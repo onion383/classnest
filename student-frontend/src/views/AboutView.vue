@@ -1,7 +1,7 @@
 <template>
   <div>
-    <div class="w-full bg-surface shadow-md rounded-xl mb-6 px-6 py-5 border border-border">
-      <h1 class="text-2xl font-bold text-text">ℹ️ 关于</h1>
+    <div class="w-full bg-surface shadow-md rounded-xl mb-6 px-6 py-5 border border-border min-h-[4.5rem] flex items-center">
+      <h1 class="text-2xl font-bold text-text">ℹ️ 关于软件</h1>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -19,23 +19,16 @@
           请假考勤、班级相册等常用功能，帮助班主任与班委高效完成日常事务。
         </p>
 
-        <div class="grid grid-cols-2 gap-x-6 gap-y-3 mt-6 text-sm">
-          <div class="flex justify-between text-text-secondary">
-            <span>当前版本</span>
-            <span class="text-text">v1.0.0</span>
-          </div>
-          <div class="flex justify-between text-text-secondary">
-            <span>应用类型</span>
-            <span class="text-text">Electron 桌面应用</span>
-          </div>
-          <div class="flex justify-between text-text-secondary">
-            <span>前端框架</span>
-            <span class="text-text">Vue 3 + Tailwind CSS</span>
-          </div>
-          <div class="flex justify-between text-text-secondary">
-            <span>后端技术</span>
-            <span class="text-text">Node.js + Express + SQLite</span>
-          </div>
+        <div class="flex flex-wrap items-center gap-3 mt-4">
+          <button @click="dialogProtocol = true" class="px-4 py-2 text-sm rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
+            MIT 协议
+          </button>
+          <button @click="dialogVersion = true" class="px-4 py-2 text-sm rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
+            版本更新
+          </button>
+          <button @click="dialogDonate = true" class="px-4 py-2 text-sm rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
+            打赏
+          </button>
         </div>
       </div>
 
@@ -44,29 +37,229 @@
         <h2 class="font-semibold text-text mb-4">功能特性</h2>
         <ul class="space-y-3 text-sm text-text-secondary">
           <li class="flex items-center gap-2">
-            <span class="text-primary">✔</span> 班级成员管理
+            <span class="text-emerald-500">✅</span> 简洁的界面和操作
           </li>
           <li class="flex items-center gap-2">
-            <span class="text-primary">✔</span> 班费收支记账与导出
+            <span class="text-emerald-500">✅</span> 班级管理的定制化功能
           </li>
           <li class="flex items-center gap-2">
-            <span class="text-primary">✔</span> 课程表与座位可视化
+            <span class="text-emerald-500">✅</span> 智能排表算法
           </li>
           <li class="flex items-center gap-2">
-            <span class="text-primary">✔</span> 请假审批与考勤
+            <span class="text-emerald-500">✅</span> 优美简洁的主题
           </li>
           <li class="flex items-center gap-2">
-            <span class="text-primary">✔</span> 班级相册与桌面小组件
+            <span class="text-emerald-500">✅</span> 分布计算性能优化
           </li>
         </ul>
       </div>
     </div>
 
-    <div class="text-center text-xs text-text-muted mt-8">
-      校园助手 © 2026 · 让班级管理更简单
+    <!-- 技术栈（毛玻璃卡片） -->
+    <div class="mt-6 bg-surface shadow-md rounded-xl border border-border p-6">
+      <h2 class="font-semibold text-text mb-4">🛠️ 使用的开源项目</h2>
+      <p class="text-xs text-text-muted mb-3 px-1 leading-relaxed">感谢所有开源提供者，本项目基于众多优秀开源项目构建，第三方组件遵循各自开源许可证。</p>
+      <div class="max-h-64 overflow-y-auto pr-1 scroll-smooth">
+        <div v-for="group in libGroups" :key="group.category" class="mb-3 last:mb-0">
+          <div class="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5 px-1">{{ group.category }}</div>
+          <div class="space-y-0.5">
+            <a v-for="lib in group.items" :key="lib.name" :href="lib.url" target="_blank" rel="noopener"
+              @click="openExternal($event, lib.url)"
+              class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors no-underline group text-sm">
+              <span class="text-text-secondary shrink-0 min-w-[5.5rem]">{{ lib.desc }}</span>
+              <span class="text-text font-medium">{{ lib.name }}</span>
+              <span class="text-[11px] text-text-muted/50 shrink-0">{{ lib.url.replace('https://', '') }}</span>
+              <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-text-muted shrink-0 ml-auto">{{ lib.license }}</span>
+            </a>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <div class="text-center text-xs text-text-muted mt-6 pb-2 space-y-1">
+      <div>本软件遵循 <a href="https://opensource.org/license/mit" target="_blank" rel="noopener" @click="openExternal($event, 'https://opensource.org/license/mit')" class="text-primary hover:underline">MIT License</a> 发布</div>
+      <div class="text-text-muted/70">可自由使用、修改与分发（含商业用途）；分发时保留版权声明与许可声明即可</div>
+      <div>
+        Copyright &copy; 无聊的小洋葱 2026 &nbsp;|&nbsp;
+        <a href="https://github.com/onion383/classmanagement" target="_blank" rel="noopener" @click="openExternal($event, 'https://github.com/onion383/classmanagement')" class="text-primary hover:underline">仓库地址</a>
+      </div>
+      <div class="text-[10px] text-text-muted/50">https://github.com/onion383/classmanagement</div>
+    </div>
+
+    <!-- 协议弹窗 -->
+    <Teleport to="body">
+      <Transition name="dialog">
+        <div v-if="dialogProtocol" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" @click.self="dialogProtocol = false">
+          <div class="dialog-card bg-surface rounded-xl shadow-2xl border border-border w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col" @click.stop>
+          <div class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+            <h2 class="text-lg font-semibold text-text">MIT License</h2>
+            <button @click="dialogProtocol = false" class="text-text-muted hover:text-text text-xl leading-none">&times;</button>
+          </div>
+          <div class="overflow-y-auto px-6 py-4 text-sm text-text-secondary leading-relaxed whitespace-pre-line flex-1">{{ licenseText }}</div>
+          <div class="px-6 py-4 border-t border-border shrink-0 flex justify-end">
+            <button @click="dialogProtocol = false" class="px-4 py-2 rounded-lg bg-primary text-text-inverse text-sm">关闭</button>
+          </div>
+        </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- 版本更新弹窗 -->
+    <Teleport to="body">
+      <Transition name="dialog">
+        <div v-if="dialogVersion" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" @click.self="dialogVersion = false">
+          <div class="dialog-card bg-surface rounded-xl shadow-2xl border border-border w-full max-w-sm mx-4" @click.stop>
+          <div class="flex items-center justify-between px-6 py-4 border-b border-border">
+            <h2 class="text-lg font-semibold text-text">版本更新</h2>
+            <button @click="dialogVersion = false" class="text-text-muted hover:text-text text-xl leading-none">&times;</button>
+          </div>
+          <div class="px-6 py-4 text-sm text-text-secondary space-y-2">
+            <div class="flex justify-between"><span>当前版本</span><span class="text-text font-medium">v1.0.0</span></div>
+            <div class="flex justify-between"><span>最新版本</span><span class="text-text font-medium">v1.0.0</span></div>
+            <div class="flex justify-between"><span>更新状态</span><span class="text-emerald-500 font-medium">已是最新版本</span></div>
+          </div>
+          <div class="px-6 py-4 border-t border-border flex justify-end">
+            <button @click="dialogVersion = false" class="px-4 py-2 rounded-lg bg-primary text-text-inverse text-sm">关闭</button>
+          </div>
+        </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- 打赏弹窗 -->
+    <Teleport to="body">
+      <Transition name="dialog">
+        <div v-if="dialogDonate" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" @click.self="dialogDonate = false">
+          <div class="dialog-card bg-surface rounded-xl shadow-2xl border border-border w-full max-w-md mx-4" @click.stop>
+          <div class="flex items-center justify-between px-6 py-4 border-b border-border">
+            <h2 class="text-lg font-semibold text-text">打赏</h2>
+            <button @click="dialogDonate = false" class="text-text-muted hover:text-text text-xl leading-none">&times;</button>
+          </div>
+          <div class="px-6 py-4 text-sm text-text-secondary text-center">
+            <p class="mb-4">本软件个人免费使用，如果你觉得好的话欢迎打赏我们</p>
+            <div class="grid grid-cols-2 gap-4">
+              <div class="space-y-2">
+                <div class="text-text font-medium">微信</div>
+                <div class="w-full aspect-square bg-black/5 dark:bg-white/5 rounded-lg flex items-center justify-center text-text-muted text-xs">
+                  微信收款码
+                </div>
+              </div>
+              <div class="space-y-2">
+                <div class="text-text font-medium">支付宝</div>
+                <div class="w-full aspect-square bg-black/5 dark:bg-white/5 rounded-lg flex items-center justify-center text-text-muted text-xs">
+                  支付宝收款码
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="px-6 py-4 border-t border-border flex justify-end">
+            <button @click="dialogDonate = false" class="px-4 py-2 rounded-lg bg-primary text-text-inverse text-sm">确定</button>
+          </div>
+        </div>
+      </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
+import { ref } from 'vue'
+import '../styles/dialog-transition.css'
+
+// Electron 内用系统浏览器打开外链，非 Electron 环境让浏览器默认行为处理
+function openExternal(event, url) {
+  if (window.electron && window.electron.invoke) {
+    event.preventDefault()
+    window.electron.invoke('open-external', url)
+  }
+  // 非 Electron：不阻止默认行为，让 href 直接在新标签页打开
+}
+
+// 弹窗状态
+const dialogProtocol = ref(false)
+const dialogVersion = ref(false)
+const dialogDonate = ref(false)
+
+// 协议全文
+const licenseText = `MIT License
+
+Copyright (c) 2026 无聊的小洋葱
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.`
+
+const libGroups = [
+  {
+    category: '桌面壳',
+    items: [
+      { desc: '桌面框架', name: 'Electron', url: 'https://github.com/electron/electron', license: 'MIT' },
+    ],
+  },
+  {
+    category: '前端',
+    items: [
+      { desc: '前端框架', name: 'Vue 3', url: 'https://github.com/vuejs/core', license: 'MIT' },
+      { desc: '前端路由', name: 'Vue Router', url: 'https://github.com/vuejs/vue-router', license: 'MIT' },
+      { desc: '状态管理', name: 'Pinia', url: 'https://github.com/vuejs/pinia', license: 'MIT' },
+      { desc: '构建工具', name: 'Vite', url: 'https://github.com/vitejs/vite', license: 'MIT' },
+      { desc: 'CSS 框架', name: 'Tailwind CSS', url: 'https://github.com/tailwindlabs/tailwindcss', license: 'MIT' },
+      { desc: 'HTTP 请求', name: 'Axios', url: 'https://github.com/axios/axios', license: 'MIT' },
+    ],
+  },
+  {
+    category: '后端',
+    items: [
+      { desc: '后端框架', name: 'Express', url: 'https://github.com/expressjs/express', license: 'MIT' },
+      { desc: '数据库引擎', name: 'better-sqlite3', url: 'https://github.com/WiseLibs/better-sqlite3', license: 'MIT' },
+      { desc: '图片处理', name: 'Sharp', url: 'https://github.com/lovell/sharp', license: 'Apache-2.0' },
+      { desc: '跨域支持', name: 'cors', url: 'https://github.com/expressjs/cors', license: 'MIT' },
+    ],
+  },
+  {
+    category: '安全支持',
+    items: [
+      { desc: 'JWT 鉴权', name: 'jsonwebtoken', url: 'https://github.com/auth0/node-jsonwebtoken', license: 'MIT' },
+      { desc: '密码加密', name: 'bcryptjs', url: 'https://github.com/dcodeIO/bcrypt.js', license: 'MIT' },
+    ],
+  },
+  {
+    category: '数据处理',
+    items: [
+      { desc: '表格导出', name: 'ExcelJS', url: 'https://github.com/exceljs/exceljs', license: 'MIT' },
+      { desc: '电子表格', name: 'SheetJS (xlsx)', url: 'https://github.com/SheetJS/sheetjs', license: 'Apache-2.0' },
+      { desc: 'PDF 生成', name: 'jsPDF', url: 'https://github.com/parallax/jsPDF', license: 'MIT' },
+      { desc: '截图渲染', name: 'html2canvas', url: 'https://github.com/niklasvh/html2canvas', license: 'MIT' },
+      { desc: '拖拽排序', name: 'SortableJS', url: 'https://github.com/SortableJS/Sortable', license: 'MIT' },
+    ],
+  },
+]
 </script>
+
+<style scoped>
+/* 滚动区域美化 */
+.bg-surface .overflow-y-auto::-webkit-scrollbar {
+  width: 4px;
+}
+.bg-surface .overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+.bg-surface .overflow-y-auto::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.25);
+  border-radius: 4px;
+}
+</style>

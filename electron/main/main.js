@@ -233,9 +233,14 @@ function createMainWindow() {
   const _webPrefs = buildWebPreferences({ devTools: true, webviewTag: true })
   _profMark('【prof】buildWebPreferences 完成', _profWpT0)
   const win = new BrowserWindow({
+    // 最小尺寸 1200×600（DIP）是「布局不散」的下限：再窄，顶部工具栏那排按钮会折成
+    // 两行、相册的列数也会掉到很窄的档位。
+    // 注意单位是 DIP（= CSS 像素），不是物理像素：125% 缩放下 1200 DIP 会渲染成
+    // 1500 物理像素宽。布局只认 DIP，所以这里就该写 DIP —— 换个 100% 或 150% 缩放的
+    // 屏幕，窗口的物理大小会变，但内容宽度不变，不会出现「这台刚好、那台折行」。
     width: 1280,
     height: 800,
-    minWidth: 900,
+    minWidth: 1200,
     minHeight: 600,
     title: '班集',
     icon: APP_ICON_PATH,

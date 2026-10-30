@@ -22,15 +22,25 @@ import { fetchThumbBatch } from '../utils/albumMedia'
 const DEBOUNCE_MS = 120
 // 一次批量请求最多带多少张
 const CHUNK = 100
+// 已生成 objectURL 的缩略图最多保留多少张（LRU 上限）
+// 512px / q82 的 JPEG blob 约 40~60KB，1500 张 ≈ 75MB，够滚过好几个屏幕还不用重取。
+const MAX_KEEP = 1500
 
 export function useThumbBatch(getVisibleIds, options = {}) {
   const enabled = options.enabled !== false
-  // photoId → objectURL
+  // photoId → 三态值：
+  //   undefined  批量还没结果（调用方应「先不渲染」）
+  //   ''         服务端没缓存这张缩略图，放弃批量、走单张接口
+  //   'blob:…'   已就绪，直接用
   const urls = ref(new Map())
   // 正在请求中的 id 集合（避免重复请求同一批）
   const inflight = new Set()
   // 已尝试过批量但没拿到的 id（这类直接走单张回落，不再进批量）
   const miss = new Set()
+  // photoId → 最近一次被读取时的序号，仅用于 LRU 淘汰。普通 Map（非响应式）：
+  // 在 getter 里写响应式状态会让渲染触发自己，死循环。
+  const lastUsed = new Map()
+  let useSeq = 0
 
   let timer = 0
   let destroyed = false
@@ -45,14 +55,33 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     urls.value = new Map()
   }
 
-  // 只保留当前还要用的，其余 revoke（避免 blob 无限增长）
-  function prune(keepIds) {
-    if (!liveUrls.size) return
-    const next = new Map()
-    for (const [id, u] of urls.value) {
-      if (keepIds.has(id)) { next.set(id, u); continue }
+  // 内存回收：只在超过 MAX_KEEP 时按 LRU 淘汰，且绝不碰当前可见区。
+  //
+  // 原先的做法是「只保留此刻可见的，其余立刻 revoke」。它省内存，但代价是：
+  // 往回滚一屏，那些 objectURL 已经没了 → <img> 从 blob 退回 http URL → 120ms 后
+  // 批量再做一批新 objectURL → src 又变回 blob。**同一个 <img> 的 src 变了两次**，
+  // 浏览器每次都当作「换了一张图」，清帧重解码，画面上就是「图片在格子里跳 / 闪」。
+  // 现在改成延迟淘汰：src 一旦定下就不再变，闪动的根就没了。
+  function evict(keepIds) {
+    const map = urls.value
+    if (map.size <= MAX_KEEP) return
+    const cands = []
+    for (const [id, u] of map) {
+      if (!u) continue                    // '' 标记体积极小，留着免得重复请求
+      if (keepIds.has(id)) continue       // 可见区的元素还挂在 DOM 上，撤掉必闪
+      cands.push(id)
+    }
+    if (!cands.length) return
+    cands.sort((a, b) => (lastUsed.get(a) || 0) - (lastUsed.get(b) || 0))
+    const drop = cands.slice(0, map.size - MAX_KEEP)
+    if (!drop.length) return
+    const next = new Map(map)
+    for (const id of drop) {
+      const u = next.get(id)
       try { URL.revokeObjectURL(u) } catch (_) {}
       liveUrls.delete(u)
+      next.delete(id)
+      lastUsed.delete(id)
     }
     urls.value = next
   }
@@ -83,34 +112,47 @@ export function useThumbBatch(getVisibleIds, options = {}) {
         liveUrls.add(u)
         next.set(id, u)
       }
-      urls.value = next
-      // 这一批里没回来的 id 记为 miss，后续直接走单张回落（不再进批量）
+      // 这一批里没回来的 id：服务端不现场生成缩略图，所以批量永远拿不到它。
+      // 写入空串（而不是留 undefined）是为了把「还在拿」和「放弃批量」区分开 ——
+      // 否则调用方会一直等，格子永远是空的。
       for (const id of chunk) {
-        if (!map.has(id)) miss.add(id)
+        if (!map.has(id)) {
+          miss.add(id)
+          next.set(id, '')
+        }
         inflight.delete(id)
       }
+      urls.value = next
     }
   }
 
-  function schedule() {
-    if (!enabled || destroyed) return
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(async () => {
-      timer = 0
-      const ids = getVisibleIds() || []
-      if (!ids.length) return
-      await load(ids)
-      // 请求完再裁一次：把已经滚出可视区、且没有 objectURL 的旧记录清掉
-      prune(new Set(getVisibleIds() || []))
-    }, DEBOUNCE_MS)
+  async function run() {
+    const ids = getVisibleIds() || []
+    if (!ids.length) return
+    await load(ids)
+    // 拿完再看一眼总容量，超了才按 LRU 收一批（见 evict 的注释）
+    evict(new Set(getVisibleIds() || []))
   }
 
-  // 可视区 id 列表变化 → 调度一次批量预取
+  // immediate：切换相册 / 首次加载后立即拉。
+  // 现在 <img> 不再用 HTTP 图垫底，等批量就等于「格子先空着」，
+  // 那 120ms 防抖就成了纯粹的空白时间，没有必要。
+  // 滚动时仍走防抖（watch 调的是不带参数的 schedule）。
+  function schedule(immediate = false) {
+    if (!enabled || destroyed) return
+    if (timer) { clearTimeout(timer); timer = 0 }
+    if (immediate) { run(); return }
+    timer = setTimeout(() => { timer = 0; run() }, DEBOUNCE_MS)
+  }
+
+  // 可视区 id 列表变化 → 调度一次批量预取。
+  // 必须包一层：watch 会把 (newVal, oldVal) 传给回调，直接传 schedule 会让
+  // newVal（一个字符串）被当成 immediate 参数，变成每次都立即发请求。
   watch(() => {
     const ids = getVisibleIds() || []
     // 只用「长度 + 首尾 id」做依赖判断，避免大数组每次都触发深比较
     return ids.length ? `${ids.length}:${ids[0]}:${ids[ids.length - 1]}` : ''
-  }, schedule)
+  }, () => schedule())
 
   onBeforeUnmount(() => {
     destroyed = true
@@ -119,11 +161,19 @@ export function useThumbBatch(getVisibleIds, options = {}) {
   })
 
   return {
-    // 取某张照片的 objectURL（没有则返回 ''，调用方回落到单张接口）
-    thumbUrlFor: (photoId) => urls.value.get(photoId) || '',
-    // 手动触发一次（切换相册后立即拉，不等滚动）
-    refresh: schedule,
+    // 取某张照片的缩略图地址，三态返回（调用方按 undefined / '' / blob 分别处理）：
+    //   undefined → 批量还没结果，先别给 <img> 设 src
+    //   ''        → 批量拿不到，调用方回落到单张 /thumb 接口
+    //   'blob:…'  → 直接用
+    thumbUrlFor: (photoId) => {
+      const u = urls.value.get(photoId)
+      // 每次读取都刷新 LRU 时间戳：渲染顺序 ≈ 用户实际看的顺序
+      if (u) lastUsed.set(photoId, ++useSeq)
+      return u
+    },
+    // 手动触发一次：立即执行（切换相册、首次加载完照片时用，不等防抖）
+    refresh: () => schedule(true),
     // 清空所有缓存（切换相册时用）
-    clear: () => { revokeAll(); miss.clear(); inflight.clear() },
+    clear: () => { revokeAll(); miss.clear(); inflight.clear(); lastUsed.clear() },
   }
 }

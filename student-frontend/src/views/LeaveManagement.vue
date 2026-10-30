@@ -51,13 +51,14 @@
           fit-content
           no-select
           hide-add-row
-          class="leave-today-table"
+          class="leave-today-table leave-empty-sm"
           :fields="activeLeaveFields"
           :rows="activeLeaveRows"
           :editing-cell="editingCell"
           actionsHeader="操作"
           emptyText="当前无请假学生"
-          emptyActionText=""
+          emptyActionText="添加请假"
+          @addNewRowAtBottom="openAddLeave"
           @startEdit="startEdit"
           @saveCell="saveCell"
           @swapRows="(from, to) => saveRowOrder('active', from, to)"
@@ -96,7 +97,7 @@
           fit-content
           no-select
           hide-add-row
-          class="leave-today-table"
+          class="leave-today-table leave-empty-sm"
           :fields="returnedLeaveFields"
           :rows="returnedLeaveRows"
           :editing-cell="editingCell"
@@ -852,5 +853,20 @@ onBeforeUnmount(() => { _stopOverdueTimer() })
   background-image: none !important;
   color: #fff !important;
   backdrop-filter: none;
+}
+/* 「今日到班」两张表的空态压矮。表格默认空态是 min-height:240px + padding:24px + gap:16px，
+   在这两张 fit-content 的窄卡片里显得空荡；这里缩到 180px、内边距与间距各收一档
+   （内容自然高约 168px，最终高度由 min-height 兜在 180px，原 240px）。
+   两张表都带 leave-empty-sm，保持上下两张卡片高度观感一致。 */
+.leave-empty-sm :deep(.dt-empty) {
+  min-height: 180px;
+  padding: 18px 20px;
+  gap: 12px;
+}
+/* 判定中的静默占位必须压到同一高度。它和空态是前后脚切换的
+   （260ms 判定窗口结束后 emptyPending → emptyVisible），
+   一个留 240px、一个 180px 就会看到 60px 的高度跳动。 */
+.leave-empty-sm :deep(.dt-empty-pending) {
+  min-height: 180px;
 }
 </style>

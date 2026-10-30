@@ -40,9 +40,11 @@
                   class="rounded-lg overflow-hidden bg-bg border cursor-pointer group relative picker-cell"
                   :class="isSelected(p.id) ? 'border-info ring-2 ring-info' : 'border-border'"
                   :style="cellStyle"
+                  :data-cell-id="p.id"
                 >
                   <VideoThumb v-if="isVideo(p)" :src="thumbSrc(p)" />
-                  <img v-else :src="thumbSrc(p)" :alt="p.file_name" class="w-full h-full object-cover" loading="lazy" decoding="async" @error="onThumbError" />
+                  <!-- 未就绪不渲染 <img> + 去掉 loading="lazy"，原因同 AlbumView：避免 src 二次赋值重解码导致闪。 -->
+                  <img v-else-if="thumbSrc(p)" :src="thumbSrc(p)" :alt="p.file_name" class="w-full h-full object-cover" decoding="async" @error="onThumbError" />
                   <div class="picker-mask" :class="{ 'picker-mask--sel': isSelected(p.id) }"></div>
                   <!-- 左上角单选框 -->
                   <span
@@ -119,8 +121,12 @@ const VIDEO_RE = /\.(mp4|webm|mov|avi|mkv|m4v|ogv)$/i
 function isVideo(p) {
   return p && VIDEO_RE.test(p.file_name || '')
 }
+// 三态（undefined=还在拿 / ''=回落到单张接口 / blob=就绪），与 AlbumView 同一套逻辑：
+// 一个 id 的地址只从 undefined 变成后两者之一，之后不再变，避免 <img> 的 src 二次赋值重解码。
 function thumbSrc(p) {
-  return batchThumbUrl(p.id) || albumThumbUrl(p.id)
+  const u = batchThumbUrl(p.id)
+  if (u === undefined) return ''
+  return u || albumThumbUrl(p.id)
 }
 const THUMB_PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="100%" height="100%" fill="#f3f4f6"/><g fill="none" stroke="#d1d5db" stroke-width="4"><circle cx="80" cy="70" r="18"/><path d="M30 132 Q52 96 82 118 T160 100" fill="none"/></g></svg>`

@@ -172,3 +172,34 @@ main h2.text-xl,
 main h3.text-xl {
   will-change: transform;
 }
+
+/* ==================== 空态的引导按钮 ====================
+   空态（没有数据）里那个「去添加 / 去设置」按钮的统一外观：淡蓝底 + 深蓝字。
+   为什么不用 bg-info：bg-info 是实心高饱和蓝，在空态里会抢走「这里没有东西」的视觉主体，
+   淡蓝底更安静。可见性也没问题 —— #1e3a6b 在 #d9e5f8 上是 8.3:1。
+   ⚠️ 这份色值目前还有 3 处 scoped 副本（DynamicTable 的 .dt-empty-btn、
+   GridView 的 .grid-empty-btn、SearchDialog 里的一段），改颜色要四边一起改；
+   新写的空态一律用这个类，别再复制第五份。 */
+.empty-action-btn {
+  min-width: 108px;
+  padding: 8px 20px;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.4;
+  color: #1e3a6b;
+  background: #d9e5f8;
+  border: 1px solid #c3d6f2;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(30, 58, 107, 0.10);
+  transition: transform 0.15s ease;
+}
+/* 悬停不做任何变化：这是空态的引导按钮，不是可反复试探的操作项，
+   上浮 / 换色 / 加阴影反而让空态显得「活」得过分。按下时留一个轻微缩放作为手感反馈。 */
+.empty-action-btn:active {
+  transform: scale(0.98);
+}
+.empty-action-btn:focus-visible {
+  outline: 2px solid rgba(30, 58, 107, 0.55);
+  outline-offset: 2px;
+}

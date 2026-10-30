@@ -124,9 +124,22 @@
                   class="rounded-lg overflow-hidden bg-bg border cursor-pointer group relative photo-cell select-none"
                   :class="selectMode && isSelected(p.id) ? 'border-info ring-2 ring-info' : 'border-border'"
                   :style="cellStyle"
+                  :data-cell-id="p.id"
                 >
                   <VideoThumb v-if="isVideo(p)" :src="thumbSrc(p)" />
-                  <img v-else :src="thumbSrc(p)" :alt="p.file_name" class="w-full h-full object-cover" loading="lazy" decoding="async" draggable="false" @error="onThumbError" />
+                  <!-- 缩略图未就绪时不渲染 <img>：先挂一张空图、等 blob 到了再赋值 src，
+                       浏览器会把 src 变化当成换图、清帧重解码，画面上就是「图片在圆角框里闪一下」。
+                       顺便去掉 loading="lazy" —— 虚拟滚动已把挂载范围压到视口 ±900px，
+                       再叠一层浏览器懒加载等于让这 900px 缓冲白留，图片反而更晚出现。 -->
+                  <img
+                    v-else-if="thumbSrc(p)"
+                    :src="thumbSrc(p)"
+                    :alt="p.file_name"
+                    class="w-full h-full object-cover"
+                    decoding="async"
+                    draggable="false"
+                    @error="onThumbError"
+                  />
                   <!-- 多选态：左上角勾选标记 -->
                   <span
                     v-if="selectMode"
@@ -531,8 +544,22 @@ function photoSrc(p) {
 // 尺寸/质量升级时靠它让浏览器旧缓存失效；否则 max-age 会把旧图留一天）
 // 优先用批量预取拿到的 objectURL（少几百次 HTTP 往返），
 // 没批量到的回落到单张 /thumb 接口（服务端现场生成，功能不变）。
+/* 缩略图地址「一生只定一次」——这是「照片框不动、图片却在格子里跳 / 闪」的根治点。
+ *
+ * batchThumbUrl 返回三态：
+ *   undefined  → 批量还在拿，先返回空串（模板据此不渲染 <img>）
+ *   ''         → 服务端没缓存这张缩略图，回落到单张 /thumb 接口现场生成
+ *   'blob:…'   → 已就绪
+ *
+ * 以前是 batchThumbUrl(p.id) || albumThumbUrl(p.id)：blob 没到时先挂一张 HTTP 图，
+ * 120ms 后 blob 到了再把 src 换掉。浏览器把 src 变化当成「换了一张图」，
+ * 清掉已解码的帧重新解码 —— 于是同一张照片先看见、再空一帧、再出现。
+ * 现在一个 id 只会从 undefined 变成后两者之一，之后永不改变，
+ * <img> 的 src 不会二次赋值，也就不会重解码。 */
 function thumbSrc(p) {
-  return batchThumbUrl(p.id) || albumThumbUrl(p.id)
+  const u = batchThumbUrl(p.id)
+  if (u === undefined) return ''
+  return u || albumThumbUrl(p.id)
 }
 
 // 相册卡片封面：后端已按「mtime 最新的一张图片」给出 cover_photo_id，直接用它的缩略图

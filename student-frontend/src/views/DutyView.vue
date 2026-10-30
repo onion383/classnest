@@ -30,7 +30,21 @@
             <!-- 当前值日：表头先行渲染（settingsDays 有默认值），行数据 activeLoaded 后再填，
                  未就绪时不给行，避免空格子被误编辑后覆盖真实值日名单 -->
             <template v-if="dutyView === 'active'">
+              <!-- 劳动项目一个都没配置时，buildGridRows 直接返回 [] —— GridView 连行都生成不出来，
+                   留在这里就是一片空白网格。这是唯一会「什么都没有」的场景（判定必须带 settingsLoaded，
+                   否则设置请求失败也会被误认成「没配项目」），所以换成引导页把人引到设置去。 -->
+              <EmptySnapshot
+                v-if="settingsLoaded && !settingsItems.length"
+                icon="🧹"
+                text="还没有值日设置"
+                min-height="200px"
+                action-text="去设置"
+                action-icon="settings"
+                @action="settingsVisible = true"
+                @mouseenter="prefetch(loadSettingsDialog)"
+              />
               <GridView
+                v-else
                 :anchor-prefix="'duty:' + dutyMode"
                 :col-headers="settingsDays"
                 :rows="activeLoaded ? dutyActiveRows : []"
@@ -57,7 +71,19 @@
 
             <!-- 值日模板：同当前值日，表头先行、行后填 -->
             <template v-else>
+              <!-- 同当前值日：项目没配置 → 没有行，给引导页（模板与当前值日共用同一份全局项目设置） -->
+              <EmptySnapshot
+                v-if="settingsLoaded && !settingsItems.length"
+                icon="🧹"
+                text="还没有值日设置"
+                min-height="200px"
+                action-text="去设置"
+                action-icon="settings"
+                @action="settingsVisible = true"
+                @mouseenter="prefetch(loadSettingsDialog)"
+              />
               <GridView
+                v-else
                 :anchor-prefix="'dutyt:' + dutyMode"
                 :col-headers="settingsDays"
                 :rows="masterLoaded ? dutyMasterRows : []"
@@ -94,7 +120,21 @@
               <button @click="openWeightExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
             </div>
             <!-- 权重表：同上，表头先行、行后填 -->
+            <!-- 项目没配置 → 权重矩阵也是空的（weightDisplayRows 完全由 settingsItems 按 count 铺出来），
+                 一张没有行也没有列的空网格没有任何可填内容，所以和上面两张表一样换成引导页。
+                 判定同样要带 settingsLoaded：设置请求失败时 items 会停在初始 []，否则会误报「没配项目」。 -->
+            <EmptySnapshot
+              v-if="settingsLoaded && !settingsItems.length"
+              icon="🧹"
+              text="还没有值日设置"
+              min-height="200px"
+              action-text="去设置"
+              action-icon="settings"
+              @action="settingsVisible = true"
+              @mouseenter="prefetch(loadSettingsDialog)"
+            />
             <GridView
+              v-else
               :anchor-prefix="'dutyw:' + dutyMode"
               :col-headers="settingsDays"
               :rows="weightLoaded ? weightDisplayRows : []"
@@ -376,6 +416,9 @@ const dutyViewOptions = [
 // ==================== 全局设置（时间 + 劳动项目） ====================
 const settingsDays = ref(['周一', '周二', '周三', '周四', '周五'])
 const settingsItems = ref([])
+// 设置是否「确实读到了」。只有为真时才允许把「项目为空」判成「没配置」并显示引导页 ——
+// 首次进入若 settings 请求失败，settingsItems 会停留在初始的 []，不设这道闸就会误报「没配项目」。
+const settingsLoaded = ref(false)
 
 // 学生名单（用于网格候选选择姓名）
 const allStudents = ref([])
@@ -427,6 +470,7 @@ async function fetchSettings() {
     settingsDays.value = (res.data.days && res.data.days.length) ? res.data.days : ['周一', '周二', '周三', '周四', '周五']
     // 只接受数组：items 契约是 [{name,difficulty,count}]，形状异常时不覆盖现有设置（避免 {} 把 forEach 带崩）
     settingsItems.value = Array.isArray(res.data.items) ? res.data.items : []
+    settingsLoaded.value = true
   } catch (e) { console.error(e) }
 }
 

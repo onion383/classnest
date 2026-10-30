@@ -55,7 +55,11 @@
         :node-types="timelineNodeTypes"
         :type-options="['加分', '扣分']"
         :title="isGroup ? '🗓️ 今日小组加减分时间轴' : '🗓️ 今日个人加减分时间轴'"
+        :empty-text="isGroup ? '今天还没有小组加分' : '今天还没有人加分'"
+        empty-action-text="去加分"
+        :loading="loading"
         align-right
+        @empty-action="openAdd"
       >
         <template #content="{ node }">
           <div class="text-sm text-text">

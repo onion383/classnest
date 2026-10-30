@@ -8,13 +8,16 @@
     <div class="album-ruler-track"></div>
 
     <!-- 年份刻度：短线 + 年份文字（间距够大才显示文字） -->
-    <div
-      v-for="m in yearMarks"
-      :key="m.year"
-      class="album-ruler-tick"
-      :style="{ top: m.top + 'px', height: m.len + 'px' }"
-    >
-      <span v-if="m.showLabel" class="album-ruler-label">{{ m.year }}</span>
+    <div v-for="m in yearMarks" :key="m.year">
+      <div class="album-ruler-tick" :style="{ top: m.top + 'px', height: m.len + 'px' }" />
+      <!-- 标签不能塞进刻度线里：那条线只有 2px 宽，标签的 right 会以它为定位基准，
+           算出来的右边缘比预期偏一个轴心偏移（实测偏 16px，标签左边缘仍压照片 2.5px），
+           而且可用宽度只剩 2px，两行文字会被挤成一字一行。这里让它直接以尺子定位。 -->
+      <span
+        v-if="m.showLabel"
+        class="album-ruler-label"
+        :style="{ top: m.top + m.len / 2 + 'px' }"
+      >{{ m.lines.join('\n') }}</span>
     </div>
 
     <!-- 手柄：高度固定（THUMB_H），宽度细条 -->
@@ -129,6 +132,17 @@ function markTop(offset) {
   return clamp((offset / ms) * thumbRange.value + thumbH.value / 2, 0, h)
 }
 
+/* 年份标签换行：年份（如 2026）四位数字约 22px 宽；「未知时间」四个汉字一行要 40px，
+   是整个尺子最宽的一项，单独为它加宽不值当。按两字折成「未知 / 时间」之后，
+   每行 20px，和年份齐平 —— 尺子就不必为这一个标签让步。 */
+function labelLines(text) {
+  const s = String(text || '')
+  if (s.length <= 2) return [s]
+  const lines = []
+  for (let i = 0; i < s.length; i += 2) lines.push(s.slice(i, i + 2))
+  return lines
+}
+
 /* 年份刻度：按内容高度占比定位（照片多的年份自然占更大间距），
    刻度长度与自身间距成正比 —— 间距越大（照片越多）刻度画得越长。 */
 const yearMarks = computed(() => {
@@ -144,7 +158,7 @@ const yearMarks = computed(() => {
     const year = /^\d{4}/.test(d) ? d.slice(0, 4) : (d || '未知')
     if (year === cur) continue
     cur = year
-    marks.push({ year, top: markTop(it.offset), label: it.date })
+    marks.push({ year, lines: labelLines(year), top: markTop(it.offset), label: it.date })
   }
   for (let i = 0; i < marks.length; i++) {
     const bottom = i + 1 < marks.length ? marks[i + 1].top : trackH.value
@@ -258,9 +272,15 @@ watch(() => [props.items.length, props.total], () => {
 </script>
 
 <style scoped>
+/* 尺子宽度 42px = 26px 标签区 + 16px 轨道与手柄区。
+   原来是 26px、轴心在正中间，年份标签（right:14px）的右边缘正好落在 x=0 ——
+   也就是整个标签都在尺子外面，横向压住照片约 22px（截图里的现象）。
+   现在把轴心移到 x=34：手柄悬停宽 12px 时占 28~40，右侧留 2px；
+   标签区 0~26，四位数字约 22px 放得下还余 4px 给字体差异，两行「未知 / 时间」20px 更宽松。
+   代价是照片区少 16px 可用宽度（尺子 26 → 42），照片本身尺寸不变。 */
 .album-ruler {
   position: relative;
-  width: 26px;
+  width: 42px;
   flex-shrink: 0;
   cursor: pointer;
   touch-action: none;
@@ -270,17 +290,17 @@ watch(() => [props.items.length, props.total], () => {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 50%;
+  left: 34px;
   transform: translateX(-50%);
   width: 3px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-border, #d1d5db) 70%, transparent);
 }
 
-/* 年份刻度线：紧贴轨道左侧，短横线；间距越大线越长 */
+/* 年份刻度线：压在轨道上，短横线；间距越大线越长 */
 .album-ruler-tick {
   position: absolute;
-  left: 50%;
+  left: 34px;
   transform: translateX(-50%);
   width: 2px;
   border-radius: 999px;
@@ -288,21 +308,25 @@ watch(() => [props.items.length, props.total], () => {
   pointer-events: none;
 }
 
+/* 标签区 = 尺子左侧 26px（left:0 到 right:16 之间），右边缘与悬停手柄（左边缘 28px）留 2px。
+   宽度用 left+right 撑出来、不写死，尺子宽度调整时自动跟着变。 */
 .album-ruler-label {
   position: absolute;
-  right: 14px;
-  top: 50%;
+  left: 0;
+  right: 16px;
   transform: translateY(-50%);
   font-size: 10px;
-  line-height: 1;
-  white-space: nowrap;
+  line-height: 1.15;
+  /* 标签可能是多行（「未知时间」按两字折行），pre-line 让文本里的 \n 生效 */
+  white-space: pre-line;
+  text-align: right;
   color: var(--color-text-muted, #9ca3af);
 }
 
 /* 手柄：细长条，高度由脚本按固定值下发（THUMB_H），hover / 拖动时只改宽度和高亮 */
 .album-ruler-thumb {
   position: absolute;
-  left: 50%;
+  left: 34px;
   transform: translateX(-50%);
   width: 8px;
   border-radius: 999px;
@@ -328,10 +352,12 @@ watch(() => [props.items.length, props.total], () => {
   transition: width 0.15s ease, background-color 0.15s ease;
 }
 
-/* 日期提示：显示在手柄左侧，垂直居中 */
+/* 日期提示：浮在手柄左侧的尺子外面（拖动时才出现，临时盖在照片上是可以接受的）。
+   right 要跟着尺子宽度走：原来 26px 宽配 right:30px，气泡右边缘落在 x=-4；
+   尺子加宽到 42px 后取 46px，保持同样的外置位置，不要让它挪进尺子里面。 */
 .album-ruler-tip {
   position: absolute;
-  right: 30px;
+  right: 46px;
   transform: translateY(-50%);
   padding: 3px 8px;
   border-radius: var(--radius-control);

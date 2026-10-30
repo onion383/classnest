@@ -55,8 +55,26 @@
       </div>
     </div>
 
-    <!-- 空状态 -->
-    <div v-else class="text-center text-text-muted py-8 text-sm">暂无匹配的时间轴记录</div>
+    <!-- 空状态。两种「空」必须分开：
+         · 一条记录都没有 → 显示页面传入的 emptyText；传了 emptyActionText 就配一个引导按钮
+           （如加分页的「今天还没有人加分 / 去加分」）；
+         · 有记录、只是被筛选挡住了 → 固定提示「暂无匹配」，此时引导去新增只会越搞越乱
+           （数据本来就在，加一条新的并不能解决「为什么看不见」）。
+         请假页两个 prop 都不传，走默认值：文案与改造前完全一致，且不出现按钮。
+         加载中单独一档：数据还没回来时 nodes 也是空的，不挡一下会先闪出「还没有人加分 + 去加分」
+         再变成列表 —— 那个按钮一闪而过，反而像故障。 -->
+    <div v-else-if="loading" class="tl-empty">
+      <p class="tl-empty-text">加载中…</p>
+    </div>
+    <div v-else class="tl-empty">
+      <p class="tl-empty-text">{{ filteredOut ? '暂无匹配的时间轴记录' : emptyText }}</p>
+      <button
+        v-if="!filteredOut && emptyActionText"
+        type="button"
+        class="empty-action-btn"
+        @click="emit('emptyAction')"
+      >{{ emptyActionText }}</button>
+    </div>
   </div>
 </template>
 
@@ -80,6 +98,14 @@ const props = defineProps({
   maxHeight: { type: Number, default: 420 },
   // 撑满外层容器高度：外层给固定高度时，卡片与时间轴区域一起填满（用于和表格同高切换）
   fillHeight: { type: Boolean, default: false },
+  // 「一条记录都没有」时的提示文案。默认值与改造前写死的那句一致，老调用方不受影响。
+  // 注意它不会出现在「有记录但被筛选挡住」的场景 —— 那时固定提示「暂无匹配」。
+  emptyText: { type: String, default: '暂无匹配的时间轴记录' },
+  // 空态下的引导按钮文案；留空则不显示按钮（请假页、导入预览等不需要）
+  emptyActionText: { type: String, default: '' },
+  // 数据加载中：此时 nodes 也是空的，若不单独挡一下会先闪出空态（尤其是带按钮的空态）再变列表。
+  // 不传则维持改造前行为（加载中直接显示空态文案）。
+  loading: { type: Boolean, default: false },
   // 节点类型配置：{ value, label, colorKey: 'info'|'success'|'danger', color: hex }
   nodeTypes: {
     type: Array,
@@ -94,6 +120,9 @@ const props = defineProps({
 const keyword = ref('');
 const filterType = ref('');
 const filterNode = ref('');
+
+// 空态引导按钮的点击：由页面决定打开哪个弹窗（时间轴本身不知道业务该怎么新增）
+const emit = defineEmits(['emptyAction'])
 
 const filterTypeOptions = computed(() => {
   return [{ value: '', label: '全部类型' }, ...props.typeOptions];
@@ -119,6 +148,10 @@ const visibleNodes = computed(() => {
     .sort((a, b) => zhCollator.compare(String(b.time), String(a.time)));
 });
 
+// 时间轴里本来有记录、只是被筛选挡住了（区别于「一条记录都没有」）。
+// visibleNodes 为空时，只要 nodes 非空就一定是筛掉的 —— 两者展示文案与按钮都不同。
+const filteredOut = computed(() => props.nodes.length > 0);
+
 function nodeTypeLabel(type) {
   const t = props.nodeTypes.find(n => n.value === type);
   return t ? t.label : type;
@@ -142,6 +175,21 @@ function badgeClass(node) {
 </script>
 
 <style scoped>
+/* 空态：文案 +（可选）引导按钮垂直堆叠。
+   尺寸沿用改造前那句 py-8 / text-sm / text-text-muted 的观感，不额外加高。 */
+.tl-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 20px;
+  text-align: center;
+}
+.tl-empty-text {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-muted, #94a3b8);
+}
 .timeline {
   position: relative;
   padding-left: 16px;

@@ -1,7 +1,8 @@
 <template>
   <!-- 年份刻度尺：贴在照片网格右侧的细长滚动条。
        刻度按「内容高度占比」定位，所以照片越多的年份分到的刻度间距越大；
-       拖动手柄时容器同步滚动，旁边浮出精确到日的日期提示，松手吸附到最近的那一天。 -->
+       拖动手柄时容器同步滚动，旁边浮出精确到日的日期提示。
+       松手**不吸附**：拖到哪儿停哪儿（吸附会在大块的「未知时间」区间里把位置拽走）。 -->
   <div ref="trackRef" class="album-ruler select-none" @pointerdown="onTrackPointerDown">
     <!-- 轨道底色 -->
     <div class="album-ruler-track"></div>
@@ -16,10 +17,13 @@
       <span v-if="m.showLabel" class="album-ruler-label">{{ m.year }}</span>
     </div>
 
-    <!-- 手柄：高度与可视区占比一致，宽度固定细条 -->
+    <!-- 手柄：高度固定（THUMB_H），宽度细条 -->
     <div
       class="album-ruler-thumb"
-      :class="{ 'album-ruler-thumb--active': dragging }"
+      :class="{
+        'album-ruler-thumb--active': dragging,
+        'album-ruler-thumb--free': !maxScroll,
+      }"
       :style="{ top: thumbTop + 'px', height: thumbH + 'px' }"
       @pointerdown.stop="onThumbPointerDown"
     ></div>
@@ -47,13 +51,26 @@ const props = defineProps({
 })
 const emit = defineEmits(['seek'])
 
-const MIN_THUMB = 28   // 手柄最小高度（px），太矮不好抓
-const MAX_TRACK = 420  // 刻度尺最大高度（px），窗口再高也不无限拉长
-const MIN_GAP = 26     // 低于这个间距（px）的年份不显示文字
+// 手柄固定高度：不随内容比例变化 —— 照片多少、窗口多高，长出来的都是同一个形状。
+// 原来的写法是 clamp(clientH / total * trackH, 28, trackH)：照片一多就被压成 28px 的细针，
+// 照片少又能糊满整条，抓取手感随内容漂移，这也正是「大小不固定」的来源。
+const THUMB_H = 44
+const MIN_GAP = 26 // 低于这个间距（px）的年份不显示文字
 
 const trackRef = ref(null)
 const trackH = ref(0)
 const dragging = ref(false)
+
+// 拖动期间只需记住一个量：grabOffset —— 按下瞬间指针相对手柄顶部的偏移，
+// 保证从手柄任意位置按下都不会「弹到指针中心」。
+let grabOffset = 0
+let resizeObs = null
+
+// 没有可滚动内容（相册只有一两张、一屏放得下）时的「自由位移」：
+// 此时 maxScroll = 0，手柄位置本来是 scrollTop / 0，除不动 → 死死钉在顶部，
+// 看起来像坏了（用户报过）。这里单独给一份位移，让手柄照样跟手；
+// 松手时复位到 0，复位过程由 CSS 的 top 过渡补一段平滑滑回。
+const manualTop = ref(0)
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v
@@ -61,18 +78,19 @@ function clamp(v, lo, hi) {
 
 const maxScroll = computed(() => Math.max(0, (props.total || 0) - (props.clientH || 0)))
 
-// 手柄高度：可视区占总内容的比例（内容不足一屏时给一个固定高度）
-const thumbH = computed(() => {
-  const h = trackH.value
-  if (!h || !props.total) return MIN_THUMB
-  return clamp((props.clientH / props.total) * h, MIN_THUMB, h)
-})
+// 手柄高度固定（只有轨道本身比手柄还短时才退让，避免溢出轨道）
+const thumbH = computed(() => Math.min(THUMB_H, Math.max(0, trackH.value)))
 
-// 手柄位置：滚动进度 → 轨道可用区间
+// 手柄能走的行程 = 轨道高度 − 手柄自身高度。手柄顶点的活动区间就是它，
+// 顶格时手柄顶在轨道顶端，拖到底时手柄底边贴住轨道底边 —— 视觉上真的「完全」。
+const thumbRange = computed(() => Math.max(0, trackH.value - thumbH.value))
+
+// 手柄位置：滚动进度 → 行程区间。
+// 没有可滚动内容时用 manualTop（纯手感，不影响任何滚动），否则跟真实滚动位置走。
 const thumbTop = computed(() => {
-  const range = Math.max(0, trackH.value - thumbH.value)
-  if (!range || !maxScroll.value) return 0
-  return clamp((props.scrollTop / maxScroll.value) * range, 0, range)
+  if (!thumbRange.value) return 0
+  if (!maxScroll.value) return clamp(manualTop.value, 0, thumbRange.value)
+  return clamp((props.scrollTop / maxScroll.value) * thumbRange.value, 0, thumbRange.value)
 })
 
 // 当前视口顶部所在的那一组（取偏移不超过 scrollTop 的最后一组）
@@ -87,7 +105,29 @@ const currentItem = computed(() => {
   return hit
 })
 
-const tipText = computed(() => (currentItem.value ? currentItem.value.date : ''))
+// 拖动时浮出的日期。
+// 内容不足一屏时手柄能被拖到任意位置，但那一刻**没有任何内容滚到对应日期**，
+// 提示照常显示第一组日期就是在骗人，所以这种情况下不显示。
+const tipText = computed(() => {
+  if (!maxScroll.value) return ''
+  return currentItem.value ? currentItem.value.date : ''
+})
+
+/* 刻度必须和手柄同源换算：同一个 maxScroll 分母、同一段行程，否则拖到某一年时
+   手柄中心会和那年的刻度线对不上。原来刻度用的是 offset / total，
+   而手柄用的是 scrollTop / maxScroll —— 越靠底部偏得越多，是一条真错位。 */
+function markTop(offset) {
+  const h = trackH.value
+  if (!h) return 0
+  const ms = maxScroll.value
+  if (!ms) {
+    // 内容不足一屏：没有可滚动行程，刻度按内容比例铺满轨道（此时手柄停在顶端）
+    const t = props.total || 0
+    return t ? clamp((offset / t) * h, 0, h) : 0
+  }
+  // + thumbH/2：滚到该位置时手柄中心落在哪儿，刻度就画在哪儿
+  return clamp((offset / ms) * thumbRange.value + thumbH.value / 2, 0, h)
+}
 
 /* 年份刻度：按内容高度占比定位（照片多的年份自然占更大间距），
    刻度长度与自身间距成正比 —— 间距越大（照片越多）刻度画得越长。 */
@@ -96,8 +136,6 @@ const yearMarks = computed(() => {
   const total = props.total || 0
   const h = trackH.value
   if (!list.length || !total || !h) return []
-  const range = Math.max(0, h - thumbH.value)
-  const posOf = (offset) => (offset / total) * range + thumbH.value / 2
   const marks = []
   let cur = null
   for (const it of list) {
@@ -106,7 +144,7 @@ const yearMarks = computed(() => {
     const year = /^\d{4}/.test(d) ? d.slice(0, 4) : (d || '未知')
     if (year === cur) continue
     cur = year
-    marks.push({ year, top: posOf(it.offset), label: it.date })
+    marks.push({ year, top: markTop(it.offset), label: it.date })
   }
   for (let i = 0; i < marks.length; i++) {
     const bottom = i + 1 < marks.length ? marks[i + 1].top : trackH.value
@@ -120,28 +158,43 @@ const yearMarks = computed(() => {
 function measure() {
   const el = trackRef.value
   if (!el) return
-  trackH.value = Math.min(el.clientHeight, MAX_TRACK)
+  // 轨道高度 = 元素自身高度（由父级 flex 拉伸决定）。
+  // 这里原来还套了一层 Math.min(clientHeight, 420)：元素照旧是满高的，
+  // 手柄却只在上半截活动，窗口一高就出现「条子铺到底、手柄拖到底不下去」。
+  trackH.value = el.clientHeight
 }
 
 /* 轨道点击 / 拖动：按指针纵向位置换算成滚动位置 */
 function applyFromEvent(e) {
   const el = trackRef.value
   if (!el) return
+  const range = thumbRange.value
+  if (range <= 0) return // 轨道比手柄还短，没有可走的行程
   const rect = el.getBoundingClientRect()
-  const range = Math.max(0, trackH.value - thumbH.value)
-  const center = e.clientY - rect.top
-  const ratio = range > 0 ? clamp((center - thumbH.value / 2) / range, 0, 1) : 0
-  emit('seek', ratio * maxScroll.value)
+  // 想让手柄顶部落到的位置（扣掉按下时的抓取偏移，手柄就不会跳到指针中心）
+  const top = clamp(e.clientY - rect.top - grabOffset, 0, range)
+  // 内容不足一屏：没有可滚动量，只让手柄跟手，不产生任何滚动
+  if (!maxScroll.value) {
+    manualTop.value = top
+    return
+  }
+  emit('seek', (top / range) * maxScroll.value)
 }
 
 function onTrackPointerDown(e) {
   if (e.button !== 0) return
+  // 点轨道：手柄中心对齐指针位置
+  grabOffset = thumbH.value / 2
   startDrag()
   applyFromEvent(e)
 }
 
 function onThumbPointerDown(e) {
   if (e.button !== 0) return
+  const el = trackRef.value
+  if (!el) return
+  // 按住手柄的哪个位置就从哪儿拖起，不做「弹到中心」的跳变
+  grabOffset = e.clientY - el.getBoundingClientRect().top - thumbTop.value
   startDrag()
 }
 
@@ -157,22 +210,23 @@ function onPointerMove(e) {
   applyFromEvent(e)
 }
 
-// 松手吸附：滚到离当前位置最近的那一天
+// 松手**不吸附**：拖到哪儿就停在哪儿。
+// 之前这里会「吸到最近的一组日期」（候选 = 最顶 + 各分组起点 + 最底），观感就是一松手就跳：
+//   · 分组粒度是「天」，末尾还有一行照片和间距 → 拖到底松手被拽回最后一组的日期；
+//   · 相册里「未知时间」往往是一大块，那一组的 offset 覆盖面极宽，
+//     手柄落到它范围内任意位置、只要松手都会被拽到那组起点，看起来像「被一根很大比例的条拉过去」。
+// 手柄位置本来就是 scrollTop / maxScroll 的严格映射，拖动过程中已经逐帧 emit('seek')，
+// 松手保持当前落点即可，不需要再做任何修正。
 function onPointerUp() {
   if (!dragging.value) return
   dragging.value = false
   window.removeEventListener('pointermove', onPointerMove)
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerUp)
-  const list = props.items || []
-  if (!list.length) return
-  let best = list[0]
-  let bestD = Infinity
-  for (const it of list) {
-    const d = Math.abs(it.offset - props.scrollTop)
-    if (d < bestD) { bestD = d; best = it }
-  }
-  emit('seek', best.offset)
+  // 内容不足一屏：没有真实滚动位置可留，复位到顶部。
+  // 复位不是瞬间跳回 —— `.album-ruler-thumb--free` 上挂了 top 过渡（拖动时由 --active 关掉，
+  // 保证跟手不拖影），所以这里只把值改回 0，视觉上是一段平滑的滑回。
+  if (!maxScroll.value) manualTop.value = 0
 }
 
 function onResize() {
@@ -182,8 +236,15 @@ function onResize() {
 onMounted(() => {
   measure()
   window.addEventListener('resize', onResize)
+  // 父容器高度变化（窗口缩放之外的场景：工具栏折行、侧栏开合）只有 ResizeObserver 看得到
+  if (trackRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObs = new ResizeObserver(() => measure())
+    resizeObs.observe(trackRef.value)
+  }
 })
 onBeforeUnmount(() => {
+  resizeObs?.disconnect()
+  resizeObs = null
   window.removeEventListener('resize', onResize)
   window.removeEventListener('pointermove', onPointerMove)
   window.removeEventListener('pointerup', onPointerUp)
@@ -238,18 +299,24 @@ watch(() => [props.items.length, props.total], () => {
   color: var(--color-text-muted, #9ca3af);
 }
 
-/* 手柄：细长条，hover / 拖动时加宽并高亮 */
+/* 手柄：细长条，高度由脚本按固定值下发（THUMB_H），hover / 拖动时只改宽度和高亮 */
 .album-ruler-thumb {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  min-height: 28px;
   width: 8px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-primary, #3b82f6) 75%, transparent);
   transition: width 0.15s ease, background-color 0.15s ease;
   cursor: grab;
 }
+/* 没有可滚动内容时（相册一屏放得下）：松手复位走过渡 —— 手柄滑回顶部，不是瞬间跳上去。
+   拖动中会同时带 --active，那条规则把 top 过渡关掉，保证严格跟手、不拖影。 */
+.album-ruler-thumb--free {
+  transition: width 0.15s ease, background-color 0.15s ease,
+    top 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
 .album-ruler-thumb:hover,
 .album-ruler-thumb--active {
   width: 12px;
@@ -257,6 +324,8 @@ watch(() => [props.items.length, props.total], () => {
 }
 .album-ruler-thumb--active {
   cursor: grabbing;
+  /* 覆盖 --free 的 top 过渡：拖动期间 top 每帧都要跟手 */
+  transition: width 0.15s ease, background-color 0.15s ease;
 }
 
 /* 日期提示：显示在手柄左侧，垂直居中 */

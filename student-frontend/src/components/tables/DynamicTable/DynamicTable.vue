@@ -1480,6 +1480,22 @@ onMounted(() => {
   // 否则挂载时 TransitionGroup 会对静态表头播放 move，造成进入页面时表头乱跳。
   ctx._colAnimTimer = setTimeout(() => { colAnimDone.value = true; }, 400);
 })
+/* KeepAlive 切回：把表格内部的滚动位置恢复回来。
+ * 页面被 KeepAlive 缓存时，组件根 DOM 会被挪进一个「未插入文档的 div」，浏览器借此
+ * 把滚动容器的 scrollTop 清成 0（clientHeight 也变 0），**而且不派发 scroll 事件**。
+ * 于是撕成两半：容器在顶部，而 _scrollTop 还停在切走前的真值上。
+ * initVirtual() 开头是「_scrollTop = wrap.scrollTop」，不先写回容器就会被 0 覆盖，
+ * 窗口回到顶部、表格跳顶（长表尤其明显）。所以恢复必须在 initVirtual 之前做。
+ * 不用另外存快照：_scrollTop 由 onScroll 同步维护，切走期间没有 scroll 事件，
+ * 它天然就是「切走那一刻的位置」。 */
+function restoreBodyScroll() {
+  const wrap = ctx.scrollWrapper.value;
+  if (!wrap || !(ctx._scrollTop > 0)) return;
+  const max = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+  const top = Math.min(ctx._scrollTop, max);
+  if (Math.abs(wrap.scrollTop - top) > 1) wrap.scrollTop = top;
+}
+
 // KeepAlive：从其它状态栏/页签切换回来时重播数据区整体弹入动效
 // （取消新增行后「添加一行」重现的上浮动效由 hasNewRow 驱动，不在此处触发，
 //   否则它会和 tbody 整体滑入叠加造成闪动）
@@ -1490,8 +1506,9 @@ onActivated(() => {
   colAnimDone.value = false;
   if (ctx._colAnimTimer) clearTimeout(ctx._colAnimTimer);
   ctx._colAnimTimer = setTimeout(() => { colAnimDone.value = true; }, 400);
-  // 缓存的 DOM 尺寸可能已随页签切换变化，重新量一次窗口
-  nextTick(() => { initVirtual(); });
+  // 缓存的 DOM 尺寸可能已随页签切换变化，重新量一次窗口。
+  // 恢复滚动位置必须排在 initVirtual 之前：后者会用 wrap.scrollTop 覆盖 _scrollTop。
+  nextTick(() => { restoreBodyScroll(); initVirtual(); });
 })
 onBeforeUnmount(() => {
   if (ctx._ro) { ctx._ro.disconnect(); ctx._ro = null; }

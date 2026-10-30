@@ -773,7 +773,11 @@ async function endRegionSelect() {
 // 聊天区滚动到接近顶部时补载更早的历史消息（贴底由 scrollBottom 负责）
 function onMsgScroll() {
   const box = msgBox.value
-  if (!box || box.scrollTop > 60) return
+  if (!box) return
+  // 用户滚离底部（上滑翻历史 / 拖动滚动条）→ 立刻停止贴底跟随，
+  // 否则后面表格、图片长高会把视口一次次拽回底部，他就没法看历史了
+  if (_stickOn && box.scrollHeight - box.scrollTop - box.clientHeight > 48) _stickOn = false
+  if (box.scrollTop > 60) return
   if (!hasEarlier.value || loadingEarlier.value) return
   ctx.loadEarlier()
 }
@@ -851,6 +855,56 @@ function scrollBottom() {
   })
 }
 
+// ===== 首屏贴底跟随（打开 / 切换会话时用）=====
+// 打开会话时消息是分批长高的：markdown 库懒加载完成后才重算 _blocks、AiRecordTable 还要异步
+// 取数（先是一行「正在读取数据…」再变成整张表）、图片是 lazy 加载、图表要绘制。
+// 一次性 scrollBottom 只贴到「那一刻」的底部，高度长出来后视口就留在上面，用户得自己往下滑。
+// 这里在「用户还没手动离开底部」之前持续跟随；用户一旦滚离底部立即停止，绝不抢滚动。
+let _stickOn = false
+let _stickRo = null
+let _stickMo = null
+const _stickTargets = new Set()
+
+// AiChatMessages 是 fragment（多个根节点），消息节点是 msgBox 的直接子元素，没有单一容器可观察，
+// 所以逐个观察直接子元素；增删时用 MutationObserver 增量同步，不做全量重挂。
+function _syncStickTargets(box) {
+  if (!_stickRo) return
+  const kids = new Set(box.children)
+  for (const el of _stickTargets) {
+    if (!kids.has(el)) {
+      _stickRo.unobserve(el)
+      _stickTargets.delete(el)
+    }
+  }
+  for (const el of kids) {
+    if (!_stickTargets.has(el)) {
+      _stickRo.observe(el)
+      _stickTargets.add(el)
+    }
+  }
+}
+
+// msgBox 只在 AI 已启用时才渲染，故跟着模板 ref 挂载 / 卸载观察器
+watch(msgBox, (box) => {
+  if (_stickRo) { _stickRo.disconnect(); _stickRo = null }
+  if (_stickMo) { _stickMo.disconnect(); _stickMo = null }
+  _stickTargets.clear()
+  if (!box) return
+  // 由渲染引擎在布局后回调，不主动读 scrollHeight，避免每帧强制布局
+  _stickRo = new ResizeObserver(() => {
+    if (_stickOn) box.scrollTop = box.scrollHeight
+  })
+  _stickMo = new MutationObserver(() => _syncStickTargets(box))
+  _stickMo.observe(box, { childList: true })
+  _syncStickTargets(box)
+})
+
+// 打开 / 切换会话：开启跟随并立即置底（与 scrollBottom 的区别只多了一个「之后还跟」）
+function stickBottom() {
+  _stickOn = true
+  scrollBottom()
+}
+
 // 组件自身方法挂上 ctx（供三个逻辑模块经 ctx.xxx 互调）
 Object.assign(ctx, {
   _buildBlocks, _updateLiveRender, _parseMessages, _lastAssistantIndex, _lastAssistant,
@@ -860,7 +914,7 @@ Object.assign(ctx, {
   onConvNew, onConvSelect, captureScreenshot, onRegionDown, onRegionMove, onRegionUp, onRegionKey,
   confirmRegion, cancelRegion, endRegionSelect, onMsgScroll, onMsgClick, isHttpLink,
   updateOutsideListener, onDocMouseDown, openChangeDrawer, gotoTable, openLinkInDrawer,
-  openLinkExternal, scrollBottom,
+  openLinkExternal, scrollBottom, stickBottom,
 })
 // 迟绑定：三个逻辑模块（原 Options mixin）的方法/computed 回填进 ctx。
 // 模块间互相调用、以及对上面组件方法的调用，都在运行时经 ctx 解析，故必须在组件方法挂完后再填。
@@ -901,6 +955,11 @@ onMounted(() => {
 })
 onUnmounted(() => {
   _unmounted.value = true
+  // 贴底跟随的观察器必须断开，否则销毁后回调仍持有已卸载的 msgBox 引用
+  _stickOn = false
+  if (_stickRo) { _stickRo.disconnect(); _stickRo = null }
+  if (_stickMo) { _stickMo.disconnect(); _stickMo = null }
+  _stickTargets.clear()
   // 卸载时若仍在选区截屏，先把窗口还原，避免主窗口停在铺满整屏的状态
   if (regionShot.value) endRegionSelect()
   document.removeEventListener('mousedown', onDocMouseDown, true)

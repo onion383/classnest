@@ -410,40 +410,48 @@
 }
 
 /* A9. 彩色玻璃按钮：把「白遮罩提亮」翻成「暗遮罩压深」，字色改浅 */
+/* 静止态配色（**不要再给它们补 :hover 版本**）。
+   夜间按钮悬浮不改变配色，见下方「夜间按钮悬浮冻结」一节。 */
 :root[data-mode="night"][data-theme="glass"] button.bg-primary.text-text-inverse {
   background: rgba(34, 197, 94, 0.30) !important;
   color: #bbf7d0 !important;
-}
-:root[data-mode="night"][data-theme="glass"] button.bg-primary.text-text-inverse:hover {
-  background: rgba(34, 197, 94, 0.40) !important;
 }
 :root[data-mode="night"][data-theme="glass"] button.bg-success.text-text-inverse {
   background: rgba(34, 197, 94, 0.30) !important;
   color: #bbf7d0 !important;
 }
-:root[data-mode="night"][data-theme="glass"] button.bg-success.text-text-inverse:hover {
-  background: rgba(34, 197, 94, 0.40) !important;
-}
 :root[data-mode="night"][data-theme="glass"] button.bg-warning.text-text-inverse {
   background: rgba(245, 158, 11, 0.32) !important;
   color: #fde68a !important;
-}
-:root[data-mode="night"][data-theme="glass"] button.bg-warning.text-text-inverse:hover {
-  background: rgba(245, 158, 11, 0.42) !important;
 }
 :root[data-mode="night"][data-theme="glass"] button.bg-danger.text-text-inverse {
   background: rgba(239, 68, 68, 0.32) !important;
   color: #fecaca !important;
 }
-:root[data-mode="night"][data-theme="glass"] button.bg-danger.text-text-inverse:hover {
-  background: rgba(239, 68, 68, 0.42) !important;
-}
 :root[data-mode="night"][data-theme="glass"] button.bg-info.text-text-inverse {
   background: rgba(59, 130, 246, 0.32) !important;
   color: #dbeafe !important;
 }
-:root[data-mode="night"][data-theme="glass"] button.bg-info.text-text-inverse:hover {
-  background: rgba(59, 130, 246, 0.42) !important;
+/* ---------- 悬浮时把文字色也钉住（2026-10-30 补） ----------
+   白天 theme-glass.css 里有 `button.bg-*.text-text-inverse:hover { color: <深色> }`，
+   特异性 (0,5,1)，**高于**上面静止态的 (0,4,1)。所以夜里一悬停文字就变深：
+   危险按钮浅粉 #fecaca → 深红 #7f1d1d（就是用户说的「悬停变红」）、
+   主色按钮浅绿 → 深绿、警告按钮浅黄 → 深棕。背景因为静止态也带 !important 且特异性够，没被带走。
+   这里用 (0,6,1) 把 5 个颜色分别压回夜间静止色。**删掉这段，夜间悬停就又会变深。** */
+:root[data-mode="night"][data-theme="glass"] button.bg-primary.text-text-inverse:not(.tab-active):hover {
+  color: #bbf7d0 !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-success.text-text-inverse:not(.tab-active):hover {
+  color: #bbf7d0 !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-warning.text-text-inverse:not(.tab-active):hover {
+  color: #fde68a !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-danger.text-text-inverse:not(.tab-active):hover {
+  color: #fecaca !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-info.text-text-inverse:not(.tab-active):hover {
+  color: #dbeafe !important;
 }
 /* 统一新风格的 box-shadow（原为白色内遮罩，改暗内遮罩） */
 :root[data-mode="night"][data-theme="glass"] button.bg-primary.text-text-inverse:not(.tab-active),
@@ -469,33 +477,109 @@
   border-color: rgba(150, 180, 255, 0.16);
   color: var(--color-text) !important;
 }
-:root[data-mode="night"][data-theme="glass"] button.bg-surface-hover:hover {
-  background-color: var(--alpha-white-16) !important;
-}
+/* ========== 刷新类按钮（.btn-refresh）：夜间淡暖色玻璃 ==========
+   与白天同一套思路（见 theme-glass.css 同名段）：去掉 !important、阴影只留一个来源。
+   夜间有两条硬规则要先让路，否则会被它们压掉：
+   ① 下方 `.opbar button` 的暗遮罩（(0,5,1) + !important）→ 已加 `:not(.btn-refresh)`；
+   ② A9b「夜间按钮悬浮冻结」里的 `button.bg-text-muted`（同特异性 + !important）
+      → 也已加 `:not(.btn-refresh)`，否则底色会被钉回灰色。
+   悬浮仍然遵守「夜间按钮不变色」：只加深内遮罩与暖光晕，background / color 保持不动。 */
 :root[data-mode="night"][data-theme="glass"] button.btn-refresh {
-  background: rgba(251, 146, 60, 0.32) !important;
-  color: #fed7aa !important;
+  background: rgba(251, 146, 60, 0.32);
+  border: none;
+  backdrop-filter: blur(12px) saturate(1.3);
+  color: #fed7aa;
   box-shadow:
     inset 0 0 0 40px var(--alpha-black-18),
-    0 0 14px rgba(251, 146, 60, 0.18) !important;
+    0 0 14px rgba(251, 146, 60, 0.18);
 }
 :root[data-mode="night"][data-theme="glass"] button.btn-refresh:hover {
-  color: #ffedd5 !important;
+  background: rgba(251, 146, 60, 0.32);
+  color: #fed7aa;
   box-shadow:
     inset 0 0 0 40px var(--alpha-black-24),
-    0 0 20px rgba(251, 146, 60, 0.28) !important;
+    0 0 20px rgba(251, 146, 60, 0.28);
 }
-/* 操作栏按钮的白色内遮罩改暗 */
-:root[data-mode="night"][data-theme="glass"] .opbar button:not(.view-switch-btn) {
+/* 操作栏按钮的白色内遮罩改暗（.btn-refresh 除外，它自己带暖色阴影） */
+:root[data-mode="night"][data-theme="glass"] .opbar button:not(.view-switch-btn):not(.btn-refresh) {
   box-shadow:
     inset 0 0 0 40px var(--alpha-black-20),
     0 0 14px var(--alpha-black-12) !important;
 }
-:root[data-mode="night"][data-theme="glass"] .opbar button:hover:not(.view-switch-btn) {
+:root[data-mode="night"][data-theme="glass"] .opbar button:hover:not(.view-switch-btn):not(.btn-refresh) {
   box-shadow:
     inset 0 0 0 40px var(--alpha-black-26),
     0 0 18px var(--alpha-black-18) !important;
 }
+
+/* ==================== A9b. 夜间按钮悬浮冻结：深色模式下按钮不变色 ====================
+   需求：夜间鼠标移到按钮上，按钮**颜色不变**（可点的反馈只靠光标、以及上面对 box-shadow 的加深）。
+
+   难点：按钮底色绝大多数来自模板里的 `hover:bg-*` 工具类（特异性 (0,2,0)、无 !important），
+   而 glass2 主题从不覆盖按钮的静止底色，所以悬浮色一直照常生效。
+   CSS 没有"回到我原本那个色"的取值方式（revert 会退回浏览器默认），静止色只能显式写出。
+
+   解法：给静止色类补一条「**同值** + !important」的规则 —— 值与该主题原本的静止色完全一致
+   （观感零变化），但 !important 会压住 hover 工具类，于是悬浮时颜色不再跳变。
+   glass 主题的彩色按钮在上面已有半透明玻璃配方（特异性更高，仍然是它赢），这几条只兜住
+   不带 .text-text-inverse 的那些。
+
+   **不要再给这些类补 :hover 版本** —— hover 规则正是这里要消灭的东西。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-primary {
+  background-color: var(--color-primary) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-success {
+  background-color: var(--color-success) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-warning {
+  background-color: var(--color-warning) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-danger {
+  background-color: var(--color-danger) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-info {
+  background-color: var(--color-info) !important;
+}
+/* 中性灰按钮：夜间原本就是 tailwind 变量值（玻璃主题没覆盖过），这里只是把同一个值钉住。
+   glass 下排除 .btn-refresh —— 它有自己的淡暖色配方，不能被钉回灰底；
+   glass2 保持原样（它没有 btn-refresh 配方，冻结范围含 .btn-refresh，别改）。 */
+:root[data-mode="night"][data-theme="glass"] button.bg-text-muted:not(.btn-refresh) {
+  background-color: var(--color-text-muted) !important;
+}
+:root[data-mode="night"][data-theme="glass2"] button.bg-text-muted {
+  background-color: var(--color-text-muted) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-text-secondary {
+  background-color: var(--color-text-secondary) !important;
+}
+/* 半透明浅底按钮（关于页「用户协议 / 版本日志」、分组页「新增分组」） */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-primary\/10 {
+  background-color: color-mix(in srgb, var(--color-primary) 10%, transparent) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-amber-300\/10 {
+  background-color: color-mix(in srgb, #fcd34d 10%, transparent) !important;
+}
+/* ---------- A9b-2. 文字色 / 半透明底的悬浮冻结 ----------
+   上一版只冻结了 `hover:bg-*`（背景），漏了 `hover:text-*`（文字），于是夜间
+   「✕ 关闭 / 删除 / 撤回更改」这类小图标按钮一悬停文字就变红 —— 用户报的「还是会变红」。
+   这类按钮静止色只有两种，按类分别钉回原色即可（不需要通用属性选择器，那会误伤
+   `.view-switch-btn` / `.dtf-sort-btn`）。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.hover\:text-danger.text-text-muted:hover {
+  color: var(--color-text-muted) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.hover\:text-danger.text-text-secondary:hover {
+  color: var(--color-text-secondary) !important;
+}
+/* 「删除」文字按钮（`text-danger hover:bg-danger/10`，如值日设置里的行内删除）：
+   静止是透明底，悬浮会冒出一层淡红 —— 钉回透明。这里能用类选择器精确定位，
+   所以不会波及 `.view-switch-btn` / `.dtf-sort-btn` 那批。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.hover\:bg-danger\/10:hover {
+  background-color: transparent !important;
+}
+/* 边框按钮 / 着色文字按钮（虚线边框的"添加"、`text-primary hover:bg-primary/10` 之类）：
+   静止本来就是透明，悬浮会冒出一层底色。**这类仍未冻结** —— 它们的 class 里不含 bg-，
+   用一条 `button:not([class*="bg-"])` 会把 `.view-switch-btn` / `.dtf-sort-btn`
+   这种"背景由组件 scoped 样式决定"的按钮一起打穿。要收掉得在模板里显式加 `bg-transparent`。 */
 
 /* A10. 浮层：候选列表 / 右键菜单 / 搜索面板 */
 :root[data-mode="night"][data-theme="glass"] .candidate-popup,
@@ -776,9 +860,8 @@
   background-color: #1e263a;
   color: var(--color-text);
 }
-:root[data-mode="night"][data-theme="glass2"] button.bg-surface-hover:hover {
-  background-color: rgba(72, 84, 122, 0.9) !important;
-}
+/* 原 `button.bg-surface-hover:hover`（提到 0.9）已删除：夜间按钮悬浮不改配色，
+   静止值来自 theme-glass2.css 的 `.bg-surface-hover`（带 !important），悬浮时同样生效。 */
 :root[data-mode="night"][data-theme="glass2"] .candidate-popup,
 :root[data-mode="night"][data-theme="glass2"] .context-menu-popup {
   background-color: rgba(42, 50, 76, 0.86) !important;

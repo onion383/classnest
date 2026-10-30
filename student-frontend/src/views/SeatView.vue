@@ -113,14 +113,29 @@
 
         <div v-else-if="activeTab === 'history'" class="relative">
           <!-- 座位指数（公平账本）：每人一根长条，按所坐位置权重逐天累加，截至所选周 -->
-          <div v-if="historySnapshot" class="mb-8">
+          <div class="mb-8">
             <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
               <h2 class="text-xl font-semibold text-text flex items-center gap-2"><IconGlyph name="chart" :size="20" /> 座位指数</h2>
-              <span class="text-xs text-text-muted">按每人所坐位置的权重逐天累加 · 截至 {{ historySnapDate || '—' }}</span>
+              <span v-if="historySnapshot" class="text-xs text-text-muted">按每人所坐位置的权重逐天累加 · 截至 {{ historySnapDate || '—' }}</span>
             </div>
-            <div class="bg-surface rounded-lg border border-border p-6">
+            <!-- 工具栏：刷新 / 导出（与上方座位表、权重表保持同一套 opbar 写法）。
+                 常驻渲染：没有快照时也保留按钮，否则用户只能从下方「座位记录」那排去操作 -->
+            <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
+              <button @click="refreshSeatIndex()" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
+              <button @click="openSeatIndexExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
+            </div>
+            <!-- 空态与座位记录区同一处理：加载中不判空（避免闪），加载完且无快照才用房统一空态。
+                 高度取 188px ≈ StatBarList 5 行(140) + 卡片内边距(48)，切换时不跳高 -->
+            <EmptySnapshot
+              v-if="!historyLoading && !historySnapshot"
+              text="暂未有历史快照，无法结算座位指数"
+              icon="📊"
+              min-height="188px"
+            />
+            <div v-else class="bg-surface rounded-lg border border-border p-6">
               <StatBarList :rows="seatIndexRows" :bar-width="seatIndexBarWidth" :value-text="(row) => row.value.toFixed(2)" empty-text="暂无座位指数数据" />
             </div>
+            <ExportExcel v-if="seatIndexExportMounted" :is-visible="seatIndexExportVisible" :rows="seatIndexExportRows" :fields="seatIndexExportFields" defaultFilename="座位指数" @update:is-visible="seatIndexExportVisible = $event" />
           </div>
 
           <!-- 座位记录：标题 + 菜单栏（设置 / 刷新 / 导出 Excel / 补录记录） -->
@@ -1032,6 +1047,27 @@ const seatIndexRows = computed(() => {
 
 function seatIndexBarWidth(row) {
   return Math.round((Math.abs(row.value) / row._max) * 100)
+}
+
+// ---------- 座位指数：刷新 / 导出 ----------
+// 指数本身是 computed（seatIndexDaily × weightWeights 逐天累加），所以「刷新」只需重拉
+// 每日快照序列，数字会自动重算——不需要另外保存一份结果。
+async function refreshSeatIndex() {
+  await loadSeatIndex()
+  notifySuccess('已刷新座位指数')
+}
+
+const seatIndexExportVisible = ref(false)
+const seatIndexExportMounted = ref(false)
+watch(() => seatIndexExportVisible.value, v => { if (v) seatIndexExportMounted.value = true })
+const seatIndexExportFields = computed(() => [{ name: '姓名' }, { name: '座位指数' }])
+// 与界面同序（已按累计权重降序），数值保留两位小数，避免导出后出现 3.3333333333 这类尾巴
+const seatIndexExportRows = computed(() =>
+  seatIndexRows.value.map(r => ({ '姓名': r.name, '座位指数': r.value.toFixed(2) }))
+)
+function openSeatIndexExport() {
+  if (!seatIndexRows.value.length) return useNotification().info('暂无座位指数数据可导出')
+  seatIndexExportVisible.value = true
 }
 
 // 补存已过日期：仅补齐「今天之前」缺失的历史快照（今天由启动时的静默补存负责）

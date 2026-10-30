@@ -47,9 +47,22 @@ const filePath = computed(() => {
   return '保存至：图片/screenshots/'
 })
 
+// 截屏前把整窗内容藏起来，比主进程「setOpacity(0) 后盲等 150ms」又快又确定：
+// 窗口是 transparent，内容一隐藏它在屏幕上就等于不存在。
+// 等两帧 + 一个宏任务，确保合成器已提交、DWM 已更新，之后主进程直接抓屏即可。
+function hideForCapture() {
+  document.documentElement.style.visibility = 'hidden'
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))
+  })
+}
+function restoreAfterCapture() {
+  document.documentElement.style.visibility = ''
+}
+
 async function capture() {
   try {
-    // 获取自定义保存路径
+    // 获取自定义保存路径（放在隐藏之前：隐藏期间不做任何额外等待）
     let saveDir = ''
     try {
       const settingsRes = await axios.get('/api/widget-settings')
@@ -59,13 +72,20 @@ async function capture() {
     } catch (_) { /* 读取设置失败则使用默认路径 */ }
 
     // 只保存文件，不回传整屏 base64（本组件只用 filePath，省掉一大块内存）
-    const res = await window.electron.invoke(INVOKE.SCREENSHOT_CAPTURE, { hideWidget: false, saveDir, withDataUrl: false })
-    if (res.success) {
-      result.value = res
-    } else {
-      error.value = '截屏失败，请重试'
+    // hideWidget 传 false：自己已经藏好了，别让主进程再等 150ms 白等一次
+    await hideForCapture()
+    try {
+      const res = await window.electron.invoke(INVOKE.SCREENSHOT_CAPTURE, { hideWidget: false, saveDir, withDataUrl: false })
+      if (res.success) {
+        result.value = res
+      } else {
+        error.value = '截屏失败，请重试'
+      }
+    } finally {
+      restoreAfterCapture()
     }
   } catch (err) {
+    restoreAfterCapture()
     error.value = err.message || '截屏失败'
   } finally {
     capturing.value = false
@@ -90,6 +110,8 @@ onMounted(capture)
 
 onUnmounted(() => {
   if (autoCloseTimer) clearTimeout(autoCloseTimer)
+  // 兜底：万一截屏途中组件被关掉，不能把整个窗口留在 visibility:hidden 状态（否则工具箱永久隐身）
+  restoreAfterCapture()
 })
 </script>
 

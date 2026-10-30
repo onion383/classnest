@@ -6,6 +6,7 @@ const { db } = require('../db');
 const dbManager = require('../dbManager/dbManager');
 const { moveToTrash, deleteThumb } = require('../albumOps');
 const albumThumbs = require('../albumThumbs');
+const { readExifDetail } = require('../albumExif');
 const { now } = require('../utils/sql');
 // 扫描子进程管理器：主进程**不跑扫描**，只负责派活/收报活/转发补图需求。
 // 详见本文件末尾「后台扫描：委派给扫描子进程」段与 scanWorker.js 顶部注释。
@@ -53,6 +54,15 @@ function contentTypeOf(fileName) {
   const ext = path.extname(fileName).slice(1).toLowerCase() || (isVideo ? 'mp4' : 'jpeg');
   const mime = isVideo ? (ext === 'mkv' ? 'video/x-matroska' : `video/${ext === 'ogv' ? 'ogg' : ext}`) : `image/${ext}`;
   return mime;
+}
+
+// 判断 If-None-Match 是否命中当前 ETag：值可能是单个、逗号分隔的多个，或 *。
+// 只做精确比较：我们发的是强 ETag，不处理 W/ 弱前缀（浏览器会原样回送，不会自行加 W/）。
+function matchesEtag(header, etag) {
+  if (!header) return false;
+  const raw = String(header).trim();
+  if (raw === '*') return true;
+  return raw.split(',').some((t) => t.trim() === etag);
 }
 
 // ---------- 请求路径的缩略图现场生成：配额闸 + 超量转子进程 ----------
@@ -664,7 +674,26 @@ router.get('/photo/:photoId/file', async (req, res) => {
     const mime = contentTypeOf(photo.file_name);
     const range = req.headers.range;
 
-    if (range) {
+    // 版本指纹：size + mtime。刻意不用内容哈希——算哈希要整读一遍文件（手机原图 3~8MB），
+    // 每次请求多几十毫秒，为省那点回环流量不值当；size+mtime 是 nginx 的默认做法。
+    // 唯一漏网场景是「内容被原地替换且大小、mtime 都没变」，这个场景在相册扫描里不存在
+    // （增删改都会重新入库，photoId 变了就是另一个 URL）。
+    const etag = `"${total.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}"`;
+
+    // 既然发了 ETag，就要守 If-Range 契约：Range 请求带回来的 If-Range 对不上，
+    // 说明文件在客户端拿完上一段之后变过，此时必须忽略 Range 回 200 全量，
+    // 否则客户端会把新旧两段拼成一张坏图。日期形式的 If-Range 不解析——
+    // 浏览器对 <video> 用的就是我们刚发的这个 ETag，不会回退到日期形式。
+    const ifRange = req.headers['if-range'];
+    const rangeTrustworthy = !ifRange || ifRange === etag;
+
+    // 304 只对整文件请求成立：带 Range 的请求要的是片段，回 304 浏览器拿不到内容。
+    if (!range && matchesEtag(req.headers['if-none-match'], etag)) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+      return res.end();
+    }
+
+    if (range && rangeTrustworthy) {
       // 解析并校验 Range：非法/越界/多段统一回 416，避免 start/end 反了读出负长度或越界
       const m = /^bytes=(\d*)-(\d*)$/.exec(String(range).trim());
       if (!m || (m[1] === '' && m[2] === '')) {
@@ -698,6 +727,7 @@ router.get('/photo/:photoId/file', async (req, res) => {
         'Content-Length': chunkSize,
         'Content-Type': mime,
         'Cache-Control': 'no-cache',
+        ETag: etag,
       });
       const stream = fs.createReadStream(photo.file_path, { start, end });
       // 读盘失败时立刻销毁响应，避免前端拿到半截视频后一直转圈
@@ -712,6 +742,7 @@ router.get('/photo/:photoId/file', async (req, res) => {
         'Content-Type': mime,
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-cache',
+        ETag: etag,
       });
       const stream = fs.createReadStream(photo.file_path);
       stream.on('error', (e) => {
@@ -802,6 +833,47 @@ router.get('/photo/:photoId/thumb', async (req, res) => {
 // 低干扰：缺图的两阶段处理（见「后台扫描的低干扰约定」）。
 //   第一阶段：整批缺图数过配额闸 → 主进程现场生成（用户无感知，格子立刻有图）；
 //   第二阶段：过不了闸 → 全部记进需求队列交给扫描任务，本次直接跳过。
+// GET /api/album/photo/:photoId/info 返回「照片信息」面板所需的元数据
+//
+// 为什么不把这些字段存进 album_photos：色域、设备、GPS 只在「打开某一张看详情」时才用得上，
+// 让扫描阶段为每张照片多解析一遍 GPS + ICC 会明显拖慢大相册（这也是 albumExif 当初
+// 只从 EXIF 里取拍摄时间的原因）。按需读一张约 10~20ms，打开面板时感知不到。
+//
+// 源文件已被删除时仍返回文件名/路径/库内大小，依赖读文件的字段留空——
+// 这种照片在查看器里本来就显示不出来，信息面板给「未知」比整个面板报错更合理。
+router.get('/photo/:photoId/info', async (req, res) => {
+  try {
+    const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(req.params.photoId));
+    if (!photo) return res.status(404).json({ error: '照片不存在' });
+
+    let stat = null;
+    try { stat = await fsp.stat(photo.file_path); } catch (_) { /* 源文件不在了，用库里的兜底 */ }
+
+    const detail = stat ? await readExifDetail(photo.file_path) : {};
+    res.json({
+      success: true,
+      data: {
+        fileName: photo.file_name,
+        filePath: photo.file_path,
+        // 以磁盘实际大小为准：库里的 file_size 是扫描那一刻的值，之后文件可能被改过
+        fileSize: stat ? stat.size : (photo.file_size || 0),
+        width: detail.width || null,
+        height: detail.height || null,
+        colorSpace: detail.colorSpace || '',
+        // 库里的 exif_date 是扫描时读到的，作为实时读取的兜底（值是 "YYYY-MM-DDTHH:mm:ss"）
+        takenAt: detail.takenAt || String(photo.exif_date || '').replace('T', ' '),
+        camera: detail.camera || '',
+        lat: typeof detail.lat === 'number' ? detail.lat : null,
+        lng: typeof detail.lng === 'number' ? detail.lng : null,
+        format: detail.format || '',
+        mediaType: mediaTypeOf(photo.file_name),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 不做「截断式」处理（只生成前 N 张、其余排队）：那样用户会看到同一屏里
 // 靠前的格子有图、靠后的没有，比全都没有更难解释。
 router.post('/photo/thumbs', async (req, res) => {

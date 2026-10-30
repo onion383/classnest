@@ -11,6 +11,7 @@
       class="overflow-auto border rounded"
       :class="{ 'scrollbar-gutter-stable': vScroll }"
       :style="maxHeight > 0 ? { maxHeight: maxHeight + 'px' } : null"
+      @scroll.passive="onGridScroll"
     >
       <!-- 空态：**网状表不再显示**。
            课表 / 值日 / 座位这类表的「空」本身就是一张待填的网格 —— 有行列结构、
@@ -364,6 +365,8 @@ const ctx = {
   _measureTimer: null,
   _measureRaf: null,
   _titleHeadH: 0,
+  // 内部滚动容器的最后位置（KeepAlive 切回时要靠它还原，见 onActivated 注释）
+  _gridScrollTop: 0,
   _rowSlotGhost: null, _colSlotGhost: null, _rowRaf: 0, _colRaf: 0,
   _rowGeom: null, _colGeom: null, _rowPending: null, _colPending: null,
   _rowAutoScroll: null, _colAutoScroll: null,
@@ -653,6 +656,24 @@ watch(rowsKeySig, () => { ctx.openRowsAnimWindow(); ctx.scheduleMeasure(); })
 // 列头变化：讲台/时段/节次列的显隐会改总列数，进而改单元格宽度、可能改行高（换行）
 watch(ctx.colHeaders, () => { ctx.scheduleMeasure(); })
 
+/* KeepAlive 切回：还原表格内部滚动位置。
+ * 页面被 KeepAlive 缓存时组件根 DOM 会被挪进一个「未插入文档的 div」，浏览器因此把
+ * 滚动容器的 scrollTop 清成 0，**且不派发 scroll 事件**。
+ * 这里自己没有虚拟滚动，内容不会空白，但窗口回到顶部同样突兀，所以照实还原。
+ * 只有内容超高（vScroll）时容器才真的可滚，其余情况 scrollTop 恒 0，恢复会自然跳过。 */
+function onGridScroll(e) {
+  ctx._gridScrollTop = e && e.target ? e.target.scrollTop : 0;
+}
+
+function restoreGridScroll() {
+  const el = ctx.gridTable.value;
+  const saved = ctx._gridScrollTop || 0;
+  if (!el || !saved) return;
+  const max = Math.max(0, el.scrollHeight - el.clientHeight);
+  const top = Math.min(saved, max);
+  if (Math.abs(el.scrollTop - top) > 1) el.scrollTop = top;
+}
+
 onMounted(() => {
   document.addEventListener('mouseup', ctx.handleGlobalMouseUp);
   // 首屏：数据区整体从左往右弹入
@@ -666,6 +687,8 @@ onActivated(() => {
   if (firstActivate.value) { firstActivate.value = false; ctx.scheduleMeasure(); return; }
   ctx.playTableEnter();
   ctx.scheduleMeasure();
+  // DOM 已插回文档、但滚动位置在 0：等本帧渲染完再写回（早于 paint，不会闪一帧顶部）
+  nextTick(() => restoreGridScroll());
 })
 onBeforeUnmount(() => {
   document.removeEventListener('mouseup', ctx.handleGlobalMouseUp);

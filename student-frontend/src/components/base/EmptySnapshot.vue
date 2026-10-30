@@ -1,20 +1,27 @@
 <template>
-  <!-- 空态占位：整行铺满（与表格/骨架屏同宽同高），底色走主题 surface（毛玻璃主题下即白色磨砂玻璃） -->
-  <div class="snapshot-empty bg-surface">
-    <span class="snapshot-empty-icon">🗓</span>
-    <span class="snapshot-empty-text">暂未有历史快照</span>
+  <!-- 空态占位：整行铺满（与表格/骨架屏同宽同高），底色走主题 surface（毛玻璃主题下即白色磨砂玻璃）
+       text/icon/minHeight 可覆盖默认值，供「非表格位置」的空态复用（如座位指数条列表）。
+       不传时与原来完全一致，既有调用方无需改动。 -->
+  <div class="snapshot-empty bg-surface" :style="{ minHeight }">
+    <span class="snapshot-empty-icon">{{ icon }}</span>
+    <span class="snapshot-empty-text">{{ text }}</span>
   </div>
 </template>
 
 <script setup>
 defineOptions({ name: 'EmptySnapshot' })
+defineProps({
+  text: { type: String, default: '暂未有历史快照' },
+  icon: { type: String, default: '🗓' },
+  // 与同位置的内容块保持等高，避免空态↔数据切换时页面跳动
+  minHeight: { type: String, default: '320px' }
+})
 </script>
 
 <style scoped>
 .snapshot-empty {
   box-sizing: border-box;
   width: 100%;
-  min-height: 320px;
   display: flex;
   flex-direction: column;
   align-items: center;

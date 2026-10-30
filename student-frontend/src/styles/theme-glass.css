@@ -457,25 +457,36 @@
 :root:is([data-theme="glass"], [data-theme="win11"]) button.bg-surface-hover:hover {
   background-color: var(--alpha-white-95) !important;
 }
-/* ========== 刷新按钮：与其它彩色玻璃按钮同款质感（白遮罩 + blur，透出暖橙底色） ========== */
+/* ========== 刷新类按钮（.btn-refresh）：淡暖色玻璃 ==========
+   观感取自上一版橙色特例「实际生效」的那套，只把冲突剔掉：
+   - 原来 background / color 带 !important 是为了压模板里的 `hover:bg-text-secondary`
+     （(0,2,0)）。其实 `button.btn-refresh` 本身就是 (0,3,1)，天然压得住，不需要 !important ——
+     去掉之后它才能被公共按钮层正常接住，不再出现「改公共样式刷新按钮不动」。
+   - 原来它的 box-shadow 和 `.opbar button:not(.view-switch-btn)`（(0,4,1)，更高）争抢，
+     opbar 内实际生效的一直是 opbar 那份。现在 opbar 规则排除 .btn-refresh（见下方 `:not(.btn-refresh)`），
+     阴影只有一个来源，值就取 opbar 内原本真实生效的那组（含 14px 白外发光）。
+   - 悬浮只加深内遮罩 50%→56% + 文字深一档，**底色不变**（与全站按钮硬约定一致）。 */
 :root:is([data-theme="glass"], [data-theme="win11"]) button.btn-refresh {
-  background: rgba(251, 146, 60, 0.5) !important;
-  backdrop-filter: blur(12px) saturate(1.3);
-  color: #9a3412 !important;
+  background: rgba(251, 146, 60, 0.5);
   border: none;
-  /* 去掉原本那圈橙色外发光：悬浮态不发光，静止态也一并去掉，
-     否则鼠标上去光晕消失，按钮反而是"变平"而不是"点亮" */
-  box-shadow: inset 0 0 0 40px var(--alpha-white-50) !important;
+  backdrop-filter: blur(12px) saturate(1.3);
+  color: #9a3412;
+  box-shadow:
+    inset 0 0 0 40px var(--alpha-white-50),
+    0 0 14px var(--alpha-white-12);
 }
+/* hover 里重写一次 background：不是为了改色，而是用它 (0,3,1) 压住模板的
+   `hover:bg-text-secondary`（(0,2,0)，会把底色推到深灰），保证悬浮底色不动。 */
 :root:is([data-theme="glass"], [data-theme="win11"]) button.btn-refresh:hover {
-  color: #7c2d12 !important;
-  /* 与其它彩色按钮一致：只加深文字，不做外发光 */
-  box-shadow: inset 0 0 0 40px var(--alpha-white-56) !important;
+  background: rgba(251, 146, 60, 0.5);
+  color: #7c2d12;
+  box-shadow: inset 0 0 0 40px var(--alpha-white-56);
 }
 
 /* ========== 操作栏按钮：叠加微弱白色遮罩提升可读性（仅操作栏，不作用到弹窗等其它按钮）
-   排除 .view-switch-btn：视图切换的两个标签需要直接透出切换组件自身的标题栏同款毛玻璃底面 ========== */
-:root:is([data-theme="glass"], [data-theme="win11"]) .opbar button:not(.view-switch-btn) {
+   排除 .view-switch-btn：视图切换的两个标签需要直接透出切换组件自身的标题栏同款毛玻璃底面
+   排除 .btn-refresh：它的阴影由上面那条自己给，留着会被这里 (0,4,1) 的 !important 抢走 ========== */
+:root:is([data-theme="glass"], [data-theme="win11"]) .opbar button:not(.view-switch-btn):not(.btn-refresh) {
   border: none;
   backdrop-filter: blur(12px) saturate(1.3);
   box-shadow:
@@ -483,7 +494,7 @@
     0 0 14px var(--alpha-white-12) !important;
 }
 /* 操作栏按钮悬浮：与彩色按钮一致 —— 只加深内遮罩，不做外发光 */
-:root:is([data-theme="glass"], [data-theme="win11"]) .opbar button:hover:not(.view-switch-btn) {
+:root:is([data-theme="glass"], [data-theme="win11"]) .opbar button:hover:not(.view-switch-btn):not(.btn-refresh) {
   box-shadow:
     inset 0 0 0 40px var(--alpha-white-56) !important;
 }

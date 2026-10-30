@@ -83,8 +83,14 @@
           当前相册暂无照片，点击「刷新」或到设置页「更新文件夹照片」重新扫描。
         </p>
 
-        <!-- 照片区 + 右侧年份刻度尺：行布局，滚动只发生在左侧网格里 -->
-        <div v-else class="flex-1 min-h-0 flex gap-1">
+        <!-- 照片区 + 右侧年份刻度尺：外层一层毛玻璃面板，两者同处其中。
+             玻璃观感不在这里硬写：`.bg-surface` 是项目统一的玻璃入口 ——
+             glass / win11 走 theme-glass.css 的 `main .bg-surface` 配方（底色 + blur(24px) saturate(1.4)），
+             glass2 走 theme-glass2.css 的 `.bg-surface` 规则；夜间模式各自覆盖。
+             p-5 与其它玻璃卡片同一档（项目里 33 处卡片都用它），且正好等于 glass 主题的卡片圆角半径，
+             内边距不小于圆角半径，内容不会被圆弧切掉角。
+             overflow-hidden 只为让内部滚动内容被圆角裁掉（不裁的话滚动时直角格子会顶出圆弧）。 -->
+        <div v-else class="flex-1 min-h-0 flex gap-1 bg-surface border border-border rounded-xl p-5 overflow-hidden">
           <!-- 虚拟滚动容器：只挂载视口附近的分组，外部用总高度撑起滚动条 -->
           <div ref="containerRef" class="flex-1 overflow-auto min-h-0 album-scroll" @scroll="onScroll">
           <div class="relative" :style="{ height: totalH + 'px' }">
@@ -109,6 +115,7 @@
                   v-for="p in v.g.photos"
                   :key="p.id"
                   @click="onCellClick(p)"
+                  @pointerenter="onCellHover(p)"
                   @pointerdown="onCellPointerDown(p, $event)"
                   @pointermove="onCellPointerMove"
                   @pointerup="onCellPointerUp"
@@ -281,21 +288,35 @@
     <!-- 媒体查看器（图片 / 视频） -->
     <Teleport to="body">
     <Transition name="preview">
-    <div v-if="viewer" class="fixed inset-0 bg-black/90 z-[10004] flex flex-col" @click.self="closeViewer">
-      <!-- 关闭按钮（右上角） -->
-      <button @click="closeViewer" class="z-20 w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 text-white text-lg flex items-center justify-center transition-theme" style="position:absolute!important;top:16px!important;right:16px!important;" title="关闭">✕</button>
-      <!-- 上一张（左侧边缘居中） -->
-      <button @click="prevPhoto" class="z-20 w-11 h-11 rounded-full bg-white/10 hover:bg-white/25 text-white text-xl flex items-center justify-center transition-theme" style="position:absolute!important;left:16px!important;top:50%!important;transform:translateY(-50%)!important;" title="上一张">‹</button>
-      <!-- 下一张（右侧边缘居中） -->
-      <button @click="nextPhoto" class="z-20 w-11 h-11 rounded-full bg-white/10 hover:bg-white/25 text-white text-xl flex items-center justify-center transition-theme" style="position:absolute!important;right:16px!important;top:50%!important;transform:translateY(-50%)!important;" title="下一张">›</button>
+    <!-- 配色走 .album-viewer 的 CSS 变量：默认深色灯箱，毛玻璃主题下换成浅色玻璃（见 style 块） -->
+    <div v-if="viewer" class="fixed inset-0 z-[10004] flex flex-col album-viewer" @click.self="closeViewer">
+      <!-- 媒体区 + 信息面板的外层：flex 行。面板展开时靠宽度动画把媒体区【压窄】（而不是盖上去），
+           图片因此会在剩下的空间里重新居中。媒体区必须 min-w-0：flex 子项默认 min-width:auto，
+           会被图片的固有宽度撑住，那样面板再怎么变宽也挤不动它。 -->
+      <div class="viewer-main flex-1 flex min-h-0">
+      <!-- 媒体舞台：关闭按钮和左右箭头都挂在这一层，定位相对它而不是整个查看器。
+           这样面板挤压时按钮【跟着布局自然移动】，不必再给 right 加第二条动画去跟宽度动画对齐
+           （两套时间函数稍有出入就会有可见的错位）。 -->
+      <div class="viewer-stage flex-1 min-w-0 relative">
+      <!-- 关闭按钮（媒体区右上角） -->
+      <button @click="closeViewer" class="z-20 w-10 h-10 rounded-full viewer-btn viewer-close text-lg flex items-center justify-center transition-theme" title="关闭">✕</button>
+      <!-- 上一张（媒体区左侧边缘居中） -->
+      <button @click="prevPhoto" class="z-20 w-11 h-11 rounded-full viewer-btn viewer-nav viewer-nav-prev text-xl flex items-center justify-center transition-theme" title="上一张">‹</button>
+      <!-- 下一张（媒体区右侧边缘居中） -->
+      <button @click="nextPhoto" class="z-20 w-11 h-11 rounded-full viewer-btn viewer-nav viewer-nav-next text-xl flex items-center justify-center transition-theme" title="下一张">›</button>
       <!-- 视频播放区 -->
-      <div v-if="isVideo(viewer)" class="flex-1 flex items-center justify-center p-6 overflow-hidden preview-media">
+      <div
+        v-if="isVideo(viewer)"
+        class="absolute inset-0 flex items-center justify-center p-6 overflow-hidden preview-media"
+        :class="mediaReady ? 'media-in' : 'media-waiting'"
+      >
         <video
           ref="videoEl"
-          class="max-w-full max-h-full bg-black outline-none"
+          class="max-w-full max-h-full bg-black outline-none viewer-media"
           :src="photoSrc(viewer)"
           @timeupdate="onTimeupdate"
           @loadedmetadata="onLoadedmetadata"
+          @loadeddata="mediaReady = true"
           @play="playing = true"
           @pause="playing = false"
           @ended="playing = false"
@@ -303,22 +324,67 @@
       </div>
       <!-- 图片查看区：滚轮缩放只挂在外层容器上（原来 img 上还挂了一份重复监听，
            多出来的非 passive wheel 监听既浪费又会在 devtools 里刷 Violation 提示） -->
-      <div v-else class="flex-1 flex items-center justify-center p-6 overflow-hidden preview-media" @wheel.prevent="onZoomWheel">
+      <div
+        v-else
+        class="absolute inset-0 flex items-center justify-center p-6 overflow-hidden preview-media"
+        :class="mediaReady ? 'media-in' : 'media-waiting'"
+        @wheel.prevent="onZoomWheel"
+      >
         <img
           :src="photoSrc(viewer)"
-          class="max-w-full max-h-full select-none transition-transform duration-100"
+          class="max-w-full max-h-full select-none transition-transform duration-100 viewer-media"
           :style="viewerStyle"
           draggable="false"
+          decoding="async"
+          @load="mediaReady = true"
+          @error="mediaReady = true"
         />
-      </div>
-      <!-- 底部工具条 -->
-      <div class="flex items-center justify-center gap-3 p-4 bg-black/40 flex-wrap">
+      </div><!-- /preview-media -->
+      </div><!-- /viewer-stage -->
+
+      <!-- 照片信息侧边栏（挤压式）：和媒体区同处 viewer-main 这个 flex 行里，宽度 0 → --info-w 时
+           媒体区被压窄、图片在剩余空间里重新居中（是「挤」不是「盖」）。
+           放进 flex 行还让面板高度天然等于媒体区高度，不会伸到下面把工具条盖住。
+           常驻 DOM、靠 .open 开合；若用 v-if，宽度动画就没有起点，会一开一关地闪。 -->
+      <aside class="info-panel" :class="{ open: infoVisible }">
+        <div class="info-panel-inner">
+          <div class="info-head">
+            <span class="info-title">照片信息</span>
+            <button @click="infoVisible = false" class="info-close" title="关闭">✕</button>
+          </div>
+          <div v-if="infoLoading" class="info-loading">读取中…</div>
+          <template v-else>
+            <section class="info-sec">
+              <h4 class="info-sec-title">基础信息</h4>
+              <dl class="info-list">
+                <div class="info-row"><dt>文件名</dt><dd>{{ photoInfo?.fileName || viewer.file_name || '未知' }}</dd></div>
+                <div class="info-row"><dt>路径</dt><dd>{{ photoInfo?.filePath || viewer.file_path || '未知' }}</dd></div>
+                <div class="info-row"><dt>大小</dt><dd>{{ fmtBytes(photoInfo?.fileSize ?? viewer.file_size) || '未知' }}</dd></div>
+              </dl>
+            </section>
+            <section class="info-sec">
+              <h4 class="info-sec-title">照片信息</h4>
+              <dl class="info-list">
+                <div class="info-row"><dt>色域</dt><dd>{{ photoInfo?.colorSpace || '未知' }}</dd></div>
+                <div class="info-row"><dt>分辨率</dt><dd>{{ infoSize }}</dd></div>
+                <div class="info-row"><dt>拍摄时间</dt><dd>{{ photoInfo?.takenAt || '未知' }}</dd></div>
+                <div class="info-row"><dt>拍摄设备</dt><dd>{{ photoInfo?.camera || '未知' }}</dd></div>
+                <div class="info-row"><dt>地点</dt><dd>{{ infoGps }}</dd></div>
+              </dl>
+            </section>
+          </template>
+        </div>
+      </aside>
+      </div><!-- /viewer-main -->
+
+      <!-- 底部工具条：在 viewer-main 之外，横贯全宽，不随侧边栏挤压 -->
+      <div class="flex items-center justify-center gap-3 p-4 flex-wrap viewer-bar">
         <!-- 视频控制 -->
         <template v-if="isVideo(viewer)">
-          <button @click="togglePlay" class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-sm transition-theme" :title="playing ? '暂停' : '播放'">{{ playing ? '⏸' : '▶' }}</button>
-          <button @click="skip(-10)" class="h-10 px-3 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs transition-theme" title="后退 10 秒">« -10s</button>
+          <button @click="togglePlay" class="w-10 h-10 rounded-full viewer-btn text-sm transition-theme" :title="playing ? '暂停' : '播放'">{{ playing ? '⏸' : '▶' }}</button>
+          <button @click="skip(-10)" class="h-10 px-3 rounded-full viewer-btn text-xs transition-theme" title="后退 10 秒">« -10s</button>
           <div class="flex items-center gap-2 min-w-[260px] max-w-full">
-            <span class="text-white text-xs tabular-nums w-12 text-right">{{ fmtTime(currentTime) }}</span>
+            <span class="viewer-fg text-xs tabular-nums w-12 text-right">{{ fmtTime(currentTime) }}</span>
             <input
               type="range"
               class="flex-1 accent-info"
@@ -330,24 +396,25 @@
               @pointerdown="dragging = true"
               @pointerup="dragging = false"
             />
-            <span class="text-white text-xs tabular-nums w-12">{{ fmtTime(duration) }}</span>
+            <span class="viewer-fg text-xs tabular-nums w-12">{{ fmtTime(duration) }}</span>
           </div>
-          <button @click="skip(10)" class="h-10 px-3 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs transition-theme" title="前进 10 秒">+10s »</button>
+          <button @click="skip(10)" class="h-10 px-3 rounded-full viewer-btn text-xs transition-theme" title="前进 10 秒">+10s »</button>
           <AppSelect v-model="playbackRate" @change="changeRate" class="w-20" title="播放倍数" :options="[{ value: 0.5, label: '0.5x' }, { value: 0.75, label: '0.75x' }, { value: 1, label: '1x' }, { value: 1.25, label: '1.25x' }, { value: 1.5, label: '1.5x' }, { value: 2, label: '2x' }]" />
-          <span class="text-white/30">|</span>
+          <span class="viewer-sep">|</span>
         </template>
         <!-- 图片控制 -->
         <template v-else>
-          <button @click="rotate(-1)" class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-sm transition-theme">⟲</button>
-          <button @click="rotate(1)" class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-sm transition-theme">⟳</button>
-          <button @click="zoomOut" class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white transition-theme">−</button>
-          <span class="text-white text-xs w-14 text-center">{{ Math.round(zoom * 100) }}%</span>
-          <button @click="zoomIn" class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white transition-theme">＋</button>
-          <button @click="resetView" class="px-3 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs transition-theme">复位</button>
-          <span class="text-white/30">|</span>
+          <button @click="rotate(-1)" class="w-10 h-10 rounded-full viewer-btn text-sm transition-theme">⟲</button>
+          <button @click="rotate(1)" class="w-10 h-10 rounded-full viewer-btn text-sm transition-theme">⟳</button>
+          <button @click="zoomOut" class="w-10 h-10 rounded-full viewer-btn transition-theme">−</button>
+          <span class="viewer-fg text-xs w-14 text-center">{{ Math.round(zoom * 100) }}%</span>
+          <button @click="zoomIn" class="w-10 h-10 rounded-full viewer-btn transition-theme">＋</button>
+          <button @click="resetView" class="px-3 h-10 rounded-full viewer-btn text-xs transition-theme">复位</button>
+          <span class="viewer-sep">|</span>
         </template>
-        <button @click="saveAs(viewer)" class="px-4 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-sm transition-theme">另存</button>
-        <button @click="openFolderViewer" class="px-4 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-sm transition-theme">打开文件夹</button>
+        <button @click="toggleInfo" class="px-4 h-10 rounded-full viewer-btn text-sm transition-theme">信息</button>
+        <button @click="saveAs(viewer)" class="px-4 h-10 rounded-full viewer-btn text-sm transition-theme">另存</button>
+        <button @click="openFolderViewer" class="px-4 h-10 rounded-full viewer-btn text-sm transition-theme">打开文件夹</button>
         <button @click="deletePhoto(viewer)" class="px-4 h-10 rounded-full bg-danger hover:bg-danger/80 text-white text-sm transition-theme">删除（回收站）</button>
       </div>
     </div>
@@ -423,6 +490,16 @@ const exportMounted = ref(false)
 const viewer = ref(null)
 const rotation = ref(0)
 const zoom = ref(1)
+// 媒体首帧就绪：驱动「进入动画」的起跑线（为什么不用 Transition 的 enter-active，见 style 块注释）。
+// 首次打开为 false，等 img @load / video loadeddata 才置 true；翻页时直接为 true（不重播动画）。
+const mediaReady = ref(false)
+
+// 照片信息面板：只在点「信息」后才去后端读 EXIF/ICC（打开查看器时不读，省一次往返）。
+// 同一张看过就进缓存，左右来回翻不会重复请求。
+const infoVisible = ref(false)
+const infoLoading = ref(false)
+const photoInfo = ref(null)
+const infoCache = new Map()
 
 // 视频播放状态
 const videoEl = ref(null)
@@ -926,12 +1003,59 @@ function onCellPointerMove(e) {
 function onCellPointerUp() {
   clearPressTimer()
   pressOrigin = null
+  // 指针离开/抬起时取消"还没触发"的悬停预取，避免在格子外白白下原图
+  onCellHoverEnd()
 }
 
 function onCellClick(p) {
   if (suppressClick) { suppressClick = false; return }
   if (selectMode.value) { toggleSelect(p.id); return }
   viewPhoto(p)
+}
+
+// ---- 悬停预取原图（单槽）----
+// 实测（testjs/probe/viewer-load-probe.cjs，4032x3024 / 3.38MB）：
+//   全新 URL 直接加载到可见 149ms；用 new Image() 预热后只需 33ms，省 116ms。
+// 为什么不用 fetch 预取：/file 返回 Cache-Control: no-cache 且没有 ETag/Last-Modified，
+//   浏览器无法做条件请求，fetch 下完的字节 img 不认（实测仍走完整请求），纯属白花带宽。
+// 为什么只留一张：原图解码成位图约 4032×3024×4 = 47MB，预热多张等于把内存堆在
+//   "用户可能根本不点"的图上。单槽覆盖 → 最多一张常驻，且新悬停会中断上一张的下载。
+const HOVER_PREFETCH_DELAY = 80 // 滤掉快速划过网格；80ms 比 150ms 更早开始下，代价是横穿时多开几次请求
+let hoverTimer = null
+let prefetchImg = null
+let prefetchId = null
+
+function releasePrefetch() {
+  if (!prefetchImg) return
+  // 置空 src 会中断还没下完的请求；已下完的位图交给浏览器/GC 回收
+  prefetchImg.src = ''
+  prefetchImg = null
+}
+
+function onCellHover(p) {
+  // 多选态、已打开查看器时不预取：这两种状态下点开图不会立刻发生
+  if (selectMode.value || viewer.value || isVideo(p)) return
+  if (prefetchId === p.id) return // 槽位里就是这张，重复预取没意义
+  clearTimeout(hoverTimer)
+  hoverTimer = setTimeout(() => {
+    hoverTimer = null
+    releasePrefetch()
+    prefetchId = p.id
+    const im = new Image()
+    im.decoding = 'async'
+    // 失败就放弃这张，别让 prefetchId 卡在"预取过但没成功"的状态，否则永远不再重试
+    im.onerror = () => {
+      if (prefetchImg === im) { prefetchImg = null; prefetchId = null }
+    }
+    // URL 必须和查看器里的 photoSrc(viewer) 完全一致，多一个参数就命中不了 image cache
+    im.src = albumFileUrl(p.id)
+    prefetchImg = im
+  }, HOVER_PREFETCH_DELAY)
+}
+
+function onCellHoverEnd() {
+  clearTimeout(hoverTimer)
+  hoverTimer = null
 }
 
 function openMove() {
@@ -954,6 +1078,8 @@ async function onPhotosMoved() {
 
 // ---- 查看器操作 ----
 function viewPhoto(p) {
+  // 翻页（查看器已经开着）不播进入动画：图片是直接替换的，媒体层会一直保持 media-in 状态
+  const reopening = !!viewer.value
   rotation.value = 0
   zoom.value = 1
   // 视频状态复位
@@ -963,6 +1089,9 @@ function viewPhoto(p) {
   playbackRate.value = 1
   dragging.value = false
   viewer.value = { ...p, _rot: 0 }
+  mediaReady.value = reopening
+  // 信息面板开着时跟着切到新照片（面板位置保持不动，只换内容）
+  if (infoVisible.value) loadPhotoInfo(viewer.value)
 }
 // 在扁平列表中平移当前项，首尾循环
 function stepPhoto(dir) {
@@ -987,7 +1116,55 @@ function resetView() {
 function onZoomWheel(e) {
   zoom.value = Math.min(5, Math.max(0.2, zoom.value + (e.deltaY < 0 ? 0.1 : -0.1)))
 }
-function closeViewer() { viewer.value = null }
+function closeViewer() { viewer.value = null; infoVisible.value = false }
+
+// ---- 照片信息面板 ----
+// 字节数格式化。0 / null 返回空串，由模板统一显示「未知」——
+// 不在这里返回「未知」，是为了让「大小确实为 0 字节」和「读不到」在代码里仍然可区分。
+function fmtBytes(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v <= 0) return ''
+  if (v < 1024) return v + ' B'
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + ' KB'
+  if (v < 1024 * 1024 * 1024) return (v / 1024 / 1024).toFixed(2) + ' MB'
+  return (v / 1024 / 1024 / 1024).toFixed(2) + ' GB'
+}
+
+async function loadPhotoInfo(p) {
+  if (!p) return
+  if (infoCache.has(p.id)) { photoInfo.value = infoCache.get(p.id); return }
+  infoLoading.value = true
+  photoInfo.value = null
+  try {
+    const res = await axios.get(`/api/album/photo/${p.id}/info`, { headers: authHeaders() })
+    if (res.data && res.data.success) {
+      infoCache.set(p.id, res.data.data)
+      // 请求期间可能已经切到别的照片：只有仍是当前这张才写入，避免旧结果盖掉新面板
+      if (viewer.value && viewer.value.id === p.id) photoInfo.value = res.data.data
+    }
+  } catch (_) {
+    if (viewer.value && viewer.value.id === p.id) photoInfo.value = null
+  } finally {
+    if (viewer.value && viewer.value.id === p.id) infoLoading.value = false
+  }
+}
+
+function toggleInfo() {
+  infoVisible.value = !infoVisible.value
+  if (infoVisible.value) loadPhotoInfo(viewer.value)
+}
+
+const infoSize = computed(() => {
+  const i = photoInfo.value
+  if (!i || !i.width || !i.height) return '未知'
+  return `${i.width} × ${i.height}`
+})
+// 只显示十进制经纬度，不接地图（用户明确要求）。南纬/西经靠负号区分。
+const infoGps = computed(() => {
+  const i = photoInfo.value
+  if (!i || typeof i.lat !== 'number' || typeof i.lng !== 'number') return '未知'
+  return `${i.lat.toFixed(6)}, ${i.lng.toFixed(6)}`
+})
 
 // ---- 视频控制 ----
 function onLoadedmetadata() {
@@ -1080,15 +1257,44 @@ onMounted(async () => {
   startScanWatch()
 })
 
+/* ===== KeepAlive 切回：必须自己把滚动位置恢复回来 =====
+ * 实测结论（Chromium 行为，不会随版本改）：
+ * KeepAlive 缓存页面时，是把组件根 DOM 挪进一个「未插入文档的 div」。这一挪，
+ * 浏览器会把滚动容器的 scrollTop 重置为 0、clientHeight 变 0，**而且不派发 scroll 事件**。
+ *
+ * 于是切回来的状态是：容器在顶部、scrollTop ref 还停在中部（没人改它）。
+ * 虚拟滚动按旧位置渲染中部的分组（绝对定位在下方），视口内空无一物 ——
+ * 照片越多、滚得越深，这片空白越久，要等任意一次 scroll 事件才对齐。
+ * 这就是「大相册切走一会儿再切回，好久才出画面」的真正原因。
+ *
+ * 恢复办法：activated 时重新量一次尺寸（窗口可能在切走期间变过），再把容器滚回原位。 */
+let savedScrollTop = 0
+
 onActivated(() => {
   applyFocus()
   // KeepAlive 首次挂载也会触发 activated；startScanWatch 幂等，重复调用无害
   startScanWatch()
+  // 此刻 DOM 已插回文档，但滚动位置在 0，必须等渲染完再写 scrollTop
+  nextTick(() => {
+    measure()
+    const el = containerRef.value
+    if (!el) return
+    const max = Math.max(0, el.scrollHeight - el.clientHeight)
+    const top = Math.min(savedScrollTop, max)
+    el.scrollTop = top
+    // 同步 ref：不写的话 scroll 事件走 rAF 才更新，恢复的这一帧窗口还是旧值
+    scrollTop.value = top
+  })
 })
 watch(() => route.query.focus, applyFocus)
 
-// 被 KeepAlive 缓存时定时器要停（见 scanWatch 注释），否则切走后仍在发请求
-onDeactivated(stopScanWatch)
+// 被 KeepAlive 缓存时定时器要停（见 scanWatch 注释），否则切走后仍在发请求。
+// 顺手记下滚动位置 —— 只能读 onScroll 维护的 ref：onDeactivated 触发时 DOM 已被移出文档，
+// 那一刻 el.scrollTop 已经是 0 了，读不到真值。
+onDeactivated(() => {
+  savedScrollTop = scrollTop.value
+  stopScanWatch()
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
@@ -1097,6 +1303,9 @@ onBeforeUnmount(() => {
   stopScanWatch()
   // 长按手势的定时器也要清：卸载后再触发会去操作已经不存在的组件状态
   clearPressTimer()
+  // 悬停预取的定时器与在途下载同理：页面走后不该再拉原图
+  onCellHoverEnd()
+  releasePrefetch()
 })
 </script>
 
@@ -1165,12 +1374,17 @@ onBeforeUnmount(() => {
   transform: translateY(18px);
 }
 
-/* ===== 媒体预览动画：淡入 + 缩放（从较明显放大到原始） ===== */
+/* ===== 媒体预览动画：淡入 + 轻微缩放 =====
+ * 进入动画**不挂在 Transition 上**。原因是计时的起点：`.preview-media` 是 absolute inset-0 的
+ * 满屏容器，enter-active 从「元素插入」那一帧就开始算，而里面的 <img> 没有预留尺寸，
+ * 要等下载 + 解码完才撑开可见（冷加载实测 149ms，加解码约 180ms）。
+ * 结果就是动画早跑掉大半，用户看到「点下去空一下，图才带着动画尾巴硬砸出来」；
+ * 动画越短越明显（曾经缩到 0.16s 反而更卡），加长也只是遮丑，治不了根。
+ * 现在改为：遮罩 0.14s 立刻淡入当点击反馈，媒体层由 img @load / video loadeddata
+ * 置 mediaReady 才开跑，动画和图像首帧对齐。
+ * 翻页（stepPhoto）时 viewPhoto 把 mediaReady 直接置 true，class 不变 → 不重播，保持「直接替换」手感。 */
 .preview-enter-active {
-  transition: opacity 0.35s ease;
-}
-.preview-enter-active .preview-media {
-  animation: previewMediaIn 0.35s cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: opacity 0.14s ease;
 }
 .preview-leave-active {
   transition: opacity 0.22s ease;
@@ -1178,6 +1392,14 @@ onBeforeUnmount(() => {
 .preview-enter-from,
 .preview-leave-to {
   opacity: 0;
+}
+/* 首帧没就绪：先隐形，别让浏览器把 0×0 的 img 先画一遍再重排 */
+.preview-media.media-waiting {
+  opacity: 0;
+}
+/* 注意特异性：这条必须写在下面的 leave 规则之前，否则退场动画会被它盖掉（同为 0,2,0） */
+.preview-media.media-in {
+  animation: previewMediaIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .preview-leave-active .preview-media {
   animation: previewMediaOut 0.22s ease forwards;
@@ -1201,5 +1423,234 @@ onBeforeUnmount(() => {
     opacity: 0;
     transform: scale(0.9);
   }
+}
+
+/* ===== 媒体查看器配色：由 CSS 变量驱动，默认仍是深色灯箱 =====
+ * 原来遮罩写的是工具类 bg-black/90。改成变量而不是继续用具类的原因是：
+ * 全局 utilities.css 有一条「弹窗遮罩模糊」规则按 [class*="bg-black/"] 匹配，
+ * 且刻意排除了 bg-black/8、bg-black/9（注释写明「看图场景要保持深底压暗」）。
+ * 现在只需要毛玻璃主题换一套配色，用变量分档最省事，也不会牵动那条全局规则。
+ * 下方默认值与原工具类逐项等价，故基础/极简/夜间等主题视觉零变化。 */
+.album-viewer {
+  --av-overlay-bg: rgba(0, 0, 0, 0.9);
+  --av-overlay-blur: none;
+  --av-fg: #ffffff;
+  --av-fg-dim: rgba(255, 255, 255, 0.3);
+  --av-btn-bg: rgba(255, 255, 255, 0.1);
+  --av-btn-bg-hover: rgba(255, 255, 255, 0.25);
+  --av-btn-border: 1px solid transparent;
+  --av-btn-shadow: none;
+  --av-bar-bg: rgba(0, 0, 0, 0.4);
+  --av-bar-border-top: 1px solid transparent;
+  --av-media-radius: 0;
+  --av-media-shadow: none;
+  --av-panel-bg: rgba(38, 38, 38, 0.94);
+  --av-panel-border: rgba(255, 255, 255, 0.14);
+  --av-panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  /* 信息侧边栏宽度：面板自身宽度、媒体区/工具条的挤压量都由它推导，改宽度只动这一处 */
+  --info-w: 320px;
+
+  background-color: var(--av-overlay-bg);
+  backdrop-filter: var(--av-overlay-blur);
+}
+
+/* 窄窗口下把侧边栏收窄，免得把图片挤成一条 */
+@media (max-width: 900px) {
+  .album-viewer {
+    --info-w: 268px;
+  }
+}
+@media (max-width: 640px) {
+  .album-viewer {
+    --info-w: 220px;
+  }
+}
+
+/* 毛玻璃 / Win11：浅色玻璃灯箱。
+ * 底色不写死白色，而是由 --color-surface 混成半透明——夜间模式下该变量会变深，
+ * 于是同一套规则自动得到「深色玻璃」，不必再补一条 data-mode="night" 的规则。
+ * blur 只在遮罩这一层做一次：子元素若再叠 backdrop-filter，采样到的是已经模糊过的
+ * 结果，既无收益又会把大面积合成层叠起来。 */
+:root:is([data-theme="glass"], [data-theme="win11"]) .album-viewer {
+  --av-overlay-bg: color-mix(in srgb, var(--color-surface) 74%, transparent);
+  --av-overlay-blur: blur(30px) saturate(1.25);
+  --av-fg: var(--color-text);
+  --av-fg-dim: var(--color-text-muted);
+  --av-btn-bg: color-mix(in srgb, var(--color-surface-hover) 82%, transparent);
+  --av-btn-bg-hover: var(--color-surface-hover);
+  --av-btn-border: 1px solid var(--color-border);
+  /* 与 theme-glass.css 里全局 button 皮肤同一套配方（1px 细环 + 12px 柔光 + 顶部内高光），
+     避免查看器按钮和其余按钮出现两种玻璃质感 */
+  --av-btn-shadow: 0 0 0 1px var(--alpha-white-12), 0 0 12px var(--alpha-white-04),
+    inset 0 1px 0 var(--alpha-white-15);
+  --av-bar-bg: color-mix(in srgb, var(--color-surface) 46%, transparent);
+  --av-bar-border-top: 1px solid var(--color-border);
+  --av-media-radius: var(--radius-card);
+  /* 浅色玻璃上，白底照片/浅色截图会和背景融在一起，用投影 + 极细描边把边界立出来 */
+  --av-media-shadow: 0 18px 56px rgba(15, 23, 42, 0.22), 0 0 0 1px rgba(15, 23, 42, 0.05);
+  /* 面板比遮罩更实一点：它在画面之上，透得太厉害会看不清文字 */
+  --av-panel-bg: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  --av-panel-border: var(--color-border);
+  --av-panel-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+}
+
+/* 底部工具条（在 viewer-main 之外，所以侧边栏挤压它不到，横贯全宽） */
+.viewer-bar {
+  background-color: var(--av-bar-bg);
+  border-top: var(--av-bar-border-top);
+}
+
+/* 按钮：只接管配色与描边，宽高/圆角/内容排布仍由各自的工具类决定。
+ * 选择器带 .album-viewer 前缀，是为了压过 theme-glass.css 里那条全局 button 皮肤
+ * （`:root:is([data-theme=glass],[data-theme=win11]) button`，特异度 0,2,1）——
+ * scoped 下单独的 .viewer-btn 只有 0,2,0，会输给它，届时背景色是否生效就取决于
+ * 那条全局规则恰好没写 background-color，属于「靠巧合正确」，不能这么留。 */
+.album-viewer .viewer-btn {
+  background-color: var(--av-btn-bg);
+  color: var(--av-fg);
+  border: var(--av-btn-border);
+  box-shadow: var(--av-btn-shadow);
+}
+.album-viewer .viewer-btn:hover {
+  background-color: var(--av-btn-bg-hover);
+}
+
+/* 工具条内的文字（播放时间、缩放百分比）与分隔符 */
+.viewer-fg {
+  color: var(--av-fg);
+}
+.viewer-sep {
+  color: var(--av-fg-dim);
+}
+
+/* 图片 / 视频本体 */
+.viewer-media {
+  border-radius: var(--av-media-radius);
+  box-shadow: var(--av-media-shadow);
+}
+
+/* ===== 照片信息侧边栏 ===== */
+/* 关闭按钮和左右箭头都挂在 .viewer-stage 上，定位相对【媒体区】而不是整个查看器。
+   于是信息面板挤压时，它们会跟着媒体区一起左移，不必再为它们单独写一条动画去和
+   padding 动画对时（两套时间函数稍有出入就会有可见错位）。
+   定位必须带 !important —— theme-glass.css 的全局 button 皮肤把 position 设成了 relative
+   （特异度 0,2,1），不带 !important 会被拉回文档流。 */
+.album-viewer .viewer-nav {
+  position: absolute !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+}
+.album-viewer .viewer-nav-prev {
+  left: 16px !important;
+}
+.album-viewer .viewer-nav-next {
+  right: 16px !important;
+}
+.album-viewer .viewer-close {
+  position: absolute !important;
+  top: 16px !important;
+  right: 16px !important;
+}
+
+.info-panel {
+  flex: 0 0 auto;
+  width: 0;
+  overflow: hidden;
+  /* 内层固定 --info-w 且右对齐：宽度动画期间文字不会逐帧重排，只是被裁切；
+     可见区域从右侧往左展开，看起来就是「从右边滑出来」。 */
+  display: flex;
+  justify-content: flex-end;
+  cursor: default;
+  transition: width 0.22s cubic-bezier(0.32, 0.72, 0.24, 1);
+}
+.info-panel.open {
+  width: var(--info-w);
+}
+.info-panel-inner {
+  flex: 0 0 auto;
+  width: var(--info-w);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  overflow-y: auto;
+  /* 侧边栏贴边，用一条左侧分隔线代替原来的整圈描边 + 投影（挤压式不需要"浮起"感） */
+  border-left: 1px solid var(--av-panel-border);
+  background-color: var(--av-panel-bg);
+}
+.info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+.info-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--av-fg);
+}
+/* 关闭按钮必须带 .album-viewer 前缀：theme-glass.css 里那条全局 button 皮肤特异度 0,2,1，
+   只写 .info-close（scoped 后 0,2,0）会被它套上边框与外发光。 */
+.album-viewer .info-close {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--av-fg);
+  font-size: 12px;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+.album-viewer .info-close:hover {
+  opacity: 1;
+  background: var(--av-btn-bg);
+}
+.info-loading {
+  padding: 18px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--av-fg-dim);
+}
+.info-sec {
+  margin-top: 12px;
+}
+.info-sec-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--av-fg);
+  opacity: 0.6;
+}
+.info-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.info-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.info-row dt {
+  flex: 0 0 56px;
+  color: var(--av-fg);
+  opacity: 0.6;
+}
+.info-row dd {
+  flex: 1 1 auto;
+  margin: 0;
+  color: var(--av-fg);
+  /* 路径又长又没有空格，必须允许任意位置断行，否则会把面板横向撑破 */
+  word-break: break-all;
 }
 </style>

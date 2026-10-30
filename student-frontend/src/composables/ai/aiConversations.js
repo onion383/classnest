@@ -195,7 +195,9 @@ export function useAiConversations(ctx) {
         const { data } = await axios.get(`/api/ai/conversations/${latest.id}/messages?limit=${INITIAL_MSG_LIMIT}`)
         ctx._applyInitialMessages(data)
         nextTick(() => {
-          ctx.scrollBottom()
+          // 用 stickBottom 而非 scrollBottom：内容还在长高（markdown 重算 / 表格取数 / 图片），
+          // 需要一直跟到底，直到用户自己往上滑
+          ctx.stickBottom()
           ctx._fillEarlier()
         })
       } catch (_) { ctx.messages.value = [] }
@@ -213,7 +215,8 @@ export function useAiConversations(ctx) {
         const { data } = await axios.get(`/api/ai/conversations/${id}/messages?limit=${INITIAL_MSG_LIMIT}`)
         ctx._applyInitialMessages(data)
         nextTick(() => {
-          ctx.scrollBottom()
+          // 同上：切换会话后伴随分批长高，需要跟随贴底
+          ctx.stickBottom()
           ctx._fillEarlier()
         })
       } catch (_) { /* 忽略 */ }

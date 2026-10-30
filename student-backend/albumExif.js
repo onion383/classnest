@@ -39,26 +39,28 @@ function normalizeExifDate(str) {
   return `${year}-${p(mon)}-${p(day)}T${p(+h)}:${p(+mi)}:${p(+s)}`
 }
 
-// 从一段 TIFF/EXIF 字节里取出第一个命中的标签值。
-// 只处理 ASCII(2) / SHORT(3) / LONG(4) 三种类型 —— 日期标签都是 ASCII，
-// ExifIFD 指针(0x8769)是 LONG，正好够用。
-function readExifBuf(buf) {
-  if (!buf || buf.length < 8) return null
+// 从一段 TIFF/EXIF 字节里取出 IFD0 / Exif / GPS 三个标签表。
+// 拆成独立函数，是因为「只读拍摄时间」（扫描时每张都跑）和「读完整信息」（查看器里按需跑）
+// 需要同一套 IFD 遍历，没必要写两遍。
+function parseIfds(buf) {
+  const empty = { ifd0: new Map(), exif: new Map(), gps: new Map() }
+  if (!buf || buf.length < 8) return empty
   // sharp 给的通常已是 TIFF 头；少数来源前面带 "Exif\0\0" 前缀，跳过
   let base = 0
   if (buf.length > 6 && buf[0] === 0x45 && buf[1] === 0x78 && buf[2] === 0x69 && buf[3] === 0x66) base = 6
   const le = buf[base] === 0x49 && buf[base + 1] === 0x49
   const be = buf[base] === 0x4d && buf[base + 1] === 0x4d
-  if (!le && !be) return null
+  if (!le && !be) return empty
   const u16 = (o) => (le ? buf.readUInt16LE(o) : buf.readUInt16BE(o))
   const u32 = (o) => (le ? buf.readUInt32LE(o) : buf.readUInt32BE(o))
 
-  if (u16(base + 2) !== 42) return null // TIFF magic
+  if (u16(base + 2) !== 42) return empty // TIFF magic
   // 注意：块内所有偏移都是相对 TIFF 头（即 base），带 "Exif\0\0" 前缀时要加上 base
   const ifd0 = base + u32(base + 4)
-  if (ifd0 < 8 || ifd0 + 2 > buf.length) return null
+  if (ifd0 < 8 || ifd0 + 2 > buf.length) return empty
 
-  // 读一个 IFD 的全部条目，返回 Map<tag, 值>（值只取ASCII 字符串或数字）
+  // 读一个 IFD 的全部条目，返回 Map<tag, 值>
+  // 值类型：ASCII 字符串 / SHORT、LONG 数字 / RATIONAL 数字（count>1 时给数组）
   function readIfd(offset) {
     const out = new Map()
     if (offset < 8 || offset + 2 > buf.length) return out
@@ -83,6 +85,19 @@ function readExifBuf(buf) {
         out.set(tag, count <= 2 ? u16(valOff) : u16(base + u32(valOff)))
       } else if (type === 4) { // LONG
         out.set(tag, count <= 1 ? u32(valOff) : u32(base + u32(valOff)))
+      } else if (type === 5) { // RATIONAL：GPS 经纬度就是 3 个「度/分/秒」有理数
+        // 一个 RATIONAL 占 8 字节（分子+分母），count=1 也放不进 4 字节的内联槽位，恒为外部偏移
+        const need = count * 8
+        const start = need <= 4 ? valOff : base + u32(valOff)
+        const arr = []
+        for (let k = 0; k < count; k++) {
+          const o = start + k * 8
+          if (o + 8 > buf.length) break
+          const num = u32(o)
+          const den = u32(o + 4)
+          arr.push(den === 0 ? NaN : num / den)
+        }
+        out.set(tag, count === 1 ? arr[0] : arr)
       }
     }
     return out
@@ -91,12 +106,19 @@ function readExifBuf(buf) {
   const ifd0Tags = readIfd(ifd0)
   const exifPtr = ifd0Tags.get(0x8769) // Exif IFD 指针
   const exifTags = typeof exifPtr === 'number' ? readIfd(base + exifPtr) : new Map()
+  const gpsPtr = ifd0Tags.get(0x8825) // GPS IFD 指针（经纬度在这里，不在 Exif IFD）
+  const gpsTags = typeof gpsPtr === 'number' ? readIfd(base + gpsPtr) : new Map()
+  return { ifd0: ifd0Tags, exif: exifTags, gps: gpsTags }
+}
 
+// 从一段 TIFF/EXIF 字节里取出拍摄时间（保留原接口，扫描流程在用）。
+function readExifBuf(buf) {
+  const { ifd0, exif } = parseIfds(buf)
   // 优先级：实际拍摄时间 > 数字化时间 > IFD0 通用时间
   const candidates = [
-    exifTags.get(0x9003), // DateTimeOriginal
-    exifTags.get(0x9004), // DateTimeDigitized
-    ifd0Tags.get(0x0132),  // DateTime
+    exif.get(0x9003), // DateTimeOriginal
+    exif.get(0x9004), // DateTimeDigitized
+    ifd0.get(0x0132),  // DateTime
   ]
   for (const c of candidates) {
     const v = normalizeExifDate(c)
@@ -129,4 +151,167 @@ async function readExifDate(filePath) {
   }
 }
 
-module.exports = { readExifDate, normalizeExifDate, readExifBuf, readXmp }
+// ---------------------------------------------------------------------------
+// 以下为「照片信息」面板服务：按需读一张图的完整元数据
+// ---------------------------------------------------------------------------
+
+// 读一个 ICC 文本标签的内容。两种格式都要认：
+//   · desc  —— ICC v2 的 textDescriptionType，ASCII 串（"sRGB IEC61966-2.1"）
+//   · mluc  —— ICC v4 的 multiLocalizedUnicodeType，UTF-16BE，带语言/地区记录
+// 只认 desc 会把 v4 profile 全部读空（实测：sharp 内置的 P3 profile 就是 mluc，
+// 内容 "sP3C"，若读不到就会错误地回落到 EXIF ColorSpace=1 报成 sRGB）。
+function iccText(icc, off, size) {
+  const type = icc.toString('latin1', off, off + 4)
+  const limit = Math.min(off + size, icc.length)
+  if (type === 'desc') {
+    // v2：reserved(4) + ASCII 字节数(4) + ASCII 串
+    if (off + 12 > icc.length) return ''
+    const len = icc.readUInt32BE(off + 8)
+    return icc.toString('latin1', off + 12, Math.min(off + 12 + len, limit))
+  }
+  if (type === 'mluc') {
+    // v4：reserved(4) + 记录数(4) + 记录长度(4) + 记录表；记录 = 语言(2)+地区(2)+长度(4)+偏移(4)
+    // 偏移相对标签起点。取第一条记录（通常是 enUS）。
+    if (off + 16 > icc.length) return ''
+    const recCount = icc.readUInt32BE(off + 8)
+    if (recCount <= 0 || recCount > 64) return ''
+    const rec = off + 16
+    if (rec + 12 > icc.length) return ''
+    const len = icc.readUInt32BE(rec + 4)
+    const strOff = off + icc.readUInt32BE(rec + 8)
+    if (strOff < 0 || strOff >= icc.length) return ''
+    const end = Math.min(strOff + len, icc.length)
+    let s = ''
+    for (let i = strOff; i + 1 < end; i += 2) s += String.fromCharCode(icc.readUInt16BE(i))
+    return s
+  }
+  return ''
+}
+
+// 从 ICC profile 里取 desc 标签的文本（"sRGB IEC61966-2.1" / "Display P3" 等）。
+// 为什么不用 EXIF 的 ColorSpace 就够：那个标签只有 sRGB / Adobe RGB / 未校准三个值，
+// 广色域设备（P3、Adobe RGB）普遍写 0xFFFF「未校准」，真实色域只在 ICC 里。
+// ICC 结构固定：128 字节头 + tag 表（每项 12 字节：签名 4 + 偏移 4 + 长度 4）。
+function iccDesc(icc) {
+  if (!Buffer.isBuffer(icc) || icc.length < 132) return ''
+  const count = icc.readUInt32BE(128)
+  // tag 表条目数不合理时直接放弃（防止损坏文件让我们循环很久）
+  if (count <= 0 || count > 256) return ''
+  for (let i = 0; i < count; i++) {
+    const e = 132 + i * 12
+    if (e + 12 > icc.length) break
+    if (icc.toString('latin1', e, e + 4) !== 'desc') continue
+    const off = icc.readUInt32BE(e + 4)
+    const size = icc.readUInt32BE(e + 8)
+    if (off + 8 > icc.length) return ''
+    return iccText(icc, off, size).replace(/\0+$/, '').trim()
+  }
+  return ''
+}
+
+// 把 ICC 描述 / EXIF ColorSpace / sharp 的色彩空间归一成一句人话
+function describeColorSpace(meta, exifTags) {
+  const desc = iccDesc(meta.icc)
+  if (desc) {
+    // 判断顺序有讲究：sRGB 要先判，否则某些厂商 profile 名里带 "p3" 字样会被误判成 P3
+    if (/srgb|iec\s*61966/i.test(desc)) return 'sRGB'
+    if (/adobe\s*rgb/i.test(desc)) return 'Adobe RGB'
+    // 覆盖 "Display P3" 以及紧凑 profile 的简写（如 sharp 内置的 "sP3C"）
+    if (/p3/i.test(desc)) return 'Display P3'
+    if (/prophoto/i.test(desc)) return 'ProPhoto RGB'
+    return desc
+  }
+  // 0xA001 ColorSpace：1=sRGB / 2=Adobe RGB / 0xFFFF=未校准
+  const cs = exifTags.get(0xA001)
+  if (cs === 1) return 'sRGB'
+  if (cs === 2) return 'Adobe RGB'
+  // 兜底看 sharp 的判断（PNG/WebP 等常常既没 ICC 也没 ColorSpace 标签）
+  if (meta.space === 'srgb') return 'sRGB'
+  if (meta.space === 'cmyk') return 'CMYK'
+  if (meta.space === 'b-w') return '灰度'
+  return ''
+}
+
+// 把 GPS 的「度/分/秒 + 半球」转成十进制度。
+// 南纬 / 西经为负值——这正是面板上要显示的符号，不能丢。
+function gpsDecimal(parts, ref) {
+  if (!Array.isArray(parts) || parts.length < 3) return null
+  const [d, m, s] = parts
+  if (!Number.isFinite(d) || !Number.isFinite(m) || !Number.isFinite(s)) return null
+  let v = d + m / 60 + s / 3600
+  if (!Number.isFinite(v)) return null
+  const r = String(ref || '').trim().toUpperCase()
+  if (r === 'S' || r === 'W') v = -v
+  return v
+}
+
+// 厂牌 + 型号拼成设备名。型号多数已含厂牌（"Canon EOS 5D Mark IV"、"Apple iPhone 13"），
+// 直接拼接会变成 "Canon Canon EOS 5D"，故先判前缀。
+function describeCamera(make, model) {
+  const mk = String(make || '').trim()
+  const md = String(model || '').trim()
+  if (!mk && !md) return ''
+  if (!md) return mk
+  if (!mk) return md
+  if (md.toLowerCase().startsWith(mk.toLowerCase())) return md
+  return `${mk} ${md}`
+}
+
+/**
+ * 读一张图片的完整元数据（供相册「照片信息」面板）。
+ * 读不到的字段一律给空值 / null，由前端显示「未知」——不猜、不编。
+ * @returns {Promise<{width:number|null,height:number|null,colorSpace:string,takenAt:string,
+ *                    camera:string,lat:number|null,lng:number|null,format:string,orientation:number}>}
+ */
+async function readExifDetail(filePath) {
+  const out = {
+    width: null, height: null, colorSpace: '', takenAt: '',
+    camera: '', lat: null, lng: null, format: '', orientation: 1,
+  }
+  let meta
+  try {
+    const sharp = require('sharp')
+    meta = await sharp(filePath, { failOn: 'none' }).metadata()
+  } catch (_) {
+    return out // 视频 / 损坏文件 / 不支持格式：交给前端显示「未知」
+  }
+  if (!meta) return out
+
+  out.format = String(meta.format || '').toUpperCase()
+  out.orientation = Number(meta.orientation) || 1
+
+  // 宽高按「观感」给：EXIF Orientation 5~8 表示画面被旋转 90°，
+  // 此时存储的宽高与实际看到的是反的，竖拍的手机照片不换会让用户觉得写错了。
+  let w = meta.width || null
+  let h = meta.height || null
+  if (w && h && out.orientation >= 5) { const t = w; w = h; h = t }
+  out.width = w
+  out.height = h
+
+  const { ifd0, exif, gps } = parseIfds(meta.exif)
+
+  out.colorSpace = describeColorSpace(meta, exif)
+  out.camera = describeCamera(ifd0.get(0x010F), ifd0.get(0x0110))
+
+  // 拍摄时间：与扫描时同一套优先级，并复用 XMP 兜底
+  let taken = ''
+  for (const c of [exif.get(0x9003), exif.get(0x9004), ifd0.get(0x0132)]) {
+    const v = normalizeExifDate(c)
+    if (v) { taken = v; break }
+  }
+  if (!taken) taken = readXmp(meta.xmp)
+  // "2024-05-06T10:11:12" → "2024-05-06 10:11:12"（面板上直接读，不用前端再转）
+  out.takenAt = taken ? taken.replace('T', ' ') : ''
+
+  const lat = gpsDecimal(gps.get(0x0002), gps.get(0x0001))
+  const lng = gpsDecimal(gps.get(0x0004), gps.get(0x0003))
+  // 范围校验：越界值（相机写坏 / 空值）当作没有，避免显示 "1234.5, 999"
+  if (lat !== null && lat >= -90 && lat <= 90) out.lat = lat
+  if (lng !== null && lng >= -180 && lng <= 180) out.lng = lng
+
+  return out
+}
+
+module.exports = {
+  readExifDate, normalizeExifDate, readExifBuf, readXmp, readExifDetail,
+}

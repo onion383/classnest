@@ -30,6 +30,8 @@ const isDev = !app.isPackaged
 
 // 渲染层 → 主进程 → 写盘通道的统一体积上限：避免超大 payload 在主进程再复制一份。
 const MAX_WRITE_BYTES = 50 * 1024 * 1024
+// 一键截屏的 JPEG 质量：90 在界面截图上肉眼几乎无差，编码耗时只有 PNG 的 1/10 左右
+const JPEG_QUALITY = 90
 // save-file 只服务导出类文件；扩展名由用户可在对话框里改，因此最终路径还要再校验一次。
 const ALLOWED_SAVE_EXTS = new Set([
   '.html', '.htm', '.xlsx', '.csv', '.md', '.txt', '.json', '.png', '.pdf',
@@ -238,7 +240,7 @@ function registerDialogsIpc(opts = {}) {
   })
 
   // 一键截屏：截取整个屏幕并保存到本地
-  // options.hideWidget: 是否隐藏 widget 窗口（默认 true）。截屏工具传 false 以保持 spinner 可见
+  // options.hideWidget: 是否隐藏 widget 窗口（默认 true）。置透明再截，避免把工具箱面板自己截进画面
   ipcMain.handle('screenshot-capture', async (event, options) => {
     const widgetWindow = getWidgetWindow()
     const hideWidget = options?.hideWidget !== false
@@ -264,25 +266,29 @@ function registerDialogsIpc(opts = {}) {
       })
 
       const primarySource = sources.find(s => s.display_id === String(primaryDisplay.id)) || sources[0]
-      const image = primarySource.thumbnail.toPNG()
+      // 用 JPEG 而不是 PNG：同一屏实测 toPNG 172ms / 0.51MB，toJPEG(90) 15ms / 0.24MB。
+      // 截屏是「点一下就要结果」的操作，编码时间比无损更值得省；质量 90 对界面截图够用。
+      const image = primarySource.thumbnail.toJPEG(JPEG_QUALITY)
+      const imageExt = 'jpg'
+      const imageMime = 'image/jpeg'
 
       const defaultSaveDir = path.join(app.getPath('pictures'), 'screenshots')
       // saveDir 来自设置页（可自定义），不能直接 mkdir/write：只接受非盘符根、非系统保护目录
       const safeDir = resolveSafeWriteDir(options?.saveDir, defaultSaveDir)
       if (safeDir.error) return { success: false, error: safeDir.error }
       const saveDir = safeDir.path
-      // 整屏 PNG 常有几 MB～十几 MB，写盘走异步，避免截图瞬间主进程冻结
+      // 整屏图常有几 MB，写盘走异步，避免截图瞬间主进程冻结
       await fsp.mkdir(saveDir, { recursive: true })
 
       // 精度必须到毫秒：只到秒时 1 秒内连存两次会生成同名文件，writeFile 直接把上一次的覆盖掉（静默丢数据）
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23)
-      const filePath = path.join(saveDir, `screenshot_${timestamp}.png`)
+      const filePath = path.join(saveDir, `screenshot_${timestamp}.${imageExt}`)
       await fsp.writeFile(filePath, image)
 
-      // dataUrl 仅按需生成：整屏 PNG base64 在主进程/IPC/渲染进程各持一份，
+      // dataUrl 仅按需生成：整屏图 base64 在主进程/IPC/渲染进程各持一份，
       // 内存开销大。默认生成以兼容旧调用；调用方（Screenshot.vue）不需要时可关闭。
       const withDataUrl = options?.withDataUrl !== false
-      const dataUrl = withDataUrl ? `data:image/png;base64,${image.toString('base64')}` : ''
+      const dataUrl = withDataUrl ? `data:${imageMime};base64,${image.toString('base64')}` : ''
       return { success: true, filePath, dataUrl }
     } finally {
       // 恢复 widget 窗口透明度

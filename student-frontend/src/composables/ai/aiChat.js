@@ -396,7 +396,9 @@ export function useAiChat(ctx) {
         ctx.abortCtrl.value = null
         ctx.busy.value = false
         if (last) { last.reasoningStreaming = false; last.processDone = true }
-        ctx.scrollBottom()
+        // 用 stickBottom：流结束这一刻正文才刚变成 _blocks，里面的 AiRecordTable 还要异步取数、
+        // 图片要加载、图表要绘制，高度会在之后继续长。只贴一次会停在半路，用户得自己往下滑。
+        ctx.stickBottom()
         // 完全权限：写入提案不等用户确认，流一结束就自动执行。
         // 放在 busy 复位之后，执行的收尾才能沿用既有链路（写回思维链 + 让 AI 续跑说明结果）；
         // 用户主动中断的这一轮不自动执行，避免把没回复完的提案直接落库。

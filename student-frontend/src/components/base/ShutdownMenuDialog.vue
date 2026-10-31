@@ -19,7 +19,7 @@
         <div class="shutdown-options">
           <button class="shutdown-opt" @click="choose('main')">
             <span class="opt-icon opt-icon-blue">
-              <Monitor :size="22" stroke-width="1.8" />
+              <IconGlyph name="monitor" tint="current" glyph :size="22" :stroke-width="1.8" />
             </span>
             <span class="opt-text">
               <span class="opt-title">关闭主窗口</span>
@@ -29,7 +29,7 @@
 
           <button class="shutdown-opt" :class="{ 'opt-disabled': !hasToolbox }" :disabled="!hasToolbox" @click="choose('toolbox')">
             <span class="opt-icon opt-icon-cyan">
-              <PanelsTopLeft :size="22" stroke-width="1.8" />
+              <IconGlyph name="panelsTopLeft" tint="current" glyph :size="22" :stroke-width="1.8" />
             </span>
             <span class="opt-text">
               <span class="opt-title">关闭主窗口和工具箱<span v-if="!hasToolbox" class="opt-muted-inline">（未开启）</span></span>
@@ -39,7 +39,7 @@
 
           <button class="shutdown-opt" :class="{ 'opt-disabled': !hasDesktop }" :disabled="!hasDesktop" @click="choose('desktop')">
             <span class="opt-icon opt-icon-green">
-              <LayoutGrid :size="22" stroke-width="1.8" />
+              <IconGlyph name="layoutGrid" tint="current" glyph :size="22" :stroke-width="1.8" />
             </span>
             <span class="opt-text">
               <span class="opt-title">关闭主窗口和桌面组件<span v-if="!hasDesktop" class="opt-muted-inline">（未开启）</span></span>
@@ -49,7 +49,7 @@
 
           <button class="shutdown-opt opt-danger" @click="choose('all')">
             <span class="opt-icon opt-icon-red">
-              <Power :size="22" stroke-width="1.8" />
+              <IconGlyph name="power" tint="current" glyph :size="22" :stroke-width="1.8" />
             </span>
             <span class="opt-text">
               <span class="opt-title">完全关闭</span>
@@ -75,11 +75,11 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 // 主窗口关闭选择菜单：复用 dialog-transition.css 的弹窗动画
 import { ref } from 'vue'
 import '../../styles/dialog-transition.css'
-import { Monitor, PanelsTopLeft, LayoutGrid, Power } from '@lucide/vue'
+import IconGlyph from '../../components/base/IconGlyph.vue'
 
 defineOptions({ name: 'ShutdownMenuDialog' })
 defineProps({

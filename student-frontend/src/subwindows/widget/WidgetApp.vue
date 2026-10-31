@@ -61,7 +61,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import Timer from './Timer.vue'

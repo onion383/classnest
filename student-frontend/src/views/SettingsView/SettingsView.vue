@@ -721,14 +721,13 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { getCurrentUser } from '../../utils/authStorage.js'
 import { ref, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHelp from '../../components/base/AppHelp.vue'
 import AppSelect from '../../components/base/AppSelect.vue'
 import AppSwitch from '../../components/base/AppSwitch.vue'
-import { Sun, Moon } from '@lucide/vue'
 import ViewSwitch from '../../components/base/ViewSwitch.vue'
 import { useThemeStore } from '../../stores/theme'
 import { storeToRefs } from 'pinia'
@@ -815,8 +814,8 @@ const topbarColorOptions = [
 ]
 // 日夜模式切换：日间 / 夜间（图标为标题栏同款太阳 / 月亮）
 const modeSwitchOptions = [
-  { value: 'day', label: '日间', icon: Sun },
-  { value: 'night', label: '夜间', icon: Moon },
+  { value: 'day', label: '日间', icon: 'sun' },
+  { value: 'night', label: '夜间', icon: 'moon' },
 ]
 // Modal
 const modalType = ref('')

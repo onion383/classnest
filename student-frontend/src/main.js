@@ -1,5 +1,8 @@
 import { getToken, clearToken } from './utils/authStorage.js'
 import { createApp } from 'vue'
+// Vue 3.6 Vapor 混跑用的互操作插件。3.5 通道下这个模块是 null（见 vite.config.js 的
+// vaporInteropShim），所以下面必须判空——两个通道跑的是同一份入口代码。
+import vaporInterop from 'virtual:vapor-interop'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
@@ -138,6 +141,9 @@ landingPreload.catch(() => {})
 
 // ===== Vue 应用初始化 =====
 const app = createApp(App)
+// 必须在 mount 之前装：插件会包裹 app.mount，并给 app._context 挂上 vapor 互操作实现。
+// 3.5 通道下 vaporInterop 是 null，这一行等于不存在。
+if (vaporInterop) app.use(vaporInterop)
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)

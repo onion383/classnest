@@ -4,7 +4,7 @@
        图形数据内联渲染（见 IconGlyph.shapes.js）：不再实例化 @lucide/vue 组件，
        每个图标从「一个组件实例 + 一棵 VNode」变成「一个 svg + 若干形状元素」。 -->
   <svg
-    v-if="iconStyle === 'color'"
+    v-if="iconStyle === 'color' || glyph"
     xmlns="http://www.w3.org/2000/svg"
     :width="size"
     :height="size"
@@ -29,7 +29,7 @@
   <span v-else class="icon-emoji" :class="{ 'icon-loading': isLoading }" :style="{ fontSize: size + 'px', lineHeight: 1 }">{{ entry.emoji }}</span>
 </template>
 
-<script setup>
+<script setup vapor>
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ICON_SHAPES } from './IconGlyph.shapes.js'
@@ -44,6 +44,11 @@ const props = defineProps({
   strokeWidth: { type: Number, default: 2 },
   // 取色方式：'current' 继承文字色（按钮）；其他默认用语义彩色
   tint: { type: String, default: 'color' },
+  // 强制绘制图形、不受「图标样式=emoji」影响。
+  // 工具型图标（加号/叉/面板开合/关机菜单等）在 emoji 档下不该变成表情：
+  // 它们是控件的视觉锚点，不是"内容"。收口 lucide 直连时统一带上本参数，
+  // 保证两个主题下的观感与改造前完全一致。
+  glyph: { type: Boolean, default: false },
 })
 
 // 页面/小节标题语义配色（与侧边栏导航一一对应）+ 通用图标
@@ -109,6 +114,32 @@ const MAP = {
   highlighter: { lucide: 'Highlighter', emoji: '🖍️', color: '#f59e0b' },
   error: { lucide: 'XCircle', emoji: '❌', color: '#ef4444' },
   developing: { lucide: 'Construction', emoji: '🚧', color: '#f59e0b' },
+
+  // ---- 工具型图标（按钮/箭头/窗口控件）----
+  // 从 @lucide/vue 直连收口而来：这些不是「语义图标」（不代表某个页面/功能），
+  // 所以用 tint="current" + glyph 使用，emoji 档也保持 SVG —— 见模板里 v-if 的第三个条件。
+  // emoji 字段只是兜底：万一将来有人不带 glyph 用它，至少不会渲染成空白。
+  arrowDown: { lucide: 'ArrowDown', emoji: '↓', color: '#94a3b8' },
+  arrowUp: { lucide: 'ArrowUp', emoji: '↑', color: '#94a3b8' },
+  chevronDown: { lucide: 'ChevronDown', emoji: '▾', color: '#94a3b8' },
+  plus: { lucide: 'Plus', emoji: '➕', color: '#94a3b8' },
+  minus: { lucide: 'Minus', emoji: '➖', color: '#94a3b8' },
+  square: { lucide: 'Square', emoji: '⬜', color: '#94a3b8' },
+  database: { lucide: 'Database', emoji: '🗄️', color: '#94a3b8' },
+  filter: { lucide: 'Filter', emoji: '🔽', color: '#94a3b8' },
+  globe: { lucide: 'Globe', emoji: '🌐', color: '#94a3b8' },
+  layoutGrid: { lucide: 'LayoutGrid', emoji: '🔡', color: '#94a3b8' },
+  monitor: { lucide: 'Monitor', emoji: '🖥️', color: '#94a3b8' },
+  moon: { lucide: 'Moon', emoji: '🌙', color: '#94a3b8' },
+  sun: { lucide: 'Sun', emoji: '☀️', color: '#94a3b8' },
+  power: { lucide: 'Power', emoji: '⏻', color: '#94a3b8' },
+  redo: { lucide: 'Redo2', emoji: '↪️', color: '#94a3b8' },
+  shieldAlert: { lucide: 'ShieldAlert', emoji: '🛡️', color: '#94a3b8' },
+  shieldCheck: { lucide: 'ShieldCheck', emoji: '✅', color: '#94a3b8' },
+  panelLeft: { lucide: 'PanelLeft', emoji: '▤', color: '#94a3b8' },
+  panelLeftClose: { lucide: 'PanelLeftClose', emoji: '◧', color: '#94a3b8' },
+  panelLeftOpen: { lucide: 'PanelLeftOpen', emoji: '◨', color: '#94a3b8' },
+  panelsTopLeft: { lucide: 'PanelsTopLeft', emoji: '⊞', color: '#94a3b8' },
 }
 
 const { iconStyle } = storeToRefs(useThemeStore())

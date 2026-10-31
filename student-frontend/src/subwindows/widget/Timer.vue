@@ -93,7 +93,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, onUnmounted } from 'vue'
 import { pad2 } from '../../utils/dateTime.js'
 

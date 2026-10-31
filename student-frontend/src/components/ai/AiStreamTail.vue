@@ -2,7 +2,7 @@
   <span class="ai-stream-tail"><span v-if="base">{{ base }}</span><span v-for="seg in segments" :key="seg.id" class="ai-stream-fade">{{ seg.text }}</span></span>
 </template>
 
-<script setup>
+<script setup vapor>
 // 流式正文的“未完成行”：把每次新增的片段单独包一层，让新吐出的文字渐入；
 // 旧片段会被合并进 base，避免一条长行产生成百上千个节点。
 import { ref, watch } from 'vue'

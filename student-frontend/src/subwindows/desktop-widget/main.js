@@ -1,5 +1,8 @@
 import { getToken as loadStoredToken, TOKEN_KEY } from '../../utils/authStorage.js'
 import { createApp } from 'vue'
+// 桌面组件里也用到带 <script setup vapor> 的组件（AnimatedClock 时钟），
+// 3.6 通道下同样需要 interop 插件；3.5 通道下该模块是 null（见 vite.config.js）。
+import vaporInterop from 'virtual:vapor-interop'
 import { createPinia } from 'pinia'
 import DesktopWidget from './DesktopWidget.vue'
 import '../../styles/index.css'
@@ -48,6 +51,8 @@ function bootstrap() {
   if (import.meta.env.DEV) console.info('[dw-timing] bootstrap 开始 ' + Date.now())
 
   const app = createApp(DesktopWidget)
+  // 与主窗口同一套：3.6 通道装上 vapor 互操作，3.5 通道是 null。必须在 mount 前。
+  if (vaporInterop) app.use(vaporInterop)
   const pinia = createPinia()
   app.use(pinia)
 

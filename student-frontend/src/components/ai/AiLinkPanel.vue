@@ -33,7 +33,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 
 defineOptions({ name: 'AiLinkPanel' })

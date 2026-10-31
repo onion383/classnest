@@ -16,7 +16,7 @@
         :class="{ 'is-on': sortOrder === 'desc' }"
         @click="$emit('sort', 'desc')"
       >
-        <ArrowDown :size="13" stroke-width="2" />
+        <IconGlyph name="arrowDown" tint="current" glyph :size="13" :stroke-width="2" />
         <span>降序</span>
       </button>
       <button
@@ -25,14 +25,14 @@
         :class="{ 'is-on': sortOrder === 'asc' }"
         @click="$emit('sort', 'asc')"
       >
-        <ArrowUp :size="13" stroke-width="2" />
+        <IconGlyph name="arrowUp" tint="current" glyph :size="13" :stroke-width="2" />
         <span>升序</span>
       </button>
     </div>
 
     <!-- 搜索框：只搜「下面这份值列表」，不改变数据筛选结果 -->
     <div class="dtf-search">
-      <Search class="dtf-search-icon" :size="13" stroke-width="2" />
+      <IconGlyph name="search" tint="current" glyph class="dtf-search-icon" :size="13" :stroke-width="2" />
       <input
         ref="kw"
         v-model="keyword"
@@ -43,7 +43,7 @@
         @keydown.esc.prevent="$emit('close')"
       />
       <button v-if="keyword" type="button" class="dtf-search-clear" title="清空搜索" @click="keyword = ''">
-        <X :size="11" stroke-width="2.6" />
+        <IconGlyph name="close" tint="current" glyph :size="11" :stroke-width="2.6" />
       </button>
     </div>
 
@@ -60,7 +60,7 @@
       >
         <span class="dtf-item-label">{{ displayValue(opt.value) }}</span>
         <span class="dtf-item-count">({{ opt.count }})</span>
-        <Check class="dtf-item-check" :size="13" stroke-width="2.6" />
+        <IconGlyph name="check" tint="current" glyph class="dtf-item-check" :size="13" :stroke-width="2.6" />
       </button>
       <p v-if="!shownOptions.length" class="dtf-none">{{ keyword ? '没有匹配的值' : '没有可选的值' }}</p>
     </div>
@@ -72,13 +72,13 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 // 表头筛选面板（DynamicTable 专用）
 // 职责：展示「排序 / 值搜索 / 值复选」三块，并把用户操作抛给 DynamicTable 处理；
 // 自身只负责定位、关键字过滤与过渡动画，不持有筛选状态。
 // 样式不走独立 css：基础样式在 styles/index.css，毛玻璃/夜间覆盖在各主题 css 里。
-import { Search, Check, ArrowUp, ArrowDown, X } from '@lucide/vue'
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import IconGlyph from '../../../components/base/IconGlyph.vue'
 
 const PANEL_W = 268
 

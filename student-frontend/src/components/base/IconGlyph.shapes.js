@@ -1,4 +1,4 @@
-// 自动生成，勿手改：由 testjs/tmp/gen-icon-shapes.mjs 从 @lucide/vue 提取。
+// 自动生成，勿手改：由 testjs/tools/gen-icon-shapes.mjs 从 @lucide/vue 提取。
 // 用途：IconGlyph 内联渲染图标形状，避免每个图标都实例化一个 VDOM 组件。
 // 结构：{ [图标key]: { paths/circles/rects/lines/polylines/polygons/ellipses: [属性对象] } }
 export const ICON_SHAPES = {
@@ -193,5 +193,76 @@ export const ICON_SHAPES = {
   developing: {
       paths: [{ d: 'M17 14v7' }, { d: 'M7 14v7' }, { d: 'M17 3v3' }, { d: 'M7 3v3' }, { d: 'M10 14 2.3 6.3' }, { d: 'm14 6 7.7 7.7' }, { d: 'm8 6 8 8' }],
       rects: [{ x: '2', y: '6', width: '20', height: '8', rx: '1' }],
+  },
+  arrowDown: {
+      paths: [{ d: 'M12 5v14' }, { d: 'm19 12-7 7-7-7' }],
+  },
+  arrowUp: {
+      paths: [{ d: 'm5 12 7-7 7 7' }, { d: 'M12 19V5' }],
+  },
+  chevronDown: {
+      paths: [{ d: 'm6 9 6 6 6-6' }],
+  },
+  plus: {
+      paths: [{ d: 'M5 12h14' }, { d: 'M12 5v14' }],
+  },
+  minus: {
+      paths: [{ d: 'M5 12h14' }],
+  },
+  square: {
+      rects: [{ width: '18', height: '18', x: '3', y: '3', rx: '2' }],
+  },
+  database: {
+      paths: [{ d: 'M3 5V19A9 3 0 0 0 21 19V5' }, { d: 'M3 12A9 3 0 0 0 21 12' }],
+      ellipses: [{ cx: '12', cy: '5', rx: '9', ry: '3' }],
+  },
+  filter: {
+      paths: [{ d: 'M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z' }],
+  },
+  globe: {
+      paths: [{ d: 'M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20' }, { d: 'M2 12h20' }],
+      circles: [{ cx: '12', cy: '12', r: '10' }],
+  },
+  layoutGrid: {
+      rects: [{ width: '7', height: '7', x: '3', y: '3', rx: '1' }, { width: '7', height: '7', x: '14', y: '3', rx: '1' }, { width: '7', height: '7', x: '14', y: '14', rx: '1' }, { width: '7', height: '7', x: '3', y: '14', rx: '1' }],
+  },
+  monitor: {
+      rects: [{ width: '20', height: '14', x: '2', y: '3', rx: '2' }],
+      lines: [{ x1: '8', x2: '16', y1: '21', y2: '21' }, { x1: '12', x2: '12', y1: '17', y2: '21' }],
+  },
+  moon: {
+      paths: [{ d: 'M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401' }],
+  },
+  sun: {
+      paths: [{ d: 'M12 2v2' }, { d: 'M12 20v2' }, { d: 'm4.93 4.93 1.41 1.41' }, { d: 'm17.66 17.66 1.41 1.41' }, { d: 'M2 12h2' }, { d: 'M20 12h2' }, { d: 'm6.34 17.66-1.41 1.41' }, { d: 'm19.07 4.93-1.41 1.41' }],
+      circles: [{ cx: '12', cy: '12', r: '4' }],
+  },
+  power: {
+      paths: [{ d: 'M12 2v10' }, { d: 'M18.4 6.6a9 9 0 1 1-12.77.04' }],
+  },
+  redo: {
+      paths: [{ d: 'm15 14 5-5-5-5' }, { d: 'M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13' }],
+  },
+  shieldAlert: {
+      paths: [{ d: 'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z' }, { d: 'M12 8v4' }, { d: 'M12 16h.01' }],
+  },
+  shieldCheck: {
+      paths: [{ d: 'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z' }, { d: 'm9 12 2 2 4-4' }],
+  },
+  panelLeft: {
+      paths: [{ d: 'M9 3v18' }],
+      rects: [{ width: '18', height: '18', x: '3', y: '3', rx: '2' }],
+  },
+  panelLeftClose: {
+      paths: [{ d: 'M9 3v18' }, { d: 'm16 15-3-3 3-3' }],
+      rects: [{ width: '18', height: '18', x: '3', y: '3', rx: '2' }],
+  },
+  panelLeftOpen: {
+      paths: [{ d: 'M9 3v18' }, { d: 'm14 9 3 3-3 3' }],
+      rects: [{ width: '18', height: '18', x: '3', y: '3', rx: '2' }],
+  },
+  panelsTopLeft: {
+      paths: [{ d: 'M3 9h18' }, { d: 'M9 21V9' }],
+      rects: [{ width: '18', height: '18', x: '3', y: '3', rx: '2' }],
   },
 }

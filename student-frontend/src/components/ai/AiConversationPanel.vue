@@ -55,7 +55,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { computed } from 'vue'
 import { formatTime } from '../../composables/ai/aiMessages.js'
 

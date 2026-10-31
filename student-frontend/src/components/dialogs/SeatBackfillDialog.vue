@@ -82,7 +82,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch } from 'vue'
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'

@@ -33,7 +33,7 @@
   </ExportExcel>
 </template>
 
-<script setup>
+<script setup vapor>
 import { getToken } from '../../utils/authStorage.js'
 import { reportError } from '../../utils/reportError.js'
 import { ref, computed, watch } from 'vue'

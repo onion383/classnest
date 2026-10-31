@@ -147,7 +147,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
 import axios from 'axios'
 import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'

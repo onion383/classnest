@@ -191,7 +191,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'

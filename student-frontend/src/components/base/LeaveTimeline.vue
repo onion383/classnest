@@ -78,7 +78,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import AppSelect from './AppSelect.vue'
 import { zhCollator } from '../../utils/collator.js'
 import { ref, computed } from 'vue'

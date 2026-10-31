@@ -18,14 +18,18 @@
       :aria-selected="modelValue === opt.value"
       @click="$emit('update:modelValue', opt.value)"
     >
-      <component v-if="opt.icon" :is="opt.icon" :size="15" :stroke-width="1.8" />
+      <!-- 图标走 IconGlyph 而不是 <component :is>：lucide 组件是 VDOM 组件，
+           放在 vapor 组件里就是一个 interop 边界，而这里只是画个 15px 的图形。
+           glyph + tint="current" = 两种图标主题下都是 SVG 且继承文字色，与改造前一致。 -->
+      <IconGlyph v-if="opt.icon" :name="opt.icon" :size="15" :stroke-width="1.8" tint="current" glyph />
       <span v-if="opt.label">{{ opt.label }}</span>
     </button>
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import IconGlyph from './IconGlyph.vue'
 
 const props = defineProps({
   modelValue: { type: [String, Number], default: '' },

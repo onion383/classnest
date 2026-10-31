@@ -11,7 +11,7 @@
     @blur="onBlur"
     @keydown.esc="hideNow"
   >
-    <Info :size="size" :stroke-width="2" />
+    <IconGlyph name="about" tint="current" glyph :size="size" :stroke-width="2" />
   </button>
 
   <!-- Teleport + 行内 fixed：气泡要能超出设置卡片边界，挂到 body 才是安全的。 -->
@@ -41,9 +41,9 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, nextTick, onBeforeUnmount, useId } from 'vue'
-import { Info } from '@lucide/vue'
+import IconGlyph from '../../components/base/IconGlyph.vue'
 
 const props = defineProps({
   // 气泡里的说明文字（支持 \n 换行）

@@ -68,7 +68,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { SEND, INVOKE, RECEIVE } from '../../electronChannels.js'
 import { apiUrl } from '../../utils/apiUrl'
 import { applyAuthHeader } from '../../composables/secureChannel'

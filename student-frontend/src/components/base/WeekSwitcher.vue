@@ -31,7 +31,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { computed } from 'vue'
 import AppSelect from './AppSelect.vue'
 import { shiftDateStr } from '../../utils/dateTime.js'

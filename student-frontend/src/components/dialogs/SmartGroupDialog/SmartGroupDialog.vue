@@ -112,7 +112,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, onBeforeUnmount, toRef } from 'vue'
 import '../../../styles/dialog-transition.css'
 import NewComerConfirm from '../NewComerConfirm.vue'

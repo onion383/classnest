@@ -93,7 +93,7 @@ console.log(`一致性问题：${problems.length ? '\n  ' + problems.join('\n  '
 
 if (write && !problems.length) {
   const lines = []
-  lines.push('// 自动生成，勿手改：由 testjs/tmp/gen-icon-shapes.mjs 从 @lucide/vue 提取。')
+  lines.push('// 自动生成，勿手改：由 testjs/tools/gen-icon-shapes.mjs 从 @lucide/vue 提取。')
   lines.push('// 用途：IconGlyph 内联渲染图标形状，避免每个图标都实例化一个 VDOM 组件。')
   lines.push('// 结构：{ [图标key]: { paths/circles/rects/lines/polylines/polygons/ellipses: [属性对象] } }')
   lines.push('export const ICON_SHAPES = {')

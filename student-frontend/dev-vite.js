@@ -12,9 +12,11 @@
 //   node student-frontend/dev-vite.js --port 5175 --strictPort
 //   node student-frontend/dev-vite.js --vue36    # 走 Vue 3.6 预览通道（npm run dev:new）
 //   node student-frontend/dev-vite.js --vue36 build  # 用 3.6 构建（npm run build:new）
+//   node student-frontend/dev-vite.js --vue36 --vdom build  # 3.6 纯 VDOM 对照组（忽略 vapor 标记）
 //
 // --vue36 由本启动器翻译成环境变量 VUE_CHANNEL=36 传给 Vite（见 vite.config.js），
 // 自己并不传给 vite —— Vite 不认识这个参数，会直接报错退出。
+// --vdom 同理翻译成 VUE_VAPOR=0，只在与 --vue36 同用时有效。
 // 其余参数（含 build 子命令）原样透传。
 //
 // 注意：cwd 必须是 student-frontend —— vite.config.js 用 import.meta.dirname 解析
@@ -29,13 +31,22 @@ const viteBin = path.join(dir, 'node_modules', 'vite', 'bin', 'vite.js')
 
 const rawArgs = process.argv.slice(2)
 const useVue36 = rawArgs.includes('--vue36')
-const viteArgs = rawArgs.filter((arg) => arg !== '--vue36')
+const vdomOnly = rawArgs.includes('--vdom')
+const viteArgs = rawArgs.filter((arg) => arg !== '--vue36' && arg !== '--vdom')
+
+if (vdomOnly && !useVue36) {
+  console.error('[dev-vite] --vdom 只用于 3.6 纯 VDOM 对照，必须与 --vue36 同用')
+  process.exit(1)
+}
 
 // 显式设置或清掉 VUE_CHANNEL：否则在已 export VUE_CHANNEL=36 的终端里跑普通 dev，
 // 会莫名其妙用上 3.6，排查起来很费时间。
 const env = { ...process.env }
 if (useVue36) env.VUE_CHANNEL = '36'
 else delete env.VUE_CHANNEL
+// 同理清掉 VUE_VAPOR，避免上一条命令的 --vdom 残留到下一次普通 dev
+if (vdomOnly) env.VUE_VAPOR = '0'
+else delete env.VUE_VAPOR
 
 // stdio: 'inherit' 保留 vite 的彩色输出与 Ctrl+C 行为，与直接跑 npm run dev 观感一致
 const child = spawn(process.execPath, [viteBin, ...viteArgs], {

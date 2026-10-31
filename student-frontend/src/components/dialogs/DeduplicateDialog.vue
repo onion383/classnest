@@ -73,7 +73,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 import DynamicTable from '../tables/DynamicTable/DynamicTable.vue';
 import { ref, computed, watch, nextTick } from 'vue'
 import '../../styles/dialog-transition.css'

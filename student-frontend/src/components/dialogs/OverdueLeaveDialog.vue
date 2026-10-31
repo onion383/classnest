@@ -23,7 +23,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
 

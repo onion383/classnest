@@ -9,7 +9,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
 import { pad2 } from '../utils/dateTime.js'
 

@@ -36,7 +36,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, watch } from 'vue'
 import { useNotification } from '../../composables/useNotification.js'
 import '../../styles/dialog-transition.css'

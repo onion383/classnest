@@ -332,7 +332,6 @@ import AppSelect from '../../components/base/AppSelect.vue'
 import AppSwitch from '../../components/base/AppSwitch.vue'
 import ViewSwitch from '../../components/base/ViewSwitch.vue'
 import ConfirmDialog from '../../components/base/ConfirmDialog.vue'
-import { Sun, Moon } from '@lucide/vue'
 
 // 主题预览色：仅用于「主题选择」的缩略示意（真实配色由各主题 CSS 变量驱动）
 const PREVIEW = {
@@ -399,8 +398,8 @@ const recovery = ref({
 const classInfo = ref({ name: '', mottoStyle: '', xuefeng: '' })
 // 日夜模式切换：与设置页同一套控件（仅 glass / glass2 支持夜间配色）
 const modeSwitchOptions = [
-  { value: 'day', label: '日间', icon: Sun },
-  { value: 'night', label: '夜间', icon: Moon },
+  { value: 'day', label: '日间', icon: 'sun' },
+  { value: 'night', label: '夜间', icon: 'moon' },
 ]
 const dirs = ref({ dataDir: '', thumbsDir: '' })
 const busyDataDir = ref(false)

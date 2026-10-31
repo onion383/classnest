@@ -8,7 +8,7 @@
       >
         <div class="bg-surface p-5 rounded-xl w-[340px] max-w-[92vw] shadow-lg dialog-card">
           <div class="flex items-center justify-between mb-4">
-            <h3 class="text-lg font-bold text-text flex items-center gap-2"><User :size="18" /> 账户</h3>
+            <h3 class="text-lg font-bold text-text flex items-center gap-2"><IconGlyph name="user" tint="current" glyph :size="18" /> 账户</h3>
             <button class="dlg-close" @click="$emit('close')">✕</button>
           </div>
 
@@ -39,14 +39,14 @@
   />
 </template>
 
-<script setup>
+<script setup vapor>
 import { getCurrentUser, clearAuth } from '../../utils/authStorage.js'
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { User } from '@lucide/vue'
 import axios from 'axios'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { clearMediaToken } from '../../utils/apiUrl'
+import IconGlyph from '../../components/base/IconGlyph.vue'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])

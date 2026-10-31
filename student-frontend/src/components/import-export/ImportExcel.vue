@@ -64,7 +64,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import DynamicTable from '../tables/DynamicTable/DynamicTable.vue';
 import { parseSheet } from '../../utils/importSheet.js';
 import { useSeq } from '../../composables/useSeq.js';

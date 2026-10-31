@@ -94,7 +94,7 @@
   />
 </template>
 
-<script setup>
+<script setup vapor>
 import axios from 'axios'
 import { ref, computed, watch } from 'vue'
 import AppHelp from '../base/AppHelp.vue'

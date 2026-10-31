@@ -117,7 +117,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { computed } from 'vue'
 import DynamicTable from './DynamicTable/DynamicTable.vue'
 import AiRecordTable from './AiRecordTable.vue'

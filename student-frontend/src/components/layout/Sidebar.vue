@@ -15,16 +15,16 @@
         :title="!nightSupported ? '当前主题暂不支持夜间模式' : (isNightPending ? '切换到日间模式' : '切换到夜间模式')"
         @click="toggleMode"
       >
-        <Sun v-if="isNightPending" :size="15" stroke-width="1.8" />
-        <Moon v-else :size="15" stroke-width="1.8" />
+        <IconGlyph name="sun" tint="current" glyph v-if="isNightPending" :size="15" :stroke-width="1.8" />
+        <IconGlyph name="moon" tint="current" glyph v-else :size="15" :stroke-width="1.8" />
       </button>
       <button
         class="mode-toggle-btn"
         :title="collapsed ? '展开侧边栏' : '折叠侧边栏'"
         @click="toggleCollapsed"
       >
-        <PanelLeftOpen v-if="collapsed" :size="15" stroke-width="1.8" />
-        <PanelLeftClose v-else :size="15" stroke-width="1.8" />
+        <IconGlyph name="panelLeftOpen" tint="current" glyph v-if="collapsed" :size="15" :stroke-width="1.8" />
+        <IconGlyph name="panelLeftClose" tint="current" glyph v-else :size="15" :stroke-width="1.8" />
       </button>
     </h2>
     <nav class="space-y-1 flex-1 min-h-0 overflow-y-auto sidebar-scroll" @pointerover="onNavOver">
@@ -39,12 +39,17 @@
           :title="collapsed ? item.label : null"
           @pointerdown="onNavPointerDown($event, item.to)"
         >
-          <component
+          <!-- 图标走 IconGlyph 的名字查找：原来这里是 <component :is="item.lucide">，
+               把 lucide 组件当数据塞在 config/searchIndex.js 里，等于每个导航项都是一个
+               interop 边界。改成名字后，nav 数据里只留 icon: 'students' 这种字符串。 -->
+          <IconGlyph
             v-if="iconStyle === 'color'"
-            :is="item.lucide"
-            class="icon-color"
+            :name="item.icon"
             :size="16"
             :stroke-width="2"
+            tint="current"
+            glyph
+            class="icon-color"
             :style="{ color: item.color }"
           />
           <span v-else class="nav-emoji">{{ item.emoji }}</span>
@@ -56,14 +61,14 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Sun, Moon, PanelLeftClose, PanelLeftOpen } from '@lucide/vue'
 import { PAGE_GROUPS as navGroups } from '../../config/searchIndex.js'
 import { useThemeStore } from '../../stores/theme'
 import { prefetchRoute } from '../../utils/routePrefetch.js'
+import IconGlyph from '../../components/base/IconGlyph.vue'
 
 const router = useRouter()
 const route = useRoute()

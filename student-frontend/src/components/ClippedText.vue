@@ -25,7 +25,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed } from 'vue'
 import '../styles/dialog-transition.css'
 

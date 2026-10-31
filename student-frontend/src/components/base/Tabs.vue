@@ -26,7 +26,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 defineOptions({ name: 'Tabs' })
 defineProps({
   tabs: { type: Array, required: true },

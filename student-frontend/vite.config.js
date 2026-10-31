@@ -71,7 +71,42 @@ function injectSplash() {
 // ───────────────────────────────────────────────────────────────────────────
 const VUE36_DIR = path.resolve(import.meta.dirname, 'vue36')
 
-async function loadVue36() {
+// 3.6 通道必须用「vapor 双运行时」而不是 pkg.module 指向的 vue.runtime.esm-bundler.js：
+// 后者只有 830 字节、导出表里只有 compile / defineVaporAsyncComponent，一个 vapor helper
+// 都没有；带 <script setup vapor> 的组件编译产物 `import { txt, renderEffect } from 'vue'`
+// 一加载就会报 "does not provide an export named 'txt'"。
+// dist/vue.runtime-with-vapor.esm-browser.js 是官方把 vdom + vapor 合在一起的成品
+// （自包含、0 外部 import，同时含 createApp / createVaporApp / vaporInteropPlugin / 全部 helper）。
+// dev 用带警告的版本，构建用 prod 版（781KB → 267KB）。3.5 通道完全不受影响。
+const VUE36_RUNTIME = {
+  serve: 'dist/vue.runtime-with-vapor.esm-browser.js',
+  build: 'dist/vue.runtime-with-vapor.esm-browser.prod.js',
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 3.6 纯 VDOM 对照通道（VUE_CHANNEL=36 + VUE_VAPOR=0）
+//
+// 存在的意义：把「3.6 运行时/编译器本身的改进」和「Vapor 带来的收益」拆开。
+// 现有 --vue36 通道里所有已迁移组件都走 vapor，量到的差异是两者混在一起的；
+// 想去掉 vapor 这层，就得让同一套 3.6 编译器产出 VDOM 代码。
+//
+// 两件事必须同时做，少一件就不是纯 VDOM：
+//   1. 运行时换成 dist/vue.runtime.esm-browser(.prod).js —— 只有 VDOM，没有 vapor helper。
+//      仍然用 esm-browser 而不是 esm-bundler：后者是 830 字节的壳，内部 import @vue/runtime-dom，
+//      而 pinia / vue-router 的预构建产物会内联另一份 vue，dev 下就是「两份 Vue 实例」
+//      （provide/inject、ref 判等全失效）。esm-browser 自包含、0 外部 import，
+//      和 vapor 通道用的是同一个系列产物，体积口径也能直接横向比。
+//   2. 剥掉 SFC 上的 `vapor` 属性 —— 否则 compiler-sfc 3.6 照样按 vapor 编译，
+//      产物里 `import { txt, renderEffect } from 'vue'` 在纯 VDOM 运行时里直接报缺导出。
+//
+// 只在开发/对比时用，不进任何默认脚本；关掉这个变量，行为与改动前一致。
+// ───────────────────────────────────────────────────────────────────────────
+const VUE36_VDOM_RUNTIME = {
+  serve: 'dist/vue.runtime.esm-browser.js',
+  build: 'dist/vue.runtime.esm-browser.prod.js',
+}
+
+async function loadVue36(vdomOnly = false) {
   const pkgFile = path.join(VUE36_DIR, 'node_modules', 'vue', 'package.json')
   if (!fs.existsSync(pkgFile)) {
     throw new Error(
@@ -79,8 +114,11 @@ async function loadVue36() {
     )
   }
   const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'))
-  const runtime = path.join(path.dirname(pkgFile), pkg.module || 'dist/vue.runtime.esm-bundler.js')
-  const compilerEntry = path.join(VUE36_DIR, 'node_modules', 'vue', 'compiler-sfc', 'index.mjs')
+  const vueDir = path.dirname(pkgFile)
+  const runtimeSet = vdomOnly ? VUE36_VDOM_RUNTIME : VUE36_RUNTIME
+  // 可变：configResolved 里按 command 切到 prod 版
+  let runtime = path.join(vueDir, runtimeSet.serve)
+  const compilerEntry = path.join(vueDir, 'compiler-sfc', 'index.mjs')
   const compiler = await import(pathToFileURL(compilerEntry).href)
   if (typeof compiler.parse !== 'function' || typeof compiler.compileScript !== 'function') {
     throw new Error(`[vue36] ${compilerEntry} 不是可用的 compiler-sfc 入口`)
@@ -93,23 +131,82 @@ async function loadVue36() {
       if (id === 'vue') return runtime
     },
     configResolved(config) {
+      if (config.command === 'build') runtime = path.join(vueDir, runtimeSet.build)
       // dev / build 都打印，避免「以为在跑 3.6，实际还是 3.5」
       config.logger.info(
-        `\x1b[35m[vue36]\x1b[0m ${config.command} 使用 vue@${pkg.version}（主线 node_modules 未改动）`
+        `\x1b[35m[vue36]\x1b[0m ${config.command} 使用 vue@${pkg.version} + ` +
+          (vdomOnly ? '纯 VDOM 运行时（vapor 标记已忽略）' : 'vapor 双运行时') +
+          '（主线 node_modules 未改动）'
       )
     },
   }
-  return { version: pkg.version, runtime, compiler, plugin }
+  return { version: pkg.version, runtime, compiler, plugin, vdomOnly }
+}
+
+// 纯 VDOM 通道专用：把 SFC 根级 `<script setup vapor>` 的 vapor 属性剥掉。
+// 必须 enforce:'pre' 且排在 plugin-vue 之前（plugin-vue 是普通插件，pre 阶段一定先跑），
+// 否则 transformMain 拿到的是原文，descriptor.vapor 已定，剥属性也没意义。
+// 匹配的是「空白分隔的独立单词 vapor」：属性在标签末尾时后面直接是 '>'（已被 [^>]* 排除），
+// 所以后向断言只能用「后面不是单词字符」，不能要求后面还有空白——第一版就是这么静默失效的。
+function stripVaporAttr() {
+  const isVaporAttr = /(?:^|\s)vapor(?![\w-])/
+  return {
+    name: 'strip-vapor-attr',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.endsWith('.vue')) return
+      if (!code.includes('vapor')) return
+      return code.replace(/<script\b([^>]*)>/g, (tag, attrs) => {
+        if (!isVaporAttr.test(attrs)) return tag
+        return `<script${attrs.replace(/\s*vapor(?![\w-])/, '')}>`
+      })
+    },
+  }
+}
+
+// 入口要装 vaporInteropPlugin（Vapor 组件嵌在 VDOM 应用里必须装，否则控制台会提示
+// "vapor-in-vdom interop was not installed"）。但 3.5 的 vue 根本没有这个导出，
+// 静态 import 会让 3.5 通道直接构建失败。这里用一个虚拟模块把差异挡在业务代码之外：
+//   3.6 通道 → `export { vaporInteropPlugin as default } from 'vue'`（被上面的插件指到双运行时）
+//   3.5 通道 → `export default null`
+// 入口只需 `if (vaporInterop) app.use(vaporInterop)`，两个通道都能跑。
+function vaporInteropShim(enabled) {
+  const VIRTUAL_ID = 'virtual:vapor-interop'
+  const RESOLVED_ID = '\0' + VIRTUAL_ID
+  return {
+    name: 'vapor-interop-shim',
+    resolveId(id) {
+      if (id === VIRTUAL_ID) return RESOLVED_ID
+    },
+    load(id) {
+      if (id !== RESOLVED_ID) return
+      return enabled
+        ? `export { vaporInteropPlugin as default } from 'vue'`
+        : `export default null`
+    },
+  }
 }
 
 // 顶层 await 可用：本文件是 ESM（student-frontend/package.json 是 "type": "module"），
 // Vite 以 import() 加载配置，天然支持。未开通道时这里是 null，配置与改动前完全一致。
-const vue36 = process.env.VUE_CHANNEL === '36' ? await loadVue36() : null
+// VUE_VAPOR=0 只在 VUE_CHANNEL=36 下有意义（3.5 主线没有 vapor 可言，忽略即可）。
+const vdomOnly = process.env.VUE_VAPOR === '0'
+const vue36 = process.env.VUE_CHANNEL === '36' ? await loadVue36(vdomOnly) : null
+
+// 生产口径 bench 专用：只把 bench.html 打进产物（VUE_BENCH=1）。
+// 为什么需要：dev 口径跑的是 dev 版运行时（带全部断言），而用户装的是生产包；
+// 要确认「框架差异在生产构建下是否还在」，就得让 bench 页也走 build + minify。
+// 不打包 exe —— 产物是纯静态文件，由探针起本地静态服务、复用 node_modules 里的 electron 加载，
+// 避免触发 SmartScreen（打包出的未签名 exe 会被拦，且需要管理员权限才能放行）。
+const benchBuild = process.env.VUE_BENCH === '1'
 
 export default defineConfig({
   plugins: [
     // 顺序无实质影响（该插件是 enforce:'pre'），放最前只为读起来直观
     vue36?.plugin,
+    // 必须在 vue() 之前：它要在 compiler-sfc 看到源码前就把 vapor 属性去掉
+    vue36?.vdomOnly ? stripVaporAttr() : null,
+    vaporInteropShim(!!vue36 && !vdomOnly),
     vue({
       compiler: vue36?.compiler,
       template: {
@@ -134,7 +231,11 @@ export default defineConfig({
   // 排除后所有 import 'vue' 都收敛到同一份源文件；代价仅是 dev 下 vue 按模块逐个请求
   // （比打成一个 2.5MB chunk 略慢一点加载），换来的是只有一个 Vue 运行时。
   ...(vue36
-    ? { cacheDir: path.join(VUE36_DIR, '.vite-cache'), optimizeDeps: { exclude: ['vue'] } }
+    ? {
+        // 三条通道各一份缓存：vapor / 纯 VDOM 的产物互不兼容，共用会拿到上一模式的编译结果
+        cacheDir: path.join(VUE36_DIR, vdomOnly ? '.vite-cache-vdom' : '.vite-cache'),
+        optimizeDeps: { exclude: ['vue'] },
+      }
     : {}),
   server: {
     // 允许 dev server 读取仓库根：electron/ipc-channels.json 位于 vite root 之外，
@@ -214,13 +315,16 @@ export default defineConfig({
     reportCompressedSize: false,
     // Vite 8 已用 rolldown 取代 rollup，rollupOptions 是 deprecated 别名，这里改用新名（行为不变）
     rolldownOptions: {
-      input: {
-        main: path.resolve(import.meta.dirname, 'index.html'),
-        widget: path.resolve(import.meta.dirname, 'widget.html'),
-        'desktop-widget': path.resolve(import.meta.dirname, 'desktop-widget.html'),
-        migration: path.resolve(import.meta.dirname, 'migration.html'),
-        setup: path.resolve(import.meta.dirname, 'setup.html'),
-      },
+      input: benchBuild
+        ? // 只构建基准页：产物里只有 bench.html + 它的依赖，可直接静态启动
+          { bench: path.resolve(import.meta.dirname, 'bench.html') }
+        : {
+            main: path.resolve(import.meta.dirname, 'index.html'),
+            widget: path.resolve(import.meta.dirname, 'widget.html'),
+            'desktop-widget': path.resolve(import.meta.dirname, 'desktop-widget.html'),
+            migration: path.resolve(import.meta.dirname, 'migration.html'),
+            setup: path.resolve(import.meta.dirname, 'setup.html'),
+          },
     }
   }
 })

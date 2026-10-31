@@ -189,7 +189,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { SEND, INVOKE, RECEIVE } from '../electronChannels.js'
 import '../styles/dialog-transition.css'

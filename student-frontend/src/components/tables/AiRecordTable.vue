@@ -23,7 +23,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import DynamicTable from './DynamicTable/DynamicTable.vue'
 import AiGridPreview, { GRID_TABLES } from './AiGridPreview.vue'
 import { apiFetch } from '../../utils/apiUrl.js'

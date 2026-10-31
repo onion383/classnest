@@ -288,7 +288,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
 import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

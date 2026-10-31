@@ -67,7 +67,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 import axios from 'axios'
 import AppSelect from '../base/AppSelect.vue'
 import '../../styles/dialog-transition.css'

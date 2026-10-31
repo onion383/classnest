@@ -22,7 +22,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import IconGlyph from './IconGlyph.vue'
 
 defineOptions({ name: 'EmptySnapshot' })

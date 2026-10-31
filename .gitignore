@@ -81,6 +81,11 @@ doc/代码审查/
 
 # 缓存
 .vite/
+# Vite 依赖预构建缓存。注意：上面那条 `.vite/` 只匹配名字**恰好**是 .vite 的目录，
+# 不匹配 `.vite-cache` / `.vite-cache-vdom` 这类变体（vue36 通道切换用的独立 cacheDir）。
+# 必须用通配，否则 `git add -A` 会把 9MB deps 缓存一起提交。
+.vite-cache*/
+.vite-cache-*/
 .perf-data/
 .trae/
 *.log

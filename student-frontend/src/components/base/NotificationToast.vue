@@ -46,7 +46,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { useNotification } from '../../composables/useNotification'
 import { reportError } from '../../utils/reportError.js'
 

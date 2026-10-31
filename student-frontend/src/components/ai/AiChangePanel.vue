@@ -80,7 +80,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import DynamicTable from '../tables/DynamicTable/DynamicTable.vue'
 import AiGridPreview from '../tables/AiGridPreview.vue'
 import { summarizeProposalChanges, gridCellFocus } from '../../composables/ai/aiMessages.js'

@@ -9,7 +9,7 @@
         <div class="bg-surface p-5 rounded-xl w-[600px] max-w-full shadow-lg dialog-card">
           <!-- 搜索框：沿用弹窗表单输入框规格（与添加学生等弹窗一致），左侧放大镜 -->
           <div class="relative mb-6">
-            <Search :size="16" stroke-width="2.2" class="absolute left-3 top-1/2 -translate-y-1/2 z-[1] text-text-secondary pointer-events-none" />
+            <IconGlyph name="search" tint="current" glyph :size="16" :stroke-width="2.2" class="absolute left-3 top-1/2 -translate-y-1/2 z-[1] text-text-secondary pointer-events-none" />
             <input
               ref="inputEl"
               v-model="keyword"
@@ -67,15 +67,15 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Search } from '@lucide/vue'
 import axios from 'axios'
 import {
   PAGES, SETTINGS_SECTIONS, SETTINGS_ITEMS, matchKeywords, REMOTE_SOURCE, buildRemoteResults,
 } from '../../config/searchData.js'
 import { useSeq } from '../../composables/useSeq.js'
+import IconGlyph from '../../components/base/IconGlyph.vue'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])

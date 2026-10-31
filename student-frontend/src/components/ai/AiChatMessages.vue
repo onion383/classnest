@@ -260,7 +260,7 @@
 }
 </style>
 
-<script setup>
+<script setup vapor>
 import AiChart from '../AiChart.vue'
 import AiRecordTable from '../tables/AiRecordTable.vue'
 import AiStreamTail from './AiStreamTail.vue'

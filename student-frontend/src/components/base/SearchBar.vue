@@ -32,7 +32,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch } from 'vue'
 import AppSelect from './AppSelect.vue'
 

@@ -14,7 +14,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 // 通用横向条状图：同时生长动画、夜间低浓度蓝、默认显示 5 行可滚动
 import { computed } from 'vue'
 

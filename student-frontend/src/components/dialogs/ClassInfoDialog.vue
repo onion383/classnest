@@ -34,7 +34,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 import '../../styles/dialog-transition.css'
 import { ref, watch, nextTick } from 'vue'
 import DialogShell from '../base/DialogShell.vue'

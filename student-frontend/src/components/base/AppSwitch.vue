@@ -21,7 +21,7 @@
   </label>
 </template>
 
-<script setup>
+<script setup vapor>
 import { useSlots } from 'vue'
 
 defineProps({

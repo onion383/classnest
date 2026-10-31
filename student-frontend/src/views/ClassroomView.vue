@@ -155,7 +155,7 @@
    </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
 import { reportError } from '../utils/reportError.js'
 import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'

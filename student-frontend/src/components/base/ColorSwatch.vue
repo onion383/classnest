@@ -31,7 +31,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch } from 'vue'
 
 const props = defineProps({

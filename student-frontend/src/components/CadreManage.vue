@@ -77,7 +77,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { getToken } from '../utils/authStorage.js'
 import { ref, reactive, computed, onMounted } from 'vue'
 import axios from 'axios'

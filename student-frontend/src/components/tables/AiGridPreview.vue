@@ -72,7 +72,7 @@ export function invalidateStudentMap() {
 }
 </script>
 
-<script setup>
+<script setup vapor>
 import GridView from './GridView/GridView.vue'
 import { generateColHeaders, buildSeatLikeRows } from '../../composables/useSeatGrid.js'
 import { useSeq } from '../../composables/useSeq.js'

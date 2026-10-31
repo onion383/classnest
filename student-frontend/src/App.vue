@@ -6,37 +6,37 @@
       <!-- 左侧：撤销 / 重做 / 全局搜索（登录页隐藏，保持干净） -->
       <div v-if="$route.path !== '/login'" class="titlebar-left flex items-center" style="gap:6px; padding-left:10px; height:100%;">
         <button class="tb-btn" :disabled="!undoState.canUndo || undoState.busy" :title="undoTitle" @mouseenter="onUndoHover" @click="onUndo">
-          <Undo2 :size="15" stroke-width="1.8" />
+          <IconGlyph name="undo" tint="current" glyph :size="15" :stroke-width="1.8" />
         </button>
         <button class="tb-btn" :disabled="!undoState.canRedo || undoState.busy" :title="redoTitle" @mouseenter="onUndoHover" @click="onRedo">
-          <Redo2 :size="15" stroke-width="1.8" />
+          <IconGlyph name="redo" tint="current" glyph :size="15" :stroke-width="1.8" />
         </button>
         <button class="tb-btn" title="搜索（页面 / 设置）" @mouseenter="preloadSearchDialog" @click="searchOpen = true">
-          <Search :size="15" stroke-width="2" />
+          <IconGlyph name="search" tint="current" glyph :size="15" :stroke-width="2" />
         </button>
         <button class="tb-btn" title="切换主题" @mouseenter="preloadThemePickerDialog" @click="themeOpen = true">
-          <Palette :size="15" stroke-width="1.8" />
+          <IconGlyph name="palette" tint="current" glyph :size="15" :stroke-width="1.8" />
         </button>
         <button class="tb-btn" title="账户" @mouseenter="preloadAccountDialog" @click="accountOpen = true">
-          <User :size="15" stroke-width="1.8" />
+          <IconGlyph name="user" tint="current" glyph :size="15" :stroke-width="1.8" />
         </button>
         <button class="tb-btn" title="系统设置" @click="goToSettings">
-          <Settings :size="15" stroke-width="1.8" />
+          <IconGlyph name="settings" tint="current" glyph :size="15" :stroke-width="1.8" />
         </button>
         <button class="tb-btn" title="关于软件" @click="goToAbout">
-          <Info :size="15" stroke-width="1.8" />
+          <IconGlyph name="about" tint="current" glyph :size="15" :stroke-width="1.8" />
         </button>
       </div>
 
       <div class="window-controls flex items-center" style="height:100%;">
         <button class="win-btn" title="最小化" @click="winMinimize">
-          <Minus :size="14" stroke-width="1.5" />
+          <IconGlyph name="minus" tint="current" glyph :size="14" :stroke-width="1.5" />
         </button>
         <button class="win-btn" title="最大化/还原" @click="winMaximizeToggle">
-          <Square :size="12" stroke-width="1.5" />
+          <IconGlyph name="square" tint="current" glyph :size="12" :stroke-width="1.5" />
         </button>
         <button class="win-btn win-btn-close" title="关闭" @click="winClose">
-          <X :size="14" stroke-width="1.5" />
+          <IconGlyph name="close" tint="current" glyph :size="14" :stroke-width="1.5" />
         </button>
       </div>
     </div>
@@ -188,11 +188,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { prefetchRoutes } from './router'
 import { prefetch } from './utils/dialogPrefetch'
 import { prefetchThemeStyles, warmNightMode, isNightWarmEnabled } from './styles/themeLoader'
-import { Minus, Square, X, Undo2, Redo2, Search, Palette, User, Settings, Info } from '@lucide/vue'
 import axios from 'axios'
 import { undoState as undo, performUndo, refreshUndoStatus } from './composables/useUndo.js'
 import './styles/dialog-transition.css'
 import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
+import IconGlyph from './components/base/IconGlyph.vue'
 
 // AI 助手懒加载：loader 抽成命名函数，既给 defineAsyncComponent 用，也供悬浮图标 hover 预取（@mouseenter → prefetch）
 const loadAiAssistant = () => import('./views/AiAssistant.vue')

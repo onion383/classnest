@@ -141,7 +141,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 import axios from 'axios'
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import AppSelect from '../base/AppSelect.vue'

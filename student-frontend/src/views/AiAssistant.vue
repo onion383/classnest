@@ -9,7 +9,7 @@
           @click="openDataManage"
           class="bg-surface-hover hover:bg-primary hover:text-text-inverse text-text px-4 py-2 rounded-sm transition-theme flex items-center gap-1.5"
           title="管理聊天记录与 Markdown 技能文件"
-        ><Database :size="14" :stroke-width="1.8" /> 数据管理</button>
+        ><IconGlyph name="database" tint="current" glyph :size="14" :stroke-width="1.8" /> 数据管理</button>
         <button
           @click="showSettings = true"
           class="bg-surface-hover hover:bg-primary hover:text-text-inverse text-text px-4 py-2 rounded-sm transition-theme flex items-center gap-1.5"
@@ -45,10 +45,10 @@
                负外边距必须与卡片 p-4 相等，才能铺满卡片上沿 -->
           <div class="chat-toolbar -mx-4 -mt-4 mb-1.5 flex items-center gap-1.5 flex-shrink-0 px-4 py-2">
             <button class="dlg-close" title="对话列表" @click="convDrawerOpen = true">
-              <PanelLeft :size="15" stroke-width="1.8" />
+              <IconGlyph name="panelLeft" tint="current" glyph :size="15" :stroke-width="1.8" />
             </button>
             <button class="dlg-close" title="新建对话" :disabled="busy" @click="newConversation">
-              <Plus :size="15" stroke-width="1.8" />
+              <IconGlyph name="plus" tint="current" glyph :size="15" :stroke-width="1.8" />
             </button>
             <span class="chat-tb-divider"></span>
             <span class="chat-tb-title">{{ activeConvTitle || '新对话' }}</span>
@@ -425,11 +425,10 @@
 }
 </style>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, onMounted, onUnmounted, defineAsyncComponent, nextTick, toRef } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
-import { PanelLeft, Plus, Database } from '@lucide/vue'
 import { useNotification } from '../composables/useNotification.js'
 import ConfirmDialog from '../components/base/ConfirmDialog.vue'
 import AiConversationPanel from '../components/ai/AiConversationPanel.vue'
@@ -448,6 +447,7 @@ import { useAiConversations } from '../composables/ai/aiConversations.js'
 import { useAiChat } from '../composables/ai/aiChat.js'
 import { useAiExec } from '../composables/ai/aiExec.js'
 import { INVOKE } from '../electronChannels.js'
+import IconGlyph from '../components/base/IconGlyph.vue'
 
 // 读取本地保存的写入权限挡位（只有 'full' 视为完全权限，其余一律回落到默认的「全部审批」）
 function readPermissionMode() {

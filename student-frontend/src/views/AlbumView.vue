@@ -436,7 +436,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
 import { getToken } from '../utils/authStorage.js'
 import { ref, computed, nextTick, onMounted, onActivated, onDeactivated, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'

@@ -125,7 +125,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, onBeforeUnmount, nextTick, toRef } from 'vue'
 import GridView from '../../tables/GridView/GridView.vue'
 import AppSelect from '../../base/AppSelect.vue'

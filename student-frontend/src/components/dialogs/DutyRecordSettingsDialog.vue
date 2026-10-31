@@ -76,7 +76,7 @@
   </DialogShell>
 </template>
 
-<script setup>
+<script setup vapor>
 // 管理周值日记录弹窗：按学期查看/删除值日历史快照（每周一条记录）。
 // 学期下拉用于在前端过滤周列表，不改变全局当前学期。mode 区分日常值日 / 大扫除。
 import axios from 'axios'

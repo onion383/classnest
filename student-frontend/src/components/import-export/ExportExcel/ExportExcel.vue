@@ -61,7 +61,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, toRef } from 'vue'
 import AppSelect from '../../base/AppSelect.vue'
 import { useNotification } from '../../../composables/useNotification';

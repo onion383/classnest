@@ -288,8 +288,8 @@
           :title="permissionMode === aiPermissionFull ? '当前：完全权限（AI 改数据不再逐次征求同意）' : '当前：全部审批（AI 每次改数据都要你确认）'"
           @click="togglePermMenu"
         >
-          <ShieldAlert v-if="permissionMode === aiPermissionFull" :size="13" :stroke-width="1.8" />
-          <ShieldCheck v-else :size="13" :stroke-width="1.8" />
+          <IconGlyph name="shieldAlert" tint="current" glyph v-if="permissionMode === aiPermissionFull" :size="13" :stroke-width="1.8" />
+          <IconGlyph name="shieldCheck" tint="current" glyph v-else :size="13" :stroke-width="1.8" />
           <span>{{ permissionMode === aiPermissionFull ? '完全权限' : '全部审批' }}</span>
         </button>
         <!-- 联网搜索开关：仅 DeepSeek 模式可用；其余模式下置灰禁用，避免隐藏造成入口不可发现 -->
@@ -302,7 +302,7 @@
             : '联网搜索仅支持 DeepSeek 模型'"
           @click="searchAvailable && $emit('toggle-search')"
         >
-          <Globe :size="13" :stroke-width="1.8" />
+          <IconGlyph name="globe" tint="current" glyph :size="13" :stroke-width="1.8" />
           <span>联网</span>
         </button>
 
@@ -447,9 +447,8 @@
 .skill-chip-x:hover { opacity: 1; }
 </style>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { ShieldAlert, ShieldCheck, Globe } from '@lucide/vue'
 import AiProposalTable from '../../tables/AiProposalTable.vue'
 import AppSelect from '../../base/AppSelect.vue'
 import { useNotification } from '../../../composables/useNotification.js'
@@ -458,6 +457,7 @@ import { frontProposalHint } from '../../../composables/ai/aiMessages.js'
 import { ASK_OTHER_KEY, ASK_OTHER_LABEL, AI_PERMISSION_FULL } from '../../../composables/ai/aiConstants.js'
 import { _slashToken } from './AiComposer.skill.js'
 import { isPicked, _isSingleUnpicked } from './AiComposer.ask.js'
+import IconGlyph from '../../../components/base/IconGlyph.vue'
 
 defineOptions({ name: 'AiComposer' })
 const props = defineProps({

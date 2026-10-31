@@ -8,7 +8,7 @@
       >
         <div class="bg-surface p-5 rounded-xl w-[520px] max-w-[92vw] shadow-lg dialog-card">
           <div class="flex items-center justify-between mb-4">
-            <h3 class="text-lg font-bold text-text flex items-center gap-2"><Palette :size="18" /> 切换主题</h3>
+            <h3 class="text-lg font-bold text-text flex items-center gap-2"><IconGlyph name="palette" tint="current" glyph :size="18" /> 切换主题</h3>
             <button class="dlg-close" @click="$emit('close')">✕</button>
           </div>
 
@@ -48,10 +48,10 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { useThemeStore } from '../../stores/theme'
-import { Palette } from '@lucide/vue'
 import AppSwitch from './AppSwitch.vue'
+import IconGlyph from '../../components/base/IconGlyph.vue'
 
 defineProps({ visible: { type: Boolean, default: false } })
 defineEmits(['close'])

@@ -32,7 +32,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, watch } from 'vue'
 import '../../styles/dialog-transition.css'
 import { sanitizeFileName } from '../../utils/fileName.js'

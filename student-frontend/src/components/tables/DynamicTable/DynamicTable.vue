@@ -113,8 +113,8 @@
                 :title="filterButtonTitle(field.name)"
                 @click.stop="openFilter(field, $event)"
               >
-                <Filter v-if="isColumnFiltered(field.name)" :size="13" stroke-width="2.2" />
-                <Search v-else :size="13" stroke-width="2.2" />
+                <IconGlyph name="filter" tint="current" glyph v-if="isColumnFiltered(field.name)" :size="13" :stroke-width="2.2" />
+                <IconGlyph name="search" tint="current" glyph v-else :size="13" :stroke-width="2.2" />
               </button>
             </div>
           </th>
@@ -333,9 +333,9 @@ import { prefetch } from '../../../utils/dialogPrefetch.js'
 import { ref, computed, watch, onMounted, onActivated, onBeforeUnmount, nextTick, defineAsyncComponent, TransitionGroup, toRef } from 'vue'
 import AppSelect from '../../base/AppSelect.vue'
 import ConfirmDialog from '../../base/ConfirmDialog.vue'
-import { Search, Filter } from '@lucide/vue'
 import { useDynamicTableDrag } from './DynamicTable.drag.js'
 import { zhCollator } from '../../../utils/collator.js'
+import IconGlyph from '../../../components/base/IconGlyph.vue'
 
 // 表头筛选面板：独立组件 + 懒加载。
 // 用 defineAsyncComponent 把面板拆成单独 chunk，只有第一次点开表头放大镜/漏斗时才下载；

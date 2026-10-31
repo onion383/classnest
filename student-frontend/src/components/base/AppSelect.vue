@@ -14,7 +14,7 @@
       <span class="av-select__value" :class="{ 'av-select__value--placeholder': !resolved || resolved.value == null }">
         {{ display }}
       </span>
-      <span class="av-select__arrow" aria-hidden="true"><ChevronDown :size="14" stroke-width="1.8" /></span>
+      <span class="av-select__arrow" aria-hidden="true"><IconGlyph name="chevronDown" tint="current" glyph :size="14" :stroke-width="1.8" /></span>
     </button>
 
     <!-- 下拉菜单（Teleport 到 body 避免被父容器 overflow/transform/backdrop-filter 裁剪） -->
@@ -29,7 +29,7 @@
           @click="commit(i)"
         >
           <span class="av-select__option-label">{{ opt.label }}</span>
-          <Check v-if="opt.value === resolved?.value" class="av-select__check" :size="14" stroke-width="1.8" />
+          <IconGlyph name="check" tint="current" glyph v-if="opt.value === resolved?.value" class="av-select__check" :size="14" :stroke-width="1.8" />
         </li>
         <li v-if="!list.length" class="av-select__option av-select__option--empty">无选项</li>
       </ul>
@@ -37,13 +37,13 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 // 自定义下拉框：替代原生 <select>，适配圆角 + 毛玻璃 + 点击过渡动画。
 // 用法：
 //   <AppSelect v-model="xxx" :options="[{value:'a', label:'A'}, 'B']" placeholder="请选择" />
 import '../../styles/select.css'
-import { ChevronDown, Check } from '@lucide/vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import IconGlyph from '../../components/base/IconGlyph.vue'
 
 defineOptions({ name: 'AppSelect' })
 

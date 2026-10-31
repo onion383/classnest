@@ -122,7 +122,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, watch } from 'vue'
 import axios from 'axios'
 import AppHelp from '../base/AppHelp.vue'

@@ -40,7 +40,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 
 const props = defineProps({

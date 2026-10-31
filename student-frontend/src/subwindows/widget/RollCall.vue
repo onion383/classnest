@@ -32,7 +32,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { getToken } from '../../utils/authStorage.js'
 import { ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'

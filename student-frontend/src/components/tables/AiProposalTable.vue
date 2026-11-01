@@ -128,7 +128,7 @@ import { FRONT_LABELS } from '../../composables/ai/aiConstants.js'
 
 // 枚举值的中文说明（仅本表格用，供设置提案预览可读）
 const FRONT_VALUE_LABELS = {
-  base: '彩色色块', glass: '毛玻璃', glass2: '新毛玻璃', win11: 'Win11', minimal: '极简',
+  base: '彩色色块', glass: '毛玻璃', glass2: '新毛玻璃',
   day: '日间', night: '夜间',
   color: '彩色图标', emoji: 'Emoji',
   blue: '深蓝', light: '白色调',

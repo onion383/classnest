@@ -191,7 +191,7 @@ onBeforeUnmount(() => {
   margin: 0;
   vertical-align: middle;
   border: none !important;
-  /* glass/win11 的全局 button 规则会把圆角改成 --radius-control（0,2,1 特异性压过 scoped），
+  /* glass 的全局 button 规则会把圆角改成 --radius-control（0,2,1 特异性压过 scoped），
      这里用 !important 保住圆形热区 */
   border-radius: var(--radius-full) !important;
   background-color: transparent;
@@ -225,7 +225,7 @@ onBeforeUnmount(() => {
   max-width: min(280px, calc(100vw - 16px));
   pointer-events: none;
 }
-:root:is([data-theme="glass"], [data-theme="win11"]) .help-pop-wrap {
+:root:is([data-theme="glass"]) .help-pop-wrap {
   --help-border: var(--alpha-white-35);
 }
 :root[data-mode="night"][data-theme="glass"] .help-pop-wrap {
@@ -252,7 +252,7 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
 }
-:root:is([data-theme="glass"], [data-theme="win11"]) .help-pop {
+:root:is([data-theme="glass"]) .help-pop {
   backdrop-filter: blur(20px) saturate(1.1);
 }
 

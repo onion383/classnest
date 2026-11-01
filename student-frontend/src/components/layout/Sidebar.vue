@@ -27,8 +27,9 @@
         <IconGlyph name="panelLeftClose" tint="current" glyph v-else :size="15" :stroke-width="1.8" />
       </button>
     </h2>
-    <nav class="space-y-1 flex-1 min-h-0 overflow-y-auto sidebar-scroll" @pointerover="onNavOver">
-      <template v-for="group in navGroups" :key="group.title">
+    <div class="sidebar-scroll-wrap flex-1 min-h-0">
+      <nav ref="navRef" class="space-y-1 h-full overflow-y-auto sidebar-scroll app-custom-scroll" @pointerover="onNavOver">
+        <template v-for="group in navGroups" :key="group.title">
         <div v-if="!collapsed" class="text-[11px] sidebar-group-title uppercase tracking-wider px-3 pt-1 pb-0.5">{{ group.title }}</div>
         <router-link
           v-for="item in group.items"
@@ -57,7 +58,9 @@
         </router-link>
         <div class="border-t border-white/10 my-2"></div>
       </template>
-    </nav>
+      </nav>
+      <CustomScrollbar :target="navRef" />
+    </div>
   </div>
 </template>
 
@@ -69,6 +72,7 @@ import { PAGE_GROUPS as navGroups } from '../../config/searchIndex.js'
 import { useThemeStore } from '../../stores/theme'
 import { prefetchRoute } from '../../utils/routePrefetch.js'
 import IconGlyph from '../../components/base/IconGlyph.vue'
+import CustomScrollbar from '../../components/base/CustomScrollbar.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -90,7 +94,7 @@ function isSelected(to) {
 // 图标样式跟随主题设置：'lucide' 线性图标 | 'emoji' 表情
 const themeStore = useThemeStore()
 const { iconStyle, isNightPending, nightSupported } = storeToRefs(themeStore)
-// 全局日/夜切换（仅 glass / glass2 支持，见 theme-night.css）
+// 全局日/夜切换（base / glass / glass2 支持）
 const { toggleMode } = themeStore
 
 function onNavOver(e) {
@@ -106,24 +110,31 @@ function toggleCollapsed() {
   collapsed.value = !collapsed.value
   localStorage.setItem(COLLAPSE_KEY, collapsed.value ? '1' : '0')
 }
+
+const navRef = ref(null)
 </script>
 
 <style scoped>
-/* 侧边栏细滚动条：窗口过高时导航区独立滚动，标题行固定不滚 */
+/* 隐藏原生滚动条：Chromium 里它的悬停颜色无法过渡，改用下面的 DOM 滚动条。
+   各主题文件在 :root / `*` 上声明了非 auto 的 scrollbar-width、scrollbar-color，
+   Chromium 会因此忽略 ::-webkit-scrollbar 皮肤；这里用 !important 把两轴一起收掉
+   （导航区没有横向滚动，收掉没有副作用）。 */
+.sidebar-scroll {
+  scrollbar-width: none !important;
+  scrollbar-color: transparent transparent !important;
+  -ms-overflow-style: none;
+}
 .sidebar-scroll::-webkit-scrollbar {
-  width: 6px;
+  width: 0 !important;
+  height: 0 !important;
 }
-.sidebar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.25);
-  /* 滚动条滑块：宽度 6px，半高圆角 3px 才呈胶囊。
-     写死 3px 是因为它必须等于滑块自身宽度的一半，与卡片圆角体系无关。 */
-  border-radius: 3px;
+/* 展开态给滚动条留内边距：12px 让位给轨道，另外 8px 是真空隙，
+   导航项和选中块都不会贴着滑块。 */
+.sidebar-root:not(.sidebar-collapsed) .sidebar-scroll {
+  padding-right: 20px;
 }
-.sidebar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.4);
-}
-.sidebar-scroll::-webkit-scrollbar-track {
-  background: transparent;
+.sidebar-scroll-wrap {
+  position: relative;
 }
 /* 导航项：图标 + 文字垂直居中，图标与文字间距固定，去掉链接下划线。
    过渡覆盖 background/border/color/box-shadow/border-radius/transform（Tailwind transition-theme

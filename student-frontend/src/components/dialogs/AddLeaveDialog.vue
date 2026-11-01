@@ -23,7 +23,8 @@
           />
           <div
             v-if="listVisible"
-            class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border rounded-lg shadow-lg max-h-40 overflow-y-auto z-10"
+            ref="studentListRef"
+            class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border rounded-lg shadow-lg max-h-40 overflow-y-auto z-10 app-custom-scroll"
           >
             <div
               v-for="s in filteredStudents"
@@ -36,6 +37,15 @@
             </div>
             <div v-if="!filteredStudents.length" class="px-3 py-2 text-sm text-text-muted">无匹配学生</div>
           </div>
+          <!-- 候选学生：细滑块 + 淡入（与下拉同宽，覆盖层以 relative 外壳定位） -->
+          <CustomScrollbar
+            v-if="listVisible"
+            :target="studentListRef"
+            compact
+            :arrows="false"
+            auto-hide
+            :min-thumb="16"
+          />
         </div>
       </div>
 
@@ -113,6 +123,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { formatDateTimeLocal, formatDateTime } from '../../utils/dateTime.js'
 
@@ -128,7 +139,9 @@ const props = defineProps({
 const emit = defineEmits(['cancel', 'delete', 'update', 'ask-save-phones', 'confirm'])
 
 const keyword = ref('');
-const listVisible = ref(false);
+const listVisible = ref(false)
+// 候选学生列表滚动容器（自定义滚动条的目标）
+const studentListRef = ref(null);
 const selected = ref(null);
 const hideTimer = ref(null);
 const quickButtons = ref(['今日全天', '今日上午', '今日下午', '今日晚修', '今日不过夜', '明天全天', '连续两天', '连续三天']);

@@ -19,7 +19,7 @@
 
     <!-- 下拉菜单（Teleport 到 body 避免被父容器 overflow/transform/backdrop-filter 裁剪） -->
     <Teleport to="body">
-      <ul v-if="open" class="av-select__menu" :style="menuStyle" role="listbox">
+      <ul v-if="open" ref="menuRef" class="av-select__menu" :style="menuStyle" role="listbox">
         <li
           v-for="(opt, i) in list"
           :key="opt.value == null ? i : opt.value"
@@ -33,6 +33,17 @@
         </li>
         <li v-if="!list.length" class="av-select__option av-select__option--empty">无选项</li>
       </ul>
+      <!-- 下拉候选：细滑块 + 无箭头 + 悬停淡入。菜单是 fixed + Teleport，滚动条用 fixed 模式跟随 -->
+      <CustomScrollbar
+        v-if="open"
+        :target="menuRef"
+        compact
+        :arrows="false"
+        auto-hide
+        fixed
+        :min-thumb="18"
+        :z-index="menuZ + 1"
+      />
     </Teleport>
   </div>
 </template>
@@ -44,6 +55,7 @@
 import '../../styles/select.css'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import IconGlyph from '../../components/base/IconGlyph.vue'
+import CustomScrollbar from './CustomScrollbar.vue'
 
 defineOptions({ name: 'AppSelect' })
 
@@ -67,6 +79,8 @@ const menuPos = ref({ left: 0, top: 0, width: 0 })
 const menuZ = ref(10010)
 
 const rootRef = ref(null)
+// 下拉菜单滚动容器（自定义滚动条的 fixed 目标）
+const menuRef = ref(null)
 
 const list = computed(() => {
   return props.options.map(o => {

@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col">
+  <div class="h-full flex flex-col relative">
     <!-- 工具栏按钮：视图切换 + 设置 + 刷新 -->
     <div class="mb-4 flex items-center gap-3 opbar">
       <button @click="onEditSelected" :disabled="!selectedNode" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
@@ -11,7 +11,7 @@
     </div>
 
     <!-- ====== 树状视图（智能排表式嵌套列表） ====== -->
-    <div class="tree-scroll bg-surface shadow-md rounded-xl border border-border p-4 flex-1 min-h-0 overflow-y-auto overflow-x-hidden" @click.self="selectedId = null">
+    <div ref="treeScrollRef" class="tree-scroll bg-surface shadow-md rounded-xl border border-border p-4 flex-1 min-h-0 overflow-y-auto overflow-x-hidden app-custom-scroll" @click.self="selectedId = null">
       <!-- 空状态 -->
       <div v-if="!loading && tree.length === 0" class="text-center text-text-muted py-12">
         <p class="text-lg mb-2">还没有任何职务</p>
@@ -39,6 +39,8 @@
         />
       </div>
     </div>
+    <!-- 职务树：细滑块 + 淡入；根容器 relative，覆盖层落在卡片右侧内边距里 -->
+    <CustomScrollbar :target="treeScrollRef" compact :arrows="false" auto-hide :min-thumb="22" />
 
     <!-- ============ 新增/编辑职务弹窗 ============ -->
     <Teleport to="body">
@@ -82,6 +84,7 @@ import { getToken } from '../utils/authStorage.js'
 import { ref, reactive, computed, onMounted } from 'vue'
 import axios from 'axios'
 import CadreTreeList from './CadreTreeList.vue'
+import CustomScrollbar from './base/CustomScrollbar.vue'
 import { useNotification } from '../composables/useNotification'
 
 const { success, error, info } = useNotification()
@@ -90,6 +93,9 @@ const API_BASE = '/api'
 const tree = ref([])
 const loading = ref(false)
 const allStudents = ref([])
+
+// 职务树滚动容器（自定义滚动条的目标）
+const treeScrollRef = ref(null)
 
 // 当前选中的职务行（选中后高亮蓝框，供工具栏「增加下级 / 设置」使用）
 const selectedId = ref(null)

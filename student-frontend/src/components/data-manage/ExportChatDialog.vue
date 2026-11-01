@@ -3,7 +3,7 @@
   <Teleport to="body">
   <Transition name="dialog">
   <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="cancel">
-    <div class="bg-surface p-5 rounded-lg shadow-card border border-border dialog-card chat-card flex flex-col">
+    <div class="bg-surface p-5 rounded-lg shadow-card border border-border dialog-card chat-card flex flex-col relative">
       <h3 class="text-lg font-bold mb-3">导出聊天记录</h3>
 
       <div class="mb-4 flex flex-col min-h-0">
@@ -21,7 +21,7 @@
 
         <div v-if="loading" class="text-sm text-text-muted py-6 text-center">正在加载聊天记录…</div>
         <div v-else-if="!visibleMsgs.length" class="text-sm text-text-muted py-6 text-center">没有可导出的聊天记录</div>
-        <div v-else class="msg-list border border-border rounded-lg overflow-y-auto">
+        <div v-else ref="listRef" class="msg-list border border-border rounded-lg overflow-y-auto app-custom-scroll">
           <div
             v-for="m in visibleMsgs" :key="m.id"
             class="msg-row flex items-start gap-2 px-2.5 py-2 border-b border-border last:border-b-0"
@@ -49,6 +49,7 @@
           <span>已选 {{ selectedIds.length }} / {{ msgs.length }} 条</span>
         </div>
       </div>
+      <CustomScrollbar :target="listRef" />
 
       <div class="mb-4">
         <p class="font-semibold mb-2">导出范围：</p>
@@ -79,6 +80,7 @@
 import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 import AppSelect from '../base/AppSelect.vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 import { useNotification } from '../../composables/useNotification'
 import { parseMessages } from '../../composables/ai/aiMessages.js'
 import { runTableExport, FORMAT_OPTIONS, FORMAT_LABELS } from '../../composables/exportFormats.js'
@@ -116,6 +118,8 @@ const range = ref('content')
 const exportFormat = ref('md')
 const filename = ref('')
 const exporting = ref(false)
+// 消息列表滚动容器（自定义滚动条的目标）
+const listRef = ref(null)
 
 const visibleMsgs = computed(() => {
   if (filter.value === 'user') return msgs.value.filter((m) => m.role === 'user')

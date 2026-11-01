@@ -12,12 +12,12 @@
         <div v-if="activeTab === 'schedule'">
           <!-- 实行课表（临时） -->
           <section class="mb-10">
-            <h2 class="text-xl font-semibold mb-4">📅 实行课表（临时）</h2>
+            <h2 class="text-xl font-semibold mb-4 flex items-center gap-2"><IconGlyph name="schedule" :size="20" /> 实行课表（临时）</h2>
             <div class="mb-4 flex items-center gap-3 opbar">
               <button @click="activeSettingsVisible = true" @mouseenter="prefetch(loadSettingsDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
               <button @click="refreshActive" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="applyMasterVisible = true" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> 从模板导入</button>
-              <button @click="openActiveExport" class="bg-warning text-text-inverse px-4 py-2 rounded">📥 导出 Excel</button>
+              <button @click="openActiveExport" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
             </div>
 
             <GridView

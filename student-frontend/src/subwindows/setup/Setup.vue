@@ -202,7 +202,7 @@
           <!-- ===== 主题选择 ===== -->
           <template v-else-if="current === 'theme'">
             <div class="pane">
-              <!-- 列表来自 store 的 allThemes，已剔除被暂时屏蔽的主题（见 stores/theme.js 的 HIDDEN_THEME_IDS） -->
+              <!-- 列表来自 store 的 allThemes -->
               <div class="theme-grid">
                 <button
                   v-for="t in themeStore.allThemes"
@@ -338,8 +338,6 @@ const PREVIEW = {
   base: { bg: '#f9fafb', side: '#1f2937', bar: '#22c55e' },
   glass: { bg: '#dfe9f5', side: '#ffffff', bar: '#3b82f6' },
   glass2: { bg: '#e6ecff', side: '#ffffff', bar: '#5b7cfa' },
-  win11: { bg: '#eef2f7', side: '#ffffff', bar: '#3b82f6' },
-  minimal: { bg: '#ffffff', side: '#111827', bar: '#111827' },
 }
 
 const STEPS = [

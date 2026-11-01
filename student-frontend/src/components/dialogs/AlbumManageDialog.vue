@@ -1,6 +1,6 @@
 <template>
   <DialogShell :visible="visible" :z-index="10003" @overlay="$emit('close')">
-    <div class="bg-surface rounded-xl p-6 w-[820px] max-w-[94vw] max-h-[88vh] flex flex-col border border-border shadow-card dialog-card">
+    <div class="bg-surface rounded-xl p-6 w-[820px] max-w-[94vw] max-h-[88vh] flex flex-col border border-border shadow-card dialog-card relative">
       <div class="flex items-center justify-between mb-4 flex-shrink-0">
         <h3 class="text-lg font-bold text-text">管理相册</h3>
         <button @click="$emit('close')" class="dlg-close">✕</button>
@@ -19,7 +19,7 @@
       </div>
 
       <!-- 文件夹列表（可滚动区域，可拖拽排序） -->
-      <div class="flex-1 min-h-0 overflow-y-auto">
+      <div ref="bodyRef" class="flex-1 min-h-0 overflow-y-auto app-custom-scroll">
         <p v-if="albums.length === 0" class="text-sm text-text-muted py-3">暂无相册文件夹，请在上面添加。</p>
         <div v-else ref="albumListRef" class="space-y-2 mb-4">
           <div v-for="a in albums" :key="a.id" class="flex items-center gap-1 border border-border rounded-lg p-2.5 album-sort-item">
@@ -39,6 +39,7 @@
           </div>
         </div>
       </div>
+      <CustomScrollbar :target="bodyRef" />
 
       <!-- 扫描任务已独立入口：页面上的「任务管理」弹窗（AlbumTaskDialog） -->
       <p class="text-xs text-text-muted pt-3 border-t border-border flex-shrink-0">更新文件夹照片（增量/全量/暂停/停止）已移到「任务管理」弹窗；要从其他相册挑照片建相册，请用页面上的「新建相册」。</p>
@@ -62,6 +63,7 @@ import { reportError } from '../../utils/reportError.js'
 import { ref, nextTick, watch, onBeforeUnmount } from 'vue'
 import axios from 'axios'
 import DialogShell from '../base/DialogShell.vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 import ConfirmDialog from '../base/ConfirmDialog.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { pushUndo } from '../../api/undo'
@@ -76,6 +78,8 @@ const props = defineProps({
 const emit = defineEmits(['close', 'changed'])
 
 const albums = ref([])
+// 弹窗正文滚动容器（自定义滚动条的目标）
+const bodyRef = ref(null)
 const newName = ref('')
 const newPath = ref('')
 const busyAdd = ref(false)

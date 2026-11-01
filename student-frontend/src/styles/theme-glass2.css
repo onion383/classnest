@@ -26,29 +26,44 @@
   --g2-glass: rgba(255, 255, 255, calc(var(--g2-a) + 0.15)); /* 内容卡基准 0.55 */
   --g2-glass-strong: rgba(255, 255, 255, calc(var(--g2-a) + 0.34)); /* 0.74 */
   --g2-glass-soft: rgba(255, 255, 255, calc(var(--g2-a) - 0.1)); /* 0.30 */
-  --g2-line: var(--alpha-white-70); /* 玻璃外描边 */
-  --g2-line-soft: var(--alpha-white-45);
+  --g2-line: rgba(255, 255, 255, 0.84); /* 玻璃外描边：受光的亮边 */
+  --g2-line-soft: rgba(255, 255, 255, 0.58);
   --g2-hair: rgba(84, 94, 120, 0.16); /* 表格网格 / 分隔细线 */
   --g2-hair-strong: rgba(84, 94, 120, 0.3);
-  --g2-blur: 18px;
-  --g2-saturate: 175%;
-  --g2-hl: inset 0 1px 0 var(--alpha-white-85); /* 顶部内高光 */
+  --g2-blur: 20px;
+  --g2-saturate: 180%;
+  /* 玻璃厚度：顶亮边 + 底暗边 + 内圈柔光，三层叠加比单条内高光更接近实体材质 */
+  --g2-hl:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    inset 0 -1px 0 rgba(84, 94, 120, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  /* 外圈冷色发丝线：浅底上把玻璃边缘从背景里"拎"出来 */
+  --g2-edge: 0 0 0 1px rgba(58, 72, 110, 0.1);
 
-  /* ---- 阴影（分层柔和，色调偏冷） ---- */
-  --g2-shadow-1: 0 1px 2px rgba(23, 30, 54, 0.05), 0 2px 8px rgba(23, 30, 54, 0.05);
-  --g2-shadow-2: 0 4px 16px rgba(23, 30, 54, 0.08), 0 14px 36px rgba(23, 30, 54, 0.07);
-  --g2-shadow-3: 0 18px 60px rgba(23, 30, 54, 0.2);
+  /* ---- 阴影（接触阴影 + 中景扩散 + 远景柔光，色调偏冷） ---- */
+  --g2-shadow-1:
+    0 1px 2px rgba(26, 34, 60, 0.06),
+    0 4px 12px -2px rgba(26, 34, 60, 0.08);
+  --g2-shadow-2:
+    0 2px 4px rgba(26, 34, 60, 0.05),
+    0 12px 28px -6px rgba(26, 34, 60, 0.12),
+    0 32px 64px -24px rgba(26, 34, 60, 0.18);
+  --g2-shadow-3:
+    0 8px 24px rgba(26, 34, 60, 0.12),
+    0 24px 80px -16px rgba(26, 34, 60, 0.3);
 
-  /* ---- 强调色：长春花蓝（区别于旧 glass 的 #3b82f6 亮蓝） ---- */
+  /* ---- 强调色：长春花蓝（区别于旧 glass 的 #3b82f6 亮蓝） ----
+     --g2-accent 保留较亮的 #5b7cfa 做光晕/焦点环；
+     实色按钮改用更深的 #4a65e8，保证白字对比度 ≥ 4.5:1。 */
   --g2-accent: #5b7cfa;
   --g2-accent-strong: #4560e0;
   --g2-accent-ring: rgba(91, 124, 250, 0.34);
   --g2-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   /* ---- 映射到全站主题变量 ---- */
-  --color-primary: #5b7cfa;
-  --color-primary-hover: #4560e0;
-  --color-primary-active: #3a51c9;
+  --color-primary: #4a65e8;
+  --color-primary-hover: #4058d8;
+  --color-primary-active: #364cc2;
   --color-primary-light: rgba(91, 124, 250, 0.14);
 
   --color-success: #14874a;
@@ -58,8 +73,8 @@
   --color-warning-light: rgba(194, 116, 10, 0.13);
   --color-danger: #d63a3a;
   --color-danger-hover: #b92f2f;
-  --color-info: #5b7cfa;
-  --color-info-hover: #4560e0;
+  --color-info: #4a65e8;
+  --color-info-hover: #4058d8;
 
   --color-bg: #eef1f8;
   --color-surface: var(--g2-glass);
@@ -70,7 +85,8 @@
 
   --color-text: #191f2e;
   --color-text-secondary: #545e78;
-  --color-text-muted: #8a93a8;
+  /* 弱化文字在浅玻璃上必须保住 4.5:1：#8a93a8 实测只有 2.8:1，压到 #657089 */
+  --color-text-muted: #657089;
   --color-text-inverse: #ffffff;
 
   --color-border: var(--g2-hair);
@@ -112,15 +128,16 @@
    毛玻璃必须有东西可模糊——纯色底上完全看不出玻璃感。
    这里用两团柔光斑（蓝 / 紫）做底，面板压上去才有色彩层次；
    第三团（青）是静态的，直接烘进 body 的渐变里。
-   【性能】光斑一旦动起来，上方所有 backdrop-filter 面板（侧边栏/卡片/表格）
-   每帧都要重算模糊，滚动会掉帧；故这里保持静态：
-   原 34s/41s 漂移动画与 will-change 已注释，恢复时见下方「暂时注释」标记。
+   【性能】漂移动画会用 transform 走合成层；上方 backdrop-filter 面板每帧仍需
+   重新采样，低配机器可在设置页关闭「动画效果」，global .no-animations 会连同
+   本段动画一起瞬时化。prefers-reduced-motion 亦会关闭。
    ------------------------------------------------------------ */
 :root[data-theme="glass2"] body {
-  background-color: #e9edf8;
+  background-color: #e7ecf9;
   background-image:
-    radial-gradient(circle at 30% 108%, rgba(143, 217, 232, 0.62) 0%, rgba(143, 217, 232, 0) 44%),
-    linear-gradient(160deg, #e8edfb 0%, #f2ebfa 45%, #e6f2fa 100%);
+    radial-gradient(circle at 28% 108%, rgba(130, 208, 232, 0.58) 0%, rgba(130, 208, 232, 0) 46%),
+    radial-gradient(circle at 88% -6%, rgba(236, 205, 255, 0.42) 0%, rgba(236, 205, 255, 0) 42%),
+    linear-gradient(160deg, #e6ecfb 0%, #f1e9fb 45%, #e3f1fb 100%);
   background-attachment: fixed;
 }
 :root[data-theme="glass2"] body::before,
@@ -129,12 +146,10 @@
   position: fixed;
   border-radius: 50%;
   filter: blur(60px);
-  opacity: 0.62;
+  opacity: 0.66;
   pointer-events: none;
   z-index: -2; /* 内容之下、body 背景之上 */
-  /* 暂时注释：光斑已改静态，不再需要常驻合成层
   will-change: transform;
-  暂时注释结束 */
 }
 :root[data-theme="glass2"] body::before {
   width: 48vw;
@@ -142,9 +157,7 @@
   top: -16vw;
   left: -10vw;
   background: radial-gradient(circle at 35% 35%, #9fb8ff 0%, rgba(159, 184, 255, 0) 70%);
-  /* 暂时注释：漂移动画会带动全页玻璃逐帧重算模糊，滚动掉帧
   animation: g2-drift-a 34s var(--g2-ease) infinite alternate;
-  暂时注释结束 */
 }
 :root[data-theme="glass2"] body::after {
   width: 42vw;
@@ -152,18 +165,15 @@
   top: 10vh;
   right: -12vw;
   background: radial-gradient(circle at 60% 40%, #c7a8f5 0%, rgba(199, 168, 245, 0) 70%);
-  /* 暂时注释：同 ::before
   animation: g2-drift-b 41s var(--g2-ease) infinite alternate;
-  暂时注释结束 */
 }
-/* 暂时注释：漂移关键帧（配合上面两条 animation 一起恢复）
+/* 漂移关键帧：只动 transform，避免重排；配合 will-change 常驻合成层 */
 @keyframes g2-drift-a {
   to { transform: translate3d(6vw, 5vh, 0) scale(1.12); }
 }
 @keyframes g2-drift-b {
   to { transform: translate3d(-7vw, 8vh, 0) scale(1.08); }
 }
-暂时注释结束 */
 /* 内容区必须是透明的，否则 body 上的渐变与光斑全被盖住。
    main 带 Tailwind 的 bg-bg，而 --color-bg 是给其它零散元素兜底的实色。 */
 :root[data-theme="glass2"] main {
@@ -210,7 +220,8 @@
   color: #191f2e !important;
 }
 :root[data-topbar-color="blue"][data-theme="glass2"] .window-title-bar {
-  background-color: rgba(74, 88, 179, 0.58) !important;
+  /* 深靛蓝：降低透光率，浅色底上白字仍保持 4.5:1 以上 */
+  background-color: rgba(40, 52, 138, 0.78) !important;
   color: #eef1fb !important;
 }
 /* 顶部受光高光，与侧栏/卡片同一套配方 */
@@ -252,19 +263,24 @@
   position: relative;
   z-index: 1;
   overflow: hidden;
+  /* 兜底色：设置项尚未写入 data-topbar-color 时也不会沿用旧主题的白字 */
+  color: #191f2e;
 }
 :root[data-topbar-color="light"][data-theme="glass2"] .bg-sidebar {
   background-color: var(--alpha-white-58) !important;
   /* 侧栏本体挂着 text-text-inverse（白字），浅玻璃底上必须改成深字 */
   color: #191f2e !important;
   border-right-color: var(--g2-line-soft) !important;
-  box-shadow: var(--g2-shadow-1), var(--g2-hl);
+  box-shadow: var(--g2-shadow-2), var(--g2-hl), var(--g2-edge);
 }
 :root[data-topbar-color="blue"][data-theme="glass2"] .bg-sidebar {
-  background-color: rgba(74, 88, 179, 0.55) !important;
+  background-color: rgba(40, 52, 138, 0.78) !important;
   color: #eef1fb !important;
   border-right-color: transparent !important;
-  box-shadow: 0 4px 24px rgba(23, 30, 54, 0.18), inset 0 1px 0 var(--alpha-white-16);
+  box-shadow:
+    0 12px 32px -8px rgba(23, 30, 54, 0.26),
+    var(--g2-hl),
+    var(--g2-edge);
 }
 :root[data-theme="glass2"] .bg-sidebar::before {
   content: '';
@@ -285,17 +301,25 @@
 :root[data-topbar-color="light"][data-theme="glass2"] .bg-sidebar nav a {
   color: #3d4661 !important;
 }
+:root[data-theme="glass2"] .bg-sidebar a,
+:root[data-theme="glass2"] .bg-sidebar nav a {
+  color: #3d4661;
+}
 :root[data-topbar-color="light"][data-theme="glass2"] .bg-sidebar .app-name {
   color: #191f2e !important;
 }
 :root[data-topbar-color="light"][data-theme="glass2"] .sidebar-group-title {
-  color: #8a93a8 !important;
+  color: #5f6980 !important;
+}
+:root[data-theme="glass2"] .sidebar-group-title {
+  color: #5f6980;
 }
 /* hover：浅色底压一层更亮的玻璃 */
 :root[data-topbar-color="light"][data-theme="glass2"] .bg-sidebar-hover,
 :root[data-topbar-color="light"][data-theme="glass2"] .bg-sidebar a:hover:not(.bg-sidebar-active) {
   background-color: var(--alpha-white-78) !important;
   color: #191f2e !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 /* 选中：强调色淡底 + 内描边 + 柔光，不用荧光描边 */
 :root[data-topbar-color="light"][data-theme="glass2"] .bg-sidebar-active,
@@ -310,13 +334,13 @@
 }
 :root[data-topbar-color="blue"][data-theme="glass2"] .bg-sidebar a,
 :root[data-topbar-color="blue"][data-theme="glass2"] .bg-sidebar nav a {
-  color: #e6eafb !important;
+  color: #f4f6ff !important;
 }
 :root[data-topbar-color="blue"][data-theme="glass2"] .bg-sidebar .app-name {
   color: #ffffff !important;
 }
 :root[data-topbar-color="blue"][data-theme="glass2"] .sidebar-group-title {
-  color: rgba(230, 234, 251, 0.62) !important;
+  color: #e6eafb !important;
 }
 :root[data-topbar-color="blue"][data-theme="glass2"] .bg-sidebar-hover,
 :root[data-topbar-color="blue"][data-theme="glass2"] .bg-sidebar a:hover:not(.bg-sidebar-active) {
@@ -463,6 +487,19 @@
   background-color: rgba(84, 94, 120, 0.06) !important;
   opacity: 0.65;
 }
+/* 占位符：浅玻璃底上不能沿用默认的超浅灰 */
+:root[data-theme="glass2"] input::placeholder,
+:root[data-theme="glass2"] textarea::placeholder {
+  color: var(--color-text-muted);
+}
+/* 键盘焦点：按钮已在上面统一处理，这里补齐链接 / 自定义可交互元素。
+   只画 outline，不改 border-radius —— 否则圆角/胶囊控件获得焦点时形状会跳变。 */
+:root[data-theme="glass2"] a:focus-visible,
+:root[data-theme="glass2"] [role="button"]:focus-visible,
+:root[data-theme="glass2"] [tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--g2-accent);
+  outline-offset: 2px;
+}
 :root[data-theme="glass2"] select option {
   background-color: #ffffff;
   color: var(--color-text);
@@ -485,7 +522,7 @@
   backdrop-filter: blur(var(--g2-blur)) saturate(var(--g2-saturate));
   border: 1px solid var(--g2-line) !important;
   border-radius: var(--radius-card);
-  box-shadow: var(--g2-shadow-2), var(--g2-hl);
+  box-shadow: var(--g2-shadow-2), var(--g2-hl), var(--g2-edge);
 }
 :root[data-theme="glass2"] .bg-surface-hover {
   background-color: var(--g2-glass-strong) !important;
@@ -501,7 +538,7 @@
   backdrop-filter: blur(var(--g2-blur)) saturate(var(--g2-saturate));
   border: 1px solid var(--g2-line) !important;
   border-radius: var(--radius-lg) !important;
-  box-shadow: var(--g2-shadow-1), var(--g2-hl);
+  box-shadow: var(--g2-shadow-1), var(--g2-hl), var(--g2-edge);
 }
 
 /* ------------------------------------------------------------
@@ -515,7 +552,7 @@
      will-change: transform 让容器常驻合成层（该容器已有 backdrop-filter，无新增副作用） */
   contain: layout paint style;
   will-change: transform;
-  box-shadow: var(--g2-shadow-1), var(--g2-hl);
+  box-shadow: var(--g2-shadow-1), var(--g2-hl), var(--g2-edge);
 }
 :root[data-theme="glass2"] table {
   border-collapse: separate;
@@ -622,7 +659,7 @@
   /* 与 .table-scroll-wrapper 同法：重绘收窄到容器内，且常驻合成层 */
   contain: layout paint style;
   will-change: transform;
-  box-shadow: var(--g2-shadow-1), var(--g2-hl);
+  box-shadow: var(--g2-shadow-1), var(--g2-hl), var(--g2-edge);
 }
 /* 网格表内部滚动容器：滚动/编辑引起的重绘收窄在容器内 */
 :root[data-theme="glass2"] .grid-view-container > .overflow-auto {
@@ -666,11 +703,11 @@
   border: 1px solid var(--g2-line) !important;
   border-radius: var(--radius-md);
   contain: paint;
-  box-shadow: var(--g2-shadow-2), var(--g2-hl);
+  box-shadow: var(--g2-shadow-2), var(--g2-hl), var(--g2-edge);
 }
 :root[data-theme="glass2"] .nt-title { color: #191f2e !important; }
 :root[data-theme="glass2"] .nt-msg { color: #545e78 !important; }
-:root[data-theme="glass2"] .nt-close { color: #8a93a8 !important; }
+:root[data-theme="glass2"] .nt-close { color: #657089 !important; }
 :root[data-theme="glass2"] .nt-close:hover { background-color: rgba(84, 94, 120, 0.1) !important; color: #191f2e !important; }
 :root[data-theme="glass2"] .nt-success .nt-bar { background: rgba(20, 135, 74, 0.85) !important; }
 :root[data-theme="glass2"] .nt-error   .nt-bar { background: rgba(214, 58, 58, 0.85) !important; }
@@ -687,7 +724,7 @@
   backdrop-filter: blur(14px) saturate(1.2);
   border: 1px solid var(--g2-line) !important;
   border-radius: var(--radius-sm) !important;
-  box-shadow: var(--g2-shadow-2);
+  box-shadow: var(--g2-shadow-2), var(--g2-hl), var(--g2-edge);
   overflow: hidden;
 }
 :root[data-theme="glass2"] .candidate-popup .bg-info\/20 {
@@ -702,7 +739,7 @@
   backdrop-filter: blur(var(--g2-blur)) saturate(var(--g2-saturate));
   border: 1px solid var(--g2-line);
   border-radius: var(--radius-md);
-  box-shadow: var(--g2-shadow-2), var(--g2-hl);
+  box-shadow: var(--g2-shadow-2), var(--g2-hl), var(--g2-edge);
 }
 :root[data-theme="glass2"] .search-panel .bg-surface-hover {
   background-color: var(--g2-glass-strong) !important;
@@ -717,7 +754,7 @@
   background-color: var(--alpha-white-62) !important;
 }
 :root[data-topbar-color="blue"][data-theme="glass2"] .view-switch {
-  background-color: rgba(74, 88, 179, 0.58) !important;
+  background-color: rgba(40, 52, 138, 0.72) !important;
 }
 :root[data-theme="glass2"] .view-switch-btn.on {
   color: var(--color-text-inverse, #ffffff);
@@ -726,13 +763,13 @@
    --color-text-secondary（深灰蓝），压上去基本读不出来 —— 这里改成浅色。
    （旧 glass 主题同样存在这个对比度问题，新主题顺手修掉。） */
 :root[data-topbar-color="blue"][data-theme="glass2"] .view-switch-btn {
-  color: rgba(238, 241, 251, 0.75);
+  color: rgba(238, 241, 251, 0.9);
 }
 :root[data-topbar-color="blue"][data-theme="glass2"] .view-switch-btn.on {
   color: #ffffff;
 }
 
-/* 弹窗遮罩的透明底 + 背景模糊由 utilities.css 的非 glass/win11 规则统一提供，
+/* 弹窗遮罩的透明底 + 背景模糊由 utilities.css 的非 glass 规则统一提供，
    这里不再重复声明。 */
 
 /* ------------------------------------------------------------
@@ -770,7 +807,7 @@
   border-color: var(--g2-accent) !important;
 }
 :root[data-theme="glass2"] .login-glow {
-  box-shadow: var(--g2-shadow-3), var(--g2-hl);
+  box-shadow: var(--g2-shadow-3), var(--g2-hl), var(--g2-edge);
 }
 
 /* ------------------------------------------------------------
@@ -824,7 +861,7 @@
   border-color: var(--g2-line-soft) !important;
   backdrop-filter: blur(var(--g2-blur)) saturate(var(--g2-saturate));
   -webkit-backdrop-filter: blur(var(--g2-blur)) saturate(var(--g2-saturate));
-  box-shadow: var(--g2-shadow-2), var(--g2-hl);
+  box-shadow: var(--g2-shadow-2), var(--g2-hl), var(--g2-edge);
 }
 :root[data-theme="glass2"] .dtf-item:hover,
 :root[data-theme="glass2"] .dtf-sort-btn:hover {
@@ -842,4 +879,16 @@
 :root[data-theme="glass2"] .dtf-search-input:focus {
   background-color: var(--g2-glass-strong);
   border-color: var(--g2-accent);
+}
+
+/* ---------- 侧边栏自定义滚动条：与 glass2 冷雾玻璃一致 ----------
+   日间/夜间的滑块颜色统一由 utilities.css 的 --sidebar-* 提供；
+   这里只补「深靛蓝侧栏」的浅色版本，避免深色轨道上出现一条看不见的冷灰滑块。 */
+:root[data-topbar-color="blue"][data-theme="glass2"] {
+  --sidebar-track: rgba(255, 255, 255, 0.1);
+  --sidebar-thumb: rgba(255, 255, 255, 0.42);
+  --sidebar-thumb-hover: rgba(255, 255, 255, 0.62);
+  --sidebar-arrow: rgba(255, 255, 255, 0.72);
+  --sidebar-arrow-hover: #ffffff;
+  --sidebar-arrow-bg-hover: rgba(255, 255, 255, 0.14);
 }

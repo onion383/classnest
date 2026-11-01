@@ -11,7 +11,7 @@
     <!-- 引导按钮：actionText 为空时不渲染，既有调用方不受影响。
          配色与内边距沿用值日页原先手写的那一份（bg-info 实心蓝 + text-text-inverse 主题反色字），
          所以从手写插槽迁过来观感零变化。
-         为什么是 bg-info 而不是 bg-primary：--color-primary 在 base 主题是绿、minimal 近黑，
+         为什么是 bg-info 而不是 bg-primary：--color-primary 在 base 主题是绿，
          只有 glass 系才是蓝；--color-info 全主题都是蓝。这条是用户定的口径（占位页按钮统一蓝色）。 -->
     <button
       v-if="actionText"
@@ -54,6 +54,17 @@ const emit = defineEmits(['action'])
      故取 --radius-table（表格容器档），而不是另选一档。 */
   border-radius: var(--radius-table);
   border: 1px solid var(--color-border, #e5e7eb);
+  /* 入场动画与 DynamicTable 的空态（.dt-empty / dt-empty-in）同参数：
+     淡入 + 从下方 6px 浮上来。但只作用于**内容子元素**（图标/文字/按钮/插槽），
+     底色卡片本身不动画 —— 否则整块面板滑入，玻璃底闪一下，观感很跳。
+     .snapshot-empty 上的同款选择器给所有直接子元素统一动画，插槽内容也覆盖。 */
+}
+.snapshot-empty > * {
+  animation: snapshot-empty-in 0.3s ease both;
+}
+@keyframes snapshot-empty-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 .snapshot-empty-icon {
   font-size: 44px;

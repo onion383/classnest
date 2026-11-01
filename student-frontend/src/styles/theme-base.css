@@ -119,7 +119,7 @@
 
      ② 角色别名（role）：按用途命名，组件只引用角色，不直接写数值。
         control 控件（按钮/输入框） · card 卡片 · surface 弹窗/抽屉 · table 表格容器
-        角色 → 尺寸档的映射也由各主题决定（极简主题全部压到 0 = 直角）。
+        角色 → 尺寸档的映射也由各主题决定。
 
      ③ 同心对（concentric）：内层圆角 = 外层圆角 − 内外间距，
         使内外圆弧圆心落在同一点（视觉上是一条连续的弧，而非两条错开的弧）。
@@ -137,7 +137,7 @@
      785 处 `rounded` 用法（按钮、输入框、徽标…）因此也能随主题变化。 */
   --radius: var(--radius-control);
 
-  /* 角色别名 → 尺寸档。极简主题（theme-minimal.css）把这几项全部覆盖为 0。
+  /* 角色别名 → 尺寸档。
      base 是「中性」主题：控件 6px、卡片 8px、弹窗 12px、表格 12px。
      表格与弹窗同取 xl（12px），因为基础主题下表格容器与弹窗卡片是同一视觉层级，
      且表格贴边嵌套在卡片内时，圆角一致才不会露出错位的双弧。 */
@@ -151,19 +151,27 @@
   --radius-concentric-gap: 12px;
 }
 
-/* ========== 无边框透明窗口（窗外亚克力）适配：基础主题 ==========
-   主窗口已统一为无边框透明 + 窗外亚克力（见 electron/main.js），
-   body 改为透明让桌面亚克力透出；内容区 main 用浅灰半透明磨砂淡色叠加，
-   既保留基础主题的浅色底与可读性，又透出亚克力「厚度」。 */
+/* ========== 彩色色块主题 · 基础外观 ==========
+   定位：纯色、快、不透明。这里刻意不使用 backdrop-filter / 大阴影 / 半透明叠层，
+   所有层次靠「色块 + 1px 描边 + 字号」表达。
+   body 只做兜底底色；真正铺满窗口的是 main 与自绘标题栏。 */
 :root[data-theme="base"] body {
-  background-color: transparent;
+  background-color: #f4f6f4;
 }
 :root[data-theme="base"] main {
-  background-color: rgba(248, 250, 252, 0.55);
+  background-color: #f4f6f4;
 }
 :root[data-theme="base"] .window-title-bar {
-  background: rgba(255, 255, 255, 0.35);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  border-bottom: 1px solid #e3e9e5;
+  color: #55635c;
+}
+:root[data-theme="base"] .window-controls .win-btn:hover {
+  background: #edf1ef;
+}
+:root[data-theme="base"] .window-controls .win-btn-close:hover {
+  background: #b42318;
+  color: #fff;
 }
 
 /* ===== 「系统亚克力」窗口 ===== 
@@ -180,3 +188,505 @@
   background: transparent !important;
   background-image: none !important;
 }
+
+/* ==================================================================
+   彩色色块主题 · 设计系统
+   ------------------------------------------------------------------
+   定位：性能优先 / 无毛玻璃 / 纯色块。
+   规则：
+   · 每个模块一个「模块色」（data-page），只把它用在标题条、表头、行号、
+     导航选中与主按钮上；页面其余部分保持纸白 + 墨色。
+   · 一个工具栏只保留一个实心主按钮，其余用模块色的浅底（tonal）。
+   · 几何统一：控件 6px、卡片 10px、弹窗 12px；1px 描边，不做大阴影。
+   ================================================================== */
+
+/* ---------- 色板：默认模块色（首页/未匹配路由） ---------- */
+:root[data-theme="base"] {
+  color-scheme: light;
+
+  --page-accent: #0e9f6e;
+  --page-accent-dark: #047857;
+  --page-accent-light: #d1fae5;
+  --page-accent-ink: #064e3b;
+  --page-accent-soft: #ecfdf5;
+
+  --color-primary: var(--page-accent);
+  --color-primary-hover: var(--page-accent-dark);
+  --color-primary-active: var(--page-accent-ink);
+  --color-primary-light: var(--page-accent-light);
+
+  --color-success: #16a34a;
+  --color-success-hover: #15803d;
+  --color-warning: #d97706;
+  --color-warning-hover: #b45309;
+  --color-warning-light: #fef3c7;
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-info: #2563eb;
+  --color-info-hover: #1d4ed8;
+
+  --color-bg: #f7f8f6;
+  --color-surface: #ffffff;
+  --color-surface-hover: #eef2ef;
+  --color-sidebar: #101713;
+  --color-sidebar-hover: #1a241f;
+  --color-sidebar-active: #17352b;
+
+  --color-text: #17211d;
+  --color-text-secondary: #55635c;
+  --color-text-muted: #8a968f;
+  --color-text-inverse: #ffffff;
+
+  --color-border: #dbe4df;
+  --color-border-strong: #c6d2cb;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.10);
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
+
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-surface: 12px;
+  --radius-table: 10px;
+}
+
+/* ---------- 各模块的模块色 ---------- */
+:root[data-theme="base"][data-page="students"] {
+  --page-accent: #2563eb; --page-accent-dark: #1d4ed8; --page-accent-light: #dbeafe; --page-accent-ink: #1e3a8a; --page-accent-soft: #eff6ff;
+}
+:root[data-theme="base"][data-page="group"] {
+  --page-accent: #4f46e5; --page-accent-dark: #4338ca; --page-accent-light: #e0e7ff; --page-accent-ink: #312e81; --page-accent-soft: #eef2ff;
+}
+:root[data-theme="base"][data-page="schedule"] {
+  --page-accent: #0891b2; --page-accent-dark: #0e7490; --page-accent-light: #cffafe; --page-accent-ink: #155e75; --page-accent-soft: #ecfeff;
+}
+:root[data-theme="base"][data-page="fee"] {
+  --page-accent: #d97706; --page-accent-dark: #b45309; --page-accent-light: #fef3c7; --page-accent-ink: #78350f; --page-accent-soft: #fffbeb;
+}
+:root[data-theme="base"][data-page="seats"] {
+  --page-accent: #ea580c; --page-accent-dark: #c2410c; --page-accent-light: #ffedd5; --page-accent-ink: #7c2d12; --page-accent-soft: #fff7ed;
+}
+:root[data-theme="base"][data-page="duty"] {
+  --page-accent: #0d9488; --page-accent-dark: #0f766e; --page-accent-light: #ccfbf1; --page-accent-ink: #134e4a; --page-accent-soft: #f0fdfa;
+}
+:root[data-theme="base"][data-page="leaves"] {
+  --page-accent: #7c3aed; --page-accent-dark: #6d28d9; --page-accent-light: #ede9fe; --page-accent-ink: #4c1d95; --page-accent-soft: #f5f3ff;
+}
+:root[data-theme="base"][data-page="scores"] {
+  --page-accent: #e11d48; --page-accent-dark: #be123c; --page-accent-light: #ffe4e6; --page-accent-ink: #881337; --page-accent-soft: #fff1f2;
+}
+:root[data-theme="base"][data-page="album"] {
+  --page-accent: #db2777; --page-accent-dark: #be185d; --page-accent-light: #fce7f3; --page-accent-ink: #831843; --page-accent-soft: #fdf2f8;
+}
+:root[data-theme="base"][data-page="activities"] {
+  --page-accent: #f43f5e; --page-accent-dark: #e11d48; --page-accent-light: #ffe4e6; --page-accent-ink: #881337; --page-accent-soft: #fff1f2;
+}
+:root[data-theme="base"][data-page="ai"] {
+  --page-accent: #0284c7; --page-accent-dark: #0369a1; --page-accent-light: #e0f2fe; --page-accent-ink: #0c4a6e; --page-accent-soft: #f0f9ff;
+}
+:root[data-theme="base"][data-page="settings"],
+:root[data-theme="base"][data-page="about"] {
+  --page-accent: #475569; --page-accent-dark: #334155; --page-accent-light: #e2e8f0; --page-accent-ink: #1e293b; --page-accent-soft: #f8fafc;
+}
+
+/* ---------- 滚动条：细、低对比，和纯色界面一致 ---------- */
+:root[data-theme="base"] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+:root[data-theme="base"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+:root[data-theme="base"] ::-webkit-scrollbar-thumb {
+  background: #c9d3cd;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+:root[data-theme="base"] ::-webkit-scrollbar-thumb:hover {
+  background: #aebbb4;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* ---------- 侧边栏：深墨绿底，只让选中项出现颜色 ---------- */
+:root[data-theme="base"] .bg-sidebar {
+  background: #101713 !important;
+  border-right: 1px solid #1e2a24;
+}
+:root[data-theme="base"] .sidebar-group-title {
+  color: #6f7f77;
+}
+:root[data-theme="base"] .nav-item {
+  position: relative;
+  color: #aebdb6;
+  border-radius: 6px;
+}
+:root[data-theme="base"] .nav-item:hover {
+  background: #1a241f !important;
+  color: #eef4f0;
+}
+:root[data-theme="base"] .nav-item.bg-sidebar-active {
+  background: #17352b !important;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(53, 192, 142, 0.16);
+}
+:root[data-theme="base"] .nav-item.bg-sidebar-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: #35c08e;
+}
+/* 导航图标不再使用 13 种高饱和色：默认跟随文字，选中项才点亮 */
+:root[data-theme="base"] .nav-item .icon-color {
+  color: currentColor !important;
+  opacity: 0.72;
+}
+:root[data-theme="base"] .nav-item.bg-sidebar-active .icon-color {
+  color: #7fe0bc !important;
+  opacity: 1;
+}
+:root[data-theme="base"] .bg-sidebar .border-white\/10 {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* ---------- 页面标题：白块 + 4px 玉色左条，不要阴影 ---------- */
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"],
+:root[data-theme="base"] .bg-surface.welcome-card {
+  position: relative;
+  overflow: hidden;
+  background: #ffffff;
+  background-image: none;
+  border: 1px solid #dde5e0;
+  border-radius: 10px;
+  box-shadow: none;
+  padding-left: 20px;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"]::before,
+:root[data-theme="base"] .bg-surface.welcome-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: #0e7a5f;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] h1,
+:root[data-theme="base"] .bg-surface.welcome-card h1 {
+  font-weight: 700;
+  color: #17211d;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] h1 > svg,
+:root[data-theme="base"] .bg-surface.welcome-card h1 > svg {
+  color: #0e7a5f !important;
+}
+
+/* ---------- 小节标题：只换色，不动字号与字重 ---------- */
+:root[data-theme="base"] main h2.text-xl,
+:root[data-theme="base"] main h3.text-xl {
+  color: #17211d;
+}
+:root[data-theme="base"] main h2.text-xl > svg,
+:root[data-theme="base"] main h3.text-xl > svg {
+  color: #0e7a5f !important;
+}
+
+/* ---------- 标签页：只换配色与圆角，尺寸沿用原组件 ---------- */
+:root[data-theme="base"] .tab-btn {
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #55635c;
+  box-shadow: none !important;
+  transform: none !important;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+:root[data-theme="base"] .tab-btn:hover {
+  background: #e9eeec;
+  color: #17211d;
+  box-shadow: none !important;
+  transform: none !important;
+}
+:root[data-theme="base"] .tab-btn.tab-active {
+  background: #17211d !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+/* 二级视图切换（临时表 / 模板表）：轨道浅灰、选中块墨色，与标签页同一套导航语言 */
+:root[data-theme="base"] .view-switch {
+  background: #edf1ef;
+  border: none;
+  box-shadow: inset 0 0 0 1px #dce5df;
+  border-radius: 6px;
+}
+:root[data-theme="base"] .view-switch-thumb {
+  background: #17211d !important;
+  border-radius: calc(var(--radius-control) - 4px) !important;
+  box-shadow: none !important;
+}
+:root[data-theme="base"] .view-switch-btn.on {
+  color: #ffffff;
+}
+
+/* ---------- 工具栏：只换配色，尺寸沿用原组件 ---------- */
+:root[data-theme="base"] .opbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 6px;
+  box-shadow: none;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+:root[data-theme="base"] .opbar button:active {
+  transform: none;
+}
+:root[data-theme="base"] .opbar button.bg-primary {
+  background: #0e7a5f;
+  border-color: #0a5c48;
+  color: #ffffff;
+}
+:root[data-theme="base"] .opbar button.bg-primary:hover {
+  background: #0b6550;
+  border-color: #084c3d;
+}
+/* 一条工具栏只允许一个实心主按钮：第一个 bg-primary 保持实心，后面的同色按钮降为浅玉底。
+   这样「设置 / 智能排表 / 从模板导入」不会三块一样重，页面自然有主次。 */
+:root[data-theme="base"] .opbar button.bg-primary ~ button.bg-primary {
+  background: #e3f2ec;
+  border-color: #bfe0d2;
+  color: #0a5c48;
+}
+:root[data-theme="base"] .opbar button.bg-primary ~ button.bg-primary:hover {
+  background: #d7ebe2;
+  border-color: #a9d4c1;
+}
+:root[data-theme="base"] .opbar button.bg-text-muted {
+  background: #e9eeec;
+  border-color: #dce5df;
+  color: #17211d;
+}
+:root[data-theme="base"] .opbar button.bg-text-muted:hover {
+  background: #dfe7e2;
+}
+:root[data-theme="base"] .opbar button.bg-warning {
+  background: #fbf1df;
+  border-color: #ead6b4;
+  color: #8a4b08;
+}
+:root[data-theme="base"] .opbar button.bg-warning:hover {
+  background: #f6e7ce;
+}
+:root[data-theme="base"] .opbar button.bg-danger {
+  background: #fbeae9;
+  border-color: #f0cbc7;
+  color: #a32020;
+}
+:root[data-theme="base"] .opbar button.bg-danger:hover {
+  background: #f7dedb;
+}
+:root[data-theme="base"] .opbar button.bg-info {
+  background: #e9eeec;
+  border-color: #dce5df;
+  color: #17211d;
+}
+:root[data-theme="base"] .opbar button.bg-info:hover {
+  background: #dfe7e2;
+}
+/* 搜索按钮在 theme-glass.css 里有一条「非毛玻璃主题」的暖沙色兜底规则，
+   而按需主题 CSS 加载后不会卸载，切回 base 时那条规则会漏进来。这里显式收回中性。 */
+:root[data-theme="base"] .opbar .btn-search {
+  background: #e9eeec;
+  border-color: #dce5df;
+  color: #17211d;
+}
+:root[data-theme="base"] .opbar .btn-search:hover {
+  background: #dfe7e2;
+}
+
+/* ---------- 网状表格：深玉表头 + 浅玉行号 + 浅灰绿走廊 ---------- */
+:root[data-theme="base"] .grid-view-container > div.overflow-auto {
+  background: #ffffff;
+  border: 1px solid #d9e3dd;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+:root[data-theme="base"] .grid-view-container thead th {
+  background-color: #0e7a5f !important;
+  border-color: #0a5c48 !important;
+  color: #ffffff !important;
+}
+:root[data-theme="base"] .grid-view-container thead th.bg-text-muted {
+  background-color: #dce6e1 !important;
+  border-color: #c9d6cf !important;
+  color: #55635c !important;
+}
+/* 课表的周标题行：用浅玉底，不再和下面的列头叠成两块整宽深绿 */
+:root[data-theme="base"] .grid-view-container thead th.grid-head-title {
+  background-color: #e3f2ec !important;
+  border-color: #cfe5db !important;
+  color: #0a5c48 !important;
+}
+:root[data-theme="base"] .grid-view-container thead th.bg-text-muted .text-text {
+  color: #55635c !important;
+}
+:root[data-theme="base"] .grid-view-container thead th .drag-handle {
+  color: rgba(255, 255, 255, 0.62) !important;
+}
+:root[data-theme="base"] .grid-view-container thead th .drag-handle:hover {
+  color: #ffffff !important;
+}
+/* 行号/讲台等左侧标签：浅玉底 + 深玉字，不再整列荧光绿 */
+:root[data-theme="base"] .grid-view-container tbody td.bg-primary {
+  background-color: #e3f2ec !important;
+  border-color: #cfe5db !important;
+  color: #0a5c48 !important;
+}
+:root[data-theme="base"] .grid-view-container tbody td.bg-primary .drag-handle {
+  color: rgba(10, 92, 72, 0.55) !important;
+}
+:root[data-theme="base"] .grid-view-container tbody td.bg-primary .drag-handle:hover {
+  color: #0a5c48 !important;
+}
+/* 走廊：浅灰绿 + 极轻斜纹，保留「通道」感但不做深灰大块 */
+:root[data-theme="base"] .grid-view-container tbody td.bg-text-muted {
+  background-color: #eff3f1 !important;
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 7px,
+    rgba(14, 122, 95, 0.05) 7px 8px
+  );
+  border-color: #dce5df !important;
+  color: #8a968f !important;
+}
+/* 数据格：细格线 + 很轻的悬停 */
+:root[data-theme="base"] .grid-view-container tbody td[data-data-cell] {
+  border-color: #e4ebe7;
+}
+:root[data-theme="base"] .grid-view-container tbody td[data-data-cell]:not(.cell-heat):hover {
+  background-color: #f3faf7;
+}
+/* 选中/框选：从蓝色改成语义一致的玉色 */
+:root[data-theme="base"] .grid-view-container td.bg-info\/10 {
+  background-color: #e8f5ef !important;
+}
+:root[data-theme="base"] .grid-view-container .outline-info {
+  outline-color: #0e7a5f !important;
+}
+:root[data-theme="base"] .grid-view-container .ring-info {
+  --tw-ring-color: #0e7a5f;
+}
+/* 讲台/分隔行：琥珀浅底，别用高饱和 warning 铺满 */
+:root[data-theme="base"] .grid-view-container tr.bg-warning\/20 {
+  background-color: #fbf1df !important;
+}
+:root[data-theme="base"] .grid-view-container td.bg-warning\/30 {
+  background-color: #fbf1df !important;
+  border-color: #ead6b4 !important;
+}
+:root[data-theme="base"] .grid-view-container td.border-info\/30 {
+  border-color: #cfe5db !important;
+}
+
+/* ---------- 列表表格：表头同样走深玉，重点仍是数据 ---------- */
+:root[data-theme="base"] .dynamic-table thead th {
+  background-color: #0e7a5f !important;
+  border-color: #0a5c48 !important;
+  color: #ffffff !important;
+}
+:root[data-theme="base"] .dynamic-table thead th.col-op {
+  background-color: #0b6550 !important;
+}
+:root[data-theme="base"] .dynamic-table tbody td {
+  border-color: #e4ebe7;
+}
+:root[data-theme="base"] .dynamic-table tbody tr:hover > td:not(.col-op) {
+  background-color: #f6faf8;
+}
+:root[data-theme="base"] .dynamic-table .table-scroll-wrapper {
+  background: #ffffff;
+}
+
+/* ---------- 空态：虚线框 + 玉色引导，不再是一大片白 ---------- */
+:root[data-theme="base"] .snapshot-empty {
+  background: #fbfcfb;
+  border: 1px dashed #cfdad3;
+  box-shadow: none;
+}
+:root[data-theme="base"] .snapshot-empty-icon {
+  opacity: 0.9;
+}
+:root[data-theme="base"] .snapshot-empty-text {
+  color: #7b8881;
+}
+:root[data-theme="base"] .dt-empty-text,
+:root[data-theme="base"] .grid-empty-text {
+  color: #7b8881;
+}
+:root[data-theme="base"] .dt-empty-icon,
+:root[data-theme="base"] .grid-empty-icon {
+  color: #a7b3ac;
+  opacity: 0.9;
+}
+:root[data-theme="base"] .dt-empty-btn,
+:root[data-theme="base"] .grid-empty-btn,
+:root[data-theme="base"] .empty-action-btn {
+  color: #0a5c48;
+  background: #e3f2ec;
+  border: 1px solid #bfe0d2;
+  box-shadow: none;
+}
+:root[data-theme="base"] .dt-empty-btn:hover,
+:root[data-theme="base"] .grid-empty-btn:hover,
+:root[data-theme="base"] .empty-action-btn:hover {
+  background: #d7ebe2;
+}
+
+/* ---------- 弹窗遮罩：纯色压暗，不做背景模糊（性能主题不用毛玻璃） ---------- */
+:root[data-theme="base"] [class*="fixed"][class*="inset-0"][class*="bg-black/"]:not([class*="bg-black/9"]):not([class*="bg-black/8"]) {
+  background-color: rgba(16, 24, 40, 0.34) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ---------- 周切换栏：白块 + 细描边，重心落在日期 ---------- */
+:root[data-theme="base"] .week-bar {
+  background: #ffffff;
+  border-color: #dde5e0;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+:root[data-theme="base"] .week-bar .week-date {
+  background: #edf1ef;
+  border-color: #dce5df;
+  color: #17211d;
+  font-weight: 600;
+}
+:root[data-theme="base"] .week-bar button {
+  border-radius: 6px;
+}
+:root[data-theme="base"] .week-bar button.bg-primary,
+:root[data-theme="base"] .week-bar button.bg-info {
+  background: #0e7a5f;
+  border: none;
+  color: #fff;
+}
+:root[data-theme="base"] .week-bar button.bg-danger {
+  background: #b42318;
+  border: none;
+  color: #fff;
+}
+
+/* ---------- 普通卡片：描边为主，阴影只留一丝 ---------- */
+:root[data-theme="base"] .bg-surface.shadow-md,
+:root[data-theme="base"] .bg-surface.shadow,
+:root[data-theme="base"] .bg-surface.shadow-card {
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+

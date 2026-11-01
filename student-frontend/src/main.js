@@ -6,6 +6,8 @@ import vaporInterop from 'virtual:vapor-interop'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
+// 彩色色块主题的 B 方案覆盖层已由 index.css 末尾统一引入，
+// 主窗口与子窗口共用同一份，避免各窗口外观不一致。
 import './styles/index.css'
 import { loadThemeStyles } from './styles/themeLoader'
 import { useThemeStore } from './stores/theme'

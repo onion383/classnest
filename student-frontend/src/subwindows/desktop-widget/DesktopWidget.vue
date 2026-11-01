@@ -1601,7 +1601,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-/* 空槽本身是 <button>：压掉 glass / win11 主题给所有 button 套的 1px 描边
+/* 空槽本身是 <button>：压掉 glass 主题给所有 button 套的 1px 描边
    （theme-glass 只设了 border-width/style，颜色会落到 currentColor，看起来像黑框）
    以及荧光环，让它与普通槽位观感一致，只留下虚线加号。
    主题样式在运行时晚于组件样式加载，这里用 !important + 去掉原生 appearance 兜底。 */

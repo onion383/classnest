@@ -103,19 +103,19 @@ onUnmounted(() => {
   background: var(--color-surface, #ffffff);
   overflow: hidden;
 }
-/* glass/win11：轨道改用与自绘标题栏 .window-title-bar 相同的毛玻璃材质
+/* glass：轨道改用与自绘标题栏 .window-title-bar 相同的毛玻璃材质
    （同 blur/saturate 配方 + 同底色 + 同内高光），随 data-topbar-color 切深蓝/淡蓝。
-   注意：glass/win11 下 12px 的轨道圆角由 theme-glass.css 统一给出（与隔壁玻璃按钮一致）。 */
-:root:is([data-theme="glass"], [data-theme="win11"]) .view-switch {
+   注意：glass 下 12px 的轨道圆角由 theme-glass.css 统一给出（与隔壁玻璃按钮一致）。 */
+:root:is([data-theme="glass"]) .view-switch {
   backdrop-filter: blur(24px) saturate(1.4);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.35),
     inset 0 -1px 0 rgba(255, 255, 255, 0.4);
 }
-:root[data-topbar-color="light"]:is([data-theme="glass"], [data-theme="win11"]) .view-switch {
+:root[data-topbar-color="light"]:is([data-theme="glass"]) .view-switch {
   background-color: rgba(219, 234, 254, 0.55);
 }
-:root[data-topbar-color="blue"]:is([data-theme="glass"], [data-theme="win11"]) .view-switch {
+:root[data-topbar-color="blue"]:is([data-theme="glass"]) .view-switch {
   background-color: rgba(30, 64, 175, 0.55);
 }
 /* 内嵌选中块：纵向由 CSS 内缩 --vs-pad 对齐，横向宽度/位置由脚本实测当前按钮得到，
@@ -124,7 +124,7 @@ onUnmounted(() => {
    （bg-primary text-text-inverse），且它是真正的 <button>，因此命中同一批主题按钮规则，
    任意主题下颜色都与其逐像素一致。 */
 .view-switch-thumb {
-  /* !important 必需：glass/win11 主题有全局 `:root:is(...) button { position: relative }`（特异性 0,2,1），
+  /* !important 必需：glass 主题有全局 `:root:is(...) button { position: relative }`（特异性 0,2,1），
      高于 scoped 的 .view-switch-thumb[data-v-*]（0,2,0）。若被改回 relative，滑块会留在文档流里、
      在最左侧占一个身位，把两个标签挤到右边（表现为「轨道很宽、左边空一片、滑块偏右」）。 */
   position: absolute !important;
@@ -142,7 +142,7 @@ onUnmounted(() => {
     transform 0.26s cubic-bezier(0.34, 1.35, 0.64, 1),
     width 0.26s cubic-bezier(0.34, 1.35, 0.64, 1);
 }
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .view-switch-thumb {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .view-switch-thumb {
   border-radius: calc(var(--radius-control) - var(--vs-pad)) !important;
 }
 .view-switch-btn {
@@ -169,9 +169,9 @@ onUnmounted(() => {
   /* 与隔壁按钮一致：选中文字用反白色 */
   color: var(--color-text-inverse, #ffffff);
 }
-/* glass/win11 下「添加职务」等按钮被主题规则改成淡底 + 深绿字（见 theme-glass.css），
+/* glass 下「添加职务」等按钮被主题规则改成淡底 + 深绿字（见 theme-glass.css），
    选中项文字同步为深绿，否则白字会与该底色糊在一起、与隔壁按钮观感不一致 */
-:root:is([data-theme="glass"], [data-theme="win11"]) .view-switch-btn.on {
+:root:is([data-theme="glass"]) .view-switch-btn.on {
   color: #166534;
 }
 </style>

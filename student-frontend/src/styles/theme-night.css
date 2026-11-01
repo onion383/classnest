@@ -3,9 +3,9 @@
    在任意主题之上再叠一层夜间配色。日间（data-mode="day"）时本文件全部不生效，
    现有观感零变化。
 
-   覆盖范围：目前只实现 glass（毛玻璃）与 glass2（新毛玻璃）两套主题的夜间配色；
-   其余主题（base / win11 / minimal）暂不实现 —— 它们没有夜间规则，data-mode 对其
-   无影响（侧边栏的切换按钮在这类主题下禁用）。
+   覆盖范围：本文件只负责 glass（毛玻璃）与 glass2（新毛玻璃）两套主题的夜间配色。
+   彩色色块主题（base）的夜间规则已直接合并进 theme-base-accent.css，随 index.css
+   常驻，不经过本文件，也不额外加载。
 
    实现方式：各主题原文件里既有「CSS 变量」也有大量「硬编码色值」，因此夜间层
    既要重定义变量，也要逐条覆盖硬编码的色（用更高特异性 + 与原规则同级的 !important）。
@@ -547,10 +547,14 @@
   background-color: var(--color-text-muted) !important;
 }
 :root[data-mode="night"][data-theme="glass2"] button.bg-text-muted {
-  background-color: var(--color-text-muted) !important;
+  /* 灰底按钮仍要压得住白字：不能直接复用「夜间浅灰文字色」 */
+  background-color: #4b5570 !important;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-text-secondary {
   background-color: var(--color-text-secondary) !important;
+}
+:root[data-mode="night"][data-theme="glass2"] button.bg-text-secondary {
+  background-color: #4b5570 !important;
 }
 /* 半透明浅底按钮（关于页「用户协议 / 版本日志」、分组页「新增分组」） */
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-primary\/10 {
@@ -653,15 +657,26 @@
   --g2-glass: rgba(42, 50, 76, calc(var(--g2-a) + 0.16));
   --g2-glass-strong: rgba(49, 58, 88, calc(var(--g2-a) + 0.30));
   --g2-glass-soft: rgba(36, 43, 68, calc(var(--g2-a) + 0.1));
-  --g2-line: var(--alpha-white-10);
-  --g2-line-soft: var(--alpha-white-07);
+  --g2-line: rgba(255, 255, 255, 0.16);
+  --g2-line-soft: rgba(255, 255, 255, 0.1);
   --g2-hair: var(--alpha-white-12);
   --g2-hair-strong: var(--alpha-white-22);
-  --g2-hl: inset 0 1px 0 var(--alpha-white-10);
+  --g2-hl:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --g2-edge: 0 0 0 1px rgba(0, 0, 0, 0.28);
 
-  --g2-shadow-1: 0 1px 2px var(--alpha-black-25), 0 2px 8px var(--alpha-black-22);
-  --g2-shadow-2: 0 4px 16px var(--alpha-black-30), 0 14px 36px var(--alpha-black-28);
-  --g2-shadow-3: 0 18px 60px var(--alpha-black-50);
+  --g2-shadow-1:
+    0 1px 2px var(--alpha-black-25),
+    0 4px 12px -2px var(--alpha-black-22);
+  --g2-shadow-2:
+    0 2px 4px var(--alpha-black-28),
+    0 12px 28px -6px var(--alpha-black-30),
+    0 32px 64px -24px var(--alpha-black-40);
+  --g2-shadow-3:
+    0 8px 24px var(--alpha-black-32),
+    0 24px 80px -16px var(--alpha-black-55);
 
   --g2-accent: #7c93ff;
   --g2-accent-strong: #93a8ff;
@@ -691,7 +706,7 @@
 
   --color-text: #e7eaf6;
   --color-text-secondary: #a9b1c9;
-  --color-text-muted: #7d869e;
+  --color-text-muted: #9aa4bd;
   --color-text-inverse: #ffffff;
 
   --color-border: var(--g2-hair);
@@ -746,11 +761,22 @@
 :root[data-mode="night"][data-theme="glass2"] .bg-sidebar::before {
   background: linear-gradient(180deg, var(--alpha-white-10) 0%, var(--alpha-white-02) 55%, var(--alpha-white-00) 100%);
 }
+/* 兜底：与日间同理，data-topbar-color 尚未写入时也不要沿用白字/深字错配 */
+:root[data-mode="night"][data-theme="glass2"] .bg-sidebar {
+  color: #e7eaf6;
+}
+:root[data-mode="night"][data-theme="glass2"] .bg-sidebar a,
+:root[data-mode="night"][data-theme="glass2"] .bg-sidebar nav a {
+  color: #b7c0d8;
+}
+:root[data-mode="night"][data-theme="glass2"] .sidebar-group-title {
+  color: #96a0b9;
+}
 :root[data-mode="night"][data-topbar-color="light"][data-theme="glass2"] .bg-sidebar {
   background-color: rgba(38, 45, 72, 0.60) !important;
   color: #e7eaf6 !important;
   border-right-color: var(--g2-line-soft) !important;
-  box-shadow: 0 2px 8px var(--alpha-black-30), var(--g2-hl);
+  box-shadow: var(--g2-shadow-2), var(--g2-hl), var(--g2-edge);
 }
 :root[data-mode="night"][data-topbar-color="blue"][data-theme="glass2"] .bg-sidebar {
   background-color: rgba(48, 56, 108, 0.56) !important;
@@ -765,7 +791,7 @@
   color: #eef1fb !important;
 }
 :root[data-mode="night"][data-topbar-color="light"][data-theme="glass2"] .sidebar-group-title {
-  color: #7d869e !important;
+  color: #96a0b9 !important;
 }
 :root[data-mode="night"][data-topbar-color="light"][data-theme="glass2"] .bg-sidebar-hover,
 :root[data-mode="night"][data-topbar-color="light"][data-theme="glass2"] .bg-sidebar a:hover:not(.bg-sidebar-active) {
@@ -868,7 +894,7 @@
 }
 :root[data-mode="night"][data-theme="glass2"] .nt-title { color: #e7eaf6 !important; }
 :root[data-mode="night"][data-theme="glass2"] .nt-msg { color: #a9b1c9 !important; }
-:root[data-mode="night"][data-theme="glass2"] .nt-close { color: #7d869e !important; }
+:root[data-mode="night"][data-theme="glass2"] .nt-close { color: #96a0b9 !important; }
 :root[data-mode="night"][data-theme="glass2"] .nt-close:hover { background-color: var(--alpha-white-08) !important; color: #e7eaf6 !important; }
 
 /* B7. 视图切换（分段控件）轨道 */

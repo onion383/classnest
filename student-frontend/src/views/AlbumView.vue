@@ -26,7 +26,7 @@
 
     <!-- 工具栏：相册级操作 + 右侧视图切换（时间轴 / 相册），两个视图下都保留 -->
     <!-- flex-wrap：窗口贴到最小宽度（900）时按钮多，宁可换行也不要横向溢出把 ViewSwitch 挤出去 -->
-    <div class="flex items-center gap-3 mb-4 flex-shrink-0 flex-wrap">
+    <div class="album-toolbar flex items-center gap-3 mb-4 flex-shrink-0 flex-wrap">
       <button @mouseenter="prefetch(loadNewAlbumDialog)" @click="openNewAlbum" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5">
         <IconGlyph name="folder" :size="14" tint="current" /> 新建相册
       </button>
@@ -85,7 +85,7 @@
 
         <!-- 照片区 + 右侧年份刻度尺：外层一层毛玻璃面板，两者同处其中。
              玻璃观感不在这里硬写：`.bg-surface` 是项目统一的玻璃入口 ——
-             glass / win11 走 theme-glass.css 的 `main .bg-surface` 配方（底色 + blur(24px) saturate(1.4)），
+             glass 走 theme-glass.css 的 `main .bg-surface` 配方（底色 + blur(24px) saturate(1.4)），
              glass2 走 theme-glass2.css 的 `.bg-surface` 规则；夜间模式各自覆盖。
              p-5 与其它玻璃卡片同一档（项目里 33 处卡片都用它），且正好等于 glass 主题的卡片圆角半径，
              内边距不小于圆角半径，内容不会被圆弧切掉角。
@@ -1457,7 +1457,7 @@ onBeforeUnmount(() => {
  * 全局 utilities.css 有一条「弹窗遮罩模糊」规则按 [class*="bg-black/"] 匹配，
  * 且刻意排除了 bg-black/8、bg-black/9（注释写明「看图场景要保持深底压暗」）。
  * 现在只需要毛玻璃主题换一套配色，用变量分档最省事，也不会牵动那条全局规则。
- * 下方默认值与原工具类逐项等价，故基础/极简/夜间等主题视觉零变化。 */
+ * 下方默认值与原工具类逐项等价，故基础/夜间等主题视觉零变化。 */
 .album-viewer {
   --av-overlay-bg: rgba(0, 0, 0, 0.9);
   --av-overlay-blur: none;
@@ -1493,12 +1493,12 @@ onBeforeUnmount(() => {
   }
 }
 
-/* 毛玻璃 / Win11：浅色玻璃灯箱。
+/* 毛玻璃：浅色玻璃灯箱。
  * 底色不写死白色，而是由 --color-surface 混成半透明——夜间模式下该变量会变深，
  * 于是同一套规则自动得到「深色玻璃」，不必再补一条 data-mode="night" 的规则。
  * blur 只在遮罩这一层做一次：子元素若再叠 backdrop-filter，采样到的是已经模糊过的
  * 结果，既无收益又会把大面积合成层叠起来。 */
-:root:is([data-theme="glass"], [data-theme="win11"]) .album-viewer {
+:root:is([data-theme="glass"]) .album-viewer {
   --av-overlay-bg: color-mix(in srgb, var(--color-surface) 74%, transparent);
   --av-overlay-blur: blur(30px) saturate(1.25);
   --av-fg: var(--color-text);
@@ -1529,7 +1529,7 @@ onBeforeUnmount(() => {
 
 /* 按钮：只接管配色与描边，宽高/圆角/内容排布仍由各自的工具类决定。
  * 选择器带 .album-viewer 前缀，是为了压过 theme-glass.css 里那条全局 button 皮肤
- * （`:root:is([data-theme=glass],[data-theme=win11]) button`，特异度 0,2,1）——
+ * （`:root:is([data-theme=glass]) button`，特异度 0,2,1）——
  * scoped 下单独的 .viewer-btn 只有 0,2,0，会输给它，届时背景色是否生效就取决于
  * 那条全局规则恰好没写 background-color，属于「靠巧合正确」，不能这么留。 */
 .album-viewer .viewer-btn {

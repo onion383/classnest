@@ -58,9 +58,9 @@
       </div>
 
       <!-- 其他页面：带侧边栏布局 -->
-      <div v-else class="flex w-full min-w-0">
+      <div v-else class="flex w-full min-w-0 relative">
         <Sidebar />
-        <main class="flex-1 min-w-0 p-6 bg-bg overflow-auto">
+        <main ref="mainScrollRef" class="h-full flex-1 min-w-0 p-6 bg-bg overflow-auto app-custom-scroll">
           <router-view v-slot="{ Component }">
             <!-- 缓存全部业务页面：当前共 15 个（不含 /login 与 /account 重定向），取 16 留 1 个余量。
                  实测多缓存几个页面仅多几 MB，故不再按最近访问淘汰。 -->
@@ -69,6 +69,7 @@
             </KeepAlive>
           </router-view>
         </main>
+        <CustomScrollbar :target="mainScrollRef" />
       </div>
     </div>
   </div>
@@ -193,6 +194,7 @@ import { undoState as undo, performUndo, refreshUndoStatus } from './composables
 import './styles/dialog-transition.css'
 import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
 import IconGlyph from './components/base/IconGlyph.vue'
+import CustomScrollbar from './components/base/CustomScrollbar.vue'
 
 // AI 助手懒加载：loader 抽成命名函数，既给 defineAsyncComponent 用，也供悬浮图标 hover 预取（@mouseenter → prefetch）
 const loadAiAssistant = () => import('./views/AiAssistant.vue')
@@ -224,12 +226,38 @@ const ShutdownMenuDialog = defineAsyncComponent(loadShutdownMenuDialog)
 const route = useRoute()
 const router = useRouter()
 const themeStore = useThemeStore()
+
+// 彩色色块主题的「模块色」：每个页面一个主色，写进 <html data-page>，
+// 由 theme-base.css 换算成该页的标题条、表头、行号与主按钮颜色。
+// 其他主题不使用这个属性，保持原样。
+const PAGE_KEYS = {
+  '/': 'home',
+  '/students': 'students',
+  '/group-manage': 'group',
+  '/schedule': 'schedule',
+  '/fee': 'fee',
+  '/seats': 'seats',
+  '/duty': 'duty',
+  '/leaves': 'leaves',
+  '/scores': 'scores',
+  '/album': 'album',
+  '/activities': 'activities',
+  '/ai-assistant': 'ai',
+  '/settings': 'settings',
+  '/about': 'about',
+}
+function syncPageKey() {
+  document.documentElement.dataset.page = PAGE_KEYS[route.path] || 'home'
+}
+syncPageKey()
+
 // 恢复「上次没跑完」的相册扫描任务：延后到小组件就绪 + 4 秒后才触发（见 mounted 的 reportWidgetsOnce）
 const albumTaskResume = useAlbumTaskResume()
 
 // 模板 ref
 const aiIcon = ref(null)
 const assistantPanel = ref(null)
+const mainScrollRef = ref(null)
 
 const assistantOpen = ref(false)
 // AI 助手是否已启用（null=尚未查到，先用隐藏态，避免图标闪一下又消失）
@@ -695,6 +723,7 @@ window.addEventListener('ai-config-changed', onAiConfigChanged)
 
 // 切页时保持浮窗状态（用户可边操作边问）；若切换到 AI 助手页则收起浮窗
 watch(() => route.path, () => {
+  syncPageKey()
   if (route.path === '/ai-assistant') assistantOpen.value = false
   // 切页时收起搜索弹窗
   searchOpen.value = false
@@ -810,7 +839,7 @@ onBeforeUnmount(() => {
   -webkit-app-region: no-drag;
 }
 /* 标题栏小按钮（撤销/重做）：26×26 圆角方块，配色随顶栏文字（currentColor）。
-   必须清掉毛玻璃/Win11 主题的按钮皮肤（边框、阴影、荧光描边 ::before）。 */
+   必须清掉毛玻璃主题的按钮皮肤（边框、阴影、荧光描边 ::before）。 */
 .tb-btn {
   display: inline-flex;
   align-items: center;
@@ -838,7 +867,7 @@ onBeforeUnmount(() => {
   to { opacity: 1; transform: translateX(0); }
 }
 .tb-search-row { animation: titleSearchRowIn 0.18s ease-out both; }
-/* 清掉毛玻璃/Win11 主题给 button 加的皮肤：主题强制了 1px 实线边框而 Tailwind 默认边框色是
+/* 清掉毛玻璃主题给 button 加的皮肤：主题强制了 1px 实线边框而 Tailwind 默认边框色是
    currentColor，会让每行外面多出一圈近黑色框；box-shadow / ::before 荧光描边同理。
    圆角改回 8px，与上方搜索输入框的 rounded-lg 一致。 */
 .tb-search-row {
@@ -861,7 +890,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   width: 46px;
   height: 100%; /* 满高，与加高后的标题栏对齐 */
-  border: none !important; /* 覆盖毛玻璃/Win11 主题全局 button 边框（theme-glass.css） */
+  border: none !important; /* 覆盖毛玻璃主题全局 button 边框（theme-glass.css） */
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -904,5 +933,46 @@ onBeforeUnmount(() => {
 .ai-pop-leave-to {
   transform: scale(0.86);
   opacity: 0;
+}
+
+/* 彩色色块主题：页面标题是白底 + 深蓝左条，标题图标跟随主色。 */
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] h1 > svg.icon-color,
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] h1 > svg {
+  color: var(--base-pagehead-icon, #3b82f6) !important;
+}
+
+/* 表头统一浅蓝底 + 深蓝字；夜间由 --base-app-grid-* 变量翻转。 */
+:root[data-theme="base"] .grid-view-container table thead th:not(.grid-head-title):not(.bg-text-muted) {
+  background-color: var(--base-app-grid-head-bg, #eff6ff) !important;
+  border-color: var(--base-app-grid-head-border, #dbeafe) !important;
+  color: var(--base-app-grid-head-text, #1e3a8a) !important;
+}
+:root[data-theme="base"] .dynamic-table table thead th {
+  background-color: var(--base-app-grid-head-bg, #eff6ff) !important;
+  border-color: var(--base-app-grid-head-border, #dbeafe) !important;
+  color: var(--base-app-grid-head-text, #1e3a8a) !important;
+}
+:root[data-theme="base"] .dynamic-table table thead th.col-op {
+  background-color: var(--base-app-grid-colop-bg, #dbeafe) !important;
+}
+
+/* 页头里的表单控件：夜间由 --base-input-* 变量翻转。 */
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] input,
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] select,
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] .av-select__trigger {
+  color: var(--base-input-text, #0f172a) !important;
+  background-color: var(--base-input-bg, #f8fafc) !important;
+  border-color: var(--base-input-border, #e2e8f0) !important;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] input::placeholder {
+  color: var(--base-input-placeholder, #94a3b8) !important;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] .av-select__value,
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] .av-select__arrow,
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] input ~ span.text-text-muted {
+  color: var(--base-input-aux, #475569) !important;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] input ~ span.text-text-muted svg {
+  color: var(--base-input-aux, #475569) !important;
 }
 </style>

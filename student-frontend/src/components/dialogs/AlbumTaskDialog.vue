@@ -1,12 +1,12 @@
 <template>
   <DialogShell :visible="visible" :z-index="10003" @overlay="$emit('close')">
-    <div class="bg-surface rounded-xl p-6 w-[760px] max-w-[94vw] max-h-[88vh] flex flex-col border border-border shadow-card dialog-card">
+    <div class="bg-surface rounded-xl p-6 w-[760px] max-w-[94vw] max-h-[88vh] flex flex-col border border-border shadow-card dialog-card relative">
       <div class="flex items-center justify-between mb-4 flex-shrink-0">
         <h3 class="text-lg font-bold text-text">任务管理</h3>
         <button @click="$emit('close')" class="dlg-close">✕</button>
       </div>
 
-      <div class="flex-1 min-h-0 overflow-y-auto">
+      <div ref="bodyRef" class="flex-1 min-h-0 overflow-y-auto app-custom-scroll">
         <p v-if="albums.length === 0" class="text-sm text-text-muted py-3">还没有相册，请先在「管理相册」里添加文件夹。</p>
 
         <!-- 整块任务列表放在一块毛玻璃里（底色取主题 surface 半透明，昼夜自动跟随） -->
@@ -68,6 +68,7 @@
           任务一次只跑一个相册：点「更新所有相册照片」会把下面每个相册依次排队执行；运行中可「暂停」并随时「继续」，进度不会丢。软件自动发起的扫描（新建相册、撤销/重做）也会实时显示在对应行。虚拟相册没有文件夹，不参与扫描。
         </p>
       </div>
+      <CustomScrollbar :target="bodyRef" />
     </div>
   </DialogShell>
 </template>
@@ -78,6 +79,7 @@ import { reportError } from '../../utils/reportError.js'
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import axios from 'axios'
 import DialogShell from '../base/DialogShell.vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { useAlbumScan } from '../../composables/useAlbumScan.js'
 import '../../styles/dialog-transition.css'
@@ -87,6 +89,9 @@ const props = defineProps({
 })
 // changed：每跑完一个相册通知页面刷新一次（照片数/封面/照片列表会变）
 const emit = defineEmits(['close', 'changed'])
+
+// 弹窗正文滚动容器（自定义滚动条的目标）
+const bodyRef = ref(null)
 
 const albums = ref([])
 // 后端任务表：albumId -> { id, mode, scanning, cancelled, scanned, total, ... }

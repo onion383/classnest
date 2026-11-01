@@ -21,7 +21,10 @@ select {
 @import "tailwindcss";
 @import "./theme-base.css";
 @import "./utilities.css";
-/* 主题皮肤（theme-glass / glass2 / minimal / win11）与夜间层（theme-night）不再在此静态引入：
+/* 彩色色块主题的 B 方案（深蓝 + 琥珀）覆盖层：放在基础层之后，
+   主窗口与桌面小组件 / 引导页等子窗口都从这里拿到同一套外观。 */
+@import "./theme-base-accent.css";
+/* 主题皮肤（theme-glass / glass2）与夜间层（theme-night）不再在此静态引入：
    改为按「当前 data-theme / data-mode」在运行时按需加载（见 styles/themeLoader.js）。
    各主题 CSS 都是 [data-theme=...] / [data-mode="night"] 属性选择器，属性不匹配时本就不生效，
    因此「只加载当前主题」与「全部加载」视觉等价，只是少了未用主题的下载与解析。 */
@@ -338,7 +341,7 @@ html.theme-switching *::after {
 .tree-scroll.is-animating {
   scrollbar-color: transparent transparent;
 }
-/* 毛玻璃/Win11 主题的滚动条走 ::-webkit-scrollbar 皮肤，这里同步透明化 */
+/* 毛玻璃主题的滚动条走 ::-webkit-scrollbar 皮肤，这里同步透明化 */
 .tree-scroll.is-animating::-webkit-scrollbar-thumb,
 .tree-scroll.is-animating::-webkit-scrollbar-track {
   background: transparent !important;
@@ -578,4 +581,42 @@ html.theme-switching *::after {
 .dtf-leave-to {
   opacity: 0;
   transform: translateY(-8px) scale(0.97);
+}
+
+/* ==================== 课程表单元格色板 ====================
+   GridView 按课程名取 var(--course-*-bg) 作为单元格底色。
+   日间沿用原有浅色；夜间换成同色系深色，避免浅色文字压在浅底上，
+   也避免空课程单元格回退成白色、在深色表格里形成大白块。 */
+:root {
+  --course-chinese-bg: #ffe4e1;
+  --course-math-bg: #e0f7fa;
+  --course-english-bg: #f3e5f5;
+  --course-physics-bg: #e8f5e9;
+  --course-chemistry-bg: #fff3e0;
+  --course-biology-bg: #f1f8e9;
+  --course-history-bg: #fbe9e7;
+  --course-geography-bg: #e0f2f1;
+  --course-politics-bg: #f9fbe7;
+  --course-pe-bg: #dcedc8;
+  --course-music-bg: #f8bbd0;
+  --course-art-bg: #c8e6c9;
+  --course-it-bg: #bbdefb;
+  --course-selfstudy-bg: #f5f5f5;
+}
+/* 仅夜间主题支持的皮肤切换色板：自定义主题不实现夜间层，保持日间浅色 */
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) {
+  --course-chinese-bg: #3a2530;
+  --course-math-bg: #17343b;
+  --course-english-bg: #33253d;
+  --course-physics-bg: #1d3527;
+  --course-chemistry-bg: #3a2d1b;
+  --course-biology-bg: #29361f;
+  --course-history-bg: #3a2825;
+  --course-geography-bg: #183432;
+  --course-politics-bg: #33341d;
+  --course-pe-bg: #26361c;
+  --course-music-bg: #3d2330;
+  --course-art-bg: #203a27;
+  --course-it-bg: #1a2e44;
+  --course-selfstudy-bg: #2a3038;
 }

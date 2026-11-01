@@ -6,7 +6,7 @@
         class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001] pointer-events-auto no-dialog-pulse"
         @click.self="$emit('close')"
       >
-        <div class="bg-surface p-5 rounded-xl w-[600px] max-w-full shadow-lg dialog-card">
+        <div class="bg-surface p-5 rounded-xl w-[600px] max-w-full shadow-lg dialog-card relative">
           <!-- 搜索框：沿用弹窗表单输入框规格（与添加学生等弹窗一致），左侧放大镜 -->
           <div class="relative mb-6">
             <IconGlyph name="search" tint="current" glyph :size="16" :stroke-width="2.2" class="absolute left-3 top-1/2 -translate-y-1/2 z-[1] text-text-secondary pointer-events-none" />
@@ -30,7 +30,7 @@
                overflow-y-auto 就会冒出一条多余的滚动条。空态本来也不需要滚动。 -->
           <div
             ref="listEl"
-            class="h-[360px] max-h-[60vh] p-1 space-y-1"
+            class="h-[360px] max-h-[60vh] p-1 space-y-1 app-custom-scroll"
             :class="results.length || remoteSearching ? 'overflow-y-auto' : 'overflow-y-hidden'"
           >
             <!-- 搜索无结果：与列表型表格的空态同款版式（图标 + 文案 + 按钮）。
@@ -61,6 +61,7 @@
               </button>
             </template>
           </div>
+          <CustomScrollbar :target="listEl" />
         </div>
       </div>
     </Transition>
@@ -76,6 +77,7 @@ import {
 } from '../../config/searchData.js'
 import { useSeq } from '../../composables/useSeq.js'
 import IconGlyph from '../../components/base/IconGlyph.vue'
+import CustomScrollbar from './CustomScrollbar.vue'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])

@@ -7,11 +7,13 @@ import { SEND } from '../electronChannels.js'
 
 const THEME_KEY = 'app-theme'
 // 全局日/夜模式：与「主题」正交，任何主题之上再叠一层夜间配色（见 styles/theme-night.css）。
-// 目前仅 glass / glass2 实现了夜间配色，其余主题保持日间外观（切换按钮禁用）。
+// base / glass / glass2 实现了夜间配色，其余主题保持日间外观（切换按钮禁用）。
 const MODE_KEY = 'app-mode'
-// 跟随系统：开启后按操作系统「深色/浅色」偏好自动切换日/夜（仅对已实现夜间配色的主题有意义）
+// 跟随系统：开启后按操作系统「深色/浅色」偏好自动切换日/夜（base / glass / glass2 支持）
 const FOLLOW_KEY = 'app-mode-follow-system'
-const NIGHT_THEMES = ['glass', 'glass2']
+// base 的夜间规则已合并进 theme-base-accent.css（随 index.css 常驻），
+// 因此这里控制「按钮可用」，但 themeLoader 不需要再加载额外的夜间文件。
+const NIGHT_THEMES = ['base', 'glass', 'glass2']
 const CUSTOM_KEY = 'app-theme-custom'
 const CUSTOM_THEMES_KEY = 'app-custom-themes'
 const BG_IMAGE_KEY = 'app-bg-image'
@@ -37,28 +39,7 @@ const PRESETS = [
   { id: 'base', name: '彩色色块主题', editable: false },
   { id: 'glass', name: '毛玻璃主题', editable: true },
   { id: 'glass2', name: '新毛玻璃主题', editable: true },
-  { id: 'win11', name: 'Win11 主题', editable: true },
-  { id: 'minimal', name: '极简主题', editable: true },
 ]
-
-// ===== 暂时屏蔽的主题（只挡「选不到」，实现全部保留）=====
-//
-// 为什么屏蔽 win11：
-//   Win11 主题的核心是「页面全透明 + 窗外 DWM 亚克力模糊」——背景模糊完全交给系统材质，
-//   而这个效果**不可控**：本机实测（Win11 正式版 26300）无论 Electron 还是纯原生 Win32
-//   （DwmSetWindowAttribute 设 DWMWA_SYSTEMBACKDROP_TYPE=Acrylic，返回 hr=0 成功），
-//   渲染出来都是均匀中性灰 rgb(211,211,211)，壁纸的蓝色一点都透不出来；
-//   观感还随 Windows build / 显卡驱动 / 虚拟显示器（如向日葵 IDD）变化，无法保证一致。
-//   详见 doc/小组件.md「磨砂背景」一节的实测记录。
-//
-// 保留什么、屏蔽什么：
-//   · 保留：styles/theme-win11.css、applyTheme 里的 win11 分支、主进程的亚克力开关、
-//     themeLoader 的 win11 样式映射 —— 实现代码一行没动，将来要恢复只改这一处。
-//   · 屏蔽：不出现在任何主题选择入口（主题选择器弹窗 / 引导页 / 设置页下拉），
-//     且 setTheme 拒绝应用它（避免 AI 改设置等旁路把它设进来）。
-//
-// 恢复方法：把下面数组清空（改回 const HIDDEN_THEME_IDS = [] 即可）。
-const HIDDEN_THEME_IDS = ['win11']
 
 // 数值型设置的读取：**不能用 `parseFloat(x) || 默认值`**。
 // 不透明度滑块的 min 是 0，「完全透明」是合法取值，而 0 会被 `||` 当成"没读到"→ 重载后变回默认值。
@@ -130,16 +111,14 @@ export const useThemeStore = defineStore('theme', () => {
   // 组件启动时置 true → 只借主题的配色，背景图与遮罩一律不画。
   const suppressBackgroundImage = ref(false)
 
-  // 可供选择的主题：预设 + 自定义，但**剔除被暂时屏蔽的主题**（见 HIDDEN_THEME_IDS）。
-  // 主题选择器弹窗（ThemePickerDialog）与引导页（Setup）都用它，
-  // 所以屏蔽一处即可让全部入口都选不到 win11。
+  // 可供选择的主题：预设 + 自定义。
+  // 主题选择器弹窗（ThemePickerDialog）与引导页（Setup）都用它。
   const allThemes = computed(() => [
-    ...PRESETS.filter(p => !HIDDEN_THEME_IDS.includes(p.id)),
+    ...PRESETS,
     ...customThemes.value.map(t => ({ ...t, editable: true })),
   ])
 
-  // 当前主题的元信息：在**完整**列表里查（不剔除被屏蔽的），
-  // 避免本地正好存着被屏蔽的主题时元信息落空（回落成第一个预设）。
+  // 当前主题的元信息：在完整列表里查；查不到（本地存着已移除的主题 id）时回落第一个预设。
   const currentThemeMeta = computed(() => {
     const all = [...PRESETS, ...customThemes.value.map(t => ({ ...t, editable: true }))]
     return all.find(t => t.id === currentTheme.value) || PRESETS[0]
@@ -194,12 +173,6 @@ export const useThemeStore = defineStore('theme', () => {
     // resourceUrl 会补完整后端地址并追加 ?token=，保证 file:// 打包版下背景图能通过鉴权加载。
     // 毛玻璃主题无自定义图时使用内置默认背景（前端静态资源，无需鉴权，直接引用）；
     // 自定义图仍走 resourceUrl。其余主题保持无背景。
-    const isWin11 = currentTheme.value === 'win11'
-    // Win11 主题：由主进程对窗口开启窗外亚克力模糊，页面自身保持透明让模糊透出，
-    // 因此不设背景图、不画底色。切换走 IPC 通知主进程。
-    if (!isWin11) {
-      document.documentElement.classList.remove('win11-acrylic')
-    }
     const isCustomBg = Boolean(backgroundImage.value)
     // glass 内置默认底图：日/夜各一张（夜间图本身是深色风景图，遮罩随之变轻）
     const defaultGlassBg = mode.value === 'night' ? DEFAULT_GLASS_BG_NIGHT : DEFAULT_GLASS_BG
@@ -207,10 +180,9 @@ export const useThemeStore = defineStore('theme', () => {
     // （真实透出桌面被模糊），若这里再画一层主题背景图就会盖住它、变成一张静态图片。
     // 故组件只借用主题的配色（文字、卡片、圆角等），背景图与遮罩一律不画。
     const suppressBg = suppressBackgroundImage.value
-    // Win11 主题：主进程开窗外亚克力，页面自身保持透明让模糊透出，故不设背景图。
     const bg = suppressBg
       ? ''
-      : (!isWin11 && backgroundImage.value) || (currentTheme.value === 'glass' ? defaultGlassBg : '')
+      : backgroundImage.value || (currentTheme.value === 'glass' ? defaultGlassBg : '')
     if (bg) {
       const bgUrl = isCustomBg ? resourceUrl(bg) : bg
       document.documentElement.style.setProperty('--bg-image', `url('${bgUrl}')`)
@@ -305,13 +277,6 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   const setTheme = (themeId) => {
-    // 被暂时屏蔽的主题（见 HIDDEN_THEME_IDS）：拒绝应用。
-    // 入口虽已屏蔽，但 setTheme 还有 AI 改设置（composables/ai/aiExec.js）等旁路调用，
-    // 这里统一拦一道，避免主题被从别处设进来。
-    if (HIDDEN_THEME_IDS.includes(themeId)) {
-      console.warn('[theme] 主题已暂时屏蔽，忽略设置：', themeId)
-      return
-    }
     currentTheme.value = themeId
     localStorage.setItem(THEME_KEY, themeId)
     applyTheme()

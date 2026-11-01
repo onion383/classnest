@@ -8,7 +8,7 @@
     -->
     <div
       ref="gridTable"
-      class="overflow-auto border rounded"
+      class="overflow-auto border rounded app-custom-scroll"
       :class="{ 'scrollbar-gutter-stable': vScroll }"
       :style="maxHeight > 0 ? { maxHeight: maxHeight + 'px' } : null"
       @scroll.passive="onGridScroll"
@@ -218,12 +218,14 @@
         </div>
       </Teleport>
     </div>
+    <CustomScrollbar :target="gridTable" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, onActivated, onBeforeUnmount, nextTick, toRef, TransitionGroup } from 'vue';
 import { useGridViewDrag } from './GridView.drag.js';
+import CustomScrollbar from '../../base/CustomScrollbar.vue';
 
 defineOptions({ name: 'GridView' })
 
@@ -244,10 +246,23 @@ const RowsFragment = {
   },
 }
 
+/* 课程色板只提供 CSS 变量名，具体色值在 styles/index.css 里按日/夜定义。
+   这样切换夜间模式时单元格底色会随变量实时变化，不依赖组件重新渲染。 */
 const COURSE_COLORS = {
-  '语文': '#FFE4E1', '数学': '#E0F7FA', '英语': '#F3E5F5', '物理': '#E8F5E9', '化学': '#FFF3E0',
-  '生物': '#F1F8E9', '历史': '#FBE9E7', '地理': '#E0F2F1', '政治': '#F9FBE7', '体育': '#DCEDC8',
-  '音乐': '#F8BBD0', '美术': '#C8E6C9', '信息技术': '#BBDEFB', '自习': '#F5F5F5',
+  '语文': 'var(--course-chinese-bg)',
+  '数学': 'var(--course-math-bg)',
+  '英语': 'var(--course-english-bg)',
+  '物理': 'var(--course-physics-bg)',
+  '化学': 'var(--course-chemistry-bg)',
+  '生物': 'var(--course-biology-bg)',
+  '历史': 'var(--course-history-bg)',
+  '地理': 'var(--course-geography-bg)',
+  '政治': 'var(--course-politics-bg)',
+  '体育': 'var(--course-pe-bg)',
+  '音乐': 'var(--course-music-bg)',
+  '美术': 'var(--course-art-bg)',
+  '信息技术': 'var(--course-it-bg)',
+  '自习': 'var(--course-selfstudy-bg)',
 };
 
 const props = defineProps({
@@ -651,8 +666,9 @@ const methods = {
     },
     isEditing(rowIdx, colIdx) { return ctx.editingCell.value?.row === rowIdx && ctx.editingCell.value?.col === colIdx; },
     // 节次/时间元数据列目前只读（历史搬运时编辑实现未带上，已移除失效的编辑入口）
-    // 单元格底色：走廊固定灰；若调用方在 cell 上给了 _bg（热力图等）则优先；否则按课程名配色
-    getCellColor(cell) { if (cell._isAisle) return '#d1d5db'; if (cell._bg != null) return cell._bg; return COURSE_COLORS[cell.course] || '#FFFFFF'; },
+    // 单元格底色：走廊固定灰；若调用方在 cell 上给了 _bg（热力图等）则优先；否则按课程名配色。
+    // 空课程返回空字符串 → 透明，交给主题的表格容器/td 规则决定底色（夜间才不会出现白块）。
+    getCellColor(cell) { if (cell._isAisle) return '#d1d5db'; if (cell._bg != null) return cell._bg; return COURSE_COLORS[cell.course] || ''; },
     // 单元格文字色：调用方在 cell 上给了 _fg（深底白字）才覆盖，否则继承主题文字色
     getCellTextColor(cell) { return cell._fg || ''; },
 }
@@ -745,8 +761,10 @@ onBeforeUnmount(() => {
 th .drag-handle { color: color-mix(in srgb, var(--color-text-inverse, #ffffff) 70%, transparent); }
 th:hover .drag-handle { color: var(--color-text-inverse, #ffffff); }
 /* ---- 容器超高时的内部滚动（maxHeight 上限）----
-   预留滚动条槽位：纵向滚动条随行增删出现/消失，若不预留会让整表宽度跳一下、列宽重排。 */
-.scrollbar-gutter-stable { scrollbar-gutter: stable; }
+   预留滚动条槽位：纵向滚动条随行增删出现/消失，若不预留会让整表宽度跳一下、列宽重排。
+   原生纵向滚动条已由 .app-custom-scroll 隐藏（width:0，不再占位），
+   这里改用右侧内边距为 DOM 滚动条（12px 轨道 + 2px 空隙）让位，效果等价。 */
+.scrollbar-gutter-stable { padding-right: 14px; }
 /* 表头吸顶：内容超出 maxHeight 后，表头保持在容器顶部、只滚数据行。
    sticky 必须加在 th 上（加 thead 在多数浏览器不生效），与 DynamicTable 同款。
    表头自带不透明底色，滚动时遮盖下方滚上来的数据格。 */
@@ -758,9 +776,9 @@ thead th:not(.grid-head-title) { top: var(--grid-title-h, 0px); }
 thead th.grid-head-title { z-index: 6; }
 /* 吸顶表头补边框：border-collapse 下 sticky 单元格脱离表格的边框绘制，
    底边会随下层数据一起「穿过去」。用内阴影补一条底线，视觉与原来一致。
-   玻璃/glass2/win11 主题把表格改成了 border-collapse: separate（边框本就正常），
+   玻璃/glass2 主题把表格改成了 border-collapse: separate（边框本就正常），
    再补会变成双线，故排除。 */
-:root:not([data-theme="glass"], [data-theme="glass2"], [data-theme="win11"]) thead th {
+:root:not([data-theme="glass"], [data-theme="glass2"]) thead th {
   box-shadow: inset 0 -1px 0 0 var(--color-border, #e5e7eb);
 }
 /* 行交换(FLIP)：松手后其它行平滑让位滑开，与动态表格保持一致 */

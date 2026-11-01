@@ -31,7 +31,8 @@
     "test:all": "node testjs/run-all.js"
   },
   "dependencies": {
-    "koffi": "^3.3.3"
+    "koffi": "^3.3.3",
+    "ui-ux-pro-max-cli": "^2.15.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.1",

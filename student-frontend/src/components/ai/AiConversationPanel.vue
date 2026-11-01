@@ -19,7 +19,7 @@
           <button class="dlg-close" title="收起对话列表" @click="$emit('close')">✕</button>
         </div>
       </div>
-      <div class="conv-list flex-1 overflow-y-auto overflow-x-hidden min-h-0 space-y-1.5 p-2">
+      <div ref="listRef" class="conv-list flex-1 overflow-y-auto overflow-x-hidden min-h-0 space-y-1.5 p-2 app-custom-scroll">
         <div
           v-for="conv in conversations"
           :key="conv.id"
@@ -43,7 +43,7 @@
           暂无历史对话
         </div>
         <!-- 默认只渲染最近 3 条，点这里每次多加载 10 条更早的会话。
-             用 div 而非 button：与上面的会话条目同款外观（glass/win11 会给所有 button 加描边皮肤） -->
+             用 div 而非 button：与上面的会话条目同款外观（glass 会给所有 button 加描边皮肤） -->
         <div
           v-if="hiddenCount > 0"
           @click="$emit('load-more')"
@@ -51,13 +51,16 @@
           title="显示更早的会话"
         >加载更多历史对话（还有 {{ hiddenCount }} 条）</div>
       </div>
+      <!-- 对话列表：细滑块 + 淡入；面板是 absolute，覆盖层以它为定位父级 -->
+      <CustomScrollbar :target="listRef" compact :arrows="false" auto-hide :min-thumb="20" />
     </div>
   </div>
 </template>
 
 <script setup vapor>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { formatTime } from '../../composables/ai/aiMessages.js'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 
 defineOptions({ name: 'AiConversationPanel' })
 const props = defineProps({
@@ -67,6 +70,9 @@ const props = defineProps({
   hiddenCount: { type: Number, default: 0 },
 })
 defineEmits(['new', 'select', 'delete', 'close', 'load-more'])
+
+// 会话列表滚动容器（自定义滚动条的目标）
+const listRef = ref(null)
 
 // 会话总数（列表 + 尚未渲染的更早会话）：用于「暂无历史对话」空态判断
 const totalCount = computed(() => {
@@ -90,7 +96,7 @@ const totalCount = computed(() => {
 }
 
 /* 抽屉内所有圆角（面板 / 会话条目 / 加载更多 / ＋、✕ 按钮）统一为「标题卡片、弹窗卡片」的主题表面圆角：
-   --radius-surface 由各主题定义（glass/win11 = 20px，glass2 = 26px，基础 = 12px，极简 = 0）。
+   --radius-surface 由各主题定义（glass = 20px，glass2 = 26px，基础 = 12px）。
    !important 用于压掉毛玻璃主题给 button 的皮肤与 .dlg-close 的默认档。 */
 .conv-r,
 .conv-panel,

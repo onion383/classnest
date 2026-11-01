@@ -1,10 +1,10 @@
 <template>
   <DialogShell :visible="visible" :z-index="10001" @overlay="$emit('cancel')">
-    <div class="bg-surface p-5 rounded-xl w-[600px] max-w-full shadow-lg dialog-card">
+    <div class="bg-surface p-5 rounded-xl w-[600px] max-w-full shadow-lg dialog-card relative">
       <h3 class="text-lg font-bold mb-4 text-text">{{ title }}</h3>
 
       <!-- p-1：聚焦时输入框有 3px 外发光（box-shadow），滚动容器 overflow 会裁掉四边，留出内边距避免蓝色边（尤其最下面一排的底边）被挡住 -->
-      <div class="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto p-1">
+      <div ref="bodyRef" class="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto p-1 app-custom-scroll">
         <div v-for="f in fields" :key="f.name">
           <label class="block text-sm text-text-secondary mb-1">
             {{ f.name }}<span v-if="requiredField === f.name" class="text-danger"> *</span>
@@ -53,6 +53,7 @@
           />
         </div>
       </div>
+      <CustomScrollbar :target="bodyRef" />
 
       <div class="flex justify-end gap-2 mt-4">
         <button type="button" @click="$emit('cancel')" class="px-4 py-2 rounded-lg bg-text-muted text-text-inverse hover:bg-text-secondary transition-theme">取消</button>
@@ -64,6 +65,7 @@
 
 <script setup vapor>
 import AppSelect from '../base/AppSelect.vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 import DialogShell from '../base/DialogShell.vue'
 import '../../styles/dialog-transition.css'
 import { useNotification } from '../../composables/useNotification.js'
@@ -81,6 +83,9 @@ const props = defineProps({
   initialValues: { type: Object, default: () => ({}) }
 })
 const emit = defineEmits(['confirm', 'cancel'])
+
+// 表单滚动容器（自定义滚动条的目标）
+const bodyRef = ref(null)
 
 const form = ref({})
 

@@ -740,15 +740,15 @@ watch(
      4) 二级页面（四个小工具内部）的色块：同样换成透亮玻璃块，别把面板背景图盖死。 -->
 <style>
 /* ---- 1. 亮边与背景模糊 ---- */
-/* 毛玻璃主题（glass / win11）：与主界面卡片同一套配方 */
-:root:is([data-theme="glass"], [data-theme="win11"]) .panel {
+/* 毛玻璃主题（glass）：与主界面卡片同一套配方 */
+:root:is([data-theme="glass"]) .panel {
   border-color: rgba(255, 255, 255, 0.35);
 }
-:root:is([data-theme="glass"], [data-theme="win11"]) .menu-panel {
+:root:is([data-theme="glass"]) .menu-panel {
   backdrop-filter: blur(20px) saturate(1.1);
 }
 /* 夜间不出现亮边（与 theme-night.css 的约定一致），改回主题边框色 */
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="win11"]) .panel {
+:root[data-mode="night"]:is([data-theme="glass"]) .panel {
   border-color: var(--color-border, rgba(255, 255, 255, 0.08));
 }
 /* 新毛玻璃主题（glass2）：亮边与模糊强度都走它自己的玻璃配方变量，夜间自动变暗 */
@@ -762,7 +762,7 @@ watch(
 /* ---- 2. 图片背景 ---- */
 /* 面板上的遮罩色与各主题 body 上那层保持一致（glass 走 --bg-mask-color 变量，随日/夜与
    「夜间内置底图」自动变化；glass2 没有这个变量，日/夜各给一档） */
-:root:is([data-theme="glass"], [data-theme="win11"]) {
+:root:is([data-theme="glass"]) {
   --panel-bg-mask: var(--bg-mask-color, rgba(240, 244, 248, var(--bg-mask-opacity, 0.6)));
 }
 :root[data-theme="glass2"] {
@@ -810,15 +810,15 @@ watch(
 
 /* ---- 3. 菜单项：玻璃块 + 亮一档的选中态 ---- */
 /* 基础态：由不透明色块改为半透明玻璃，让面板底色/背景图透出来 */
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .menu-item {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .menu-item {
   background: color-mix(in srgb, var(--color-surface, #ffffff) 70%, transparent);
   border-color: rgba(255, 255, 255, 0.45);
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .menu-item {
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .menu-item {
   border-color: var(--color-border, rgba(255, 255, 255, 0.12));
 }
 /* 选中/悬停：在玻璃块上再提亮一档（日间白霜更实，夜间只提亮不刺眼），不再用纯主色填充 */
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .menu-item:hover {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .menu-item:hover {
   background: color-mix(in srgb, var(--color-surface, #ffffff) 34%, rgba(255, 255, 255, 0.7));
   border-color: rgba(255, 255, 255, 0.75);
   color: var(--color-primary, #3b82f6);
@@ -826,7 +826,7 @@ watch(
     inset 0 1px 0 rgba(255, 255, 255, 0.5),
     0 2px 10px rgba(0, 0, 0, 0.12);
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .menu-item:hover {
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .menu-item:hover {
   background: color-mix(in srgb, var(--color-surface, #ffffff) 44%, rgba(255, 255, 255, 0.34));
   border-color: rgba(255, 255, 255, 0.26);
   color: var(--color-text, #e6ecf5);
@@ -849,37 +849,37 @@ watch(
   --tool-glass-white: rgba(255, 255, 255, 0.1);
   --tool-glass-hover: rgba(255, 255, 255, 0.16);
 }
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .tool-panel :is(.timer-tabs, .result-card, .file-path, .btn-secondary, .note-toolbar, .tb-sub-float, .screenshot) {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .tool-panel :is(.timer-tabs, .result-card, .file-path, .btn-secondary, .note-toolbar, .tb-sub-float, .screenshot) {
   background-color: color-mix(in srgb, var(--color-surface, #ffffff) 42%, transparent);
   background-image: linear-gradient(var(--tool-glass-white, rgba(255, 255, 255, 0.36)), var(--tool-glass-white, rgba(255, 255, 255, 0.36)));
   backdrop-filter: blur(16px) saturate(1.15);
   border-color: rgba(255, 255, 255, 0.5);
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .tool-panel :is(.timer-tabs, .result-card, .file-path, .btn-secondary, .note-toolbar, .tb-sub-float, .screenshot) {
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .tool-panel :is(.timer-tabs, .result-card, .file-path, .btn-secondary, .note-toolbar, .tb-sub-float, .screenshot) {
   border-color: var(--color-border, rgba(255, 255, 255, 0.12));
 }
 /* 一键截屏 / 注释加载保存页的内层玻璃块是整块铺满的方形，自身没有圆角，
    与面板的圆角不匹配（看着像直角块被裁在里面）。这里补上圆角。 */
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .tool-panel .screenshot {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .tool-panel .screenshot {
   border-radius: var(--radius-card);
 }
 /* 悬停：改为半透明白，替代原来的不透明底色 */
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .tool-panel :is(.arrow, .tb-btn, .tb-btn-sub):hover {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .tool-panel :is(.arrow, .tb-btn, .tb-btn-sub):hover {
   background: var(--tool-glass-hover, rgba(255, 255, 255, 0.42));
 }
 /* 选中态：提亮一档的亮玻璃，替代原来的纯主色填充 */
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .tool-panel :is(.tab, .tb-btn, .tb-btn-sub).active {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .tool-panel :is(.tab, .tb-btn, .tb-btn-sub).active {
   background-color: color-mix(in srgb, var(--color-surface, #ffffff) 26%, transparent);
   background-image: linear-gradient(var(--tool-glass-hover, rgba(255, 255, 255, 0.42)), var(--tool-glass-hover, rgba(255, 255, 255, 0.42)));
   border-color: rgba(255, 255, 255, 0.75);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
 }
 /* 选中态的图标/文字：亮玻璃底上白色看不见，改用主色 */
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .tool-panel .tab.active {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .tool-panel .tab.active {
   color: var(--color-primary, #3b82f6);
 }
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .tool-panel .tb-btn.active :is(.tb-icon, .tb-label),
-:root:is([data-theme="glass"], [data-theme="win11"], [data-theme="glass2"]) .tool-panel .tb-btn-sub.active :is(.tb-icon-sm, .tb-label) {
+:root:is([data-theme="glass"], [data-theme="glass2"]) .tool-panel .tb-btn.active :is(.tb-icon, .tb-label),
+:root:is([data-theme="glass"], [data-theme="glass2"]) .tool-panel .tb-btn-sub.active :is(.tb-icon-sm, .tb-label) {
   color: var(--color-primary, #3b82f6);
 }
 </style>

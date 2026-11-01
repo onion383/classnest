@@ -3,14 +3,14 @@
   <Teleport to="body">
   <Transition name="dialog" appear>
   <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="close">
-    <div class="bg-surface rounded-lg border border-border shadow-card dialog-card dm-card flex flex-col p-5">
+    <div class="bg-surface rounded-lg border border-border shadow-card dialog-card dm-card flex flex-col p-5 relative">
       <div class="flex items-center justify-between mb-4 flex-shrink-0">
         <h3 class="text-lg font-bold">数据管理</h3>
         <button class="dlg-close" title="关闭" @click="close">✕</button>
       </div>
 
       <!-- 弹窗主体：内容超出时整体滚动；每个列表自身超过 30vh 也会出现滚动条 -->
-      <div class="dm-body flex-1 min-h-0 overflow-y-auto">
+      <div ref="bodyRef" class="dm-body flex-1 min-h-0 overflow-y-auto app-custom-scroll">
         <!-- 区块一：聊天记录管理 -->
         <section class="mb-6">
           <h2 class="text-base font-bold mb-2.5">聊天记录管理</h2>
@@ -80,6 +80,7 @@
           </div>
         </section>
       </div>
+      <CustomScrollbar :target="bodyRef" />
     </div>
 
     <!-- 通用确认弹窗 -->
@@ -126,6 +127,7 @@
 import { ref, watch } from 'vue'
 import axios from 'axios'
 import AppHelp from '../base/AppHelp.vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 import ConfirmDialog from '../base/ConfirmDialog.vue'
 import MarkdownEditDialog from './MarkdownEditDialog.vue'
 import ExportChatDialog from './ExportChatDialog.vue'
@@ -141,6 +143,9 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:visible'])
 const { success: notifySuccess, error: notifyError } = useNotification()
+
+// 弹窗正文滚动容器（自定义滚动条的目标）
+const bodyRef = ref(null)
 
 const conversations = ref([])
 const skills = ref([])

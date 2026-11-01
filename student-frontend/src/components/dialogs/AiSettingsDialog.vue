@@ -1,12 +1,12 @@
 <template>
   <DialogShell :visible="show" :z-index="10005" overlay-class="bg-black/50" @overlay="close">
-      <div class="dialog-card bg-surface rounded-lg p-6 min-w-[32rem] w-auto min-h-[32rem] max-w-[calc(100vw-2rem)] border border-border shadow-lg flex flex-col" style="max-height: 90vh; overflow: visible;">
+      <div class="dialog-card bg-surface rounded-lg p-6 min-w-[32rem] w-auto min-h-[32rem] max-w-[calc(100vw-2rem)] border border-border shadow-lg flex flex-col relative" style="max-height: 90vh; overflow: visible;">
         <div class="flex items-center justify-between mb-5 flex-shrink-0">
           <h3 class="text-lg font-extrabold text-text tracking-wide">🧠 AI 助手设置</h3>
           <button @click="close" class="dlg-close" title="关闭">✕</button>
         </div>
 
-        <div class="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
+        <div ref="bodyRef" class="flex-1 overflow-y-auto overflow-x-hidden min-h-0 app-custom-scroll">
           <div v-if="loadError" class="mb-4 border border-border rounded-lg px-3 py-2 text-sm text-danger">
             {{ loadError }}
           </div>
@@ -78,6 +78,7 @@
           </div>
 
         </div>
+        <CustomScrollbar :target="bodyRef" />
       </div>
   </DialogShell>
 
@@ -98,6 +99,7 @@
 import axios from 'axios'
 import { ref, computed, watch } from 'vue'
 import AppHelp from '../base/AppHelp.vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 import AppSelect from '../base/AppSelect.vue'
 import AppSwitch from '../base/AppSwitch.vue'
 import AddModelDialog from './AddModelDialog.vue'
@@ -113,6 +115,9 @@ const props = defineProps({
   show: { type: Boolean, default: false },
 })
 const emit = defineEmits(['close', 'saved'])
+
+// 弹窗正文滚动容器（自定义滚动条的目标）
+const bodyRef = ref(null)
 
 const enabled = ref(false);
 const models = ref([]);

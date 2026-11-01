@@ -61,10 +61,10 @@
     </div>
 
     <!-- 技术栈（毛玻璃卡片） -->
-    <div class="mt-6 bg-surface shadow-md rounded-xl border border-border p-6">
+    <div class="mt-6 bg-surface shadow-md rounded-xl border border-border p-6 relative">
       <h2 class="font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="wrench" :size="20" /> 使用的开源项目</h2>
       <p class="text-xs text-text-muted mb-3 px-1 leading-relaxed">感谢所有开源提供者，本项目基于众多优秀开源项目构建，第三方组件遵循各自开源许可证。</p>
-      <div class="max-h-64 overflow-y-auto pr-1 scroll-smooth">
+      <div ref="libListRef" class="max-h-64 overflow-y-auto pr-1 scroll-smooth app-custom-scroll">
         <div v-for="group in libGroups" :key="group.category" class="mb-3 last:mb-0">
           <div class="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5 px-1">{{ group.category }}</div>
           <div class="space-y-0.5">
@@ -79,6 +79,8 @@
           </div>
         </div>
       </div>
+      <!-- 开源清单：细滑块 + 淡入；卡片 relative，覆盖层落在右侧内边距里 -->
+      <CustomScrollbar :target="libListRef" compact :arrows="false" auto-hide :min-thumb="22" />
     </div>
 
     <div class="mt-6 bg-surface shadow-md rounded-xl border border-border p-6 text-center text-sm text-text-muted space-y-1.5">
@@ -95,12 +97,13 @@
     <Teleport to="body">
       <Transition name="dialog">
         <div v-if="dialogProtocol" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" @click.self="dialogProtocol = false">
-          <div class="dialog-card bg-surface rounded-xl shadow-2xl border border-border w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col" @click.stop>
+          <div class="dialog-card bg-surface rounded-xl shadow-2xl border border-border w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col relative" @click.stop>
           <div class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
             <h2 class="text-lg font-semibold text-text">MIT License</h2>
             <button @click="dialogProtocol = false" class="dlg-close">&times;</button>
           </div>
-          <div class="overflow-y-auto px-6 py-4 text-sm text-text-secondary leading-relaxed whitespace-pre-line flex-1">{{ licenseText }}</div>
+          <div ref="licenseBodyRef" class="overflow-y-auto px-6 py-4 text-sm text-text-secondary leading-relaxed whitespace-pre-line flex-1 app-custom-scroll">{{ licenseText }}</div>
+          <CustomScrollbar :target="licenseBodyRef" compact :arrows="false" auto-hide :min-thumb="22" />
           <div class="px-6 py-4 border-t border-border shrink-0 flex justify-end">
             <button @click="dialogProtocol = false" class="px-4 py-2 rounded-lg bg-primary text-text-inverse text-sm">关闭</button>
           </div>
@@ -140,7 +143,7 @@
           <!-- 下半部分：更新历史（可滚动文本框） -->
           <div class="px-6 pb-6 flex-1 min-h-0 flex flex-col">
             <div class="text-sm font-semibold text-text mb-2">更新历史</div>
-            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-border bg-bg p-3 space-y-3 text-sm">
+            <div ref="changelogListRef" class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-border bg-bg p-3 space-y-3 text-sm app-custom-scroll">
               <div v-for="c in changelog" :key="c.version">
                 <div class="flex items-baseline gap-2">
                   <span class="text-text font-medium">v{{ c.version }}</span>
@@ -152,6 +155,8 @@
               </div>
             </div>
           </div>
+          <!-- 更新历史：细滑块 + 淡入；卡片已是 relative -->
+          <CustomScrollbar :target="changelogListRef" compact :arrows="false" auto-hide :min-thumb="22" />
         </div>
         </div>
       </Transition>
@@ -192,6 +197,7 @@
 <script setup vapor>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { SEND, INVOKE, RECEIVE } from '../electronChannels.js'
+import CustomScrollbar from '../components/base/CustomScrollbar.vue'
 import '../styles/dialog-transition.css'
 
 // Electron 内用系统浏览器打开外链，非 Electron 环境让浏览器默认行为处理
@@ -207,6 +213,11 @@ function openExternal(event, url) {
 const dialogProtocol = ref(false)
 const dialogVersion = ref(false)
 const dialogDonate = ref(false)
+
+// 三个列表的滚动容器（自定义滚动条的目标）
+const libListRef = ref(null)
+const licenseBodyRef = ref(null)
+const changelogListRef = ref(null)
 
 // ---- 版本更新 ----
 // 状态由主进程作为唯一权威来源，通过 from-main{type:'update-state'} 广播；

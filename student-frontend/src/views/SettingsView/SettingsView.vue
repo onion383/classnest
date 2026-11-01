@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full">
+  <div class="settings-view h-full">
     <!-- 顶部标题栏 -->
     <div class="w-full bg-surface shadow-md rounded-xl mb-6 px-5 py-3 border border-border min-h-[4.5rem] flex items-center justify-between gap-4">
       <h1 class="text-2xl font-bold text-text flex items-center gap-2"><IconGlyph name="settings" /> 系统设置</h1>
@@ -252,13 +252,13 @@
         >清空所有撤销记录</button>
       </div>
 
-      <div class="bg-surface rounded-lg border border-border p-6">
+      <div class="bg-surface rounded-lg border border-border p-6 relative">
 
         <div v-if="!hasUndoRecords" class="text-sm text-text-muted text-center py-8">
           暂无编辑记录。在表格中修改数据后，这里会记录该次操作，之后可一键撤销、跨重启保留。
         </div>
 
-        <div v-else class="space-y-6 max-h-[22rem] overflow-y-auto pr-1">
+        <div v-else ref="undoListRef" class="space-y-6 max-h-[22rem] overflow-y-auto pr-1 app-custom-scroll">
           <div v-for="group in undoGroups" :key="group.key" class="border border-border rounded-lg overflow-hidden">
             <div class="flex items-center justify-between px-4 py-2.5 bg-surface-hover border-b border-border">
               <span class="font-medium text-text">{{ groupLabel(group.key) }}</span>
@@ -290,6 +290,8 @@
             </ul>
           </div>
         </div>
+        <!-- 撤销记录：细滑块 + 淡入；卡片 relative，覆盖层落在右侧内边距里 -->
+        <CustomScrollbar :target="undoListRef" compact :arrows="false" auto-hide :min-thumb="22" />
 
       </div>
     </div>
@@ -726,6 +728,7 @@ import { getCurrentUser } from '../../utils/authStorage.js'
 import { ref, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHelp from '../../components/base/AppHelp.vue'
+import CustomScrollbar from '../../components/base/CustomScrollbar.vue'
 import AppSelect from '../../components/base/AppSelect.vue'
 import AppSwitch from '../../components/base/AppSwitch.vue'
 import ViewSwitch from '../../components/base/ViewSwitch.vue'
@@ -888,6 +891,8 @@ const securityDialog = ref({ open: false, target: '', password: '', newPassword:
 const privacyPhrase = ref('')
 // 撤销记录
 const undoGroups = ref([])
+// 撤销记录列表滚动容器（自定义滚动条的目标）
+const undoListRef = ref(null)
 const busyUndo = ref(false)
 // Theme
 const selectedThemeId = ref('')
@@ -917,14 +922,10 @@ const busyRestartWidget = ref(false)
 const busyRestartAll = ref(false)
 const _perfTimer = ref(null)
 // 主题下拉的候选项（这份列表是独立硬编码的副本，不走 store 的 allThemes）。
-// 「Win11 主题」暂时移除：它的背景模糊依赖 DWM 系统亚克力，效果不可控
-// （本机实测连原生 Win32 都只渲染出均匀中性灰，壁纸完全透不出），
-// 故先从选择入口去掉。实现代码保留，恢复见 stores/theme.js 的 HIDDEN_THEME_IDS。
 const presetThemes = ref([
   { id: 'base', name: '彩色色块主题' },
   { id: 'glass', name: '毛玻璃主题' },
   { id: 'glass2', name: '新毛玻璃主题' },
-  { id: 'minimal', name: '极简主题' },
 ])
 
 // 非响应式实例状态（动画帧/定时器句柄与搜索闪动标记）挂在 ctx 上单源共享

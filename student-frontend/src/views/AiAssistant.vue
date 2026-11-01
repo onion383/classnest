@@ -57,7 +57,7 @@
           <!-- 消息区：左右/上下都留出较宽松的内边距，让对话块与卡片边缘有呼吸感 -->
           <!-- ai-msg-list：见 styles/utilities.css —— 关掉列表内元素的 backdrop-filter，
                避免滚动时每帧重新模糊（气泡/头像/按钮都带模糊层，长对话会明显掉帧） -->
-          <div ref="msgBox" class="ai-msg-list flex-1 overflow-auto space-y-4 px-3 py-3" @scroll="onMsgScroll" @click="onMsgClick">
+          <div ref="msgBox" class="ai-msg-list flex-1 overflow-auto space-y-4 px-3 py-3 app-custom-scroll" @scroll="onMsgScroll" @click="onMsgClick">
             <AiChatMessages
               :messages="messages"
               :busy="busy"
@@ -75,6 +75,8 @@
               @goto="gotoTable"
             />
           </div>
+          <!-- 消息区滚动条：细滑块 + 淡入（长对话里不抢视觉，靠右缘悬停/滚动时出现） -->
+          <CustomScrollbar :target="msgBox" compact :arrows="false" auto-hide :min-thumb="24" />
 
           <!-- 附件预览 -->
           <div v-if="attachedFile" class="mb-2 flex items-center gap-2">
@@ -435,6 +437,7 @@ import AiConversationPanel from '../components/ai/AiConversationPanel.vue'
 import AiLinkPanel from '../components/ai/AiLinkPanel.vue'
 import AiChangePanel from '../components/ai/AiChangePanel.vue'
 import AiChatMessages from '../components/ai/AiChatMessages.vue'
+import CustomScrollbar from '../components/base/CustomScrollbar.vue'
 import AiComposer from '../components/ai/AiComposer/AiComposer.vue'
 import { ensureMarkdown, buildBlocks, updateLiveRender } from '../composables/ai/aiMarkdown.js'
 import {

@@ -14,7 +14,7 @@
 
     <!-- 小组管理标题 + 操作按钮行（预留固定高度，避免 v-if 按钮加载后填充/换行引起下方位移/CLS） -->
     <h2 class="text-xl font-semibold text-text mb-4 flex items-center gap-2 min-h-7"><IconGlyph name="box" :size="20" /> 小组管理</h2>
-    <div class="flex flex-nowrap items-center gap-3 mb-4 overflow-x-auto">
+    <div class="opbar flex flex-nowrap items-center gap-3 mb-4 overflow-x-auto">
       <button v-if="activeDim" @click="openSettings" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5" title="当前维度设置"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
       <button @mouseenter="prefetch(loadSmartGroupDialog)" @click="onSmartGroup" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme">🧠 智能分组</button>
       <button @click="loadAll" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh transition-theme">
@@ -25,8 +25,10 @@
       </button>
     </div>
 
-    <!-- 玻璃面板：仅含小组内容 -->
-    <div class="bg-surface shadow-md rounded-xl border border-border px-6 py-5 flex-1 min-h-0 flex flex-col overflow-hidden">
+    <!-- 内容区：不再用玻璃面板包裹（面板内放 EmptySnapshot 会面板套面板、两层毛玻璃），
+         与值日页同构：卡片/空态自带 bg-surface，直接放在页面底色上即为单层玻璃。
+         仅保留 flex-1 min-h-0 撑满剩余高度、内部滚动这些布局职责。 -->
+    <div class="flex-1 min-h-0 flex flex-col">
 
     <!-- 空状态：占满 flex-1 区域，与有数据网格同高，避免 空态↔数据 切换引起 CLS -->
     <div v-if="dimensions.length === 0" class="flex-1 flex flex-col items-center justify-center text-center text-text-muted">
@@ -34,19 +36,49 @@
       <p class="text-sm">点击上方「添加组」创建一个分组维度（如：宿舍管理、学习小组）。</p>
     </div>
 
-    <!-- 分组卡片网格 -->
-    <div v-else-if="active" class="flex-1 min-h-0 overflow-auto pr-1">
+    <!-- 内置宿舍维度：一个宿舍都没有时的面板级空态。
+         内置宿舍组**没有「＋ 添加小组」入口**（那个卡片只存在于普通维度分支），
+         宿舍数只能在「分组设置」里改（男生/女生宿舍数），所以引导按钮直接指过去，
+         否则用户对着空面板没有任何出路。
+         flex-1 让空态与有数据的网格占同高，切换时不跳。 -->
+    <EmptySnapshot
+      v-else-if="active && active.dimension.is_default && !(active.groups || []).length"
+      class="flex-1"
+      icon="🏠"
+      text="还没有宿舍分组"
+      min-height="220px"
+      action-text="去设置"
+      action-icon="settings"
+      @action="openSettings"
+    />
+
+    <!-- 分组卡片网格（仅内置宿舍维度：男女分区列）。
+         这里必须带 is_default 判断：下面的「普通维度空态」与「普通维度网格」
+         是同级 v-else-if / v-else，若本分支写成 v-else-if="active" 会把它们全部截断成死代码。
+         玻璃外观挂在本分支自身（bg-surface 面板），空态分支不带玻璃、直接在页面底色上，
+         这样有数据时有面板包着、空态时是单层玻璃卡片，两层玻璃只出现一次。 -->
+    <div v-else-if="active && active.dimension.is_default" class="bg-surface shadow-md rounded-xl border border-border px-6 py-5 flex-1 min-h-0 overflow-auto pr-1">
       <div v-if="active.dimension.is_default" class="grid grid-cols-2 gap-x-8 gap-y-5 w-full">
       <!-- 男生/女生两个分区列 -->
       <div v-for="sec in genderSections" :key="sec.title" class="flex flex-col min-w-0">
         <h4 class="text-sm font-semibold text-text mb-3">{{ sec.title }}</h4>
-        <div v-if="!sec.groups.length" class="text-text-muted text-sm py-3">暂无{{ sec.title }}</div>
+        <!-- 单个性别分区没有宿舍：同样是空态，但不给按钮 ——
+             面板级空态负责指路（去设置），这里只作分区内的说明，
+             否则两个分区各挂一个「去设置」会显得啰嗦。
+             空分组只能靠「设置」里的男/女生宿舍数产生，内置宿舍组没有「＋ 添加小组」入口。 -->
+        <EmptySnapshot
+          v-if="!sec.groups.length"
+          class="flex-1"
+          :icon="sec.icon"
+          :text="`还没有${sec.title}`"
+          min-height="140px"
+        />
         <div class="flex flex-col gap-4">
           <!-- 单个宿舍小组小表格卡片 -->
           <div
             v-for="g in sec.groups" :key="g.id"
             :data-row-id="g.id"
-            class="bg-surface rounded-xl border border-border overflow-hidden w-full flex flex-col"
+            class="bg-surface rounded-xl border border-border overflow-hidden w-full flex flex-col relative"
           >
             <div class="flex items-center justify-between px-3 py-2 bg-primary/5 border-b border-border">
               <input v-model="g.name" @focus="captureGroupOld(g)" @change="renameGroup(g)" class="bg-transparent text-text font-semibold text-sm w-full mr-2 outline-none focus:bg-bg px-1 py-0.5 rounded" />
@@ -55,7 +87,7 @@
                 <button @click="confirmDeleteGroup(g)" title="删除小组" class="btn-plain grp-btn grp-btn-del">✕</button>
               </div>
             </div>
-            <div class="overflow-x-auto overflow-y-auto max-h-[260px]">
+            <div :ref="el => setGroupScroll(g.id, el)" class="overflow-x-auto overflow-y-auto max-h-[260px] pr-2.5 app-custom-scroll">
               <table class="w-full text-sm">
                 <thead>
                   <tr class="text-text-muted text-sm border-b border-border">
@@ -95,19 +127,45 @@
                 </tbody>
               </table>
             </div>
+            <!-- 成员表：细滑块 + 淡入；卡片 relative，右侧 10px 内边距给轨道让位 -->
+            <CustomScrollbar
+              v-if="groupScrollEls[g.id]"
+              :target="groupScrollEls[g.id]"
+              compact
+              :arrows="false"
+              auto-hide
+              :min-thumb="20"
+            />
           </div>
         </div>
       </div>
     </div>
+    </div><!-- 宿舍网格容器结束：普通维度的空态与网格必须是这里的顶层兄弟，否则会被本容器的 v-else-if 拦截成死代码 -->
 
-    <!-- 普通维度：单一横排网格 + 添加小组。
+    <!-- 普通维度：组数未设置（没有任何小组）时的空态。
+         小组由设置里的「组数」批量产生（组数增减自动补充/删除小组）。
+         注意网格里那个「＋ 添加小组」虚线按钮也挂在 v-else 网格内，
+         0 组时整块网格连同按钮都不渲染，用户看到的是空面板，所以必须先指路「去设置」。
+         flex-1 让空态与有数据的网格占同高，切换时不跳。 -->
+    <EmptySnapshot
+      v-else-if="active && !(active.groups || []).length"
+      class="flex-1"
+      icon="🗂"
+      text="还没有设置组数"
+      min-height="220px"
+      action-text="去设置"
+      action-icon="settings"
+      @action="openSettings"
+    />
+
+    <!-- 普通维度：单一横排网格 + 添加小组。玻璃外观挂本分支（同宿舍分支的口径）。
          用 auto-fill + minmax 而不是 flex-wrap + 固定 320px：卡片定宽时 880px 的容器只放得下 2 个
          （320×3+16×2=992 溢出），右侧空出一大片；改成自适应后同样宽度能排 3 个，窗口拉宽自动加列。 -->
-    <div v-else class="grid gap-4 content-start" style="grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));">
+    <div v-else class="bg-surface shadow-md rounded-xl border border-border px-6 py-5 grid gap-4 content-start overflow-auto flex-1 min-h-0" style="grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));">
       <div
         v-for="g in active.groups" :key="g.id"
         :data-row-id="g.id"
-        class="bg-surface rounded-xl border border-border overflow-hidden w-full min-w-0 flex flex-col"
+        class="bg-surface rounded-xl border border-border overflow-hidden w-full min-w-0 flex flex-col relative"
       >
         <div class="flex items-center justify-between px-3 py-2 bg-primary/5 border-b border-border">
           <input v-model="g.name" @focus="captureGroupOld(g)" @change="renameGroup(g)" class="bg-transparent text-text font-semibold text-sm w-full mr-2 outline-none focus:bg-bg px-1 py-0.5 rounded" />
@@ -116,7 +174,7 @@
             <button @click="confirmDeleteGroup(g)" title="删除小组" class="btn-plain grp-btn grp-btn-del">✕</button>
           </div>
         </div>
-        <div class="overflow-x-auto overflow-y-auto max-h-[260px]">
+        <div :ref="el => setGroupScroll(g.id, el)" class="overflow-x-auto overflow-y-auto max-h-[260px] pr-2.5 app-custom-scroll">
           <table class="w-full text-sm">
             <thead>
               <tr class="text-text-muted text-sm border-b border-border">
@@ -156,6 +214,15 @@
             </tbody>
           </table>
         </div>
+        <!-- 成员表：细滑块 + 淡入；卡片 relative，右侧 10px 内边距给轨道让位 -->
+        <CustomScrollbar
+          v-if="groupScrollEls[g.id]"
+          :target="groupScrollEls[g.id]"
+          compact
+          :arrows="false"
+          auto-hide
+          :min-thumb="20"
+        />
       </div>
 
       <!-- 添加小组卡片 -->
@@ -163,8 +230,7 @@
         ＋ 添加小组
       </button>
     </div>
-    </div>
-    </div><!-- 玻璃面板结束 -->
+    </div><!-- 内容区结束 -->
 
     <!-- ============ 添加组（新增分组）弹窗 ============ -->
     <Teleport to="body">
@@ -366,12 +432,14 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
-import { ref, reactive, computed, onMounted, onActivated, nextTick, watch, defineAsyncComponent } from 'vue';
+import { ref, reactive, shallowReactive, computed, onMounted, onActivated, nextTick, watch, defineAsyncComponent } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { applyRowShift, clearShift } from '../composables/tableDragFx.js';
 import axios from 'axios';
 import Tabs from '../components/base/Tabs.vue';
+import CustomScrollbar from '../components/base/CustomScrollbar.vue';
 import AppSelect from '../components/base/AppSelect.vue';
+import EmptySnapshot from '../components/base/EmptySnapshot.vue';
 import { useNotification } from '../composables/useNotification';
 import { useUndoShortcut } from '../composables/useUndo.js';
 import { applyRouteRowFocus } from '../composables/useRowFocus.js';
@@ -385,6 +453,14 @@ const loadExportExcel = () => import('../components/import-export/ExportExcel/Ex
 const ExportExcel = defineAsyncComponent(loadExportExcel);
 
 const { success, error, info } = useNotification();
+
+// 每个小组表格的滚动容器（v-for 里动态生成的 ref），供各自的细滚动条作为 target。
+// 用 shallowReactive：只让「键值变化」可触发重渲染，不代理 DOM 元素本身。
+const groupScrollEls = shallowReactive({});
+function setGroupScroll(id, el) {
+  if (el) groupScrollEls[id] = el;
+  else delete groupScrollEls[id];
+}
 
 const api = (path, options = {}) =>
   apiFetch(`/api/group-manage${path}`, {
@@ -632,8 +708,8 @@ const genderSections = computed(() => {
   const d = active.value;
   if (!d || !d.dimension.is_default) return [];
   return [
-    { title: '男生宿舍', groups: d.groups.filter(g => g.gender === 0) },
-    { title: '女生宿舍', groups: d.groups.filter(g => g.gender === 1) },
+    { title: '男生宿舍', icon: '👦', groups: d.groups.filter(g => g.gender === 0) },
+    { title: '女生宿舍', icon: '👧', groups: d.groups.filter(g => g.gender === 1) },
   ];
 });
 

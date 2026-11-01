@@ -1,0 +1,1020 @@
+﻿/* ==================================================================
+   彩色色块主题 · B 方案（深蓝 + 琥珀）
+   ------------------------------------------------------------------
+   这一层在 theme-base.css 之后加载（见 main.js），完整覆盖该主题的
+   配色：主色统一为深蓝，工具栏 / 讲台 / 统计条使用浅琥珀作为暖色强调。
+   页面骨架、字号、间距、圆角与组件结构沿用 theme-base 与组件原值。
+   ================================================================== */
+
+/* ---------- 色板：全站统一深蓝，不再按页面换色 ---------- */
+:root[data-theme="base"] {
+  color-scheme: light;
+
+  --page-accent: #3b82f6;
+  --page-accent-dark: #2563eb;
+  --page-accent-light: #dbeafe;
+  --page-accent-ink: #1e3a8a;
+  --page-accent-soft: #eff6ff;
+
+  --color-primary: var(--page-accent);
+  --color-primary-hover: var(--page-accent-dark);
+  --color-primary-active: var(--page-accent-ink);
+  --color-primary-light: var(--page-accent-light);
+
+  --color-success: #16a34a;
+  --color-success-hover: #15803d;
+  --color-warning: #b45309;
+  --color-warning-hover: #92400e;
+  --color-warning-light: #fef3c7;
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-info: var(--page-accent);
+  --color-info-hover: var(--page-accent-dark);
+
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f1f5f9;
+  --color-sidebar: #0f172a;
+  --color-sidebar-hover: #1e293b;
+  --color-sidebar-active: #3b82f6;
+
+  --color-text: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #94a3b8;
+  --color-text-inverse: #ffffff;
+
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.10);
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
+
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-surface: 12px;
+  --radius-table: 10px;
+
+  /* 毛玻璃主题暖色按钮「叠加后」的实际颜色，不是原始 rgba */
+  --warm-strong-bg: #fed19c;
+  --warm-strong-ink: #8a4a0b;
+  --warm-strong-bg-hover: #fec88a;
+  --warm-strong-ink-hover: #7a3d08;
+  --warm-soft-bg: #fae1cd;
+  --warm-soft-ink: #9a3412;
+  --warm-soft-bg-hover: #f7d2b9;
+  --warm-soft-ink-hover: #7c2d12;
+  --warm-pale-bg: #f8ead1;
+  --warm-pale-ink: #92400e;
+  --warm-pale-bg-hover: #f3debc;
+  --warm-pale-ink-hover: #78350f;
+
+  /* App.vue 里少量高特异性规则使用的变量：夜间只改这里 */
+  --base-pagehead-icon: #3b82f6;
+  --base-app-grid-head-bg: #eff6ff;
+  --base-app-grid-head-border: #dbeafe;
+  --base-app-grid-head-text: #1e3a8a;
+  --base-app-grid-colop-bg: #dbeafe;
+  --base-input-bg: #f8fafc;
+  --base-input-border: #e2e8f0;
+  --base-input-text: #0f172a;
+  --base-input-placeholder: #94a3b8;
+  --base-input-aux: #475569;
+  --sidebar-track: rgba(30, 58, 138, 0.08);
+  --sidebar-thumb: rgba(30, 58, 138, 0.2);
+  --sidebar-thumb-hover: rgba(30, 58, 138, 0.4);
+  --sidebar-arrow: rgba(30, 58, 138, 0.65);
+  --sidebar-arrow-hover: rgba(30, 58, 138, 0.95);
+  --sidebar-arrow-bg-hover: rgba(30, 58, 138, 0.10);
+}
+/* data-page 在 theme-base.css 里原本按页面换主色；B 方案收成同一套深蓝。
+   [data-page] 与原来的 [data-page="students"] 特异性相同，本文件后加载即可覆盖。 */
+:root[data-theme="base"][data-page] {
+  --page-accent: #3b82f6;
+  --page-accent-dark: #2563eb;
+  --page-accent-light: #dbeafe;
+  --page-accent-ink: #1e3a8a;
+  --page-accent-soft: #eff6ff;
+}
+
+/* ---------- 页面骨架 / 标题栏 ---------- */
+:root[data-theme="base"] body,
+:root[data-theme="base"] main {
+  background-color: #f8fafc;
+}
+:root[data-theme="base"] .window-title-bar {
+  background: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+  color: #475569;
+}
+:root[data-theme="base"] .window-controls .win-btn:hover {
+  background: #f1f5f9;
+}
+:root[data-theme="base"] .window-controls .win-btn-close:hover {
+  background: #dc2626;
+  color: #ffffff;
+}
+:root[data-theme="base"] ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+:root[data-theme="base"] ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ---------- 侧边栏（日间）：浅蓝底 + 深蓝字 + 彩色语义图标 ---------- */
+:root[data-theme="base"] .bg-sidebar {
+  background: #dbeafe !important;
+  border-right: 1px solid #bfdbfe;
+  color: #1e3a8a;
+}
+:root[data-theme="base"] .bg-sidebar .app-name {
+  color: #1e3a8a;
+}
+:root[data-theme="base"] .sidebar-group-title {
+  color: #64748b;
+}
+:root[data-theme="base"] .nav-item {
+  position: relative;
+  color: #1e3a8a;
+  border-radius: 6px;
+}
+:root[data-theme="base"] .nav-item:hover {
+  background: #bfdbfe !important;
+  color: #0f172a;
+}
+:root[data-theme="base"] .nav-item.bg-sidebar-active {
+  background: #3b82f6 !important;
+  color: #ffffff;
+  box-shadow: none;
+}
+:root[data-theme="base"] .nav-item.bg-sidebar-active::before {
+  background: #f3debc;
+  width: 4px;
+  top: 6px;
+  bottom: 6px;
+  box-shadow: 0 0 0 1px rgba(146, 64, 14, 0.12);
+}
+/* 彩色图标在浅蓝底上略压暗一档，选中项保持白色 */
+:root[data-theme="base"] .nav-item .icon-color {
+  opacity: 0.9;
+  filter: brightness(0.82) saturate(1.15);
+}
+:root[data-theme="base"] .nav-item[href$="/"] .icon-color { color: #10b981 !important; }
+:root[data-theme="base"] .nav-item[href$="/students"] .icon-color { color: #60a5fa !important; }
+:root[data-theme="base"] .nav-item[href$="/group-manage"] .icon-color { color: #818cf8 !important; }
+:root[data-theme="base"] .nav-item[href$="/schedule"] .icon-color { color: #a3e635 !important; }
+:root[data-theme="base"] .nav-item[href$="/fee"] .icon-color { color: #fbbf24 !important; }
+:root[data-theme="base"] .nav-item[href$="/seats"] .icon-color { color: #fb923c !important; }
+:root[data-theme="base"] .nav-item[href$="/duty"] .icon-color { color: #34d399 !important; }
+:root[data-theme="base"] .nav-item[href$="/leaves"] .icon-color { color: #a78bfa !important; }
+:root[data-theme="base"] .nav-item[href$="/scores"] .icon-color { color: #f87171 !important; }
+:root[data-theme="base"] .nav-item[href$="/album"] .icon-color { color: #f472b6 !important; }
+:root[data-theme="base"] .nav-item[href$="/activities"] .icon-color { color: #fb7185 !important; }
+:root[data-theme="base"] .nav-item[href$="/ai-assistant"] .icon-color { color: #38bdf8 !important; }
+:root[data-theme="base"] .nav-item[href$="/settings"] .icon-color,
+:root[data-theme="base"] .nav-item[href$="/about"] .icon-color { color: #94a3b8 !important; }
+:root[data-theme="base"] .nav-item.bg-sidebar-active .icon-color {
+  color: #ffffff !important;
+  opacity: 1;
+  filter: none;
+}
+:root[data-theme="base"] .bg-sidebar .mode-toggle-btn {
+  color: #1e3a8a;
+}
+:root[data-theme="base"] .bg-sidebar .mode-toggle-btn:hover:not(:disabled) {
+  background: #bfdbfe;
+}
+:root[data-theme="base"] .bg-sidebar .border-white\/10 {
+  border-color: #93c5fd;
+}
+/* 滚动条颜色由 CustomScrollbar.vue（侧栏 / 主内容 / 表格 / 弹窗共用）读取
+   --sidebar-track / --sidebar-thumb / --sidebar-arrow 系列变量 */
+
+/* ---------- 页面标题：白底 + 4px 深蓝左条 ---------- */
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"],
+:root[data-theme="base"] .bg-surface.welcome-card {
+  position: relative;
+  overflow: hidden;
+  background: #ffffff;
+  background-image: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: none;
+  padding-left: 20px;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"]::before,
+:root[data-theme="base"] .bg-surface.welcome-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: #3b82f6;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] h1,
+:root[data-theme="base"] .bg-surface.welcome-card h1 {
+  font-weight: 700;
+  color: #0f172a;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] h1 > svg,
+:root[data-theme="base"] .bg-surface.welcome-card h1 > svg {
+  color: #3b82f6 !important;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] .text-text-secondary {
+  color: #475569 !important;
+}
+:root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] .text-text-muted {
+  color: #94a3b8 !important;
+}
+
+/* ---------- 小节标题 ---------- */
+:root[data-theme="base"] main h2.text-xl,
+:root[data-theme="base"] main h3.text-xl {
+  color: #0f172a;
+}
+:root[data-theme="base"] main h2.text-xl > svg,
+:root[data-theme="base"] main h3.text-xl > svg {
+  color: #3b82f6 !important;
+}
+
+/* ---------- 标签页 / 二级切换 ---------- */
+:root[data-theme="base"] .tab-btn {
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #475569;
+  box-shadow: none !important;
+  transform: none !important;
+}
+:root[data-theme="base"] .tab-btn:hover {
+  background: #eff6ff;
+  color: #3b82f6;
+  box-shadow: none !important;
+  transform: none !important;
+}
+:root[data-theme="base"] .tab-btn.tab-active {
+  background: #3b82f6 !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+:root[data-theme="base"] .view-switch {
+  background: #eff6ff;
+  border: none;
+  box-shadow: inset 0 0 0 1px #dbeafe;
+  border-radius: 6px;
+}
+:root[data-theme="base"] .view-switch-thumb {
+  background: #3b82f6 !important;
+  border-radius: calc(var(--radius-control) - 4px) !important;
+  box-shadow: none !important;
+}
+:root[data-theme="base"] .view-switch-btn.on {
+  color: #ffffff;
+}
+
+/* ---------- 工具栏：按按钮角色使用毛玻璃主题的暖色系 ---------- */
+/* 主操作 / 信息 / 搜索：最强一档暖色 */
+:root[data-theme="base"] .opbar button.bg-primary,
+:root[data-theme="base"] .opbar button.bg-primary ~ button.bg-primary,
+:root[data-theme="base"] .opbar button.bg-info,
+:root[data-theme="base"] .opbar .btn-search {
+  background: var(--warm-strong-bg);
+  border-color: transparent;
+  color: var(--warm-strong-ink);
+}
+:root[data-theme="base"] .opbar button.bg-primary:hover,
+:root[data-theme="base"] .opbar button.bg-primary ~ button.bg-primary:hover,
+:root[data-theme="base"] .opbar button.bg-info:hover,
+:root[data-theme="base"] .opbar .btn-search:hover {
+  background: var(--warm-strong-bg-hover);
+  color: var(--warm-strong-ink-hover);
+}
+/* 刷新 / 中性操作：柔和暖色 */
+:root[data-theme="base"] .opbar button.bg-text-muted {
+  background: var(--warm-soft-bg);
+  border-color: transparent;
+  color: var(--warm-soft-ink);
+}
+:root[data-theme="base"] .opbar button.bg-text-muted:hover {
+  background: var(--warm-soft-bg-hover);
+  color: var(--warm-soft-ink-hover);
+}
+/* 警告 / 导出：最浅一档暖色 */
+:root[data-theme="base"] .opbar button.bg-warning {
+  background: var(--warm-pale-bg);
+  border-color: transparent;
+  color: var(--warm-pale-ink);
+}
+:root[data-theme="base"] .opbar button.bg-warning:hover {
+  background: var(--warm-pale-bg-hover);
+  color: var(--warm-pale-ink-hover);
+}
+:root[data-theme="base"] .opbar button.bg-primary svg,
+:root[data-theme="base"] .opbar button.bg-info svg,
+:root[data-theme="base"] .opbar .btn-search svg {
+  color: var(--warm-strong-ink) !important;
+}
+:root[data-theme="base"] .opbar button.bg-text-muted svg {
+  color: var(--warm-soft-ink) !important;
+}
+:root[data-theme="base"] .opbar button.bg-warning svg {
+  color: var(--warm-pale-ink) !important;
+}
+:root[data-theme="base"] .opbar button.bg-danger {
+  background: #fee2e2;
+  border-color: transparent;
+  color: #991b1b;
+}
+:root[data-theme="base"] .opbar button.bg-danger:hover {
+  background: #fecaca;
+}
+:root[data-theme="base"] .opbar button.bg-danger svg {
+  color: #991b1b !important;
+}
+
+/* ---------- 网状表格：浅蓝表头 + 蓝调行号 / 走廊 ---------- */
+:root[data-theme="base"] .grid-view-container > div.overflow-auto {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: none;
+}
+:root[data-theme="base"] .grid-view-container thead th {
+  background-color: #eff6ff !important;
+  border-color: #dbeafe !important;
+  color: #1e3a8a !important;
+}
+:root[data-theme="base"] .grid-view-container thead th.bg-text-muted {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+  color: #64748b !important;
+}
+:root[data-theme="base"] .grid-view-container thead th.grid-head-title {
+  background-color: #dbeafe !important;
+  border-color: #bfdbfe !important;
+  color: #172554 !important;
+}
+:root[data-theme="base"] .grid-view-container thead th.bg-text-muted .text-text {
+  color: #64748b !important;
+}
+:root[data-theme="base"] .grid-view-container thead th .drag-handle {
+  color: rgba(30, 58, 138, 0.55) !important;
+}
+:root[data-theme="base"] .grid-view-container thead th .drag-handle:hover {
+  color: #1e3a8a !important;
+}
+:root[data-theme="base"] .grid-view-container tbody td.bg-primary {
+  background-color: #eff6ff !important;
+  border-color: #dbeafe !important;
+  color: #1e3a8a !important;
+}
+:root[data-theme="base"] .grid-view-container tbody td.bg-primary .drag-handle {
+  color: rgba(30, 58, 138, 0.55) !important;
+}
+:root[data-theme="base"] .grid-view-container tbody td.bg-primary .drag-handle:hover {
+  color: #1e3a8a !important;
+}
+:root[data-theme="base"] .grid-view-container tbody td.bg-text-muted {
+  background-color: #f8fafc !important;
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 7px,
+    #e2e8f0 7px 8px
+  );
+  border-color: #e2e8f0 !important;
+  color: #94a3b8 !important;
+}
+:root[data-theme="base"] .grid-view-container tbody td[data-data-cell] {
+  border-color: #e2e8f0;
+}
+:root[data-theme="base"] .grid-view-container tbody td[data-data-cell]:not(.cell-heat):hover {
+  background-color: #eff6ff;
+}
+:root[data-theme="base"] .grid-view-container td.bg-info\/10 {
+  background-color: #eff6ff !important;
+}
+:root[data-theme="base"] .grid-view-container .outline-info {
+  outline-color: #3b82f6 !important;
+}
+:root[data-theme="base"] .grid-view-container .ring-info {
+  --tw-ring-color: #3b82f6;
+}
+:root[data-theme="base"] .grid-view-container tr.bg-warning\/20 {
+  background-color: #fffbeb !important;
+}
+:root[data-theme="base"] .grid-view-container td.bg-warning\/30 {
+  background-color: #fffbeb !important;
+  border-color: #fde68a !important;
+}
+:root[data-theme="base"] .grid-view-container td.border-info\/30 {
+  border-color: #bfdbfe !important;
+}
+
+/* ---------- 列表表格：同一套浅蓝表头 ---------- */
+:root[data-theme="base"] .dynamic-table thead th {
+  background-color: #eff6ff !important;
+  border-color: #dbeafe !important;
+  color: #1e3a8a !important;
+}
+:root[data-theme="base"] .dynamic-table thead th.col-op {
+  background-color: #dbeafe !important;
+}
+:root[data-theme="base"] .dynamic-table tbody td {
+  border-color: #e2e8f0;
+}
+:root[data-theme="base"] .dynamic-table tbody tr:hover > td:not(.col-op) {
+  background-color: #f8fafc;
+}
+:root[data-theme="base"] .dynamic-table .table-scroll-wrapper {
+  background: #ffffff;
+}
+
+/* ---------- 空态：浅蓝虚线框 ---------- */
+:root[data-theme="base"] .snapshot-empty {
+  background: #f8fafc;
+  border: 1px dashed #bfdbfe;
+  box-shadow: none;
+}
+:root[data-theme="base"] .snapshot-empty-icon {
+  opacity: 0.9;
+}
+:root[data-theme="base"] .snapshot-empty-text {
+  color: #475569;
+}
+:root[data-theme="base"] .dt-empty-text,
+:root[data-theme="base"] .grid-empty-text {
+  color: #64748b;
+}
+:root[data-theme="base"] .dt-empty-icon,
+:root[data-theme="base"] .grid-empty-icon {
+  color: #94a3b8;
+  opacity: 0.9;
+}
+:root[data-theme="base"] .dt-empty-btn,
+:root[data-theme="base"] .grid-empty-btn,
+:root[data-theme="base"] .empty-action-btn {
+  color: #1e3a8a;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  box-shadow: none;
+}
+:root[data-theme="base"] .dt-empty-btn:hover,
+:root[data-theme="base"] .grid-empty-btn:hover,
+:root[data-theme="base"] .empty-action-btn:hover {
+  background: #dbeafe;
+}
+
+/* ---------- 弹窗遮罩：纯色压暗 ---------- */
+:root[data-theme="base"] [class*="fixed"][class*="inset-0"][class*="bg-black/"]:not([class*="bg-black/9"]):not([class*="bg-black/8"]) {
+  background-color: rgba(15, 23, 42, 0.34) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ---------- 周切换栏：浅琥珀主按钮 + 浅红危险按钮 ---------- */
+:root[data-theme="base"] .week-bar {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  box-shadow: none;
+}
+:root[data-theme="base"] .week-bar .week-date {
+  background: #eff6ff;
+  border-color: #dbeafe;
+  color: #1e3a8a;
+  font-weight: 600;
+}
+:root[data-theme="base"] .week-bar button {
+  border-radius: 6px;
+}
+:root[data-theme="base"] .week-bar button.bg-primary,
+:root[data-theme="base"] .week-bar button.bg-info {
+  background: var(--warm-strong-bg);
+  border: none;
+  color: var(--warm-strong-ink);
+}
+:root[data-theme="base"] .week-bar button.bg-primary:hover,
+:root[data-theme="base"] .week-bar button.bg-info:hover {
+  background: var(--warm-strong-bg-hover);
+  color: var(--warm-strong-ink-hover);
+}
+:root[data-theme="base"] .week-bar button.bg-danger {
+  background: #fee2e2;
+  border: none;
+  color: #991b1b;
+}
+:root[data-theme="base"] .week-bar button.bg-danger:hover {
+  background: #fecaca;
+}
+
+/* ---------- 卡片 / 统计 ---------- */
+:root[data-theme="base"] .bg-surface.shadow-md,
+:root[data-theme="base"] .bg-surface.shadow,
+:root[data-theme="base"] .bg-surface.shadow-card {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+:root[data-theme="base"] .bg-success\/10 { background-color: #dcfce7 !important; }
+:root[data-theme="base"] .bg-info\/10 { background-color: #eff6ff !important; }
+:root[data-theme="base"] .bg-warning\/10 { background-color: #fef3c7 !important; }
+:root[data-theme="base"] .bg-danger\/10 { background-color: #fee2e2 !important; }
+:root[data-theme="base"] .stat-bar-default {
+  background-color: #fef3c7;
+}
+
+/* 相册工具栏（未使用 .opbar 的那类工具条）：按按钮角色用毛玻璃暖色系。
+   只作用于工具条的直接子按钮，内部的 ViewSwitch 保持蓝色。 */
+:root[data-theme="base"] .album-toolbar > button.bg-primary,
+:root[data-theme="base"] .album-toolbar > button.bg-info {
+  background: var(--warm-strong-bg);
+  color: var(--warm-strong-ink);
+  border-color: transparent;
+  box-shadow: none;
+}
+:root[data-theme="base"] .album-toolbar > button.bg-primary:hover,
+:root[data-theme="base"] .album-toolbar > button.bg-info:hover {
+  background: var(--warm-strong-bg-hover);
+  color: var(--warm-strong-ink-hover);
+}
+:root[data-theme="base"] .album-toolbar > button.bg-text-muted {
+  background: var(--warm-soft-bg);
+  color: var(--warm-soft-ink);
+  border-color: transparent;
+  box-shadow: none;
+}
+:root[data-theme="base"] .album-toolbar > button.bg-text-muted:hover {
+  background: var(--warm-soft-bg-hover);
+  color: var(--warm-soft-ink-hover);
+}
+:root[data-theme="base"] .album-toolbar > button.bg-warning {
+  background: var(--warm-pale-bg);
+  color: var(--warm-pale-ink);
+  border-color: transparent;
+  box-shadow: none;
+}
+:root[data-theme="base"] .album-toolbar > button.bg-warning:hover {
+  background: var(--warm-pale-bg-hover);
+  color: var(--warm-pale-ink-hover);
+}
+:root[data-theme="base"] .album-toolbar > button.bg-primary svg,
+:root[data-theme="base"] .album-toolbar > button.bg-info svg {
+  color: var(--warm-strong-ink) !important;
+}
+:root[data-theme="base"] .album-toolbar > button.bg-text-muted svg {
+  color: var(--warm-soft-ink) !important;
+}
+:root[data-theme="base"] .album-toolbar > button.bg-warning svg {
+  color: var(--warm-pale-ink) !important;
+}
+
+/* ---------- 设置界面：按钮同样按角色用暖色系 ---------- */
+/* 主操作 / 信息：最强暖色 */
+:root[data-theme="base"] .settings-view button.bg-primary,
+:root[data-theme="base"] .settings-view button.bg-info {
+  background: var(--warm-strong-bg);
+  border-color: transparent;
+  color: var(--warm-strong-ink);
+}
+:root[data-theme="base"] .settings-view button.bg-primary:hover,
+:root[data-theme="base"] .settings-view button.bg-info:hover {
+  background: var(--warm-strong-bg-hover);
+  color: var(--warm-strong-ink-hover);
+}
+/* 成功 / 中性操作：柔和暖色 */
+:root[data-theme="base"] .settings-view button.bg-success,
+:root[data-theme="base"] .settings-view button.bg-text-muted {
+  background: var(--warm-soft-bg);
+  border-color: transparent;
+  color: var(--warm-soft-ink);
+}
+:root[data-theme="base"] .settings-view button.bg-success:hover,
+:root[data-theme="base"] .settings-view button.bg-text-muted:hover {
+  background: var(--warm-soft-bg-hover);
+  color: var(--warm-soft-ink-hover);
+}
+/* 警告 / 导出：最浅暖色 */
+:root[data-theme="base"] .settings-view button.bg-warning {
+  background: var(--warm-pale-bg);
+  border-color: transparent;
+  color: var(--warm-pale-ink);
+}
+:root[data-theme="base"] .settings-view button.bg-warning:hover {
+  background: var(--warm-pale-bg-hover);
+  color: var(--warm-pale-ink-hover);
+}
+/* 危险操作保持浅红，和暖色系区分 */
+:root[data-theme="base"] .settings-view button.bg-danger {
+  background: #fee2e2;
+  border-color: transparent;
+  color: #991b1b;
+}
+:root[data-theme="base"] .settings-view button.bg-danger:hover {
+  background: #fecaca;
+}
+:root[data-theme="base"] .settings-view button.bg-primary svg,
+:root[data-theme="base"] .settings-view button.bg-info svg {
+  color: var(--warm-strong-ink) !important;
+}
+:root[data-theme="base"] .settings-view button.bg-success svg,
+:root[data-theme="base"] .settings-view button.bg-text-muted svg {
+  color: var(--warm-soft-ink) !important;
+}
+:root[data-theme="base"] .settings-view button.bg-warning svg {
+  color: var(--warm-pale-ink) !important;
+}
+:root[data-theme="base"] .settings-view button.bg-danger svg {
+  color: #991b1b !important;
+}
+
+/* ==================================================================
+   B 方案 · 夜间模式
+   ------------------------------------------------------------------
+   夜间规则直接合并在本主题内，随 index.css 常驻；不额外加载 theme-night.css。
+   glass / glass2 仍然使用独立的 theme-night.css。
+   ================================================================== */
+:root[data-theme="base"][data-mode="night"] {
+  color-scheme: dark;
+
+  --page-accent: #60a5fa;
+  --page-accent-dark: #3b82f6;
+  --page-accent-light: rgba(96, 165, 250, 0.16);
+  --page-accent-ink: #bfdbfe;
+  --page-accent-soft: rgba(96, 165, 250, 0.10);
+
+  --color-primary: #60a5fa;
+  --color-primary-hover: #93c5fd;
+  --color-primary-active: #bfdbfe;
+  --color-primary-light: rgba(96, 165, 250, 0.16);
+
+  --color-success: #4ade80;
+  --color-success-hover: #86efac;
+  --color-warning: #fbbf24;
+  --color-warning-hover: #fcd34d;
+  --color-warning-light: #3b2a1c;
+  --color-danger: #f87171;
+  --color-danger-hover: #fca5a5;
+  --color-info: #60a5fa;
+  --color-info-hover: #93c5fd;
+
+  --color-bg: #0b1220;
+  --color-surface: #111c2e;
+  --color-surface-hover: #1a2740;
+  --color-sidebar: #070d19;
+  --color-sidebar-hover: #111c2e;
+  --color-sidebar-active: #1d4ed8;
+
+  --color-text: #e5edf7;
+  --color-text-secondary: #a9b7c9;
+  --color-text-muted: #718096;
+  --color-text-inverse: #ffffff;
+
+  --color-border: #22304a;
+  --color-border-strong: #334155;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.45);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+
+  /* 暖色按钮在深底上要换成深琥珀底 + 浅琥珀字 */
+  --warm-strong-bg: #5a3a18;
+  --warm-strong-ink: #fed7aa;
+  --warm-strong-bg-hover: #6b451d;
+  --warm-strong-ink-hover: #ffedd5;
+  --warm-soft-bg: #4a2f1c;
+  --warm-soft-ink: #fdba74;
+  --warm-soft-bg-hover: #5a3922;
+  --warm-soft-ink-hover: #fed7aa;
+  --warm-pale-bg: #3b2a1c;
+  --warm-pale-ink: #fcd34d;
+  --warm-pale-bg-hover: #4a3522;
+  --warm-pale-ink-hover: #fde68a;
+
+  --base-pagehead-icon: #93c5fd;
+  --base-app-grid-head-bg: #132238;
+  --base-app-grid-head-border: #1d3355;
+  --base-app-grid-head-text: #bfdbfe;
+  --base-app-grid-colop-bg: #1b3358;
+  --base-input-bg: #0f1a2b;
+  --base-input-border: #22304a;
+  --base-input-text: #e5edf7;
+  --base-input-placeholder: #64748b;
+  --base-input-aux: #94a3b8;
+  --sidebar-track: rgba(255, 255, 255, 0.07);
+  --sidebar-thumb: rgba(255, 255, 255, 0.14);
+  --sidebar-thumb-hover: rgba(255, 255, 255, 0.3);
+  --sidebar-arrow: rgba(255, 255, 255, 0.55);
+  --sidebar-arrow-hover: rgba(255, 255, 255, 0.9);
+  --sidebar-arrow-bg-hover: rgba(255, 255, 255, 0.08);
+}
+
+/* ---------- 夜间：骨架 / 标题栏 / 滚动条 ---------- */
+:root[data-theme="base"][data-mode="night"] body,
+:root[data-theme="base"][data-mode="night"] main {
+  background-color: #0b1220;
+}
+:root[data-theme="base"][data-mode="night"] .window-title-bar {
+  background: #0b1220;
+  border-bottom-color: #22304a;
+  color: #94a3b8;
+}
+:root[data-theme="base"][data-mode="night"] .window-controls .win-btn:hover {
+  background: #1a2740;
+}
+:root[data-theme="base"][data-mode="night"] .window-controls .win-btn-close:hover {
+  background: #b91c1c;
+  color: #ffffff;
+}
+:root[data-theme="base"][data-mode="night"] ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+:root[data-theme="base"][data-mode="night"] ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+/* 夜间滚动条颜色由 --sidebar-* 变量控制 */
+
+/* ---------- 夜间：侧边栏 ---------- */
+:root[data-theme="base"][data-mode="night"] .bg-sidebar {
+  background: #070d19 !important;
+  border-right-color: #1e293b;
+  color: #ffffff;
+}
+:root[data-theme="base"][data-mode="night"] .bg-sidebar .app-name {
+  color: #ffffff;
+}
+:root[data-theme="base"][data-mode="night"] .bg-sidebar .mode-toggle-btn {
+  color: #ffffff;
+}
+:root[data-theme="base"][data-mode="night"] .bg-sidebar .mode-toggle-btn:hover:not(:disabled) {
+  background: #1e293b;
+}
+:root[data-theme="base"][data-mode="night"] .bg-sidebar .border-white\/10 {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="base"][data-mode="night"] .sidebar-group-title {
+  color: #64748b;
+}
+:root[data-theme="base"][data-mode="night"] .nav-item {
+  color: #bfdbfe;
+}
+:root[data-theme="base"][data-mode="night"] .nav-item .icon-color {
+  filter: none;
+}
+:root[data-theme="base"][data-mode="night"] .nav-item:hover {
+  background: #111c2e !important;
+  color: #ffffff;
+}
+:root[data-theme="base"][data-mode="night"] .nav-item.bg-sidebar-active {
+  background: #1d4ed8 !important;
+  color: #ffffff;
+  box-shadow: none;
+}
+:root[data-theme="base"][data-mode="night"] .nav-item.bg-sidebar-active::before {
+  background: #60a5fa;
+}
+
+/* ---------- 夜间：页面标题 / 小节标题 ---------- */
+:root[data-theme="base"][data-mode="night"] .bg-surface[class*="min-h-[4.5rem]"],
+:root[data-theme="base"][data-mode="night"] .bg-surface.welcome-card {
+  background: #111c2e;
+  border-color: #22304a;
+}
+:root[data-theme="base"][data-mode="night"] .bg-surface[class*="min-h-[4.5rem]"]::before,
+:root[data-theme="base"][data-mode="night"] .bg-surface.welcome-card::before {
+  background: #60a5fa;
+}
+:root[data-theme="base"][data-mode="night"] .bg-surface[class*="min-h-[4.5rem]"] h1,
+:root[data-theme="base"][data-mode="night"] .bg-surface.welcome-card h1 {
+  color: #e5edf7;
+}
+:root[data-theme="base"][data-mode="night"] .bg-surface[class*="min-h-[4.5rem]"] h1 > svg,
+:root[data-theme="base"][data-mode="night"] .bg-surface.welcome-card h1 > svg {
+  color: #93c5fd !important;
+}
+:root[data-theme="base"][data-mode="night"] .bg-surface[class*="min-h-[4.5rem]"] .text-text-secondary {
+  color: #a9b7c9 !important;
+}
+:root[data-theme="base"][data-mode="night"] .bg-surface[class*="min-h-[4.5rem]"] .text-text-muted {
+  color: #718096 !important;
+}
+:root[data-theme="base"][data-mode="night"] main h2.text-xl,
+:root[data-theme="base"][data-mode="night"] main h3.text-xl {
+  color: #e5edf7;
+}
+:root[data-theme="base"][data-mode="night"] main h2.text-xl > svg,
+:root[data-theme="base"][data-mode="night"] main h3.text-xl > svg {
+  color: #60a5fa !important;
+}
+
+/* ---------- 夜间：标签页 / 二级切换 ---------- */
+:root[data-theme="base"][data-mode="night"] .tab-btn {
+  color: #94a3b8;
+}
+:root[data-theme="base"][data-mode="night"] .tab-btn:hover {
+  background: #1a2740;
+  color: #93c5fd;
+}
+:root[data-theme="base"][data-mode="night"] .tab-btn.tab-active {
+  background: #1d4ed8 !important;
+  color: #ffffff !important;
+}
+:root[data-theme="base"][data-mode="night"] .view-switch {
+  background: #111c2e;
+  box-shadow: inset 0 0 0 1px #22304a;
+}
+:root[data-theme="base"][data-mode="night"] .view-switch-thumb {
+  background: #1d4ed8 !important;
+}
+:root[data-theme="base"][data-mode="night"] .view-switch-btn.on {
+  color: #ffffff;
+}
+
+/* ---------- 夜间：工具栏危险按钮 ---------- */
+:root[data-theme="base"][data-mode="night"] .opbar button.bg-danger {
+  background: #4c1d1d;
+  color: #fca5a5;
+}
+:root[data-theme="base"][data-mode="night"] .opbar button.bg-danger:hover {
+  background: #5c2525;
+  color: #fecaca;
+}
+:root[data-theme="base"][data-mode="night"] .opbar button.bg-danger svg {
+  color: #fca5a5 !important;
+}
+
+/* ---------- 夜间：网状表格 ---------- */
+:root[data-theme="base"][data-mode="night"] .grid-view-container > div.overflow-auto {
+  background: #0f1a2b;
+  border-color: #22304a;
+  box-shadow: none;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container thead th {
+  background-color: #132238 !important;
+  border-color: #1d3355 !important;
+  color: #bfdbfe !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container thead th.bg-text-muted {
+  background-color: #16263d !important;
+  border-color: #22304a !important;
+  color: #94a3b8 !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container thead th.grid-head-title {
+  background-color: #1b3358 !important;
+  border-color: #2a4a78 !important;
+  color: #dbeafe !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container thead th.bg-text-muted .text-text {
+  color: #94a3b8 !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container thead th .drag-handle {
+  color: rgba(191, 219, 254, 0.55) !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container thead th .drag-handle:hover {
+  color: #dbeafe !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container tbody td.bg-primary {
+  background-color: #132238 !important;
+  border-color: #1d3355 !important;
+  color: #bfdbfe !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container tbody td.bg-primary .drag-handle {
+  color: rgba(191, 219, 254, 0.55) !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container tbody td.bg-primary .drag-handle:hover {
+  color: #dbeafe !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container tbody td.bg-text-muted {
+  background-color: #0f1a2b !important;
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 7px,
+    #1e2f4a 7px 8px
+  );
+  border-color: #22304a !important;
+  color: #64748b !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container tbody td[data-data-cell] {
+  border-color: #1e2f4a;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container tbody td[data-data-cell]:not(.cell-heat):hover {
+  background-color: #16263d;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container td.bg-info\/10 {
+  background-color: #132238 !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container .outline-info {
+  outline-color: #60a5fa !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container .ring-info {
+  --tw-ring-color: #60a5fa;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container tr.bg-warning\/20 {
+  background-color: #3b2a1c !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container td.bg-warning\/30 {
+  background-color: #3b2a1c !important;
+  border-color: #6b4a1f !important;
+}
+:root[data-theme="base"][data-mode="night"] .grid-view-container td.border-info\/30 {
+  border-color: #2a4a78 !important;
+}
+
+/* ---------- 夜间：列表表格 ---------- */
+:root[data-theme="base"][data-mode="night"] .dynamic-table thead th {
+  background-color: #132238 !important;
+  border-color: #1d3355 !important;
+  color: #bfdbfe !important;
+}
+:root[data-theme="base"][data-mode="night"] .dynamic-table thead th.col-op {
+  background-color: #1b3358 !important;
+}
+:root[data-theme="base"][data-mode="night"] .dynamic-table tbody td {
+  border-color: #1e2f4a;
+}
+:root[data-theme="base"][data-mode="night"] .dynamic-table tbody tr:hover > td:not(.col-op) {
+  background-color: #16263d;
+}
+:root[data-theme="base"][data-mode="night"] .dynamic-table .table-scroll-wrapper {
+  background: #0f1a2b;
+}
+
+/* ---------- 夜间：空态 / 弹窗遮罩 ---------- */
+:root[data-theme="base"][data-mode="night"] .snapshot-empty {
+  background: #0f1a2b;
+  border-color: #2a4a78;
+}
+:root[data-theme="base"][data-mode="night"] .snapshot-empty-text {
+  color: #94a3b8;
+}
+:root[data-theme="base"][data-mode="night"] .dt-empty-text,
+:root[data-theme="base"][data-mode="night"] .grid-empty-text {
+  color: #64748b;
+}
+:root[data-theme="base"][data-mode="night"] .dt-empty-icon,
+:root[data-theme="base"][data-mode="night"] .grid-empty-icon {
+  color: #64748b;
+}
+:root[data-theme="base"][data-mode="night"] .dt-empty-btn,
+:root[data-theme="base"][data-mode="night"] .grid-empty-btn,
+:root[data-theme="base"][data-mode="night"] .empty-action-btn {
+  color: #bfdbfe;
+  background: #132238;
+  border-color: #1d3355;
+}
+:root[data-theme="base"][data-mode="night"] .dt-empty-btn:hover,
+:root[data-theme="base"][data-mode="night"] .grid-empty-btn:hover,
+:root[data-theme="base"][data-mode="night"] .empty-action-btn:hover {
+  background: #1b3358;
+}
+:root[data-theme="base"][data-mode="night"] [class*="fixed"][class*="inset-0"][class*="bg-black/"]:not([class*="bg-black/9"]):not([class*="bg-black/8"]) {
+  background-color: rgba(0, 0, 0, 0.55) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ---------- 夜间：周切换栏 ---------- */
+:root[data-theme="base"][data-mode="night"] .week-bar {
+  background: #111c2e;
+  border-color: #22304a;
+  box-shadow: none;
+}
+:root[data-theme="base"][data-mode="night"] .week-bar .week-date {
+  background: #132238;
+  border-color: #1d3355;
+  color: #bfdbfe;
+}
+:root[data-theme="base"][data-mode="night"] .week-bar button.bg-danger {
+  background: #4c1d1d;
+  color: #fca5a5;
+}
+:root[data-theme="base"][data-mode="night"] .week-bar button.bg-danger:hover {
+  background: #5c2525;
+  color: #fecaca;
+}
+
+/* ---------- 夜间：卡片 / 语义色 ---------- */
+:root[data-theme="base"][data-mode="night"] .bg-surface.shadow-md,
+:root[data-theme="base"][data-mode="night"] .bg-surface.shadow,
+:root[data-theme="base"][data-mode="night"] .bg-surface.shadow-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="base"][data-mode="night"] .bg-success\/10 { background-color: #14351f !important; }
+:root[data-theme="base"][data-mode="night"] .bg-info\/10 { background-color: #132238 !important; }
+:root[data-theme="base"][data-mode="night"] .bg-warning\/10 { background-color: #3b2a1c !important; }
+:root[data-theme="base"][data-mode="night"] .bg-danger\/10 { background-color: #4c1d1d !important; }
+:root[data-theme="base"][data-mode="night"] .stat-bar-default {
+  background-color: #fbbf24;
+}
+
+/* ---------- 夜间：设置界面危险按钮 ---------- */
+:root[data-theme="base"][data-mode="night"] .settings-view button.bg-danger {
+  background: #4c1d1d;
+  color: #fca5a5;
+}
+:root[data-theme="base"][data-mode="night"] .settings-view button.bg-danger:hover {
+  background: #5c2525;
+  color: #fecaca;
+}
+:root[data-theme="base"][data-mode="night"] .settings-view button.bg-danger svg {
+  color: #fca5a5 !important;
+}

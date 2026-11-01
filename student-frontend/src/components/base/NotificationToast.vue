@@ -23,7 +23,7 @@
 
           <!-- 动作按钮（如「撤销」）：放在消息右侧而不是下方。
                配色**复用操作列「修改」按钮的那套类**（bg-info + text-text-inverse），
-               不自己写 background —— glass / win11 主题对 `button.bg-info.text-text-inverse`
+               不自己写 background —— glass 主题对 `button.bg-info.text-text-inverse`
                有 !important 覆盖（半透明淡蓝底 + 深蓝字），直写 var(--color-info) 会吃不到那层。 -->
           <button v-if="item.action" type="button" class="nt-action bg-info text-text-inverse" @click="onAction(item)">
             {{ item.action.label }}
@@ -192,7 +192,7 @@ function onAction(item) {
 }
 
 /* 动作按钮（撤销）：只负责尺寸和排布，**底色/文字色交给 bg-info / text-text-inverse 类**，
-   这样与表格操作列的「修改」按钮逐像素一致（包括 glass / win11 主题对
+   这样与表格操作列的「修改」按钮逐像素一致（包括 glass 主题对
    button.bg-info.text-text-inverse 的那层 !important 覆盖）。
    垂直居中而不是贴顶：它和两行文字的消息块并排，贴顶会显得吊在半空 */
 .nt-action {

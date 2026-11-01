@@ -1,8 +1,8 @@
 <template>
-  <div class="dynamic-table" ref="rootEl">
+  <div class="dynamic-table relative" ref="rootEl">
   <div
     ref="scrollWrapper"
-    class="table-scroll-wrapper overflow-x-auto overflow-y-auto"
+    class="table-scroll-wrapper overflow-x-auto overflow-y-auto app-custom-scroll"
     :class="{ 'is-scrollable': vScroll, 'dt-scroll-empty': emptyVisible || emptyPending }"
     :style="fitContent ? { maxHeight: fixedMaxHeight + 'px' } : { height: fixedMaxHeight + 'px' }"
     @scroll.passive="onBodyScroll"
@@ -283,6 +283,7 @@
       </tbody>
     </table>
   </div>
+  <CustomScrollbar :target="scrollWrapper" />
 
   <!-- 添加一行：放在滚动容器下方，始终固定可见（数据滚动时不随之滚走）
        存在新增行时按钮切换为「取消添加一行」，点击可放弃本次新增
@@ -333,6 +334,7 @@ import { prefetch } from '../../../utils/dialogPrefetch.js'
 import { ref, computed, watch, onMounted, onActivated, onBeforeUnmount, nextTick, defineAsyncComponent, TransitionGroup, toRef } from 'vue'
 import AppSelect from '../../base/AppSelect.vue'
 import ConfirmDialog from '../../base/ConfirmDialog.vue'
+import CustomScrollbar from '../../base/CustomScrollbar.vue'
 import { useDynamicTableDrag } from './DynamicTable.drag.js'
 import { zhCollator } from '../../../utils/collator.js'
 import IconGlyph from '../../../components/base/IconGlyph.vue'
@@ -1617,7 +1619,7 @@ th.col-header {
   white-space: nowrap;
 }
 /* 表头筛选按钮（放大镜 / 漏斗）：20×20 圆角方块，配色随表头文字（白系）。
-   必须清掉毛玻璃/Win11 主题的按钮皮肤（边框、阴影、荧光描边 ::before）。 */
+   必须清掉毛玻璃主题的按钮皮肤（边框、阴影、荧光描边 ::before）。 */
 .dt-filter-btn {
   display: inline-flex;
   align-items: center;
@@ -1750,7 +1752,7 @@ th.col-header {
   contain-intrinsic-size: auto 32px;
 }
 /* 底部渐隐雾面条：可滚动（行数超过 maxRows）时淡入，随行增删非线性（过冲回弹）淡入淡出 */
-/* 表格容器统一表面底色：玻璃/win11 主题下 --color-surface 为半透明，
+/* 表格容器统一表面底色：玻璃主题下 --color-surface 为半透明，
    若不加底色，下方空数据区与有数据的操作列（同样取 surface 半透明遮罩）遮罩程度不一致，观感不和谐 */
 .table-scroll-wrapper {
   position: relative;
@@ -1762,9 +1764,11 @@ th.col-header {
      现在改成按需：只在 is-scrollable（内容真的超出 fixedMaxHeight）时才预留 —— 见下一条。 */
 }
 /* 内容真的超高时才预留槽位：此时纵向滚动条会长期存在，预留能避免上述列宽抖动；
-   不超高时完全不占位，右侧不会再有一条空带。 */
+   不超高时完全不占位，右侧不会再有一条空带。
+   原生纵向滚动条已由 .app-custom-scroll 隐藏（width:0，不再占位），
+   这里的预留改为右侧内边距，为 DOM 滚动条（12px 轨道 + 2px 空隙）让位。 */
 .table-scroll-wrapper.is-scrollable {
-  scrollbar-gutter: stable;
+  padding-right: 14px;
 }
 .table-scroll-wrapper.is-scrollable::after {
   content: '';

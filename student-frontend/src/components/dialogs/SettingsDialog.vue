@@ -1,6 +1,6 @@
 <template>
   <DialogShell :visible="visible" :z-index="10001" overlay-class="bg-black/50">
-    <div class="bg-surface p-6 rounded-lg w-[750px] max-h-[85vh] flex flex-col shadow-card dialog-card">
+    <div class="bg-surface p-6 rounded-lg w-[750px] max-h-[85vh] flex flex-col shadow-card dialog-card relative">
       <h3 class="text-lg font-bold mb-4">⏱️ 作息时间设置</h3>
 
       <!-- 学期开始日期 -->
@@ -25,7 +25,7 @@
       </div>
 
       <!-- 各时段 -->
-      <div class="flex-1 overflow-y-auto space-y-4 mb-4">
+      <div ref="bodyRef" class="flex-1 overflow-y-auto space-y-4 mb-4 app-custom-scroll">
         <!-- 上午 -->
         <div class="border border-border rounded-xl p-3 bg-surface-hover">
           <div class="flex items-center justify-between mb-2">
@@ -106,6 +106,7 @@
           </div>
         </div>
       </div>
+      <CustomScrollbar :target="bodyRef" />
 
       <div class="text-right">
         <button @click="$emit('cancel')" class="bg-surface-hover px-4 py-2 rounded mr-2 text-text">取消</button>
@@ -119,6 +120,7 @@
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
 import AppSelect from '../base/AppSelect.vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { ref, watch } from 'vue'
 
@@ -131,6 +133,9 @@ const props = defineProps({
   showSemesterStart: { type: Boolean, default: true }   // 补上这一行  // 新增
 })
 const emit = defineEmits(['save', 'cancel', 'update:semesterStart'])  // 新增
+
+// 弹窗正文滚动容器（自定义滚动条的目标）
+const bodyRef = ref(null)
 
 const startDay = ref(1);
 const endDay = ref(5);

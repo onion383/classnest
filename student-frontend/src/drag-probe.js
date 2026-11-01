@@ -188,6 +188,18 @@ async function dragRow(fromIdx, toIdx) {
   fire(handle, 'mousedown', p.x, p.y)
   await sleep(60)
   console.log(`[probe]   mousedown → ghost ${before}→${ghostCount()} handleRect=${JSON.stringify({ x: p.x, y: p.y, w: Math.round(hr.width), h: Math.round(hr.height) })}`)
+  // 虚影体检：内容层方案下，源行内容被 visibility:hidden，如果虚影克隆的是「隐藏后」的 DOM，
+  // 虚影里就是空白 —— 这是「虚影根本没出来」的真正原因候选
+  const dumpGhost = (tag) => {
+    const ghosts = Array.from(document.querySelectorAll('body > div[style*="position: fixed"]'))
+    const info = ghosts.map((g) => {
+      const txt = (g.innerText || '').replace(/\s+/g, ' ').trim()
+      const r = g.getBoundingClientRect()
+      return { text: txt.slice(0, 30), len: txt.length, top: Math.round(r.top), h: Math.round(r.height), op: getComputedStyle(g).opacity }
+    })
+    console.log(`[probe]   ghost@${tag} ` + JSON.stringify(info))
+  }
+  dumpGhost('down')
   const y0 = rowCenterY(fromIdx)
   const y1 = rowCenterY(toIdx)
   const steps = 12
@@ -197,6 +209,7 @@ async function dragRow(fromIdx, toIdx) {
     await sleep(16)
   }
   await sleep(200)
+  dumpGhost('mid')
   // 关键判据必须在 mouseup **之前**采：松手后位移会被 clearShift 清掉
   snap(`mid#${fromIdx}->${toIdx}`)
   fire(window, 'mouseup', p.x, y1)

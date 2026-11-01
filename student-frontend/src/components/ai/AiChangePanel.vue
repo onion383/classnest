@@ -11,7 +11,7 @@
       <button class="dlg-close ml-auto flex-shrink-0" title="关闭" @click="$emit('close')">✕</button>
     </div>
     <div class="flex-1 min-h-0 p-3">
-      <div class="inner-card h-full overflow-y-auto p-3 space-y-3">
+      <div ref="bodyRef" class="inner-card h-full overflow-y-auto p-3 space-y-3 app-custom-scroll">
       <div v-if="!summary.total" class="text-center text-xs text-text-muted py-6">本轮没有数据改动</div>
       <div v-for="it in summary.items" :key="it.key" class="rounded-lg border border-border overflow-hidden">
         <div class="flex items-center gap-2 px-3 py-2">
@@ -76,6 +76,8 @@
         </div>
       </div>
       </div>
+      <!-- 改动明细：细滑块 + 淡入；面板 absolute，覆盖层以它为定位父级 -->
+      <CustomScrollbar :target="bodyRef" compact :arrows="false" auto-hide :min-thumb="20" />
     </div>
   </div>
 </template>
@@ -85,7 +87,8 @@ import DynamicTable from '../tables/DynamicTable/DynamicTable.vue'
 import AiGridPreview from '../tables/AiGridPreview.vue'
 import { summarizeProposalChanges, gridCellFocus } from '../../composables/ai/aiMessages.js'
 import { TABLE_ROUTE } from '../../composables/ai/aiConstants.js'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import CustomScrollbar from '../base/CustomScrollbar.vue'
 
 defineOptions({ name: 'AiChangePanel' })
 
@@ -93,6 +96,9 @@ const props = defineProps({
   proposal: { type: Object, default: null },
 })
 const emit = defineEmits(['close', 'goto'])
+
+// 改动明细滚动容器（自定义滚动条的目标）
+const bodyRef = ref(null)
 
 const summary = computed(() => summarizeProposalChanges(props.proposal))
 

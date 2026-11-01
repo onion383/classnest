@@ -21,7 +21,7 @@ const path = require('path')
 const fs = require('fs')
 const startupTimer = require('./main.startup-timer')
 const perf = require('./main.perf')
-const { getMasterKey, resolveDataDir, resolveThumbsDir, resolveSkillsDir, getDbMasterKey } = require('./main.config')
+const { getMasterKey, resolveDataDir, resolveThumbsDir, resolveSkillsDir, getDbMasterKey, resolveCompileCacheDir } = require('./main.config')
 
 const isDev = !app.isPackaged
 
@@ -147,6 +147,14 @@ function compileBackendProcess() {
   fs.mkdirSync(dataDir, { recursive: true })
   fs.mkdirSync(thumbsDir, { recursive: true })
   fs.mkdirSync(skillsDir, { recursive: true })
+  // 后端进程的 V8 编译缓存。为什么必须用环境变量而不是 enableCompileCache()：
+  // 那是进程级 API，fork 出来的子进程不会继承主进程的设置（main.js 里那份只管主进程自己），
+  // 所以后端一直没享受到，每次启动都要重新解析 163 个模块的源码（实测约 150ms）。
+  // NODE_COMPILE_CACHE 由 Node 在启动时自己读，子进程一进来就生效；缓存按文件路径分片，
+  // 与主进程共用同一目录是安全的。Electron 44 内置 Node v24 支持（实测返回 <dir>/v24.22.0-x64-<hash>）。
+  // 这是目前唯一「跨重启也有效」的启动优化：装在装的目录里，重启后字节码还在。
+  const compileCacheDir = resolveCompileCacheDir()
+  try { fs.mkdirSync(compileCacheDir, { recursive: true }) } catch (_) { /* 建不出目录就退回不缓存，不影响启动 */ }
   _profMark('【prof】后端路径/目录准备完成')
 
   // 统一的输出/退出处理
@@ -198,6 +206,7 @@ function compileBackendProcess() {
           DATA_DIR: dataDir,
           ALBUM_THUMBS_DIR: thumbsDir,
           AI_SKILLS_DIR: skillsDir,
+          NODE_COMPILE_CACHE: compileCacheDir,
           SECURE_MASTER: getMasterKey(),
           DB_MASTER_KEY: getDbMasterKey(),
         },
@@ -255,6 +264,7 @@ function compileBackendProcess() {
       ALBUM_THUMBS_DIR: thumbsDir,
       AI_SKILLS_DIR: skillsDir,
       ELECTRON_RUN_AS_NODE: '1',
+      NODE_COMPILE_CACHE: compileCacheDir,
       SECURE_MASTER: getMasterKey(),
       DB_MASTER_KEY: getDbMasterKey(),
     },
@@ -527,6 +537,12 @@ function detectBackendReady(chunk) {
   readyBuffer = ''
   startupTimer.mark('后端就绪')
   console.log('[main] 后端已就绪')
+  // stdout 这条是「后端已 listen」的最早信号，必须同时广播给渲染层。
+  // 只靠子进程的 IPC backend-ready 会有漏网场景：实测首次启动（后端冷启动 8.3s）
+  // 时渲染层的 backendOk 一直是 false，占位页卡死到 12s 超时兜底才定稿 ——
+  // 因为那条 IPC 消息在渲染层注册监听前/迁移过程中丢了，而这行 stdout 恰好稳稳到达。
+  // 渲染层 markBackendOk 幂等，与 IPC 路径重复广播无副作用（心跳等副作用仍只在 IPC 分支做）。
+  broadcast({ type: 'backend-ready' })
 }
 
 // 停止后端子进程（不清 isQuitting 标志，便于随后重启）。

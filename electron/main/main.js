@@ -4,6 +4,23 @@ const { app, BrowserWindow, ipcMain, shell, protocol, Menu, clipboard } = requir
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
+// V8 编译缓存必须在**任何** require 之前启用：它只对「启用之后」的编译生效，
+// 已经 require 过的模块不会再写缓存。此前这段写在 require 16 个 main.* 模块之后，
+// 实测缓存目录始终是空的 —— 启动成本一分没省，只是建了个空目录。
+//
+// 还有第二个坑（2026-10-31 实测发现）：**不能写 `module.enableCompileCache`**。
+// Electron 主进程里 `module` 是它自己的 CJS 包装对象，不是 Node 的 Module 实例
+// （实测 `module === require('module')` 为 false，`typeof module.enableCompileCache` 为 undefined），
+// 所以原来那句 `typeof module.enableCompileCache === 'function'` 永远为假 —— 缓存从未真正开启。
+// 必须从 `require('module')` 取这个 API。
+// 路径与 config.js 的 resolveCompileCacheDir() 同口径（userData/node-compile-cache），
+// 但这里不引入 config：它本身就是个模块，require 它又绕回同样的顺序问题。
+try {
+  const _ccDir = path.join(app.getPath('userData'), 'node-compile-cache')
+  fs.mkdirSync(_ccDir, { recursive: true })
+  const NodeModule = require('module')
+  if (typeof NodeModule.enableCompileCache === 'function') NodeModule.enableCompileCache(_ccDir)
+} catch (_) { /* 编译缓存不可用时静默忽略，不影响启动 */ }
 const startupTimer = require('./main.startup-timer')
 
 // 异步 fs：主进程里凡是「可能慢」的磁盘操作（目录遍历、整目录复制/删除、大文件写盘）
@@ -34,17 +51,39 @@ const { resolveCompileCacheDir, getMasterKey, saveAppConfig, resolveDataDir, res
 const { setupRendererCodeCache, setupAppProtocol } = _profReq('./main.protocol')
 const { applyBackgroundMaterial } = _profReq('./main.window-material')
 const { buildWebPreferences } = _profReq('./main.web-prefs')
-const usb = _profReq('./main.usb')
-const updater = _profReq('./main.updater')
-const dialogs = _profReq('./main.dialogs')
-const apps = _profReq('./main.apps')
-const perf = _profReq('./main.perf')
+// ===== 非启动关键路径的主进程模块：惰性 require =====
+// 冷启动时这 6 个模块的 require 合计约 300ms（每个 40~85ms：asar 逐文件读盘 + 杀软扫描），
+// 热启动只要 1~4ms —— 实测中位 617ms vs 16ms（相差 38 倍），且全部发生在 app.whenReady 之前，
+// 直接推迟窗口创建。只有「开机后第一次启动」能感知到，正是用户说的「第一次特别慢」。
+// 这些模块顶层都没有立即执行的副作用（IPC 注册都在本文件显式调用），故推迟到建窗之后加载是安全的。
+// 打完点仍走 _profMark：时间线上能看到它们落在建窗之后（不占关键路径）。
+function lazyModule(p) {
+  let mod = null
+  return () => {
+    if (mod) return mod
+    const t0 = _profOn ? Date.now() : 0
+    mod = require(p)
+    _profMark(`【prof】require ${p}`, t0)
+    return mod
+  }
+}
+const getUsb = lazyModule('./main.usb')
+const getUpdater = lazyModule('./main.updater')
+const getDialogs = lazyModule('./main.dialogs')
+const getApps = lazyModule('./main.apps')
+const getPerf = lazyModule('./main.perf')
+const getMigration = lazyModule('./main.migration')
 const tray = _profReq('./main.tray')
 const backend = _profReq('./main.backend')
 const widget = _profReq('./main.widget')
 const webviewGuard = _profReq('./main.webview-guard')
-const devLoader = _profReq('./main.dev-loader')
-const migration = _profReq('./main.migration')
+// 开发专用加载器：三个导出（devLoadingHtml / pollViteAndNavigate / loadUrlWithRetry）
+// 全部指向 127.0.0.1:5173 的 Vite，打包版 5 个调用点无一能走到（都在 if (isDev) 分支里）。
+// 此前它被无条件 require —— 等于 prod 每次启动白付一次读盘（实测 prof 打点 ~48ms）。
+// 与 main.inpLog 同款处理：仅开发模式加载。
+// 注意 prod 下 devLoader 为 null，唯一在顶层取值的 widget 注入点已做判空；
+// 其余调用点所处的 if (isDev) 分支与本条件完全等价（isDev = !app.isPackaged），不会碰到 null。
+const devLoader = app.isPackaged ? null : _profReq('./main.dev-loader')
 const pathGuard = _profReq('./main.path-guard')
 
 // 安装目录（打包后为只读 asar 所在位置）加入保护目录：
@@ -60,14 +99,9 @@ const APP_ICON_PATH = path.join(__dirname, '..', 'app-icon.png')
 // 所有调用处仍用 typeof gc === 'function' 兜底（如某些运行环境不生效）。
 app.commandLine.appendSwitch('js-flags', '--expose-gc')
 
-// Node 编译缓存（code cache）：把主进程启动过程中加载的模块字节码缓存到磁盘，
-// 下一次启动直接复用、跳过解析 + 编译（仅对 Node 侧模块生效，收益在后续启动）。
-// 目录固定放 userData 下（见 config.js 的 resolveCompileCacheDir），随版本/源码变更自动失效重建。
-try {
-  const ccDir = resolveCompileCacheDir()
-  fs.mkdirSync(ccDir, { recursive: true })
-  if (typeof module.enableCompileCache === 'function') module.enableCompileCache(ccDir)
-} catch (_) { /* 编译缓存不可用时静默忽略，不影响启动 */ }
+// Node 编译缓存（code cache）：已提前到本文件顶部、在**任何 require 之前**启用。
+// 这里不再调用：enableCompileCache 只对「启用之后」的编译生效，已经 require 过的模块
+// 不会补写缓存 —— 放在这里等于没开（实测缓存目录一直是空的，启动成本一分没省）。
 
 // 首启判定涉及同步读盘（app-config.json + existsSync index.db），提前到模块加载阶段完成，
 // 不占用 whenReady → 建窗的关键路径。looksLikeFirstRun 是函数声明，此处调用已被提升。
@@ -99,49 +133,62 @@ const FORCE_OS_WARN = 0
 // 首屏占位共享来源（splash/splash.css、splash/splash.html）与 dev 加载器
 // 已迁至 dev-loader.js：见 devLoadingHtml / pollViteAndNavigate / loadUrlWithRetry
 
-// ============ 启动耗时锚点：「窗口首次显示」============
-// 「上次启动耗时」的口径：主进程启动 → 第一个窗口真正显示出来的那一刻（用户看到画面的时刻）。
-// 所有窗口的显示都走 revealWindow()，锚点定死在那里（startupTimer.end 幂等，仅首次生效）：
-// 主窗口是 ready-to-show（首帧绘制完成，未触发时走 1500ms 兜底 reveal）；引导窗口是
-// setup-ready（dev 下此刻才 reveal；prod 下创建即显示，锚点顺延到 setup-ready 的 reveal）。
-// 后端就绪、首屏数据就绪等更晚的事件不再抬高总耗时——「点开就看到窗口」即启动完成，
-// 「点开就能用」（数据到位、占位页移除）另由时间线上的 mark 体现，两者可能是同一秒的不同时刻。
+// ============ 启动耗时锚点：「占位页移除（界面可见）」============
+// 「上次启动耗时」的口径（2026-10-31 统一，日志与性能面板同源）：主进程启动 → **占位页移除**，
+// 即首屏内容真正绘制出来的那一刻。不是「窗口首次显示」——窗口出来了但还盖着占位页，
+// 用户盯着的是占位页，两者实证相差 369~461ms（后端快时）、后端冷启动时可达 2~4.5 秒。
+// 所有窗口的显示都走 revealWindow()：
+//   - 主窗口（ready-to-show，未触发时走 1500ms 兜底 reveal）只登记**候选**锚点；
+//     定稿由渲染层「[startup] 占位页移除」日志触发（见本文件 console-message 监听 → endAt）。
+//   - 引导窗口（setup-ready；dev 下此刻才 reveal，prod 下创建即显示、锚点顺延到 setup-ready）
+//     直接定稿，保持「用户在引导页停留不计入启动耗时」。
+// 占位页永不移除的异常路径由 12s 兜底用候选时刻收尾。
 
-// U盘自动打开 IPC：与原先一致在模块加载阶段注册（不依赖 app ready）
-usb.registerUsbIpc()
+// ===== 延迟注册的 IPC（配合上方 lazyModule）=====
+// 这 5 组通道原先在模块加载阶段就注册，等于把 5 个模块的 require 压在 whenReady 之前。
+// 现在改为「建窗 + fork 后端之后」再注册：渲染层要等入口 bundle 执行完才会发首个 IPC
+// （ready-to-show 约 400ms），而这里在 createMainWindow 之后立即执行 —— 这段差就是省下的时间。
+// 抛错不该影响启动：注册失败只会让对应功能不可用，不能连累窗口和后端。
+let deferredIpcRegistered = false
+function registerDeferredIpc() {
+  if (deferredIpcRegistered) return
+  deferredIpcRegistered = true
 
-// 版本更新 IPC：与原先一致在模块加载阶段注册。状态广播只发给主窗口（与旧实现一致，
-// 内部自带判空 + isDestroyed），故把出口函数注入 updater。
-updater.registerUpdateIpc((payload) => {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('from-main', payload)
-})
+  // U盘自动打开 IPC
+  getUsb().registerUsbIpc()
 
-// 文件/文件夹对话框与本地文件读写 IPC：与其余模块一致在模块加载阶段注册
-dialogs.registerDialogsIpc({
-  getMainWindow: () => mainWindow,
-  getWidgetWindow: () => widget.getWidgetWindow(),
-  // 截屏临时隐藏 widget 后要还原穿透态：Electron 没有 getter，由 widget 模块自己记
-  isWidgetIgnoreMouse: () => widget.isWidgetIgnoreMouse(),
-})
+  // 版本更新 IPC。状态广播只发给主窗口（内部自带判空 + isDestroyed），故把出口函数注入 updater。
+  getUpdater().registerUpdateIpc((payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('from-main', payload)
+  })
 
-// 常用软件（选择文件 + 启动）IPC
-apps.registerAppsIpc({ getMainWindow: () => mainWindow })
+  // 文件/文件夹对话框与本地文件读写 IPC
+  getDialogs().registerDialogsIpc({
+    getMainWindow: () => mainWindow,
+    getWidgetWindow: () => widget.getWidgetWindow(),
+    // 截屏临时隐藏 widget 后要还原穿透态：Electron 没有 getter，由 widget 模块自己记
+    isWidgetIgnoreMouse: () => widget.isWidgetIgnoreMouse(),
+  })
 
-// 性能面板 IPC + 内存采样（窗口/后端句柄以 getter 注入，调用时取当前值）
-perf.registerPerfIpc({
-  getMainWindow: () => mainWindow,
-  getWidgetWindow: () => widget.getWidgetWindow(),
-  getDesktopWidgetWindow: () => widget.getDesktopWidgetWindow(),
-  setDesktopWidgetWindow: (w) => widget.setDesktopWidgetWindow(w),
-  getMigrationWindow: () => migrationWindow,
-  getSetupWindow: () => setupWindow,
-  getBackendProcess: () => backend.getBackendProcess(),
-  isBackendReady: () => backend.isBackendReady(),
-  isDesktopEnabled: () => widget.isDesktopEnabled(),
-  hideWidgetWindow: () => widget.hideWidgetWindow(),
-  showWidgetWindow: () => widget.showWidgetWindow(),
-  createDesktopWidgetWindow: () => widget.createDesktopWidgetWindow(),
-})
+  // 常用软件（选择文件 + 启动）IPC
+  getApps().registerAppsIpc({ getMainWindow: () => mainWindow })
+
+  // 性能面板 IPC（窗口/后端句柄以 getter 注入，调用时取当前值）
+  getPerf().registerPerfIpc({
+    getMainWindow: () => mainWindow,
+    getWidgetWindow: () => widget.getWidgetWindow(),
+    getDesktopWidgetWindow: () => widget.getDesktopWidgetWindow(),
+    setDesktopWidgetWindow: (w) => widget.setDesktopWidgetWindow(w),
+    getMigrationWindow: () => migrationWindow,
+    getSetupWindow: () => setupWindow,
+    getBackendProcess: () => backend.getBackendProcess(),
+    isBackendReady: () => backend.isBackendReady(),
+    isDesktopEnabled: () => widget.isDesktopEnabled(),
+    hideWidgetWindow: () => widget.hideWidgetWindow(),
+    showWidgetWindow: () => widget.showWidgetWindow(),
+    createDesktopWidgetWindow: () => widget.createDesktopWidgetWindow(),
+  })
+}
 
 // 托盘 + 无边框窗口控制 + 关闭确认菜单（窗口/重建入口以 getter 注入）
 tray.registerTrayIpc({
@@ -167,7 +214,7 @@ widget.registerWidgetIpc({
   getMainWindow: () => mainWindow,
   // 主窗口关闭到托盘后，桌面组件点击面板需要重建主窗口
   createMainWindow: () => createMainWindow(),
-  loadUrlWithRetry: devLoader.loadUrlWithRetry,
+  loadUrlWithRetry: devLoader ? devLoader.loadUrlWithRetry : undefined,
 })
 
 // INP 归因落盘（仅开发模式）：渲染层探针把交互耗时汇总经 'inp-report' 发来，
@@ -270,6 +317,17 @@ function createMainWindow() {
   // 透明度磨砂由渲染层 CSS backdrop-filter 完成。
 
   if (isDev) {
+    // 开发期刷新快捷键：关窗口只是收进托盘，进程和页面都还活着，改完渲染层代码
+    // 没有任何入口让它重新加载（应用菜单也没有 reload 项）。这里补 Ctrl+R / F5，
+    // 只在 dev 生效，避免正式版被误按。注意：HMR 对 <script setup> 结构变更不一定生效，
+    // 有了这个键就不用靠「退出应用重开」来验证 UI 改动。
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return
+      const key = String(input.key || '').toLowerCase()
+      if (!((input.control && key === 'r') || key === 'f5')) return
+      event.preventDefault()
+      win.webContents.reload()
+    })
     // 第一步：加载本地 inline 页面，窗口立即显示（< 1s）
     backend.setBootStatus('正在启动开发服务器…')
     win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(devLoader.devLoadingHtml())}`)
@@ -307,6 +365,13 @@ function createMainWindow() {
       if (isSplashDrop) splashDropLogged = true
       if (at !== null) startupTimer.markAt(label, at)
       else startupTimer.mark(label)
+      // 口径统一（2026-10-31）：占位页移除 = 启动完成，日志与性能面板同一个锚点。
+      // 用渲染层自报的 epoch 定稿（不是主进程送达时刻），否则跨进程投递延迟会被算进总耗时。
+      // endAt 只在锚点未定稿时生效，因此重复的 reload 日志不会改写已定稿的总耗时。
+      if (isSplashDrop) {
+        if (at !== null) startupTimer.endAt(at, label)
+        else startupTimer.end(label)
+      }
     }
   })
   // 非 data: 页面（真正的应用首屏）加载完成 → 首屏日志已收完，之后的重载不再计入启动时间线
@@ -319,16 +384,16 @@ function createMainWindow() {
   // 占位页保证不是空白），避免应用看起来「没启动」。正常情况 ready-to-show 会先到并取消它。
   // 注意：不要改用 dom-ready 提前显示——type="module" 脚本是 defer 的，DOMContentLoaded 会等
   // 入口 bundle 执行完才触发，实测 dom-ready 始终晚于 ready-to-show，提前不了。
-  win.__revealTimer = setTimeout(() => revealWindow(win), 1500)
+  win.__revealTimer = setTimeout(() => revealWindow(win, 'provisional'), 1500)
 
   // 用局部 win 判断/显示，避免重建时 mainWindow 被旧窗口 closed 置空导致新窗口无法显示。
   win.once('ready-to-show', () => {
     startupTimer.mark('ready-to-show（窗口首次显示）')
-    // 启动锚点即此处：下面 revealWindow() 内定死「窗口首次显示」（startupTimer.end 幂等）。
+    // 只登记候选锚点：启动完成的定稿在「占位页移除」那一刻（见 console-message 的 isSplashDrop）。
     clearTimeout(win.__revealTimer)
     // 显示前再次确认系统亚克力材质（隐藏状态下创建时材质可能尚未生效），
     // 确保窗口出现的那一刻就是「毛玻璃 + 内容」，而不是一层空底色。
-    revealWindow(win)
+    revealWindow(win, 'provisional')
   })
 
   // 主窗口关闭拦截：点击关闭时不直接关闭，而在窗口中央弹出"怎样关闭"菜单。
@@ -429,6 +494,61 @@ app.whenReady().then(() => {
     return
   }
 
+  // ========== 安装后预热（--warmup）==========
+  // 由安装器在装完文件之后调用一次（见 inno/setup.iss 的 [Run] 段），随后立即退出。
+  //
+  // 目的不是「建库」（实测空库 warmup 只需 66~115ms，不是瓶颈），而是让
+  // Electron 运行时（exe / dll / pak / icudtl）、后端 163 个模块、better-sqlite3 原生模块
+  // 全部被读进一遍系统文件缓存 —— 用户首次双击时就不必再付「冷盘 + 杀软首扫」的成本。
+  // 实测依据：安装后首次启动后端就绪 8356ms，同一份代码第二次 3190ms、第三次 44ms。
+  //
+  // 硬约束：不建窗口、不注册托盘/小组件、不走启动计时与启动日志。装完立即点开也不会
+  // 与它抢单实例锁（安装器用 waituntilterminated 等它退出）。
+  if (process.argv.includes('--warmup')) {
+    console.log('[warmup] 进入预热模式：起一次后端后立即退出（不建窗口、不走启动计时）')
+    ;(async () => {
+      try {
+        backend.startBackend()
+        const ok = await backend.waitForBackendReadySignal(20000)
+        console.log(`[warmup] 后端就绪=${ok}`)
+      } catch (_) { /* 预热失败不影响安装结果，也不能让安装器卡住 */ }
+      // 预热前端产物：--warmup 不建窗口、不加载页面，所以 student-frontend/dist 仍是冷的。
+      // 打包后前端就在 app.asar 里（约 14MB），而 asar 是单个文件、由 Electron 按需解压读取 ——
+      // 顺序读一遍整个 asar，等于把前端首屏资源连同主进程代码一起放进系统文件缓存。
+      // 不做解析、不遍历内部文件：V8 编译那 20ms 不值得为它在预热阶段拉起渲染进程。
+      try {
+        const asarPath = path.join(process.resourcesPath, 'app.asar')
+        if (fs.existsSync(asarPath)) {
+          const fd = fs.openSync(asarPath, 'r')
+          const buf = Buffer.allocUnsafe(256 * 1024)
+          let pos = 0
+          for (;;) {
+            const n = fs.readSync(fd, buf, 0, buf.length, pos)
+            if (n <= 0) break
+            pos += n
+          }
+          fs.closeSync(fd)
+          console.log(`[warmup] 已预热 app.asar（${(pos / 1048576).toFixed(1)}MB）`)
+        }
+      } catch (_) { /* 读不到就跳过：pre-asar 结构或权限问题都不该影响安装 */ }
+      try {
+        // 必须显式停子进程：app.exit() 直接终止主进程，后端子进程会变成孤儿继续占着端口。
+        // 但加 3s 上限 —— 预热超时那条路径下后端可能从未真正起来，等它退出会白等。
+        await Promise.race([
+          backend.stopBackendProcess(),
+          new Promise((r) => setTimeout(r, 3000)),
+        ])
+      } catch (_) { /* 已退出则忽略 */ }
+      // 退出必须走 app.quit() 而不是 app.exit()：Node 的编译缓存是异步写进
+      // libuv 线程池的，app.exit() 直接终止进程会让它来不及落盘 —— 实测两次
+      // --warmup 后 node-compile-cache/ 目录始终是空的，等于白跑一次预热。
+      // 另加 3s 兜底 app.exit()，万一 quit 被别的东西阻塞也不让安装器卡住。
+      setTimeout(() => app.exit(0), 3000)
+      app.quit()
+    })()
+    return
+  }
+
   try {
     // 渲染进程 V8 代码缓存：必须在首个页面加载前设置，故紧跟 ready 先做。
     setupRendererCodeCache()
@@ -474,8 +594,12 @@ app.whenReady().then(() => {
       backend.startBackend()
       startupTimer.mark('startBackend 完成')
 
+      // 延迟 IPC 注册：放在建窗与 fork 之后，让这 5 个模块的 require 与「窗口加载首屏」
+      // 「后端子进程引导」并行，不再串行排在窗口创建之前。
+      registerDeferredIpc()
+
       // 性能面板内存历史：自启动即开始定时采样「总计」，用于「平均（近一分钟）/ 最高（自启动起）」
-      perf.startMemSampling()
+      getPerf().startMemSampling()
     }
 
     // 低版本提示与首次引导合并到同一个启动窗口：命中任一项即在窗口内按「提示 → 引导」顺序展示，
@@ -484,20 +608,30 @@ app.whenReady().then(() => {
 
     // 版本更新：启动后延迟做一次「检查 + 下载」（避开首屏关键路径，仅打包环境）
     if (app.isPackaged) {
-      setTimeout(() => { updater.runUpdateFlow() }, 8000)
+      setTimeout(() => { getUpdater().runUpdateFlow() }, 8000)
     }
 
-    // 5s 后输出启动时间线并保存日志
+    // 启动时间线落盘：必须等锚点定稿（占位页移除）之后再写。
+    // 原来固定 5s 写盘，但「占位页移除」在后端冷启动时可晚到 5.3s，会被漏掉、日志与性能面板
+    // 就成了两个口径；改成定稿后稍等再写。
+    // 兜底：12s 仍未定稿（后端失败时渲染层会保留占位页作为失败提示载体，它永不移除），
+    // 用已登记的候选时刻（窗口首次显示）收尾——settleProvisional 会触发下面的回调，无需另写落盘。
+    startupTimer.onFinal(() => {
+      setTimeout(() => {
+        startupTimer.report()
+        startupTimer.saveLog()
+      }, 800)
+    })
     setTimeout(() => {
-      startupTimer.report()
-      startupTimer.saveLog()
-    }, 5000)
+      if (startupTimer.isFinal()) return
+      startupTimer.settleProvisional('超时兜底：占位页未移除')
+    }, 12000)
 
     // U盘自动打开非启动关键路径：延后到主窗口创建后再读配置/开监听，
     // 避免 loadUsbAutoOpenConfig 读盘与 getDriveLetters 同步遍历盘符阻塞主窗口创建。
     setTimeout(() => {
-      usb.loadUsbAutoOpenConfig()
-      if (usb.isUsbAutoOpenEnabled()) usb.startUsbWatch()
+      getUsb().loadUsbAutoOpenConfig()
+      if (getUsb().isUsbAutoOpenEnabled()) getUsb().startUsbWatch()
     }, 0)
   } catch (err) {
     console.error('[main] app.whenReady 初始化失败:', err)
@@ -706,7 +840,7 @@ async function cleanupMigrationTarget() {
   try {
     // rm 带 force:true 时目标不存在也不报错，省掉一次 existsSync 同步探测
     if (ctx.createdTarget) await fsp.rm(ctx.target, { recursive: true, force: true })
-    else await migration.clearDir(ctx.target)
+    else await getMigration().clearDir(ctx.target)
   } catch (err) {
     console.warn('[main] 清理迁移目标目录失败:', err?.message || err)
   }
@@ -863,13 +997,19 @@ async function runSetupWarmup() {
 
 // 显示窗口（主窗口 / 引导窗口共用）：显示前再次确认系统亚克力材质（隐藏状态下创建时材质
 // 可能尚未生效），确保窗口出现的那一刻就是「毛玻璃 + 内容」，而不是一层空底色。
-// 同时是「启动完成」锚点：第一个被显示的窗口即用户看到画面的时刻（startupTimer.end 幂等，
-// 仅首次调用生效），此后后端就绪、首屏数据等更晚事件都不再抬高「上次启动耗时」。
-function revealWindow(win) {
+//
+// 启动锚点口径（2026-10-31 统一为「占位页移除」，日志与性能面板同一口径）：
+//   - 主窗口走 anchor='provisional'：只登记「窗口首次显示」为候选。窗口出来了但还盖着占位页，
+//     用户看到的是占位页消失、首屏绘制完成那一刻；两者实测差 369~461ms（后端快时），
+//     后端冷启动时可达 2~4.5 秒。真正的定稿由渲染层「占位页移除」日志触发（见 console-message）。
+//   - 引导窗口 / 低版本提示走默认 'final'：它们没有占位页这一层，且必须保持
+//     「用户在引导页停留不计入启动耗时」的既有语义（否则后续主窗口的占位页移除会把停留时长算进去）。
+function revealWindow(win, anchor = 'final') {
   if (!win || win.isDestroyed()) return
   if (process.platform === 'win32') applyBackgroundMaterial(win, 'acrylic')
   win.show()
-  startupTimer.end('窗口首次显示')
+  if (anchor === 'provisional') startupTimer.endProvisional('窗口首次显示')
+  else startupTimer.end('窗口首次显示')
 }
 
 // 创建引导窗口：固定尺寸、无边框、系统亚克力，引导期间禁止关闭。
@@ -1053,7 +1193,7 @@ ipcMain.handle('set-initial-data-dir', async (event, payload) => {
         throw new Error('目标目录非空，请选择空目录')
       }
       if (!(await pathExists(dataDir))) await fsp.mkdir(dataDir, { recursive: true })
-      await migration.migrateDataDir(currentData, dataDir, sendMigration) // 内部已停止后端并写配置
+      await getMigration().migrateDataDir(currentData, dataDir, sendMigration) // 内部已停止后端并写配置
     } else {
       // 尚未建库：直接创建目录并写配置，无需搬迁
       await fsp.mkdir(dataDir, { recursive: true })
@@ -1118,7 +1258,7 @@ ipcMain.handle('set-data-dir', async (event, dir) => {
   closeAllWindowsExceptMigration()
 
   try {
-    const { oldDirRemoved } = await migration.migrateDataDir(oldDir, target, sendMigration)
+    const { oldDirRemoved } = await getMigration().migrateDataDir(oldDir, target, sendMigration)
     // 成功：配置已切到新目录 → 重启后端（读取新 DATA_DIR）→ 重开主窗口并弹出成功提示条
     sendMigration({ type: 'migration-done' })
     await new Promise((r) => setTimeout(r, 700))

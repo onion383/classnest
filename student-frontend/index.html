@@ -2,7 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
+    <!-- 说明：改这个文件会让 Vite 对已开着的窗口发一次 full-reload。
+         调 UI 时若组件级 HMR 没生效（应用关窗口只是收进托盘，页面并不重载），改这里可强制刷新。
+         最新触发：2026-11-01 06:40 回退表头宽度联动（auto 布局会连锁重排）。 -->
     <link rel="icon" type="image/webp" href="/logo.webp">
+
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="preconnect" href="http://localhost:3000">
     <!-- 注意：这里不要手写 <link rel="modulepreload" href="/src/main.js">。

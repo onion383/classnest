@@ -385,6 +385,9 @@ const { retryFailedLoads, _applyRowFocus } = common
 // ---- 一般课表显示行 ----
 const masterDisplayRows = computed(() =>
   masterRowReuse(ctx.buildDisplayRows(masterCells.value, masterSettings.value)));
+// 回填给 composables：ctx 在 343 行构造，那时这个 computed 还不存在，
+// 于是 onMasterSwapRows 里 `ctx.masterDisplayRows` 一直是 undefined。
+ctx.masterDisplayRows = masterDisplayRows;
 const masterExportFields = computed(() => {
   const fields = [{ name: '行号' }];
   masterColHeaders.value.forEach(h => fields.push({ name: h }));
@@ -420,6 +423,8 @@ const masterExportRows = computed(() => {
 // ---- 实行课表显示行（顶部自动添加周数标题行） ----
 const activeDisplayRows = computed(() =>
   activeRowReuse(ctx.buildDisplayRows(activeCells.value, activeSettings.value)));
+// 同上：回填给 composables，否则 onActiveSwapRows 取到 undefined
+ctx.activeDisplayRows = activeDisplayRows;
 
 const activeExportFields = computed(() => {
   const fields = [{ name: '行号' }];

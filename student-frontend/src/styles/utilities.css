@@ -70,6 +70,27 @@
   color: var(--color-text);
 }
 
+/* ==================== 无边框按钮（组件级按需适配） ====================
+   glass / win11 主题给「所有 button」统一加了 1px 描边 + 荧光描边环（::before），
+   特异性 (0,2,1)，组件里的普通类压不住，凡是不想要「描边胶囊」的按钮都得在组件层收一次。
+   与 .dlg-close 同一套压制手法，但去掉了「关闭键」的语义和定死的尺寸：
+   只负责「无边框 / 无外发光 / 无荧光环 / 淡底 hover」，尺寸与配色交给使用方。
+   用法：<button class="btn-plain">，需要尺寸时叠自己的类（如 grp-btn）。 */
+.btn-plain {
+  border: none !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  box-shadow: none !important;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-plain::before {
+  display: none !important;
+  content: none !important;
+}
+.btn-plain:hover {
+  background: color-mix(in srgb, var(--color-text) 14%, transparent);
+}
+
 /* ==================== 页面标题栏提亮 ====================
    各页顶部标题卡（标题栏 / 首页 welcome-card）在既有玻璃底上再叠一层 30% 白，
    与 AI 聊天区顶部工具条一致。

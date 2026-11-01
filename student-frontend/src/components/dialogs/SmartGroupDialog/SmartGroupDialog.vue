@@ -26,14 +26,19 @@
           @dragover.prevent
           @drop="boxDrop"
         >
+          <!-- 条件多时限高滚动（约三行：每行 py-1.5 + 行高 ≈ 34px，加上行距 4px）；拖动到上下边缘会自动滚动 -->
+          <div class="max-h-[112px] overflow-auto" @scroll="sortStage.onScroll">
           <div v-if="stages.length === 0" class="text-sm text-text-muted py-1">拖入下方选项作为分组条件</div>
-          <div v-for="(st, si) in stages" :key="st.key" class="mb-1 last:mb-0">
+          <div v-for="(st, si) in stages" :key="st.key" class="mb-1 last:mb-0" :data-stage-idx="stages.indexOf(st)" :class="{ 'stage-row-dragging': stageDragIdx === stages.indexOf(st) }">
             <div
               class="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-surface border border-border text-text text-sm"
-              @dragover.stop.prevent="rowDragover(si, $event)"
             >
-              <!-- 拖动手柄：拖动调整条件顺序 -->
-              <span class="cursor-grab select-none text-text-muted" draggable="true" @dragstart="onStageDragStart(si, $event)" title="拖动调整顺序">⠿</span>
+              <!-- 拖动手柄：拖动调整条件顺序（指针拖拽，与表格行/列移动同一套让位动画） -->
+              <!-- 序号 + 拖动手柄：序号跟着数组顺序走，拖动松手后自动重排 -->
+              <span class="flex items-center gap-2 shrink-0">
+                <span class="text-xs tabular-nums text-text-muted select-none opacity-70">{{ stages.indexOf(st) + 1 }}</span>
+                <span class="cursor-grab select-none text-text-muted" @mousedown="sortStage.handleDown($event, stages.indexOf(st))" title="拖动调整顺序">⠿</span>
+              </span>
               <!-- 特殊关系 -->
               <template v-if="st.type === 'relation'">
                 <AppSelect v-model="st.kind" :options="[{ value: 'together', label: '在一组' }, { value: 'apart', label: '不在一组' }]" class="w-28" />
@@ -51,10 +56,21 @@
                 <span class="text-text-secondary">性别比例</span>
                 <AppSelect v-model="st.mode" :options="[{ value: 'balanced', label: '男女尽量均匀' }, { value: 'single', label: '全为男生或女生（每组同一性别）' }]" class="w-64" />
               </template>
-              <span v-if="satisfactionOf(st) !== null" class="ml-auto text-xs px-1.5 py-0.5 rounded bg-info/15 text-info border border-info/30">满足 {{ satisfactionOf(st) }}%</span>
-              <button @click="removeStage(si)" class="cursor-pointer text-text-muted hover:text-text font-bold leading-none text-base">×</button>
+              <!-- 满足率与关闭按钮靠右成组：关闭键永远贴行尾，不随满足率有无而漂移 -->
+              <span class="ml-auto flex items-center gap-2 shrink-0">
+                <span v-if="satisfactionOf(st) !== null" class="text-xs px-1.5 py-0.5 rounded bg-info/15 text-info border border-info/30">满足 {{ satisfactionOf(st) }}%</span>
+                <button @click="removeStage(stages.indexOf(st))" class="dlg-close close-sm" title="删除该条件">✕</button>
+              </span>
             </div>
           </div>
+          </div>
+          <!-- 新增条件投放框：常驻在列表下方（条件多时列表内部滚动，此行不随之滚走），
+               把下方条件选项拖到这里即追加到末尾。样式与智能排表一致 -->
+          <div
+            class="mt-1 text-xs text-text-muted px-2 py-1 rounded border border-dashed border-info/40 flex items-center select-none"
+            @dragover.prevent
+            @drop.stop="boxDrop"
+          >拖动到这里新增条件</div>
         </div>
       </div>
 
@@ -76,14 +92,18 @@
       </div>
 
       <!-- 分组预览 -->
-      <div class="flex-1 overflow-auto border border-border rounded mb-4" style="min-height: 160px;">
+      <!-- min-h-0 是关键：flex 子项默认 min-height:auto，会拒绝收缩，
+           总高超出弹窗时就把底部的取消/确定顶出去（弹窗是 overflow-hidden，直接看不见）。
+           改成 min-h-0 后这里自己滚动，按钮永远留在原处。 -->
+      <div class="flex-1 min-h-0 overflow-auto border border-border rounded mb-4">
         <div class="p-3" v-if="!arranged && previewGroups.length === 0">
           <p class="text-sm text-text-muted">点击上方「开始排表」预览分组结果；确认后写入当前维度的各小组。</p>
         </div>
-        <div v-else class="flex flex-wrap gap-3 p-3 content-start">
+        <div v-else class="flex flex-wrap gap-3 p-3 content-start" ref="groupGridEl">
           <div
             v-for="(g, gi) in previewGroups"
             :key="gi"
+            data-group-card
             class="border border-border rounded bg-surface-hover overflow-hidden flex flex-col"
             style="width: 150px;"
           >
@@ -113,13 +133,14 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, watch, onBeforeUnmount, toRef } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount, toRef } from 'vue'
 import '../../../styles/dialog-transition.css'
 import NewComerConfirm from '../NewComerConfirm.vue'
 import AppSelect from '../../base/AppSelect.vue'
 import { useSmartGroupPipeline } from './SmartGroupDialog.pipeline.js'
 import { useSmartGroupConditions } from './SmartGroupDialog.conditions.js'
 import { useSmartGroupPreview } from './SmartGroupDialog.preview.js'
+import { useRowSortDrag } from '../../../composables/useRowSortDrag.js'
 
 defineOptions({ name: 'SmartGroupDialog' })
 const props = defineProps({
@@ -135,6 +156,9 @@ const nextKey = () => `st-${++keySeq}`
 
 // 流水线：按顺序依次应用，越靠后越重要（可部分覆盖前面）
 const stages = ref([{ type: 'gender', mode: 'balanced', key: nextKey() }])
+// 条件行拖拽中/落点行下标（用于让位动画与源行淡出）；与 _dragIdx 分开是因为这几个要参与渲染
+const stageDragIdx = ref(null)
+const stageDragOverIdx = ref(null)
 const previewGroups = ref([])
 const rejectText = ref('')
 const arranged = ref(false)
@@ -175,6 +199,7 @@ const conditionChips = computed(() => [
 // 三个 useXxx 的返回方法在下方 Object.assign 回填，模块间经 ctx 互相调用（运行时解析）
 const ctx = {
   stages, previewGroups, rejectText, arranged, satisfaction, lastResult,
+  stageDragIdx, stageDragOverIdx,
   showNewPrompt, includeNew, strangers, roster,
   students: toRef(props, 'students'),
   groups: toRef(props, 'groups'),
@@ -192,8 +217,19 @@ const conditions = useSmartGroupConditions(ctx, nextKey)
 const preview = useSmartGroupPreview(ctx)
 Object.assign(ctx, { buildAssignment }, conditions, preview)
 
+// 条件行拖拽排序：指针拖拽 + 相邻行让位 + 松手滑入（与表格行/列移动同一套，见 composables/useRowSortDrag.js）
+const sortStage = useRowSortDrag({
+  items: stages,
+  dragIdx: stageDragIdx,
+  overIdx: stageDragOverIdx,
+  attr: 'data-stage-idx',
+  rowClass: 'stage-row-dragging',
+})
+// 挂到 ctx，供 conditions.js 里的新增/删除调用进出动画
+ctx.sortStage = sortStage
+
 // 供模板调用的顶层绑定
-const { satisfactionOf, removeStage, onChipDragStart, onStageDragStart, rowDragover, boxDrop } = conditions
+const { satisfactionOf, removeStage, onChipDragStart, boxDrop } = conditions
 const { startArrange, onParticipate, onNot, cancel, confirm, buildGroupsPreview } = preview
 
 function groupLabel(gi) {
@@ -201,6 +237,9 @@ function groupLabel(gi) {
   return (g && g.name) || `第${gi + 1}组`
 }
 
+// immediate：父组件在同一 tick 里同时把 smartGroupMounted 与 showSmartGroup 置 true，
+// 组件挂载时 visible 已经是 true，没有 immediate 的话这里永远不会执行 ——
+// 表现就是「没排表时下面一片空白」。
 watch(() => props.visible, (v) => {
   if (v) {
     rejectText.value = ''
@@ -212,13 +251,86 @@ watch(() => props.visible, (v) => {
     showNewPrompt.value = false
     includeNew.value = false
   }
+}, { immediate: true })
+
+// 分组数据是异步晚到的：宿组维度的数据先就绪，切到别的维度时 active 还在加载，
+// 打开弹窗那一刻 props.groups 是空的 —— 只靠上面的 visible 监听，预览会一直空着。
+// 这里补一条：只要分组数据变了、且当前没排过表，就重建预览（已经排过表则保留结果不动）。
+watch(() => props.groups, () => {
+  if (props.visible && !arranged.value) previewGroups.value = ctx.buildGroupsPreview()
+}, { deep: true })
+// 分组卡片的动态排布（FLIP）：组内人数不同 → 卡片高度不同，换一次排表后面的卡片就会跳位。
+// 亚像素处理（这个坑踩过）：位置差一律 Math.round，写起点后必须 void offsetHeight 强制提交 ——
+// 不读一次布局，浏览器会把「设 transform」和「清 transform」合并成一次样式变更，动画根本不播；
+// 带小数差还会让起点落在半像素上，动画尾巴有肉眼可见的抖。
+const groupGridEl = ref(null)
+watch(() => previewGroups.value, async () => {
+  const grid = groupGridEl.value
+  if (!grid) return
+  // pre flush：此刻 DOM 还是旧的，正是要记录的「变化前位置」
+  const cards = [...grid.querySelectorAll('[data-group-card]')]
+  const prevRects = cards.map((el) => {
+    const r = el.getBoundingClientRect()
+    return { top: Math.round(r.top), left: Math.round(r.left) }
+  })
+  if (!cards.length) return
+  await nextTick()
+  const nowGrid = groupGridEl.value
+  if (!nowGrid) return
+  const nowCards = [...nowGrid.querySelectorAll('[data-group-card]')]
+  nowCards.forEach((el, i) => {
+    const prev = prevRects[i]
+    if (!prev) return
+    const r = el.getBoundingClientRect()
+    const dx = prev.left - Math.round(r.left)
+    const dy = prev.top - Math.round(r.top)
+    if (!dx && !dy) return
+    // 打断上一轮还在跑的过渡，一律从布局位置重新起算，避免两次动画叠加出漂移
+    for (const a of el.getAnimations()) {
+      if (a.transitionProperty === 'transform') a.cancel()
+    }
+    el.style.transition = 'none'
+    el.style.transform = `translate(${dx}px, ${dy}px)`
+    void el.offsetHeight
+    el.style.transition = 'transform 220ms cubic-bezier(0.22, 0.6, 0.36, 1)'
+    el.style.transform = ''
+    el.addEventListener('transitionend', () => {
+      el.style.transition = ''
+      el.style.transform = ''
+    }, { once: true })
+  })
 })
+
+// 条件变了只把「已排表」状态作废（按钮回到「开始排表」）+ 丢掉可应用的结果缓存，
+// 但**不清空预览**：previewGroups 是给人看的，清掉会变成「加一个条件下面的表就没了」。
+// 安全性由 lastResult 保证 —— confirm() 里先判 arranged、再判 lastResult，不会误用旧结果。
 watch(stages, () => {
   arranged.value = false
-  previewGroups.value = []
   lastResult.value = null
 }, { deep: true })
 
 // 提示条自动消失的定时器：弹窗关闭后仍在跑会往已销毁的实例写 rejectText
 onBeforeUnmount(() => { clearTimeout(ctx._rejectTimer) })
 </script>
+
+<style scoped>
+/* 条件行的基础过渡：让位靠相邻行的 translate 位移，过渡必须在样式层先声明好。
+   只在 markShift 里临时写 inline transition 时，「同一帧内既设 transition 又设 transform」
+   的首次让位可能被浏览器直接拍到终点，看起来就是没有动画。 */
+[data-stage-idx] {
+  transition: transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 条件行里的关闭键：沿用全局 .dlg-close（圆角方块 + 浅灰底），只压尺寸——
+   行本身只有 py-1.5 + 20px 内容，28px 会把行撑高一圈。 */
+.close-sm {
+  width: 22px;
+  height: 22px;
+  font-size: 13px;
+}
+
+/* 拖动中的条件行：原位变淡，留出「待填补的空槽」（与表格拖行、智能排表条件行一致） */
+.stage-row-dragging {
+  opacity: 0.35;
+}
+</style>

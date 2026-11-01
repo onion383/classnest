@@ -105,11 +105,21 @@ export function useScheduleActive(ctx, { API_BASE, DEFAULT_SECTIONS }) {
       ctx.saveActive();
     },
     async onActiveSwapRows(fromIdx, toIdx) {
-      const rows = ctx.activeDisplayRows.filter(r => !r._isSeparator && !r._mergeCells);
-      const fromRow = rows[fromIdx], toRow = rows[toIdx];
-      if (!fromRow || !toRow || fromRow._isReadonly || toRow._isReadonly) return;
+      // 索引必须落在**显示行**数组上：fromIdx/toIdx 来自 GridView 的 rows 下标
+      // （含大课间/午休/休息这些合并行）。早先这里先 filter 再取下标，
+      // 一旦拖动跨越休息行就会整体错位一格、甚至取到 undefined 直接 return。
+      const all = (ctx.activeDisplayRows && ctx.activeDisplayRows.value) || [];
+      const fromRow = all[fromIdx], toRow = all[toIdx];
+      if (!fromRow || !toRow) return;
+      if (fromRow._isReadonly || toRow._isReadonly || fromRow._mergeCells || toRow._mergeCells) return;
       const fromLessonIdx = fromRow._lessonIdx, toLessonIdx = toRow._lessonIdx;
+      // 讲台行 / 分隔行既不是 readonly 也不是 mergeCells，必须靠 _lessonIdx 兜住，
+      // 否则 splice(undefined, 1) 会删掉第 0 行、把 cells 结构弄坏
       if (fromLessonIdx === undefined || toLessonIdx === undefined) return;
+      // 越界防御：内存里的 cells 若已被上一轮异常改动压短，splice 会写出 holes，
+      // 后端遍历时就会抛 "reading 'N'"。宁可这次不生效，也不能再往库里写坏数据。
+      const srcCells = ctx.activeCells.value;
+      if (!Array.isArray(srcCells) || fromLessonIdx < 0 || fromLessonIdx >= srcCells.length) return;
       const prev = JSON.parse(JSON.stringify(ctx.activeCells.value));
       // 移动语义：与拖动时的让位预览一致（取出源行插入目标位置，中间行顺移）
       const newCells = [...ctx.activeCells.value];
@@ -132,10 +142,15 @@ export function useScheduleActive(ctx, { API_BASE, DEFAULT_SECTIONS }) {
       const fromHeader = ctx.activeColHeaders.value[fromIdx] ?? `列${fromIdx + 1}`, toHeader = ctx.activeColHeaders.value[toIdx] ?? `列${toIdx + 1}`;
       const prev = JSON.parse(JSON.stringify(ctx.activeCells.value));
       // 移动语义：取出源列插入目标位置，中间列的数据顺移（表头固定）
+      // 先按列数把每行补齐/截齐：行长短不一时 splice 会产出 undefined 单元格，
+      // 渲染与保存链路随后就会崩在 "reading '0'" 这类下标访问上。
+      const cols = ctx.activeColHeaders.value.length;
       const newCells = ctx.activeCells.value.map(row => {
-        const r = [...row];
+        const r = Array.isArray(row) ? [...row] : [];
+        while (r.length < cols) r.push({ course: '' });
+        while (r.length > cols) r.pop();
         const [m] = r.splice(fromIdx, 1);
-        r.splice(toIdx, 0, m);
+        r.splice(toIdx, 0, m || { course: '' });
         return r;
       });
       ctx.activeCells.value = newCells;

@@ -1,13 +1,20 @@
 /* ==================== 弹窗遮罩点击提示（事件委托，一次性全局注册） ====================
  * 目标：点击弹窗遮罩（窗口外部）时，不再关闭弹窗，而是弹一条提示条「请关闭弹窗」。
  * 要点：
- *   - 捕获阶段 pointerdown 判定被点元素「就是遮罩本尊」(class 含 inset-0 且 bg-black/)，
+ *   - 捕获阶段判定被点元素「就是遮罩本尊」(class 含 inset-0 且 bg-black/)，
  *     点卡片内部/其他元素一律不处理。
  *   - 找到遮罩直接子元素的 .dialog-card 确认是弹窗类遮罩（无卡片的查看器遮罩不干预）。
  *   - 带 no-dialog-pulse 标记的遮罩（标题栏的搜索/主题/账户弹窗）不拦截、不弹提示，
  *     点击遮罩即由各自 @click.self 直接关闭。
  *   - 只弹 toast，不改动弹窗自身的显隐状态。
  * 用法：在 main.js 里 import('./utils/dialogOverlayPulse') 一次即可，全局生效。
+ *
+ * ⚠️ 为什么拦 click 而不是 pointerdown（2026-10-31 实测定案，Electron 真实输入管线）：
+ *   旧版在捕获阶段对 pointerdown 做 preventDefault+stopPropagation，实测 click 照常
+ *   派发到遮罩（Pointer Events 规范：取消 pointerdown 不取消 click），@click.self
+ *   照样触发 → 拦截器上线后弹窗其实一直「点外部仍能关」。改拦 click 本身：
+ *   document 捕获阶段 stopPropagation 会让事件根本到不了遮罩上的 Vue 监听器，
+ *   关闭逻辑自然失效。
  */
 import { useNotification } from '../composables/useNotification'
 
@@ -20,7 +27,7 @@ export function initDialogOverlayPulse() {
     el.className.includes('bg-black/')
 
   document.addEventListener(
-    'pointerdown',
+    'click',
     (e) => {
       const target = e.target
       // 只有点到遮罩本尊才触发；点卡片及其内部、或其他任意元素一律不处理
@@ -39,7 +46,7 @@ export function initDialogOverlayPulse() {
       // 标题栏弹窗（搜索/主题/账户）：不拦截，点击遮罩直接关闭，且不弹提示
       if (target.classList.contains('no-dialog-pulse')) return
 
-      // 拦截默认行为，阻止气泡到 @click.self，避免弹窗被关闭
+      // 拦截 click：不让它到达遮罩自身的 @click.self / DialogShell @overlay
       e.preventDefault()
       e.stopPropagation()
 

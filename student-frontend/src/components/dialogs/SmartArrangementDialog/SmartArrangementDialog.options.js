@@ -2,6 +2,7 @@
 // 纯代码搬运自 SmartArrangementDialog.vue 的 methods，未改写逻辑。
 import { useSeatDraft } from '../../../composables/useSeatDraft.js'
 import { useNotification } from '../../../composables/useNotification.js'
+import { nextTick } from 'vue'
 export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
   return {
     // ==================== 位置工具 ====================
@@ -34,28 +35,17 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
       e.dataTransfer.setData('text/drag-kind', 'option')
       e.dataTransfer.effectAllowed = 'copy'
     },
-    onRowDragStart(e, index) {
-      e.dataTransfer.setData('text/row', String(index))
-      e.dataTransfer.setData('text/drag-kind', 'row')
-      e.dataTransfer.effectAllowed = 'move'
-    },
     // 拖到空白区：追加到末尾
     onDropZone(e) {
       ctx.handleDrop(e, ctx.conditions.value.length)
     },
-    // 拖到某行上：插入到该行之前
+    // 条件选项拖到某行上：插到该行之前（仅「添加」语义；行排序已改指针拖拽，不走这里）
     onDropOnRow(e, index) {
       ctx.handleDrop(e, index)
     },
     handleDrop(e, index) {
-      const kind = e.dataTransfer.getData('text/drag-kind')
-      if (kind === 'row') {
-        const from = Number(e.dataTransfer.getData('text/row'))
-        ctx.moveCondition(from, index)
-      } else {
-        const key = e.dataTransfer.getData('text/plain')
-        if (key) ctx.addCondition(key, index)
-      }
+      const key = e.dataTransfer.getData('text/plain')
+      if (key) ctx.addCondition(key, index)
     },
     // 添加条件（可重复添加，不限数量）
     addCondition(key, index) {
@@ -65,8 +55,10 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
       const at = Math.max(0, Math.min(index, ctx.conditions.value.length))
       ctx.conditions.value.splice(at, 0, node)
       ctx.resetArranged()
+      // 高度从 0 展开：要等这一行渲染出来才量得到高度
+      nextTick(() => { if (ctx.sortCond) ctx.sortCond.enterAt(at) })
     },
-    // 拖拽排序：把 from 行移动到 to 行之前
+    // 拖拽排序：把 from 行移动到 to 行之前（保留旧的插入位语义，供其它调用方使用）
     moveCondition(from, to) {
       if (from < 0 || from >= ctx.conditions.value.length || from === to) return
       const node = ctx.conditions.value[from]
@@ -75,9 +67,19 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
       ctx.conditions.value.splice(Math.max(0, Math.min(at, ctx.conditions.value.length)), 0, node)
       ctx.resetArranged()
     },
+    // 删除条件：先把高度收到 0 再真正移除（否则行「啪」地消失，上下的行也是瞬间补位）
     removeCondition(index) {
-      ctx.conditions.value.splice(index, 1)
-      ctx.resetArranged()
+      const node = ctx.conditions.value[index]
+      if (!node) return
+      const doRemove = () => {
+        // 用对象身份重新定位：收起动画这 200ms 里列表可能已被再次修改
+        const i = ctx.conditions.value.indexOf(node)
+        if (i < 0) return
+        ctx.conditions.value.splice(i, 1)
+        ctx.resetArranged()
+      }
+      if (ctx.sortCond) ctx.sortCond.leaveAt(index, doRemove)
+      else doRemove()
     },
     // 取某条件的语义句段（纯文案 + 下拉位），供通用渲染器产出 UI
     segmentsOf(node) {

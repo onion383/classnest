@@ -3,6 +3,8 @@
 // ctx 契约：{ stages, satisfaction, rejectText, _dragIdx, _overIdx, _pendingType, _rejectTimer, addStage }
 // （状态为 ref，模块内用 .value；临时字段与跨模块方法直接挂在 ctx 上）。
 // nextKey 由主组件以参数传入，避免循环依赖。
+import { nextTick } from 'vue'
+
 export function useSmartGroupConditions(ctx, nextKey) {
   return {
     // ==================== 流水线条件操作 ====================
@@ -12,9 +14,22 @@ export function useSmartGroupConditions(ctx, nextKey) {
       else if (type === 'identity') Object.assign(s, { type: 'identity', kind: 'leader', studentId: '' })
       else Object.assign(s, { type: 'gender', mode: 'balanced' })
       ctx.stages.value.push(s)
+      // 高度从 0 展开：要等这一行渲染出来才量得到高度
+      const at = ctx.stages.value.length - 1
+      nextTick(() => { if (ctx.sortStage) ctx.sortStage.enterAt(at) })
     },
-    removeStage(si) {
-      ctx.stages.value.splice(si, 1)
+    // 删除条件：先把高度收到 0 再真正移除（否则行「啪」地消失，上下的行也是瞬间补位）
+    removeStage(index) {
+      const node = ctx.stages.value[index]
+      if (!node) return
+      const doRemove = () => {
+        // 用对象身份重新定位：收起动画这 200ms 里列表可能已被再次修改
+        const i = ctx.stages.value.indexOf(node)
+        if (i < 0) return
+        ctx.stages.value.splice(i, 1)
+      }
+      if (ctx.sortStage) ctx.sortStage.leaveAt(index, doRemove)
+      else doRemove()
     },
 
     // ==================== 拖拽交互（拖入添加 / 拖动手柄调序） ====================
@@ -25,40 +40,10 @@ export function useSmartGroupConditions(ctx, nextKey) {
       e.dataTransfer.setData('text/plain', 'chip')
       e.dataTransfer.effectAllowed = 'copy'
     },
-    // 拖动已有条件的手柄：记录来源下标
-    onStageDragStart(si, e) {
-      ctx._dragIdx = si
-      ctx._pendingType = null
-      e.dataTransfer.setData('text/plain', 'stage')
-      e.dataTransfer.effectAllowed = 'move'
-    },
-    // 悬停某行时计算插入位置（上半 → 之前，下半 → 之后）
-    rowDragover(si, e) {
-      e.preventDefault()
-      e.stopPropagation()
-      const rect = e.currentTarget.getBoundingClientRect()
-      const next = e.clientY < rect.top + rect.height / 2 ? si : si + 1
-      // 值未变化时不写响应式状态，避免拖拽过程中每帧触发整个条件列表重渲染
-      if (ctx._overIdx !== next) ctx._overIdx = next
-    },
-    // 松开到条件区：处理拖入新条件 / 拖动手柄调序
+    // 松开到条件区：处理拖入新条件（行内调序已改指针拖拽，不走这里）
     boxDrop(e) {
       e.preventDefault()
-      if (ctx._dragIdx != null) {
-        // 已有条件调序
-        const from = ctx._dragIdx
-        let to = ctx._overIdx
-        if (to == null) to = ctx.stages.value.length
-        const [moved] = ctx.stages.value.splice(from, 1)
-        let insert = to
-        if (from < to) insert = to - 1
-        ctx.stages.value.splice(insert, 0, moved)
-      } else if (ctx._pendingType) {
-        // 从选项区拖入新条件（追加到末尾）
-        ctx.addStage(ctx._pendingType)
-      }
-      ctx._dragIdx = null
-      ctx._overIdx = null
+      if (ctx._pendingType) ctx.addStage(ctx._pendingType)
       ctx._pendingType = null
     },
     satisfactionOf(st) {

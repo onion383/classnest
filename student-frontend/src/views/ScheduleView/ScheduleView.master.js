@@ -111,11 +111,15 @@ export function useScheduleMaster(ctx, { API_BASE, DEFAULT_SECTIONS }) {
       ctx.saveMaster();
     },
     async onMasterSwapRows(fromIdx, toIdx) {
-      const rows = ctx.masterDisplayRows.filter(r => !r._isSeparator && !r._mergeCells);
-      const fromRow = rows[fromIdx], toRow = rows[toIdx];
-      if (!fromRow || !toRow || fromRow._isReadonly || toRow._isReadonly) return;
+      // 同 active：索引必须对齐**显示行**（含大课间/午休/休息），否则跨休息行拖动会错位一格
+      const all = (ctx.masterDisplayRows && ctx.masterDisplayRows.value) || [];
+      const fromRow = all[fromIdx], toRow = all[toIdx];
+      if (!fromRow || !toRow) return;
+      if (fromRow._isReadonly || toRow._isReadonly || fromRow._mergeCells || toRow._mergeCells) return;
       const fromLessonIdx = fromRow._lessonIdx, toLessonIdx = toRow._lessonIdx;
       if (fromLessonIdx === undefined || toLessonIdx === undefined) return;
+      const srcCells = ctx.masterCells.value;
+      if (!Array.isArray(srcCells) || fromLessonIdx < 0 || fromLessonIdx >= srcCells.length) return;
       const prev = JSON.parse(JSON.stringify(ctx.masterCells.value));
       // 移动语义：同上
       const newCells = [...ctx.masterCells.value];
@@ -135,10 +139,14 @@ export function useScheduleMaster(ctx, { API_BASE, DEFAULT_SECTIONS }) {
       const fromHeader = ctx.masterColHeaders.value[fromIdx] ?? `列${fromIdx + 1}`, toHeader = ctx.masterColHeaders.value[toIdx] ?? `列${toIdx + 1}`;
       const prev = JSON.parse(JSON.stringify(ctx.masterCells.value));
       // 移动语义：同 active 表（表头固定，只移动数据列）
+      // 同样先按列数补齐/截齐，避免行长短不一时 splice 产出 undefined 单元格
+      const cols = ctx.masterColHeaders.value.length;
       const newCells = ctx.masterCells.value.map(row => {
-        const r = [...row];
+        const r = Array.isArray(row) ? [...row] : [];
+        while (r.length < cols) r.push({ course: '' });
+        while (r.length > cols) r.pop();
         const [m] = r.splice(fromIdx, 1);
-        r.splice(toIdx, 0, m);
+        r.splice(toIdx, 0, m || { course: '' });
         return r;
       });
       ctx.masterCells.value = newCells;

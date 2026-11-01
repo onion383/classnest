@@ -62,7 +62,7 @@
             <th v-if="!hideMetaColumns" class="bg-primary text-text-inverse border border-border px-2 py-1 text-center" style="width: 130px;">时间</th>
             <th v-if="hideMetaColumns && showRowNumber" class="bg-primary text-text-inverse border border-border px-2 py-1 text-center" style="width: 110px;">{{ rowHeaderLabel }}</th>
             <th
-              v-for="(col, colIdx) in colHeaders"
+              v-for="(col, colIdx) in displayHeaders"
               :key="colIdx"
               :class="['bg-primary text-text-inverse border border-border px-2 py-1 text-center', col !== '走廊' ? 'cursor-pointer' : 'cursor-default bg-text-muted', { 'dt-col-src-hidden': colDragIdx === colIdx }]"
               :style="col === '走廊' ? 'width: 60px;' : ''"
@@ -92,7 +92,7 @@
             <tr
               v-for="(row, rowIdx) in rows"
               :key="row._rowKey || rowIdx"
-              :class="[{ 'opacity-30': rowDragIdx === rowIdx, 'content-visibility-auto': true }, row._isSeparator ? 'bg-border h-8' : '', row._isPodium ? 'bg-warning/20 h-10' : '']"
+              :class="[{ 'invisible': rowDragIdx === rowIdx, 'content-visibility-auto': true }, row._isSeparator ? 'bg-border h-8' : '', row._isPodium ? 'bg-warning/20 h-10' : '']"
             >
               <!-- 讲台行 -->
               <template v-if="row._isPodium">
@@ -105,7 +105,7 @@
               <td v-else-if="row._mergeCells" :colspan="totalColumns" class="border border-border px-2 py-1 text-center bg-surface-hover text-sm font-semibold">{{ row.label }} {{ row.time }}</td>
               <!-- 普通行 -->
               <template v-else>
-                <td v-if="showPeriodColumn && !hideMetaColumns && row._periodRowSpan > 0" :rowspan="row._periodRowSpan" class="bg-primary/10 border border-border px-2 py-1 text-center font-bold align-middle" style="vertical-align: middle;">{{ row.periodLabel }}</td>
+                <td v-if="showPeriodColumn && !hideMetaColumns && row._periodRowSpan > 0" data-period-cell :rowspan="row._periodRowSpan" class="bg-primary/10 border border-border px-2 py-1 text-center font-bold align-middle relative" style="vertical-align: middle;"><div class="period-inner absolute inset-0 flex items-center justify-center">{{ row.periodLabel }}</div></td>
                 <td v-else-if="showPeriodColumn && !hideMetaColumns" class="hidden"></td>
 
                 <td v-if="!hideMetaColumns" class="bg-primary text-text-inverse border border-border px-2 py-1 text-center font-bold" style="width: 100px;">
@@ -137,12 +137,15 @@
 
                 <!-- 数据单元格 -->
                 <template v-for="(cell, colIdx) in row.cells" :key="colIdx">
-                  <td v-if="cell._isAisle && cell._aisleRowSpan" :rowspan="cell._aisleRowSpan" :data-col-idx="colIdx" class="border border-border bg-text-muted text-center align-middle" style="width: 60px; vertical-align: middle; font-size: 1.125rem; line-height: 1.2;">
+                  <!-- 走廊单元格也要登记 ref：列让位时它需要跟着一起平移来填补空白
+                       （列宽不等时，只把邻列挪进「固定槽位」会在槽尾留一条空隙）。 -->
+                  <td v-if="cell._isAisle && cell._aisleRowSpan" :rowspan="cell._aisleRowSpan" :data-col-idx="colIdx" :ref="el => setCellRef(rowIdx, colIdx, el)" class="border border-border bg-text-muted text-center align-middle" style="width: 60px; vertical-align: middle; font-size: 1.125rem; line-height: 1.2;">
                      <div style="writing-mode: vertical-lr; text-orientation: upright; display: inline-block;">走廊</div></td>
                   <td v-else-if="cell._isAisleHidden" style="display: none;"></td>
                   <td
                     v-else
                     :data-row-id="anchorPrefix && row._lessonIdx != null ? anchorPrefix + ':' + row._lessonIdx + ':' + colIdx : undefined"
+                    data-data-cell
                     :ref="el => setCellRef(rowIdx, colIdx, el)"
                     :class="['border border-border px-2 py-2 text-center transition-colors relative', colDragIdx === colIdx ? 'dt-col-src-hidden' : '', isDragTarget(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isCellSelected(rowIdx, colIdx) && !isEditing(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isEditing(rowIdx, colIdx) ? 'ring-2 ring-info ring-inset' : '', row._isReadonly ? '' : 'cursor-pointer', cell._bg != null ? 'cell-heat' : '', isEditing(rowIdx, colIdx) ? 'cell-editing' : '']"
                     :style="{
@@ -308,6 +311,19 @@ const rowDragIdx = ref(null)
 const rowDragOverIdx = ref(null)
 const colDragIdx = ref(null)
 const colDragOverIdx = ref(null)
+// 列拖动期间的「表头文字覆盖」：数组，下标是 **th 自己的索引**，值是该 th 挪到新位置后
+// 应该显示的文字。为什么按 th 索引而不是按位置：让位只改 transform、DOM 顺序不变，
+// 位置 i 上看到的其实是 th[j]，所以必须改 th[j] 的文字才会显示在位置 i。
+// null = 常规渲染。
+const colLabelOverride = ref(null)
+const displayHeaders = computed(() => {
+  const list = props.colHeaders || []
+  const ov = colLabelOverride.value
+  if (!ov) return list
+  const out = list.slice()
+  for (let i = 0; i < out.length; i++) if (ov[i] != null) out[i] = ov[i]
+  return out
+})
 const firstActivate = ref(true)
 // 行过渡容器是否启用（见模板说明）：只在行集合真正变化的短窗口内为 true，
 // 日常编辑/键入/框选时退化成 Fragment，避免 TransitionGroup 每次更新的强制同步布局。
@@ -330,7 +346,7 @@ const ctx = {
   gridTable,
   gridContainer,
   selecting, selectionStart, selectionEnd, longPressTimer, longPressActive,
-  dragSource, dragTarget, rowDragIdx, rowDragOverIdx, colDragIdx, colDragOverIdx,
+  dragSource, dragTarget, rowDragIdx, rowDragOverIdx, colDragIdx, colDragOverIdx, colLabelOverride,
   firstActivate, rowsAnimEnabled, vScroll, editingCell, editingCellData,
   candidateHighlightIndex, showCandidatePopup, candidatePopupX, candidatePopupY, cellRefs,
   colHeaders: toRef(props, 'colHeaders'),

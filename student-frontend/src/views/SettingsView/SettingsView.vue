@@ -528,7 +528,7 @@
         <div class="border-t border-border pt-6 mt-6 flex items-center gap-4">
           <div class="flex items-center gap-1.5">
             <span class="text-sm text-text-muted">上次启动耗时</span>
-            <AppHelp text="口径：进程启动到窗口首次显示（ready-to-show），不含数据加载等待" aria-label="启动耗时口径说明" :size="13" />
+            <AppHelp text="口径：进程启动到占位页移除（首屏内容真正绘制出来的那一刻），与 startup.log 同一口径" aria-label="启动耗时口径说明" :size="13" />
           </div>
           <span class="text-sm font-medium text-text" style="font-variant-numeric: tabular-nums;">{{ (perfStartupTotal / 1000).toFixed(3) }} s</span>
         </div>

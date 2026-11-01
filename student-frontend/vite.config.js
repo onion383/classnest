@@ -200,6 +200,41 @@ const vue36 = process.env.VUE_CHANNEL === '36' ? await loadVue36(vdomOnly) : nul
 // 避免触发 SmartScreen（打包出的未签名 exe 会被拦，且需要管理员权限才能放行）。
 const benchBuild = process.env.VUE_BENCH === '1'
 
+// ───────────────────────────────────────────────────────────────────────────
+// 构建通道标识
+//
+// 为什么需要：`npm run build` 直接调 vite build，它不认识 --vue36，只认环境变量
+// VUE_CHANNEL。终端里残留 VUE_CHANNEL=36 时，本该产出 3.5 的构建会静默变成 3.6；
+// 而产物里没有任何标记可反查通道，只能靠「styles chunk 是 107KB 还是 228KB」去猜
+// （2026-10-31 就这么打出了两个内容完全相同的 3.6 包，事后才从 asar 里倒查出来）。
+//
+// 现在两件事：
+//   ① 每次 dev / build 都在第一行打印通道，肉眼可见；
+//   ② 构建时往 outDir 写 .build-channel.json，随产物一起打包，事后可直接从 asar 反查。
+// 另见 package.json：build 已改为 `node dev-vite.js build`，由 dev-vite.js 显式清掉
+// VUE_CHANNEL / VUE_VAPOR，从源头断掉「终端残留变量串味」。
+// ───────────────────────────────────────────────────────────────────────────
+const CHANNEL_ID = !vue36 ? 'vue35-vdom' : (vdomOnly ? 'vue36-vdom' : 'vue36-vapor')
+const CHANNEL_LABEL = !vue36 ? 'Vue 3.5（VDOM 主线）' : (vdomOnly ? 'Vue 3.6（纯 VDOM）' : 'Vue 3.6（Vapor）')
+console.log(`\n[channel] ${CHANNEL_LABEL}${benchBuild ? '  [bench 构建]' : ''}\n`)
+
+function channelStamp() {
+  let outDir = path.resolve(import.meta.dirname, 'dist')
+  return {
+    name: 'channel-stamp',
+    apply: 'build',
+    configResolved(cfg) { outDir = cfg.build.outDir },
+    closeBundle() {
+      try {
+        fs.writeFileSync(
+          path.join(outDir, '.build-channel.json'),
+          `${JSON.stringify({ channel: CHANNEL_ID, label: CHANNEL_LABEL, bench: benchBuild, builtAt: new Date().toISOString() }, null, 2)}\n`,
+        )
+      } catch (_) { /* 标记写失败不影响构建 */ }
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     // 顺序无实质影响（该插件是 enforce:'pre'），放最前只为读起来直观
@@ -221,6 +256,8 @@ export default defineConfig({
     tailwindcss(),
     injectSplash(),
     nonBlockingCss(),
+    // 构建产物里留通道标记（见上方 channelStamp）
+    channelStamp(),
   ].filter(Boolean),
   // 预构建缓存按通道隔离：3.5 与 3.6 共用 node_modules/.vite 会互相污染，
   // 切换通道后必须重新预构建（否则会拿到上一版 vue 的 deps 产物）。

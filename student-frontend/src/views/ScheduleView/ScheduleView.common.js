@@ -23,6 +23,9 @@ export function useScheduleCommon(ctx, { SECTION_NAMES }) {
         items.forEach((item, idx) => {
           const row = {
             _rowKey: `${secKey}_${idx}`,
+            // 所属时段（morning/noon/…）：行让位不允许跨段，
+            // 否则「上午/下午」这种跨行合并块会被拆散，标签怎么摆都盖不住。
+            _section: secKey,
             label: item.name,
             time: `${item.start}-${item.end}`,
             _isSeparator: false,

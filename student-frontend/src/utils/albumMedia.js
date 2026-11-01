@@ -4,11 +4,11 @@
 // 但浏览器对 <img> 的缓存是看 URL + max-age(86400)，URL 不变就会继续用旧图一天。
 // 因此这里把版本号拼进查询串：版本一升，URL 变化，旧缓存自然失效。
 //
-// 注意：这里的版本必须与 student-backend/routes/album.js 的 THUMB_VERSION 保持一致，
-// 两边一起改（当前：512px / q82 → 版本 4）。
+// 注意：这里的版本必须与 student-backend/albumScan.js 的 THUMB_VERSION 保持一致，
+// 两边一起改（当前：256px / q82 → 版本 5）。
 import { resourceUrl, apiFetch } from './apiUrl'
 
-export const ALBUM_THUMB_VERSION = 4
+export const ALBUM_THUMB_VERSION = 5
 
 export function albumThumbUrl(photoId) {
   if (!photoId) return ''

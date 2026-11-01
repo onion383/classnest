@@ -1,3 +1,12 @@
+// ===== 启动分段打点 =====
+// 主进程的「后端就绪」只覆盖「fork → listen 成功」这一整段，中间是黑盒；实测线上出现过
+// 283ms ~ 5325ms 的 18 倍波动，无法判断是 Node 引导、模块 require 还是 listen 本身。
+// 这里按阶段打 stdout（主进程 backendLog 会写进 backend.log），只看不改行为。
+// 文字刻意避开 "listening" / "server started" —— 主进程靠正则 detectBackendReady 判就绪，不能被误触。
+const _bootT0 = Date.now();
+const _boot = (name) => { try { console.log(`[boot] +${Date.now() - _bootT0}ms ${name}`); } catch (_) { /* 日志失败不影响启动 */ } };
+_boot('后端进程入口');
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -39,6 +48,8 @@ const { resolveNames } = require('./services/provisionalStudents');
 // 关键路由：启动时立即加载（登录必需）
 const authRoutes = require('./routes/auth');
 const accountRoutes = require('./routes/account');
+
+_boot('核心模块 require 完成（含 db/middleware/auth）');
 
 const app = express();
 // 端口可用环境变量覆盖（默认 3000）：打包/日常运行行为不变，
@@ -200,11 +211,13 @@ let errorHandlerInstalled = false;
 
 // 端口冲突时自动重试（应用退出后旧进程可能未完全释放端口）
 function startServer(port) {
+  _boot(`开始监听端口 ${port}`);
   // 只监听本机回环地址（127.0.0.1）：若像原先那样不指定 host，Node 会监听 0.0.0.0/::，
   // 首次启动即触发 Windows 防火墙“允许访问”弹窗。本服务只供本机前端/主进程访问，
   // 绑定回环即可满足需求，且不会触发防火墙提示（检查更新是出站请求，本就不会弹窗）。
   const server = app.listen(port, '127.0.0.1', () => {
     console.log(`✅ 服务器已启动：http://127.0.0.1:${port}`);
+    _boot('监听成功 = 就绪');
 
     // 就绪上报：通过 fork 的 IPC 通道告知主进程「端口已监听」，由主进程转发给各渲染窗口。
     // 前端据此在就绪瞬间发起首个请求，不再靠固定退避重试去「撞」端口。
@@ -214,7 +227,11 @@ function startServer(port) {
     // 的一次性冷启动成本放到首个用户请求到达前悄悄完成，避免登录/首屏请求干等 cold start 而转圈。
     // 暖机失败静默，后续请求照常懒加载兜底，不影响功能。
     setImmediate(() => {
+      // warmup 会加载 sqlite 原生模块、打开加密库并 initSchema —— 它不阻塞「就绪」信号，
+      // 却直接决定第一个请求能不能立刻返回，也就是首屏数据什么时候到，因此单独计时。
+      const _warmT0 = Date.now();
       try { dbManager.warmup(); } catch (_) { /* 暖机失败不影响正常懒加载路径 */ }
+      try { console.log(`[boot] +${Date.now() - _bootT0}ms 数据库 warmup 完成（本段 ${Date.now() - _warmT0}ms）`); } catch (_) { /* 忽略 */ }
     });
 
     // 非关键路由懒加载：服务器就绪后再逐个注册，不阻塞就绪信号。

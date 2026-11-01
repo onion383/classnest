@@ -10,7 +10,13 @@ import { nextTick } from 'vue'
 
 // 表头/行内「数据列」的起始下标：有勾选框列时是 1，no-select 时勾选框整列不渲染，必须从 0 开始。
 // 若一律按 1 算，no-select 的表（今日到班两张表）列拖拽的落点框与虚影会整体错开一列。
-const thOffsetOf = (vm) => (!vm.readonly && !vm.noSelect ? 1 : 0);
+//
+// ctx 里的 readonly / noSelect 是 toRef（**ref 对象**，见 DynamicTable.vue 的 ctx 定义），
+// 直接 `!vm.readonly` 对 ref 恒为 false —— 这个函数曾经因此永远返回 0，
+// 于是 _colGeom 从复选框列开始收集，整体比 colEls / colDragIndex 偏一列：
+// 命中判定偏列、让位用了邻列宽度、落点框偏列，表现就是「列拖动全是乱的」。必须先 unref。
+const unrefBool = (v) => (v && typeof v === 'object' && 'value' in v ? !!v.value : !!v)
+const thOffsetOf = (vm) => (!unrefBool(vm.readonly) && !unrefBool(vm.noSelect) ? 1 : 0);
 
 // ctx 契约：状态/computed/props ref 用 .value 访问，组件根节点取 ctx.rootEl.value（模板 ref），
 // _ 开头临时字段（拖拽几何/ghost/RAF 句柄）为 ctx 普通字段，跨模块方法经 ctx 运行时解析。
@@ -97,9 +103,39 @@ export function useDynamicTableDrag(ctx) {
         ctx._rowDropSig = null;
       };
       const geom = ctx._rowGeom;
-      const g = (geom && ctx.dragOverIndex.value !== null) ? geom[ctx.dragOverIndex.value] : null;
+      const overIdx = ctx.dragOverIndex.value;
+      const g = (geom && overIdx !== null) ? geom[overIdx] : null;
       if (!g) { hide(); return; }
+      // 落点还在源行（未发生位移）时也画框：槽就是源行原位，大小 = 源行自身高度，
+      // 正好提示「松手会放回这里」。只是这时不再叠加「落点虚影」——
+      // 它是源行的半透明副本，贴在源行身上只会多一层重影。
       let { left, top, right, bottom } = g;
+      // 蓝框画的是「让位之后真正空出来的槽」，不是目标行原来的矩形。
+      // 让位的实现是整块平移 h(源行)，于是：
+      //   向下拖（from < to）：from+1..to 整体上移，槽开在**块底**（目标行原位置下部），高 h(from)
+      //   向上拖（from > to）：to..from-1 整体下移，槽开在**块顶**（目标行原位置上部），高 h(from)
+      //   原地不动（from === to）：槽就是源行原位，大小取 g 本身 —— 正好提示「松手会放回这里」
+      // 用目标行矩形时，只有全表等高才刚好等于空槽；行高不等会出现「框比被拖的行矮一大截」，
+      // 看起来那行根本塞不进去（用户反馈「蓝框大小取的是被移走的行」就是这个）。
+      const fromIdx = ctx.dragIndex.value;
+      const sameSlot = fromIdx !== null && fromIdx === overIdx;
+      if (fromIdx !== null && fromIdx !== overIdx) {
+        const srcGeom = geom[fromIdx] || null;
+        const hFrom = srcGeom
+          ? Math.round(srcGeom.bottom - srcGeom.top)
+          : Math.round(bottom - top);
+        if (fromIdx < overIdx) {
+          // 向下拖：整块上移，槽开在**块底**（目标行原位置的下半部分，高 h(源)）
+          bottom = g.bottom;
+          top = g.bottom - hFrom;
+        } else {
+          // 向上拖：整块下移，槽开在**块顶**（目标行原位置的上半部分，高 h(源)）。
+          // 不能拿源行的原位置当槽 —— 那是块底，槽会跟着源行跑到页面下方，
+          // 拖到第一行时第一行那儿反而没有框。
+          top = g.top;
+          bottom = g.top + hFrom;
+        }
+      }
       const c = ctx._rowGeomContainer;
       if (c) {
         left = Math.max(left, c.left);
@@ -124,7 +160,10 @@ export function useDynamicTableDrag(ctx) {
       box.style.height = h + 'px';
       // 落点虚影：被拖行的半透明副本固定在落点上（不跟随鼠标），
       // 松手前就能看到它将落在哪一格。
-      if (ghost) {
+      // 落在源行自身时只画框、不贴虚影：虚影就是源行的副本，叠上去只是加深一层重影。
+      if (ghost && sameSlot) {
+        ghost.style.display = 'none';
+      } else if (ghost) {
         ghost.style.display = 'block';
         ghost.style.transform = `translate(${left}px, ${top}px)`;
         ghost.style.width = w + 'px';
@@ -148,19 +187,26 @@ export function useDynamicTableDrag(ctx) {
       // 蓝框与影子只在拖到别的列、真正腾出空位后才出现。
       if (ctx.colDragIndex.value !== null && ctx.colDragOverIndex.value === ctx.colDragIndex.value) { hide(); return; }
       // 用按下时缓存的几何，拖动过程中不再读取布局。
-      // 空位大小要按「让位后真正空出来的宽度」算，不能直接套目标列的原宽度：
-      //  · 向右拖：from..to 的列整体左移到前一列的左边界，空位贴在目标列原区域右端，
-      //    宽度 = 目标列前一列的宽度（列宽不等时，它与目标列宽度并不相同）。
-      //  · 向左拖：to..from-1 的列整体右移到后一列的左边界，空位就是目标列原区域。
-      // 列宽相等时，两者都与「目标列原矩形」完全一致，表现不变。
+      // 与「行拖动」完全同构：框画的是**让位后真正空出来的槽**，尺寸取**被拖列自身宽度**。
+      //   向右拖（from < to）：from+1..to 整体左移 w(from)，槽开在目标列右端 → [g.right - w(from), g.right]
+      //   向左拖（from > to）：to..from-1 整体右移 w(from)，槽开在目标列左端 → [g.left, g.left + w(from)]
+      // 取「目标列矩形」（g.left~g.right）是错的：那是被让位挤走的那一列的尺寸，
+      // 和用户手里正拖着的那一列对不上 —— 行拖动的框高从来只取 h(from)，没取过目标行高。
       const from = ctx.colDragIndex.value;
       const to = ctx.colDragOverIndex.value;
       let left, right;
-      if (from !== null && to > from) {
-        const prev = geom[to - 1];
-        const slotW = prev ? prev.right - prev.left : g.right - g.left;
-        left = g.right - slotW;
-        right = g.right;
+      if (from !== null && to !== null && from !== to) {
+        const srcGeom = geom[from] || null;
+        const wSrc = srcGeom
+          ? Math.round(srcGeom.right - srcGeom.left)
+          : Math.round(g.right - g.left);
+        if (from < to) {
+          right = g.right;
+          left = g.right - wSrc;
+        } else {
+          left = g.left;
+          right = g.left + wSrc;
+        }
       } else {
         left = g.left;
         right = g.right;
@@ -180,22 +226,13 @@ export function useDynamicTableDrag(ctx) {
       const sig = `${left}|${top}|${w}|${h}`;
       if (ctx._colDropSig === sig) return;
       ctx._colDropSig = sig;
-      // 落点虚影延迟创建
-      if (!ctx._colSlotGhost && ctx._colGhost) {
-        ctx._colSlotGhost = ctx._cloneGhostForSlot(ctx._colGhost, 0.22);
-      }
-      const ghost = ctx._colSlotGhost;
+      // 列拖动**不再贴落点虚影**（与 GridView 同款）：列宽由 table-layout:auto 按内容分配，
+      // 「落点那一格有多宽」没有稳定语义 —— 把被拖列的窄副本塞进目标列的宽框里，
+      // 就是「框一大块、影一小块」。插到哪一格交给蓝框表达，内容预览交给跟手虚影。
       box.style.display = 'block';
       box.style.transform = `translate(${left}px, ${top}px)`;
       box.style.width = w + 'px';
       box.style.height = h + 'px';
-      // 落点虚影：半透明列副本贴在目标格上
-      if (ghost) {
-        ghost.style.display = 'block';
-        ghost.style.transform = `translate(${left}px, ${top}px)`;
-        ghost.style.width = w + 'px';
-        ghost.style.height = h + 'px';
-      }
     },
 
     onRowHandleDown(event, index) {
@@ -375,7 +412,12 @@ export function useDynamicTableDrag(ctx) {
       if (ctx._rowRaf) { cancelAnimationFrame(ctx._rowRaf); ctx._rowRaf = null; }
       ctx._applyRowMove(); // 冲刷最后一帧
       // 松手位置：落位动画的起点（清 pending 之前取）
-      const relRow = ctx._rowPending ? { x: ctx._rowPending.clientX, y: ctx._rowPending.clientY } : null;
+      // 落位动画起点取**虚影的实际位置**（左/上边缘），不是鼠标点：
+      // 鼠标和行左边缘差着一个抓取偏移，而落点基准是行的左边缘，
+      // 两者凑一起会算出「半个表宽」的假差值 —— 明明已经对齐了，还要横着飞一整段。
+      const relRow = ctx._rowGhost && ctx._rowGhost.isConnected
+        ? (() => { const g = ctx._rowGhost.getBoundingClientRect(); return { left: g.left, top: g.top }; })()
+        : null;
       ctx._rowPending = null;
       ctx._rowGeom = null;
       ctx._rowGeomContainer = null;
@@ -387,7 +429,13 @@ export function useDynamicTableDrag(ctx) {
       const to = ctx.dragOverIndex.value;
       ctx.dragIndex.value = null;
       ctx.dragOverIndex.value = null;
-      if (from === null || to === null || from === to) { ctx._clearRowShiftFx(); return; }
+      if (from === null || to === null) { ctx._clearRowShiftFx(); return; }
+      if (from === to) {
+        ctx._clearRowShiftFx();
+        // 没换行但拖动位置变了：让虚影滑回这一行的位置，而不是松手瞬间消失
+        if (relRow) nextTick(() => ctx._slideInRow(from, relRow));
+        return;
+      }
       const movedRow = ctx.rowAt(from);
       if (!movedRow) { ctx._clearRowShiftFx(); return; }
       // 让位交给拖动期完成；松手只做一段「从松手位置落位」的收尾动画
@@ -414,8 +462,8 @@ export function useDynamicTableDrag(ctx) {
       if (!tr || typeof tr.animate !== 'function') return;
       const r = tr.getBoundingClientRect();
       if (!r.width && !r.height) return;
-      const dx = Math.round(rel.x - (r.left + r.width / 2));
-      const dy = Math.round(rel.y - (r.top + r.height / 2));
+      const dx = Math.round(rel.left - r.left);
+      const dy = Math.round(rel.top - r.top);
       if (!dx && !dy) return;
       tr.animate(
         [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }],

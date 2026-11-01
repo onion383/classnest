@@ -33,6 +33,24 @@ html, body {
   font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
 }
 
+/* ==================== 数字输入框上下箭头：悬停/聚焦淡入 ====================
+   原生 spinner（::-webkit-inner/outer-spin-button）默认隐藏（opacity:0），
+   鼠标悬停输入框或聚焦时淡入，移开淡出。
+   时长 0.18s → 0.26s + ease-out：0.18s 在 60fps 下约 11 帧、且 ease 前段爬升快，
+   实际观感接近「瞬现」；ease-out 让首帧变化更缓、尾段收得干净，淡入才看得出来。
+   注意：只调时长/曲线，别改实现方式 —— 纯 Electron，无需 -moz 兜底。 */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  opacity: 0;
+  transition: opacity 0.26s ease-out;
+}
+input[type="number"]:hover::-webkit-inner-spin-button,
+input[type="number"]:hover::-webkit-outer-spin-button,
+input[type="number"]:focus::-webkit-inner-spin-button,
+input[type="number"]:focus::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
 /* 注册 Tailwind 主题变量，让 class 可用 */
 @theme {
   --color-primary: var(--color-primary);

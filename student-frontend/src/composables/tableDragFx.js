@@ -69,9 +69,11 @@ export function clearShift(root) {
 /**
  * 行让位：中间行整体挪一格，把目标位置的「空槽」让出来。
  *
- * 位移按**几何逐行补偿**：每一行都挪到「邻行原来的位置」，
- * 而不是统一挪一个「被拖行高度」。表格里行高往往不相等（讲台行、分隔行、合并行），
- * 统一高度会让中间行错位、空槽大小也对不上，松手时看着是"跳一下"。
+ * 位移 = **被拖行自身的高度**，整块平移这么多：
+ * 块内各行的相对位置不变，只在目标一端空出一个与被拖行等大的槽。
+ * 早期版本按「几何逐行补偿」（每行挪到邻行原来的位置），等价于用**相邻行的高差**当位移，
+ * 只在所有行等高时成立；行高不等时每格差值不同、累积错位（学生管理、成员表都踩过）。
+ * 需要的输入是每行的 top/bottom（缓存一次），不需要平均值。
  *
  * @param {Array<HTMLElement>} rows 与数据顺序一致的 <tr> 列表（可含 null 占位）
  * @param {number|null} from 源索引
@@ -80,35 +82,118 @@ export function clearShift(root) {
  * @param {((el:HTMLElement)=>HTMLElement|null)|null} counterOf 取「需要反向位移」的子元素（如序号列内容）：
  *        行往上让位时它往下补同样的距离，净位移为 0，看起来固定不动
  */
+/**
+ * 行让位：块内**连续重排**（与列的 computeColReorder 完全同构，只是轴换成 top/height）。
+ *
+ * 为什么不能再用「恒定位移 ±h(from)」：
+ *   区间里若夹着**固定行**（课表的大课间/午休/休息、讲台、分隔行），
+ *   这些行不参与移动，可让位的行就没办法连续铺开 ——
+ *   每行上移 h(from) 会直接撞到不动的固定行上，虚影/蓝框全跟着乱。
+ *
+ * 做法：块内元素按新顺序从块顶依次铺开，每项占自身高度。
+ *   固定行当作「走廊」处理：不能作落点，但**跟着块一起平移**（否则铺不开）；
+ *   松手后落位只换数据、固定行回原位（父组件的 splice 语义）。
+ *
+ * @returns {{hasFixed:boolean, nextTop:Map<number,number>, seq:number[]}}
+ */
+export function computeRowReorder(geom, from, to) {
+  const out = { hasFixed: false, nextTop: new Map(), seq: [] }
+  const g = Array.isArray(geom) ? geom : null
+  if (!g || from === null || to === null || from === to) return out
+  const cellOf = (k) => g[k] || null
+  const fixedOf = (k) => !!(cellOf(k) && cellOf(k).fixed)
+  const hOf = (k) => (cellOf(k) ? Math.round(cellOf(k).bottom - cellOf(k).top) : 0)
+
+  const lo = Math.min(from, to)
+  const hi = Math.max(from, to)
+  for (let k = lo; k <= hi; k++) { if (fixedOf(k)) { out.hasFixed = true; break } }
+
+  const movables = []
+  const fixedIdxs = []
+  for (let k = lo; k <= hi; k++) {
+    if (!cellOf(k)) continue
+    if (fixedOf(k)) fixedIdxs.push(k)
+    else movables.push(k)
+  }
+  const ri = movables.indexOf(from)
+  const ti = movables.indexOf(to)
+  if (ri < 0 || ti < 0 || movables.length < 2) return out
+
+  const order = movables.slice()
+  const [moved] = order.splice(ri, 1)
+  order.splice(ti, 0, moved)
+
+  // 固定行**占住自己原来的位置**（不能改变顺序），可让位行依次填进其余位置。
+  //
+  // 走过两种错法：
+  //   ① 「每个可让位行后面插一个固定行」—— 固定行比可让位行多时，多出来的被堆到块尾；
+  //   ② 「固定行跟着前面那个可让位行走」—— 拖第3节到第2节位置时，大课间被带着跑到
+  //      块尾（用户实测：大课间应该还在第二、三节之间）。
+  // 正确语义就是「位置不动」：第 2/3/4 三个位置里，3 始终是大课间，2 和 4 互换。
+  const seq = []
+  let oi = 0
+  for (let k = lo; k <= hi; k++) {
+    if (!cellOf(k)) { seq.push(null); continue }
+    seq.push(fixedOf(k) ? k : order[oi++])
+  }
+  // 去掉空位（几何里可能有没有 rect 的行）
+  const clean = seq.filter((x) => x != null)
+
+  let cursor = Math.round(cellOf(lo).top)
+  for (const idx of clean) {
+    out.nextTop.set(idx, cursor)
+    cursor += hOf(idx)
+  }
+  out.seq = clean
+  return out
+}
+
 export function applyRowShift(rows, from, to, geom, fallback = 0, counterOf = null) {
   if (!rows || !rows.length) return
+  if (typeof window !== 'undefined' && window.__ROWDBG) {
+    console.log('[rowdbg] applyRowShift from=' + from + ' to=' + to
+      + ' rows=' + rows.length
+      + ' geom=' + (Array.isArray(geom) ? geom.length : String(geom))
+      + ' fixed=' + (Array.isArray(geom) ? geom.map((g) => (g && g.fixed ? 'F' : '.')).join('') : '-'))
+  }
   const active = from !== null && to !== null && from !== to
-  const uniform = typeof geom === 'number' ? geom : fallback
+  // 取整：125% 缩放下行高是 33.6 这种小数，原样写进 translate 会让行落在半像素上
+  const uniform = Math.round(typeof geom === 'number' ? geom : fallback)
   const g = Array.isArray(geom) ? geom : null
-  const topOf = (k) => (g && g[k] ? g[k].top : null)
+  // 块内连续重排：每行移到「新顺序下自己该占的 top」，位移 = 新 top − 原 top。
+  // 固定行（课表休息行/讲台/分隔行）也参与铺开，否则可让位行会撞上它们。
+  // 没有几何缓存时退回恒定位移（±h(from)）的老口径。
+  const reorder = (active && g) ? computeRowReorder(g, from, to) : { nextTop: new Map() }
+  const nextTop = reorder.nextTop
+  const hFrom = g && g[from] ? Math.round(g[from].bottom - g[from].top) : uniform
+  const step = hFrom > 0 ? hFrom : uniform
   for (let i = 0; i < rows.length; i++) {
     const el = rows[i]
     if (!el) continue
     let dy = 0
     if (active) {
-      // 向下拖：from 之后的行走 up 到它们各自上一行的位置
-      // 向上拖：to..from-1 行走 down 到它们各自下一行的位置
-      if (to > from && i > from && i <= to) {
-        const a = topOf(i - 1), b = topOf(i)
-        dy = (a != null && b != null) ? a - b : -uniform
-      } else if (to < from && i >= to && i < from) {
-        const a = topOf(i + 1), b = topOf(i)
-        dy = (a != null && b != null) ? a - b : uniform
+      if (i === from) {
+        // 源行原件留在原位（它是 opacity-30 的「被拿起」残影，由跟手虚影代表），
+        // 让位由其余行去填它的槽。列那边源列是 visibility:hidden，看不出来，可以一起挪。
+        dy = 0
+      } else if (g && nextTop.has(i) && g[i]) {
+        dy = Math.round(nextTop.get(i) - g[i].top)
+      } else if (!g) {
+        // 无几何兜底：整块平移一个被拖行高度
+        if (to > from && i > from && i <= to) dy = -step
+        else if (to < from && i >= to && i < from) dy = step
       }
     }
+    // counterOf 可返回单个元素或数组：这些元素（时段/节次/时间这类「位置」格）
+    // 做反向位移，视觉上钉住不动 —— 让位只应该移动数据格。
     const counter = counterOf ? counterOf(el) : null
+    const counters = counter ? (Array.isArray(counter) ? counter : [counter]) : []
     if (dy) {
       markShift(el, 0, dy)
-      // 序号等内容做反向位移：跟着行一起走的话，会显得序号整体错了一行
-      if (counter) markShift(counter, 0, -dy)
+      for (const c of counters) markShift(c, 0, -dy)
     } else {
       unmarkShift(el)
-      if (counter) unmarkShift(counter)
+      for (const c of counters) unmarkShift(c)
     }
   }
 }
@@ -116,59 +201,102 @@ export function applyRowShift(rows, from, to, geom, fallback = 0, counterOf = nu
 /**
  * 列让位：中间列整体挪一格，把目标位置的「空槽」让出来。
  *
- * 同样是**按几何逐列补偿**：每一列都挪到「邻列原来的位置」。
- * 座位表在「同桌」模式下列宽并不相等（还有走廊列），
- * 统一用被拖列的宽度去平移会让中间列全部错位。
+ * 位移 = **被拖列自身的宽度**，整块平移（走廊列也一起平移）。
+ * 走廊列只是「不能作为落点、不能单独拖」，它的位置必须跟着块走 ——
+ * 若把它钉住不动，其他列平移时就会压在它身上，跨走廊拖动整排错位。
  *
  * @param {Array<Array<HTMLElement>>} colEls 索引 = 数据列序号；每项是该列需一起平移的元素
  * @param {number|null} from 源列
  * @param {number|null} to 目标列
  * @param {Array<{left:number,right:number}>|number} geom 各列的左右边界缓存，或回退用的统一宽度
  */
-export function applyColShift(colEls, from, to, geom, fallback = 0) {
+/**
+ * 列让位的「块内连续重排」几何（只对**有走廊列**的表格有意义）。
+ *
+ * 座位表的列宽不相等、走廊又是不随数据移动的分隔列，所以让位不能把邻列挪进「对方的固定槽位」
+ * —— 宽度不同会在槽尾留空白。正确做法是把块内元素按新顺序从块顶依次铺开（每项占自身宽度），
+ * 走廊跟着挪：块内首尾相接、块外不动（块总宽不变）。
+ *
+ * @returns {{hasAisle:boolean, nextLeft:Map<number,number>}} nextLeft: 显示列索引 → 新 left（含走廊）
+ */
+export function computeColReorder(geom, from, to) {
+  const out = { hasAisle: false, nextLeft: new Map(), seq: [] }
+  const g = Array.isArray(geom) ? geom : null
+  if (!g || from === null || to === null || from === to) return out
+  const cellOf = (k) => g[k] || null
+  const isAisle = (k) => !!(cellOf(k) && cellOf(k).aisle)
+  const wOf = (k) => (cellOf(k) ? Math.round(cellOf(k).right - cellOf(k).left) : 0)
+
+  const lo = Math.min(from, to)
+  const hi = Math.max(from, to)
+  for (let k = lo; k <= hi; k++) { if (isAisle(k)) { out.hasAisle = true; break } }
+
+  const reals = []
+  const aisleIdxs = []
+  for (let k = lo; k <= hi; k++) {
+    if (!cellOf(k)) continue
+    if (isAisle(k)) aisleIdxs.push(k)
+    else reals.push(k)
+  }
+  const ri = reals.indexOf(from)
+  const ti = reals.indexOf(to)
+  if (ri < 0 || ti < 0 || reals.length < 2) return out
+
+  const order = reals.slice()
+  const [moved] = order.splice(ri, 1)
+  order.splice(ti, 0, moved)
+  // 新序列：真实列按新顺序，走廊按原相对次序插在相邻真实列之间
+  const seq = []
+  let ai = 0
+  for (let i = 0; i < order.length; i++) {
+    seq.push(order[i])
+    if (i < order.length - 1 && ai < aisleIdxs.length) seq.push(aisleIdxs[ai++])
+  }
+  while (ai < aisleIdxs.length) seq.push(aisleIdxs[ai++])
+
+  let cursor = Math.round(cellOf(lo).left)
+  for (const idx of seq) {
+    out.nextLeft.set(idx, cursor)
+    cursor += wOf(idx)
+  }
+  out.seq = seq
+  return out
+}
+
+export function applyColShift(colEls, from, to, geom, fallback = 0, counterOf = null) {
   if (!colEls || !colEls.length) return
   const active = from !== null && to !== null && from !== to
-  const uniform = typeof geom === 'number' ? geom : fallback
+  // 取整：125% 缩放下行高是 33.6 这种小数，原样写进 translate 会让行落在半像素上
+  const uniform = Math.round(typeof geom === 'number' ? geom : fallback)
   const g = Array.isArray(geom) ? geom : null
-  const cellOf = (k) => (g && g[k]) || null
-  const isAisle = (k) => !!(cellOf(k) && cellOf(k).aisle)
-  const leftOf = (k) => (cellOf(k) ? cellOf(k).left : null)
-  // 相邻的「真实列」：跳过走廊这类钉住不动的列，避免用它的位置当基准
-  const prevCol = (k) => {
-    for (let j = k - 1; j >= 0; j--) { if (cellOf(j) && !cellOf(j).aisle) return j }
-    return -1
-  }
-  const nextCol = (k) => {
-    if (!g) return -1
-    for (let j = k + 1; j < g.length; j++) { if (cellOf(j) && !cellOf(j).aisle) return j }
-    return -1
-  }
-  // 让位链允许「跨过」走廊：走廊本身钉住不动（见下面的 isAisle 判断），
-  // 但它两侧的列仍然依次让位 —— 走廊每隔两列就有一个，
-  // 若跨走廊就整段不动，用户看到的就是"根本没让位"。
-  const shiftable = active
+  const leftOf = (k) => (g && g[k] ? g[k].left : null)
+
+  // 一律用「块内连续重排」：块内元素按新顺序从块左边界依次铺开，每项占自身宽度。
+  // 早期版本无走廊时用「整块平移 w(from)」——只有全表等宽才成立，
+  // 列宽不等时每列被平移同一个量，落到新位置就会互相重叠/留空（让位错位的真凶）。
+  const reorder = active ? computeColReorder(g, from, to) : { hasAisle: false, nextLeft: new Map(), seq: [] }
+  const nextLeft = reorder.nextLeft
+
   for (let i = 0; i < colEls.length; i++) {
     const els = colEls[i]
     if (!els || !els.length) continue
     let dx = 0
-    // 走廊列永远不动（它是分隔用的固定列）
-    if (shiftable && !isAisle(i)) {
-      if (to > from && i > from && i <= to) {
-        const p = prevCol(i)
-        const a = p >= 0 ? leftOf(p) : null
-        const b = leftOf(i)
-        dx = (a != null && b != null) ? a - b : -uniform
-      } else if (to < from && i >= to && i < from) {
-        const n = nextCol(i)
-        const a = n >= 0 ? leftOf(n) : null
-        const b = leftOf(i)
-        dx = (a != null && b != null) ? a - b : uniform
-      }
+    if (active && nextLeft.has(i) && leftOf(i) != null) {
+      dx = Math.round(nextLeft.get(i) - leftOf(i))
     }
     for (const el of els) {
       if (!el) continue
-      if (dx) markShift(el, dx, 0)
-      else unmarkShift(el)
+      // 表头 th 上的文字做反向位移：格子跟着让位走，但「列1/列2」这串字视觉上钉在原位，
+      // 于是编号永远与位置一致（不会出现「列2 被挪到列1 的位置还写着列2」）。
+      // 与行让位的 counterOf 完全同构，只是换了轴。
+      const counter = counterOf ? counterOf(el) : null
+      if (dx) {
+        markShift(el, dx, 0)
+        if (counter) markShift(counter, -dx, 0)
+      } else {
+        unmarkShift(el)
+        if (counter) unmarkShift(counter)
+      }
     }
   }
 }
@@ -183,6 +311,38 @@ export function applyColShift(colEls, from, to, geom, fallback = 0) {
  * @param {number} dyFrom 源行的垂直位移（= 目标行 top - 源行 top）
  * @param {number} dyTo 目标行的垂直位移（= 源行 top - 目标行 top）
  */
+/**
+ * 按「目标 top 表」渲染行位移：dy = target[i] − 原始 top[i]。
+ *
+ * 用于**步进式**行重排（跨固定行时把一次大跨越拆成多次单格重排）：
+ * 调用方自己维护「每行当前该在哪」的 top 表，这里只负责写 transform，
+ * 所以每行的位移永远相对自己的原始位置，不会累积误差。
+ *
+ * @param {Array<HTMLElement>} rows 与数据顺序一致的 <tr> 列表
+ * @param {number[]} targetTops 第 i 行应显示的 top（视口坐标）
+ * @param {Array<{top:number}>} geom 按下时缓存的原始几何
+ * @param {((el:HTMLElement)=>HTMLElement|null)|null} counterOf 需要反向位移的子元素
+ * @param {number|null} skipIdx 源行索引（原件留在原位，不参与位移）
+ */
+export function applyRowTops(rows, targetTops, geom, counterOf = null, skipIdx = null) {
+  if (!rows || !rows.length || !Array.isArray(targetTops)) return
+  for (let i = 0; i < rows.length; i++) {
+    const el = rows[i]
+    if (!el) continue
+    const dy = (i === skipIdx || !geom || !geom[i] || targetTops[i] == null)
+      ? 0
+      : Math.round(targetTops[i] - geom[i].top)
+    const counter = counterOf ? counterOf(el) : null
+    if (dy) {
+      markShift(el, 0, dy)
+      if (counter) markShift(counter, 0, -dy)
+    } else {
+      unmarkShift(el)
+      if (counter) unmarkShift(counter)
+    }
+  }
+}
+
 export function applyRowSwap(rows, from, to, dyFrom, dyTo) {
   if (!rows || !rows.length) return
   const active = from !== null && to !== null && from !== to
@@ -191,8 +351,8 @@ export function applyRowSwap(rows, from, to, dyFrom, dyTo) {
     if (!el) continue
     let dy = 0
     if (active) {
-      if (i === from) dy = dyFrom
-      else if (i === to) dy = dyTo
+      if (i === from) dy = Math.round(dyFrom)
+      else if (i === to) dy = Math.round(dyTo)
     }
     if (dy) markShift(el, 0, dy)
     else unmarkShift(el)
@@ -217,8 +377,8 @@ export function applyColSwap(colEls, from, to, dxFrom, dxTo) {
     if (!els || !els.length) continue
     let dx = 0
     if (active) {
-      if (i === from) dx = dxFrom
-      else if (i === to) dx = dxTo
+      if (i === from) dx = Math.round(dxFrom)
+      else if (i === to) dx = Math.round(dxTo)
     }
     for (const el of els) {
       if (!el) continue

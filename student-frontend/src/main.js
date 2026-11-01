@@ -341,9 +341,14 @@ if (splashEl) {
     }
   }
 
+  // 后端状态轮询兜底（见下方 startBackendPoll）
+  let backendPollTimer = null
+  let backendPollTicks = 0
+
   const markBackendOk = () => {
     if (backendOk) return
     backendOk = true
+    if (backendPollTimer) { clearInterval(backendPollTimer); backendPollTimer = null }
     if (splashReady) dropSplash()
   }
 
@@ -355,6 +360,27 @@ if (splashEl) {
   // 兜住「先就绪/先失败、后加载」的竞态
   window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) markBackendOk() }).catch(() => {})
   window.electron?.invoke(INVOKE.BACKEND_FAILURE).then((f) => { if (f) setBackendFailed(true) }).catch(() => {})
+
+  // 轮询兜底：实时事件 + 启动时单次查询都可能漏。
+  // 实测（2026-10-31，安装后首次启动）后端冷启动 8356ms 才就绪，主进程时间线里明明有
+  // 「后端就绪」，渲染层的 backendOk 却一直 false —— 占位页卡死到 12s 超时兜底才定稿，
+  // 用户看到的就是「一直转圈」。所以这里主动隔 800ms 查一次状态，最多 25 次（20 秒），
+  // 查到即停。单次是一次 IPC 往返，开销可忽略；这是最后一道保险，不替代事件。
+  const BACKEND_POLL_MS = 800
+  const BACKEND_POLL_MAX = 25
+  if (window.electron) {
+    backendPollTimer = setInterval(() => {
+      if (backendOk || backendPollTicks >= BACKEND_POLL_MAX) {
+        clearInterval(backendPollTimer)
+        backendPollTimer = null
+        return
+      }
+      backendPollTicks++
+      window.electron.invoke(INVOKE.BACKEND_STATUS)
+        .then((ok) => { if (ok) markBackendOk() })
+        .catch(() => { /* 查询失败：下一拍再试，最多 25 拍 */ })
+    }, BACKEND_POLL_MS)
+  }
 
   // 骨架屏方案开关（可回退）：
   //   true  = 只在首页(Dashboard)做骨架屏。占位页不再等首页数据，首次导航一就绪即移除，
@@ -377,6 +403,17 @@ if (splashEl) {
   whenSplashReady.then(() => { splashReady = true; dropSplash() })
   // 兜底：路由守卫抛错/卡住时也移除，避免界面被永久挡在占位页后面。
   setTimeout(dropSplash, 5000)
+  // 最后保险：无论哪条依赖卡住（后端信号丢失、样式/路由异常），12 秒后占位页必须让位。
+  // 这不是优化而是「不能永远挡住界面」—— 宁可先露出可能还不完整的界面，也不能让用户
+  // 对着转圈无限等。触发时把三个状态打出来，便于事后定位到底哪条路没走通。
+  setTimeout(() => {
+    if (dropped || !splashEl.isConnected) return
+    dropped = true
+    splashEl.remove()
+    console.warn(`[startup] 占位页超时强制移除（12s）：backendOk=${backendOk} splashReady=${splashReady} backendFailed=${backendFailed}`)
+    console.log(`[startup] 占位页移除（界面可见） @${Math.round(performance.timeOrigin + performance.now())}`)
+    window.dispatchEvent(new Event('app-visible'))
+  }, 12000)
 } else {
   // 没有占位页的窗口（理论上不会发生）：直接广播，否则小组件要等 App 里的兜底计时才建
   window.dispatchEvent(new Event('app-visible'))

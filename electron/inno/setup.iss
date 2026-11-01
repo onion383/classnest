@@ -131,6 +131,15 @@ Name: "{autodesktop}\班集"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopi
 Type: files; Name: "{commonappdata}\班集\SkipOsVersionWarning.flag"
 
 [Run]
+; 安装后预热（2026-10-31）：起一次后端再退出，把 Electron 运行时（exe/dll/pak）、
+; 后端 163 个模块与 better-sqlite3 原生模块都读进系统文件缓存。
+; 目的不是建库（实测空库只需 ~100ms），而是消掉「装完第一次双击」的冷盘 + 杀软首扫成本：
+; 实测安装后首次启动后端就绪 8356ms，同一份代码第二/三次分别 3190ms / 44ms。
+; runhidden —— 不弹窗口；waituntilterminated —— 必须等它退出，否则用户装完立刻双击
+; 会和预热进程抢单实例锁（后到者直接退出，表现为「点了没反应」）。
+; 应用侧对应 electron/main/main.js 的 --warmup 分支，20 秒超时后自行退出。
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--warmup"; StatusMsg: "正在预热程序组件（让首次启动更快）..."; Flags: runhidden waituntilterminated
+
 ; 安装完成后可选启动（静默安装时跳过）
 Filename: "{app}\{#MyAppExeName}"; Description: "启动 班集"; Flags: nowait postinstall skipifsilent
 

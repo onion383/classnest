@@ -29,17 +29,24 @@
           @dragover.prevent
           @drop="onDropZone"
         >
-          <div class="max-h-[260px] overflow-auto">
+          <!-- 条件多时限高滚动（约三行：每行 py-1.5 + 行高 ≈ 34px，加上行距 4px）；拖动到上下边缘会自动滚动 -->
+          <div class="max-h-[112px] overflow-auto" @scroll="sortCond.onScroll">
             <div v-if="conditions.length === 0" class="text-sm text-text-muted py-1">把下方的条件选项拖到这里添加</div>
             <div
               v-for="(node, ni) in conditions"
               :key="node.uid"
+              :data-cond-idx="conditions.indexOf(node)"
               class="mb-1 last:mb-0"
+              :class="{ 'cond-row-dragging': dragIdx === conditions.indexOf(node) }"
               @dragover.prevent
-              @drop.stop="onDropOnRow($event, ni)"
+              @drop.stop="onDropOnRow($event, conditions.indexOf(node))"
             >
               <div class="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-primary text-text-inverse text-sm">
-                <span class="cursor-grab select-none text-text-inverse/70" draggable="true" @dragstart="onRowDragStart($event, ni)">⠿</span>
+                <!-- 序号 + 拖拽手柄：序号跟着数组顺序走，拖动松手后自动重排 -->
+                <span class="flex items-center gap-2 shrink-0">
+                  <span class="text-xs tabular-nums text-text-inverse/60 select-none">{{ conditions.indexOf(node) + 1 }}</span>
+                  <span class="cursor-grab select-none text-text-inverse/70" @mousedown="sortCond.handleDown($event, conditions.indexOf(node))">⠿</span>
+                </span>
                 <!-- 条件名字：语义句前先亮明是哪个条件 -->
                 <span class="font-semibold whitespace-nowrap">{{ node.label }}</span>
                 <!-- 语义句：文案段 + 下拉位，由条件注册表驱动 -->
@@ -54,8 +61,11 @@
                     @update:model-value="v => setField(node, s.path, v)"
                   />
                 </template>
-                <span v-if="satisfactionOf(node) !== null" class="ml-auto text-xs px-1.5 py-0.5 rounded bg-white/20 text-text-inverse border border-white/30">满足 {{ satisfactionOf(node) }}%</span>
-                <button @click="removeCondition(ni)" class="cursor-pointer text-text-inverse/80 hover:text-text-inverse font-bold leading-none text-base">×</button>
+                <!-- 满足率与关闭按钮靠右成组：关闭键永远贴行尾，不随满足率有无而漂移 -->
+                <span class="ml-auto flex items-center gap-2 shrink-0">
+                  <span v-if="satisfactionOf(node) !== null" class="text-xs px-1.5 py-0.5 rounded bg-white/20 text-text-inverse border border-white/30">满足 {{ satisfactionOf(node) }}%</span>
+                  <button @click="removeCondition(conditions.indexOf(node))" class="dlg-close cond-close" title="删除该条件">✕</button>
+                </span>
               </div>
             </div>
           </div>
@@ -89,7 +99,8 @@
       </div>
 
       <!-- 表格预览 -->
-      <div class="flex-1 overflow-auto border border-border rounded mb-4" style="min-height: 200px;">
+      <!-- min-h-0：flex 子项默认可拒绝收缩，总高超出时会把底部按钮顶出去；这里自己滚动 -->
+      <div class="flex-1 min-h-0 overflow-auto border border-border rounded mb-4">
         <!-- maxHeight=0：预览区外层已是 flex-1 overflow-auto（弹窗自身滚动），
              这里再限高会形成嵌套滚动条 -->
         <GridView
@@ -128,6 +139,7 @@ import { useSeatDraft } from '../../../composables/useSeatDraft.js'
 import { useSmartArrangementPipeline } from './SmartArrangementDialog.pipeline.js'
 import { useSmartArrangementBlocks } from './SmartArrangementDialog.blocks.js'
 import { useSmartArrangementOptions } from './SmartArrangementDialog.options.js'
+import { useRowSortDrag } from '../../../composables/useRowSortDrag.js'
 import '../../../styles/dialog-transition.css'
 import DialogShell from '../../base/DialogShell.vue'
 
@@ -233,6 +245,9 @@ const CONDITION_ORDER = ['relation', 'group', 'random', 'lock-deskmate', 'gender
 // 排表条件：一层平铺，一行一条件（可拖拽排序、可重复添加、不限数量）
 const conditions = ref([{ uid: 0, key: 'random', label: '随机选项', scope: 'whole', unit: 'six' }])
 const nextUid = ref(1)
+// 条件行拖拽：拖动中/落点行索引（用于让位动画与「原位空槽」淡出）
+const dragIdx = ref(null)
+const dragOverIdx = ref(null)
 const previewSeats = ref([])
 const previewVersion = ref(0)
 // 是否已排表：false 显示"开始排表"，true 显示"换一换"
@@ -286,6 +301,7 @@ const conditionButtons = computed(() =>
 // 三个 useXxx 的返回方法在下方 Object.assign 回填，模块间经 ctx 互相调用（运行时解析）
 const ctx = {
   conditions, nextUid, previewSeats, previewVersion, arranged, satisfaction,
+  dragIdx, dragOverIdx,
   showNewPrompt, excludeNew, draftSeats, savingDraft, draftInUse, draftConfirmVisible, restoring,
   baseSeats, strangerNames, strangers,
   rows: toRef(props, 'rows'),
@@ -303,13 +319,28 @@ const blocks = useSmartArrangementBlocks(ctx)
 const options = useSmartArrangementOptions(ctx, CONDITION_REGISTRY)
 Object.assign(ctx, pipeline, blocks, options)
 
+// 条件行拖拽排序：指针拖拽 + 相邻行让位 + 松手滑入（与表格行/列移动同一套，见 composables/useRowSortDrag.js）
+const sortCond = useRowSortDrag({
+  items: conditions,
+  dragIdx,
+  overIdx: dragOverIdx,
+  attr: 'data-cond-idx',
+  rowClass: 'cond-row-dragging',
+  // 条件顺序变了就要重置为「开始排表」（等价于原先 moveCondition 里的 resetArranged）
+  onMoved: () => ctx.resetArranged(),
+})
+// 挂到 ctx，供 options.js 里的新增/删除调用进出动画
+ctx.sortCond = sortCond
+
 // 供模板调用的顶层绑定
 const {
   segmentsOf, getField, setField, satisfactionOf, removeCondition,
-  onDropOnRow, onDropZone, onOptionDragStart, onRowDragStart,
+  onDropOnRow, onDropZone, onOptionDragStart,
   startArrange, onParticipate, onNot, saveDraft, cancel, confirm, applyConfirm,
 } = { ...pipeline, ...blocks, ...options }
 
+// immediate：父组件（SeatView）是先置 visible=true、再在 watch 里置 mounted=true，
+// 组件挂载时 visible 已经是 true，没有 immediate 的话首次打开不会初始化预览（表格一片空）。
 watch(() => props.visible, async (v) => {
   if (!v) return
   showNewPrompt.value = false
@@ -334,7 +365,7 @@ watch(() => props.visible, async (v) => {
   }
   previewSeats.value = ctx.buildInitialSeats()
   previewVersion.value++
-})
+}, { immediate: true })
 // 任一条件（含下拉选项、顺序）变更：重置为"开始排表"
 watch(conditions, () => {
   if (restoring.value) return
@@ -346,5 +377,36 @@ watch(conditions, () => {
 /* 智能排表条件行内的下拉框：压低触发框高度，让条件行更紧凑 */
 :deep(.av-select__trigger) {
   padding: 4px 8px;
+}
+
+/* 条件行的基础过渡：让位靠相邻行的 translate 位移，过渡必须在样式层先声明好。
+   只在 markShift 里临时写 inline transition 时，「同一帧内既设 transition 又设 transform」
+   的首次让位可能被浏览器直接拍到终点，看起来就是没有动画。 */
+[data-cond-idx] {
+  transition: transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 条件行里的关闭键：沿用全局 .dlg-close 的形制（圆角方块 + 可读对比度），
+   但行是实心蓝底，默认的「浅灰底 + 深色字」压上去会发闷，这里换成半透明白。
+   尺寸压到 22px：行本身只有 py-1.5 + 20px 内容，28px 会把行撑高一圈。 */
+.cond-close {
+  width: 22px;
+  height: 22px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--color-text-inverse);
+}
+.cond-close:hover {
+  background: rgba(255, 255, 255, 0.32);
+  color: #fff;
+}
+
+/* 拖动中的条件行：原位变淡，留出「待填补的空槽」。
+   与表格拖行/拖列一致——真正让开位置的是相邻行的 translate 位移（见 tableDragFx），
+   这里只负责让源行看起来被「拿起来了」，两者叠加才是表格那套观感。
+   注意：拖拽走的是 mousedown 指针拖拽（不是原生 HTML5 拖拽）——原生 drag 会话期间
+   Chromium 不推进 CSS transition，让位只能瞬间跳过去，这点已实测。 */
+.cond-row-dragging {
+  opacity: 0.35;
 }
 </style>

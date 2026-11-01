@@ -29,17 +29,18 @@ const { ensureFfmpeg } = require('./services/ffmpeg');
 const { now } = require('./utils/sql');
 
 // 缩略图尺寸 / 质量 / 缓存版本
-// 尺寸回到 512（曾经提到 1024 是为了排查「模糊」，后来查明是全局遮罩 CSS 在照片上盖了
-// backdrop-filter 导致的，与分辨率无关，故恢复 512；单张约 27~35KB）。
+// 尺寸 512 → 256（网格格子 4 列时约 207 CSS px，125% 缩放下 ≈ 260 物理px，256 够 1:1 显示；
+// 解码面积 ÷4、单张体积约 27~35KB → 8~12KB，批量传输与 blob 内存同比例下降）。
+// ⚠️ 代价：窗口拉宽到 1~2 列时格子物理宽会超过 256，缩略图会被放大，观感偏软 —— 属预期取舍。
+// （历史：曾经提到 1024 是为了排查「模糊」，后来查明是全局遮罩 CSS 在照片上盖了
+// backdrop-filter 导致的，与分辨率无关，故恢复 512；再于 2026-10-31 降到 256。）
 // 改尺寸/质量时把 THUMB_VERSION +1：album_photos.thumb_v 记录生成时的版本，
 // 旧缩略图会在下次被请求时自动按新参数重建，不需要手动清缓存。
-// 本次只把上限从 1024 降回 512、版本不变（3）：已经生成的 1024 图仍然可用且更清晰，
-// 不强制重建，只有新照片会按 512 生成。
-const THUMB_SIZE = 512;
+const THUMB_SIZE = 256;
 const THUMB_QUALITY = 82;
-// 本次 +1（4）：修复 ffmpeg 精简构建（x86asm 被关）导致的视频封面花屏，换用新构建的
-// ffmpeg.exe 后重建所有旧视频封面；图片缩略图会顺带重建（sharp 输出不变，只是费一次 CPU）。
-const THUMB_VERSION = 4;
+// 本次 +1（5）：尺寸 512 → 256，旧缩略图（v≤4）全部按新尺寸重建（首屏浏览会有一轮现场生成，
+// 受并发信号量与配额闸约束，扫一遍之后就全是缓存命中）。
+const THUMB_VERSION = 5;
 
 const IMG_EXT = /\.(jpg|jpeg|png|gif|webp|bmp)$/i;
 const VIDEO_EXT = /\.(mp4|webm|mov|avi|mkv|m4v|ogv)$/i;

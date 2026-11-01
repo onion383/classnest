@@ -18,14 +18,10 @@ const THUMB_DIR = dbManager.thumbsDir;
 try { fs.mkdirSync(THUMB_DIR, { recursive: true }); } catch (_) {}
 
 // 缩略图尺寸 / 质量 / 缓存版本
-// 尺寸回到 512（曾经提到 1024 是为了排查「模糊」，后来查明是全局遮罩 CSS 在照片上盖了
-// backdrop-filter 导致的，与分辨率无关，故恢复 512；单张约 27~35KB）。
+// 尺寸 512 → 256（网格格子 4 列时约 207 CSS px，125% 缩放下 ≈ 260 物理px，256 够 1:1 显示；
+// 解码面积 ÷4、单张体积约 27~35KB → 8~12KB。2026-10-31 修改）。
 // 改尺寸/质量时把 THUMB_VERSION +1：album_photos.thumb_v 记录生成时的版本，
 // 旧缩略图会在下次被请求时自动按新参数重建，不需要手动清缓存。
-// 本次只把上限从 1024 降回 512、版本不变（3）：已经生成的 1024 图仍然可用且更清晰，
-// 不强制重建，只有新照片会按 512 生成。
-// 本次 +1（4）：修复 ffmpeg 精简构建（x86asm 被关）导致的视频封面花屏，换用新构建的
-// ffmpeg.exe 后重建所有旧视频封面；图片缩略图会顺带重建（sharp 输出不变，只是费一次 CPU）。
 // （常量本体已搬到 albumScan.js —— 主进程与扫描子进程共用同一份，改一处即可；
 //   本文件仍需要 THUMB_VERSION / genThumb / thumbOf / mediaTypeOf / VIDEO_EXT，
 //   以及读表改表的状态函数，都从 albumScan.js 取。）
@@ -756,10 +752,10 @@ router.get('/photo/:photoId/file', async (req, res) => {
   }
 });
 
-// GET /api/album/photo/:photoId/thumb 返回网格用的缩略图 / 视频封面（512px JPEG）
+// GET /api/album/photo/:photoId/thumb 返回网格用的缩略图 / 视频封面（256px JPEG）
 // 有缩略图则返回缓存小图（长缓存）。
 // 没有缩略图（全量扫描进行中、缩略图尚未后台生成完）时：现场用 genThumb 生成一张
-// 512px 小图并写库缓存后再返回，绝不回退 pipe 源文件原图。否则网格在扫描中请求的
+// 256px 小图并写库缓存后再返回，绝不回退 pipe 源文件原图。否则网格在扫描中请求的
 // 会是一张几 MB 的原图，几十张并发流进前端渲染进程，扫描期间内存会瞬间飙高。
 // 版本落后（thumb_v < THUMB_VERSION，即尺寸/质量改过）也走现场重建，旧缓存自动升级。
 //

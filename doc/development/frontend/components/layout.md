@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-frontend/
     └── src/
         ├── components/
@@ -17,7 +17,9 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口约定」；本节只补充组件特有接口。
+通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口标准」；本节只补充组件特有接口。
+
+---
 
 ## [Sidebar.vue](../../../../student-frontend/src/components/layout/Sidebar.vue) · 侧边栏导航
 - **定位**：主窗口左侧导航，按 `navGroups`（分组清单：概览 / 基础信息 / 核心管理 / 活动中心 / 系统管理）渲染 `router-link`（路由链接组件）。
@@ -27,3 +29,5 @@ project-name/
 - 注意：`router-link` 的 `active-class` 要等异步路由 resolve 后才生效，去掉乐观高亮会出现「点了没反应」的观感。
 
 其余根级组件（`AnimatedClock`、`CadreManage`、`CadreTreeList`、`ClippedText`、`AiChart`）见 [root.md](./root.md)。
+
+---

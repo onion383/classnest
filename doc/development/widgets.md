@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 ├── electron/
 │   └── preload.js
 └── student-frontend/
@@ -29,11 +29,15 @@ project-name/
 
 此前这部分内容附在前端文档的「浮窗与独立窗口」小节，现独立成文；前端其余内容见 [frontend/README.md](./frontend/README.md) 与 [frontend/misc.md](./frontend/misc.md)，主进程侧完整说明见 [main-process/README.md](./main-process/README.md)。
 
+---
+
 ## 综合概述
 
 - **定位**：两个独立窗口形态——工具箱浮窗（`src/subwindows/widget/`）与桌面小组件（`src/subwindows/desktop-widget/`），以及对应的主进程窗口管理与数据接口。
-- **公共逻辑**：两个窗口与主窗口同进程、同 origin，共享登录态与主题；主进程负责窗口创建、置底/置顶、拖动与 IPC；设置通过 `widget-settings` 接口读写。
+- **公共逻辑**：两个窗口与主窗口同进程、同 origin（同源，共享本地存储），共享登录态与主题；主进程负责窗口创建、置底/置顶、拖动与 IPC；设置通过 `widget-settings`（小组件设置接口）读写。
 - **局限**：不展开主进程全部模块与前端组件细节；主进程见 [main-process/README.md](./main-process/README.md)，其余前端组件见 [frontend/components/README.md](./frontend/components/README.md)。
+
+---
 
 ## 详细说明
 
@@ -84,23 +88,23 @@ project-name/
 
 - **宽 320、高度约屏幕 95%，无边框、`transparent:true`（逐像素透明，四角圆角靠页面 CSS 绘制）、不置顶、不可缩放。** 透明是必须的：置底模式的圆角不再用 `SetWindowRgn`，而是让页面把四角之外留空（详见下文「圆角改为页面自绘」）。底色 `backgroundColor:
 - **窗口跑在主进程里**：由 `main.widget.js` 的 `createDesktopWidgetWindow()` 创建/销毁（与工具箱同一套生命周期），`desktop-widget-enabled` 开关实时生效。
-- **为什么从独立进程合并回来（v0.8.x）**：早期窗口要 `SetParent` 挂进桌面层，必须隔离「Explorer 重启级联销毁子窗口 → Electron 原生崩溃」；置底改成「顶层窗口 + z 序」之后这个诱因消失，于是挪回主进程，省掉一个 Chromium browser/GPU 进程、整套 spawn/重建/启动即崩降级，以及 `widget-session.json` 快照交接（`main.desktop-widget-process.js`、`desktop-widget-host.js`、`main.widget-session.js` 已删除）。
+- **从独立进程合并回主进程的原因（v0.8.x）**：早期窗口要 `SetParent` 挂进桌面层，必须隔离「Explorer 重启级联销毁子窗口 → Electron 原生崩溃」；置底改成「顶层窗口 + z 序」之后这个诱因消失，于是挪回主进程，省掉一个 Chromium browser/GPU 进程、整套 spawn/重建/启动即崩降级，以及 `widget-session.json` 快照交接（`main.desktop-widget-process.js`、`desktop-widget-host.js`、`main.widget-session.js` 已删除）。
   - **代价**：browser 进程级原生崩溃不再隔离（与工具箱同等风险水平）；渲染进程崩溃仍然隔离，且窗口用 `webContents.on('render-process-gone')` 自动 `reload()` 兜底。
-  - **登录态/主题怎么过去**：同进程、同 profile、同 origin（dev 都是 `127.0.0.1:5173`，打包都是 `app://local`），`localStorage` 本来就是同一份，组件直接读；主窗口改 token/主题时本窗口的 `storage` 事件实时同步，不再有快照与 10s 轮询。
+  - **登录态与主题的传递方式**：同进程、同 profile、同 origin（dev 都是 `127.0.0.1:5173`，打包都是 `app://local`），`localStorage` 本来就是同一份，组件直接读；主窗口改 token/主题时本窗口的 `storage` 事件实时同步，不再有快照与 10s 轮询。
 - **置底是唯一形态，没有开关**：设置页只保留「启用桌面小组件」。窗口创建即插层（`attach()`），失败时退回普通顶层窗口（非 Windows / koffi 缺失），只影响层级不影响可用性。`get-desktop-layer-state` 仍返回真实状态（渲染层只用于日志与拖动手柄样式），其中 `autoDisabled` / `faultStreak` 恒为 `false` / `0`（独立进程时代的字段，保留是为了不改变 IPC 形状）。
 - **常驻桌面最底层（Windows）**：**固定开启**（没有设置项）。实现是**顶层窗口 + z 序插到 `Progman` 之上**（桌面挂件的通行做法），**不再 `SetParent`**：`attach()` 用 `SetWindowPos(hwnd, 当前紧挨 Progman 上方的那个窗口, NOMOVE|NOSIZE|NOACTIVATE)` 把窗口插到「桌面图标之上、所有普通窗口之下」；`isJustAboveDesktop()` 从 `Progman` 往上走、跳过 `Default IME`/`MSCTFIME UI` 这类**不可见**系统窗口，途中遇到自己才算到位（遇到可见窗口则说明自己压在它上面，不合格）。效果：被任何应用窗口盖住、Alt+Tab 不出现、`Win+D` 不隐藏，但仍可点击、可拖动、可圆角。用户点击会激活窗口并把它抬到最前，所以 `focus`/`blur` 与拖动结束后都调 `reassert()` 压回底层。
-- **为什么放弃 `SetParent`（重要，别再改回去）**：旧实现用 `SetParent` 把窗口做成 `Progman` 的 `WS_CHILD` 子窗口（Rainmeter 那套）。在 Electron 上这条路**不可用**：只要这个子窗口被移动（真实鼠标拖动、外部程序 `SetWindowPos` 都算），宿主进程就以 `0xC000041D` 原生崩溃——日志表现为 `dragstart` 后几十毫秒进程消失、8~10 秒后自动重建（WER 抓 dump 会把进程 hold 住几秒，所以看起来像"卡一下又回来了"）。试过且**都无效**的缓解手段：拖动前 `ReleaseCapture` 放掉鼠标捕获、去掉 `SetWindowRgn` 圆角区域、每次移动后重裁区域、`SWP_NOSENDCHANGING` 抑制 `WM_WINDOWPOSCHANGING`、主进程轮询光标搬窗口——只能降低概率。同一套移动代码作用在普通顶层窗口上连续 200 帧完全稳定，差异就在「跨进程父窗口」。
+- **放弃 `SetParent` 的原因（重要，勿改回）**：旧实现用 `SetParent` 把窗口做成 `Progman` 的 `WS_CHILD` 子窗口（Rainmeter 那套）。在 Electron 上这条路**不可用**：只要这个子窗口被移动（真实鼠标拖动、外部程序 `SetWindowPos` 都算），宿主进程就以 `0xC000041D` 原生崩溃——日志表现为 `dragstart` 后几十毫秒进程消失、8~10 秒后自动重建（WER 抓 dump 会把进程 hold 住几秒，所以看起来像"卡一下又回来了"）。试过且**都无效**的缓解手段：拖动前 `ReleaseCapture` 放掉鼠标捕获、去掉 `SetWindowRgn` 圆角区域、每次移动后重裁区域、`SWP_NOSENDCHANGING` 抑制 `WM_WINDOWPOSCHANGING`、主进程轮询光标搬窗口——只能降低概率。同一套移动代码作用在普通顶层窗口上连续 200 帧完全稳定，差异就在「跨进程父窗口」。
 - **圆角改为页面自绘**：窗口 `transparent:true` + `backgroundColor:'#00000000'`，`DesktopWidget.vue` 的 `.dw-wallpaper` / `.dw-veil` 两层铺满的底色加 `border-radius: 12px`，四角外侧真的透出壁纸（带抗锯齿）。**不要再用 `SetWindowRgn`**：实测「非矩形窗口 + 移动」是另一条易崩路径（带圆角区域时第 3~15 次移动必崩）；而顶层窗口 + 透明本来就没有系统边框，不需要它去裁黑边。
   - 主题 CSS 会给 `body`（及 `body::before/::after`）上底色（glass `#f0f4f8`、glass2 `#e9edf8`、night `#182238`…），会把四角重新填实；`desktop-widget.html` 里用 `:root body{background:transparent!important}` 压掉，只保留页面自绘的渐变/遮罩（视觉与改前完全一致，只有四角从方的变圆的）。
 - **上屏顺序**：`show:false` 创建 → 等页面首帧（渲染层 `desktop-widget-content-ready`）→ `attach()` 插层并用 `isJustAboveDesktop()` 校验 → **才 `showInactive()`** → 显示后再 `reassert()` 一次。反过来（先显示再压底层）会先以普通顶层窗口浮到最前闪一下。全程以判定结果为准，不靠固定延时。
 - **拖动**：两种形态共用同一条路径（窗口始终是顶层窗口）。渲染层 `pointerdown/pointermove` 上报 `screenX/screenY`（CSS 像素 = DIP），host 用 `getContentBounds()` 缓存起点、每帧 `setContentBounds({x, y, width, height})` 搬窗口、松手 `setContentSize()` 兜底并写入 `userData/desktop-widget-pos.json`（重建后回到上次位置）。**每帧必须带上宽高**：只改位置会让 Electron 每帧重算边框/客户区尺寸、误差累计，窗口越拖越大（工具箱浮窗当年同一个问题，见 `main.widget.js` 的 `widget-drag-*`）。
 - **降级**：非 Windows / koffi 不可用 / 找不到 `Progman` 时 `attach()` 返回 false，退回普通顶层窗口（可点可拖，只是不再常驻最底层）；总开关是 `main.desktop-layer.js` 顶部的 `DESKTOP_LAYER_ENABLED`。
 - **`--no-desktop-layer` / `desktop-widget-desktop-layer` 通道**：已随独立进程与开关一起删除。
-- **验证（置底模式）**：`testjs/probe/widget-bottom-regression.ps1 -Drags 3` —— 自动找到压在 `Progman` 上方的组件窗口，合成 3 次真实拖动并断言：位移正确、**尺寸不变**（防「越拖越大」）、松手后仍在 `Progman` 之上、无 `Application Error` 崩溃事件；`widget-shot.ps1 -Out <png>` 把组件临时提到最前截图（截完自动压回），用于核对圆角/透明/蓝色；`toplevel-bottom-probe.cjs` 是不含业务代码的最小原型，可单独跑起来手拖。
+- **验证（置底模式）**：`testjs/probe/widget-bottom-regression.ps1 -Drags 3` —— 自动找到压在 `Progman` 上方的组件窗口，合成 3 次真实拖动并校验：位移正确、**尺寸不变**（防「越拖越大」）、松手后仍在 `Progman` 之上、无 `Application Error` 崩溃事件；`widget-shot.ps1 -Out <png>` 把组件临时提到最前截图（截完自动压回），用于核对圆角/透明/蓝色；`toplevel-bottom-probe.cjs` 是不含业务代码的最小原型，可单独跑起来手拖。
 
 #### 磨砂背景（自绘：柔光渐变 + 奶白遮罩）
 
-**为什么不再用系统亚克力**：Win11 的 `backgroundMaterial:'acrylic'`（DWM 系统背景材质）只做「壁纸亮度采样 + 强着色」——壁纸颜色会被洗成中性灰，观感还随 Windows build 变（预览版更透、正式版更实）。实测（26H2 正式版 26300.9711）：整窗透明、页面也全透明的组件，空白区像素是中性灰 `84,84,84`（暗色）/ `211,211,211`（浅色），`stdev≈0.1`；紧邻的鲜蓝壁纸颜色完全透不出来。而且它的明暗跟随**系统**（`AppsUseLightTheme`），与组件 UI 跟随的**应用**主题不是一回事。补充实测：同机**原生 Win32**（不经 Electron）设 `DWMWA_SYSTEMBACKDROP_TYPE=Acrylic` 同样是中性灰 → 是 DWM/驱动层行为，不是 Electron 用法问题。
+**不再使用系统亚克力的原因**：Win11 的 `backgroundMaterial:'acrylic'`（DWM 系统背景材质）只做「壁纸亮度采样 + 强着色」——壁纸颜色会被洗成中性灰，观感还随 Windows build 变（预览版更透、正式版更实）。实测（26H2 正式版 26300.9711）：整窗透明、页面也全透明的组件，空白区像素是中性灰 `84,84,84`（暗色）/ `211,211,211`（浅色），`stdev≈0.1`；紧邻的鲜蓝壁纸颜色完全透不出来。而且它的明暗跟随**系统**（`AppsUseLightTheme`），与组件 UI 跟随的**应用**主题不是一回事。补充实测：同机**原生 Win32**（不经 Electron）设 `DWMWA_SYSTEMBACKDROP_TYPE=Acrylic` 同样是中性灰 → 是 DWM/驱动层行为，不是 Electron 用法问题。
 
 **现方案（与引导窗口同一套配方）**：渲染层自己合成磨砂。
 
@@ -148,14 +152,18 @@ project-name/
 | `GET /api/students` | 点名器取名单、桌面组件人数统计 |
 | `GET /api/schedule`、`/api/duty`、`/api/countdowns`、`/api/leaves` | 桌面小组件信息面板数据 |
 
+---
+
 ## 注意事项
 
-- **IPC 白名单**：新增小组件相关通道必须同步加入 `electron/preload.js` 的白名单，否则前端调用会被静默拒绝或 `Promise.reject`。
-- **常用软件上限 8**：渲染层固定渲染 8 个槽位（空槽即添加入口），满额后不再渲染空槽；后端 `routes/widgetSettings.js` 的 `MAX_DESKTOP_APPS` 再做一次截断，接口层同样写不进第 9 个。
-- **拖入文件的真实路径**：Electron 32 起 `File.path` 已移除，必须经 preload 暴露的 `window.electron.getPathForFile(file)`（内部走 `webUtils`）获取；拿不到时回退 `file.path`。拖入的快捷方式 / 文件夹 / 普通文件统一交给 `apps-resolve-paths` 取名称与系统图标，点击后由 `shell.openPath` 打开。
-- **常用软件排序**：无需手柄，**常态/编辑态都能直接拖图标**；轻点仍是启动应用（移动超过 3px 才进入拖拽，真拖动后会吞掉随后补发的 click）。用 `pointerdown + setPointerCapture` 自实现，不用 HTML5 `draggable`（在无边框常驻窗口里 `dragstart` 可能根本不触发，表现为图标拖不动）。拖拽动画复用表格拖拽的思路（`composables/tableDragFx.js` / `GridView.drag.js`）：跟手虚影、中间项 `transform` 逐格让位、蓝色落点框 + 落点虚影，松手后用 WAAPI 从虚影停住的位置滑入最终槽位；几何只在按下时缓存一次，拖动过程不再读布局。
-- **常用软件持久化**：组件常驻、可能早于后端/登录态启动，`loadApps` 失败时会每 3 秒重试，且 `appsLoaded` 为 false 时**禁止任何 PUT**，避免「空列表 + 本次新增」覆盖数据库里的旧列表；写入失败还会重试两次。桌面组件窗口的 token 也不再永久缓存空值，并在 `storage` 的 `token` 变化时清缓存，登录后无需重启组件即可恢复读写。
-- **主题按钮权重**：毛玻璃主题的 `:root:is([data-theme=...]) button` 权重很高，会覆盖普通类选择器的 `position/border/border-radius`。删除按钮必须写成 `button.app-op` 并对定位/描边加 `!important`，否则会掉回 flex 流、跑到图标下方。
-- **主题一致性**：两个入口都先在 `main.js` 中 `applyTheme()`、再挂载顶层组件，保证浮窗/桌组件外观跟随当前主题。
-- **token 来源**：两个窗口同进程同 origin，直接读 `localStorage.getItem('token')`；主窗口登录/退出时组件的 `storage` 事件会清掉缓存，下一个请求重新读取（不再有 `get-main-token` IPC）。
+- **IPC 白名单**：新增小组件相关通道必须同步加入 `electron/preload.js`（预加载脚本，集中登记允许调用的 IPC 通道）的白名单，否则前端调用会被静默拒绝或 `Promise.reject`（直接返回失败的 Promise）。
+- **常用软件上限 8**：渲染层固定渲染 8 个槽位（空槽即添加入口），满额后不再渲染空槽；后端 `routes/widgetSettings.js`（小组件设置路由）的 `MAX_DESKTOP_APPS`（常用软件数量上限常量）再做一次截断，接口层同样写不进第 9 个。
+- **拖入文件的真实路径**：Electron 32 起 `File.path`（文件对象自带的本地路径）已移除，必须经 preload 暴露的 `window.electron.getPathForFile(file)`（取文件真实路径的方法，内部走 `webUtils`（Electron 的文件工具模块））获取；拿不到时回退 `file.path`。拖入的快捷方式 / 文件夹 / 普通文件统一交给 `apps-resolve-paths`（批量解析路径的 IPC 通道）取名称与系统图标，点击后由 `shell.openPath`（用系统默认程序打开路径）打开。
+- **常用软件排序**：无需手柄，**常态/编辑态都能直接拖图标**；轻点仍是启动应用（移动超过 3px 才进入拖拽，真拖动后会吞掉随后补发的 click）。用 `pointerdown`（指针按下）+ `setPointerCapture`（捕获指针）自实现，不用 HTML5 `draggable`（浏览器原生拖拽属性）（在无边框常驻窗口里 `dragstart`（原生拖拽开始事件）可能根本不触发，表现为图标拖不动）。拖拽动画复用表格拖拽的思路（`composables/tableDragFx.js`（拖拽让位算法）/ `GridView.drag.js`（网格拖拽逻辑））：跟手虚影、中间项 `transform`（位移变换）逐格让位、蓝色落点框 + 落点虚影，松手后用 `WAAPI`（Web 动画 API）从虚影停住的位置滑入最终槽位；几何只在按下时缓存一次，拖动过程不再读布局。
+- **常用软件持久化**：组件常驻、可能早于后端/登录态启动，`loadApps`（加载常用软件的请求）失败时会每 3 秒重试，且 `appsLoaded`（已成功加载的标记）为 false 时**禁止任何 `PUT`（整体更新请求）**，避免「空列表 + 本次新增」覆盖数据库里的旧列表；写入失败还会重试两次。桌面组件窗口的 `token`（登录令牌）也不再永久缓存空值，并在 `storage`（本地存储变更事件）的 `token` 变化时清缓存，登录后无需重启组件即可恢复读写。
+- **主题按钮权重**：毛玻璃主题的 `:root:is([data-theme=...]) button`（按主题属性匹配按钮的选择器）权重很高，会覆盖普通类选择器的 `position`（定位）/ `border`（描边）/ `border-radius`（圆角）。删除按钮必须写成 `button.app-op`（删除按钮的类名）并对定位/描边加 `!important`（强制覆盖），否则会掉回 `flex`（弹性布局）流、跑到图标下方。
+- **主题一致性**：两个入口都先在 `main.js`（各窗口的入口脚本）中 `applyTheme()`（应用主题函数）、再挂载顶层组件，保证浮窗/桌组件外观跟随当前主题。
+- **token 来源**：两个窗口同进程同 origin，直接读 `localStorage.getItem('token')`（从本地存储取登录令牌）；主窗口登录/退出时组件的 `storage`（本地存储变更事件）会清掉缓存，下一个请求重新读取（不再有 `get-main-token`（旧的取主窗口令牌通道）IPC）。
 - **多窗口并存**：工具箱浮窗与桌面小组件可同时存在，但同一时刻各自至多一个实例；重建前需先销毁旧窗口。
+
+---

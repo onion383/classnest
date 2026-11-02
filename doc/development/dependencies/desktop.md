@@ -1,7 +1,5 @@
 # 桌面端依赖与随包资源
 
-每节标题是「包名 + 版本 + 许可证」，中文用途写在标题下的说明行。
-
 ## 1. 根 `package.json`
 
 ### 运行时
@@ -33,6 +31,8 @@
 | [`eslint-plugin-vue`](../../../node_modules/eslint-plugin-vue) | 10.11.1 | Vue 规则 | 同上 |
 | [`globals`](../../../node_modules/globals) | 17.13.0 | 全局变量定义 | 同上 |
 
+---
+
 ## 2. 随包二进制与资源
 
 | 资源 | 位置 | 许可证 | 用途 / 打包方式 |
@@ -45,14 +45,20 @@
 | 托盘图标 | [`electron/tray-icon.png`](../../../electron/tray-icon.png) | 自有 | 系统托盘 |
 | 第三方许可 | 安装包内 `third-party-licenses.zip` | Chromium 各组件 | `afterPack.js` 由 `LICENSES.chromium.html` 压缩生成 |
 
+---
+
 ## 3. FFmpeg 注意事项（红线）
 
 - 只保留 LGPL 版；`resources/ffmpeg/`、`electron/inno/compile.mjs`、`electron-builder.json` 不要随意改动；改前核 `sha256`。
 - 构建必须保留 x86asm（nasm 汇编路径）；`--disable-x86asm` 会让 scale 滤镜落回被 GCC 8.1 编坏的 C 实现，封面花屏。
 - 临时封面文件必须保持 `.jpg` 后缀（ffmpeg 按扩展名推断封装格式）。
 
+---
+
 ## 4. 打包去向
 
 - Electron 本体由 electron-builder 下载并按 `electronLanguages` 裁剪语言包。
 - Chromium 组件在 `afterPack` 里再剔一轮（约 -32MB），保留清单见 [performance.md](../topics/performance.md) §5。
 - 随包资源：FFmpeg、字体 `.gz`、安装器素材；许可文本必须保留。
+
+---

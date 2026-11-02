@@ -1,12 +1,11 @@
 # 后端依赖明细（`student-backend/package.json`）
 
-12 个运行时依赖，无开发期依赖（测试用根目录的 `node:test`（Node 内置测试框架））。原生模块与 `asarUnpack`（不打进 asar 包）/ `ABI`（二进制接口）重编译见 [build-and-branches.md](../topics/build-and-branches.md)。每节标题是「包名 + 版本 + 许可证」，中文用途写在标题下的「用途」行。
-
+12 个运行时依赖，无开发期依赖（测试用根目录的 `node:test`（Node 内置测试框架））。原生模块与 `asarUnpack`（不打进 asar 包）/ `ABI`（二进制接口）重编译见 [build-and-branches.md](../topics/build-and-branches.md)。
 ## 运行时依赖
 
 ### [`express`](../../../student-backend/node_modules/express) 5.3.0 · MIT · Web 服务框架
 - 用途：HTTP 服务与路由。
-- 使用位置：[`app.js`](../../../student-backend/app.js) 及全部 `routes/*.js`。
+- 使用位置：[`app.js`](../../../student-backend/app.js)（应用装配与启动）及全部 `routes/*.js`（各业务路由）。
 - 打包：`student-backend/**` 整体进 `app.asar.unpacked`（后端要 fork）。
 
 ### [`cors`](../../../student-backend/node_modules/cors) 2.8.6 · MIT · 跨域中间件
@@ -15,11 +14,11 @@
 
 ### [`jsonwebtoken`](../../../student-backend/node_modules/jsonwebtoken) 9.0.3 · MIT · JWT 令牌库
 - 用途：JWT 签发与校验。
-- 使用位置：[`middleware/auth.js`](../../../student-backend/middleware/auth.js)、[`routes/auth.js`](../../../student-backend/routes/auth.js)、[`routes/account.js`](../../../student-backend/routes/account.js)。
+- 使用位置：[`middleware/auth.js`](../../../student-backend/middleware/auth.js)（鉴权中间件）、[`routes/auth.js`](../../../student-backend/routes/auth.js)（登录注册路由）、[`routes/account.js`](../../../student-backend/routes/account.js)（账号路由）。
 
 ### [`bcryptjs`](../../../student-backend/node_modules/bcryptjs) 3.0.3 · BSD-3-Clause · 密码哈希库
 - 用途：密码哈希/比对（纯 JS）。
-- 使用位置：[`services/bcryptAsync.js`](../../../student-backend/services/bcryptAsync.js)（唯一入口）、`routes/auth.js`、`routes/account.js`。
+- 使用位置：[`services/bcryptAsync.js`](../../../student-backend/services/bcryptAsync.js)（唯一入口）、`routes/auth.js`（登录注册路由）、`routes/account.js`（账号路由）。
 - **备注**：必须走异步封装，同步版会阻塞事件循环 56~65ms。
 
 ### [`better-sqlite3-multiple-ciphers`](../../../student-backend/node_modules/better-sqlite3-multiple-ciphers) 13.0.3 · MIT · 加密 SQLite 驱动
@@ -51,19 +50,23 @@
 
 ### [`sharp`](../../../student-backend/node_modules/sharp) 0.35.5 · Apache-2.0 · 图像处理库
 - 用途：图片解码/缩放/旋转（缩略图、EXIF 方向）。
-- 使用位置：[`albumThumbs.js`](../../../student-backend/albumThumbs.js)、[`albumScan.js`](../../../student-backend/albumScan.js)、[`albumExif.js`](../../../student-backend/albumExif.js)、[`routes/album.js`](../../../student-backend/routes/album.js)。
+- 使用位置：[`albumThumbs.js`](../../../student-backend/albumThumbs.js)（缩略图缓存）、[`albumScan.js`](../../../student-backend/albumScan.js)（扫描引擎）、[`albumExif.js`](../../../student-backend/albumExif.js)（拍摄时间读取）、[`routes/album.js`](../../../student-backend/routes/album.js)（相册路由）。
 - **备注**：libuv 线程池是进程级，扫描因此放独立子进程；缩略图并发上限 4。
 
 ### [`yauzl`](../../../student-backend/node_modules/yauzl) 3.4.0 · MIT · ZIP 解压库
 - 用途：zip 解压（安全解压实现的基础）。
-- 使用位置：[`services/unzipSafe.js`](../../../student-backend/services/unzipSafe.js)、[`services/ffmpeg.js`](../../../student-backend/services/ffmpeg.js)。
+- 使用位置：[`services/unzipSafe.js`](../../../student-backend/services/unzipSafe.js)（安全解压）、[`services/ffmpeg.js`](../../../student-backend/services/ffmpeg.js)（视频处理封装）。
 
 ### [`pinyin-match`](../../../student-frontend/node_modules/pinyin-match) 1.2.10 · MIT · 拼音模糊匹配
 - 用途：拼音模糊匹配（AI 姓名查找）。
-- 使用位置：AI 工具执行器（`executors.common.js` 懒加载）、`routes/search.js`。
+- 使用位置：AI 工具执行器（`executors.common.js`（执行器通用小工具）懒加载）、`routes/search.js`（全局搜索路由）。
 - **备注**：与前端共用同一版本。
+
+---
 
 ## 打包去向
 
 - 全部运行时依赖随 `student-backend/**` 进入 `app.asar.unpacked`（`asarUnpack` 规则），保证子进程与 `.node` 可加载。
 - `electron-builder.json` 对 `better-sqlite3-multiple-ciphers`、`pdf-parse`、`mammoth`、`xlsx`、`koffi` 等做了体积裁剪，规则见 [build-and-branches.md](../topics/build-and-branches.md)。
+
+---

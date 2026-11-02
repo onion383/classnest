@@ -1,9 +1,8 @@
-﻿# 前端层（`student-frontend/`）
+# 前端层（`student-frontend/`）
 
 运行在 Electron 渲染进程中的 Vue 3 单页应用，通过 HTTP 与后端子进程通信（默认 `127.0.0.1:3000`），通过白名单 IPC（进程间通信）与主进程通信。
 
-本文件按「整体机制 → 文件清单 → 标准」组织。
-
+---
 ## 一、前端整体机制
 
 ### 1. 前端定位与职责
@@ -54,6 +53,7 @@
 - **撤销/重做**：[`useUndo.js`](../../../student-frontend/src/composables/useUndo.js) 持久化到 `/api/undo`，快捷键 `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`。
 - **Vapor 双通道**：同一份源码可被 3.5 / 3.6 编译，见 [build-and-branches.md](../topics/build-and-branches.md)。
 
+---
 ## 二、前端文件索引
 
 ### 1. 前端目录树
@@ -82,17 +82,22 @@ student-frontend/
 
 ### 2. 子文档与入口速查
 
-- 入口与构建：[entry.md](./entry.md)
-- 页面：[views.md](./views.md)
-- 组件：[components/README.md](./components/README.md)
-- 组合式函数：[composables.md](./composables.md)
-- 其他（stores/router/styles/utils/指令/独立窗口）：[misc.md](./misc.md)
-- 工具箱浮窗 + 桌面小组件：[widgets.md](../widgets.md)
+| 文档 | 主要内容 |
+| --- | --- |
+| [entry.md](./entry.md) | 入口与构建：5 个 HTML 入口、入口脚本关键动作、Vite 配置 |
+| [views.md](./views.md) | 15 个页面：路由、Tab、状态与数据流、调用接口 |
+| [components/README.md](./components/README.md) | 76 个组件索引、通用接口标准、全局注册 |
+| [composables.md](./composables.md) | 26 个组合式函数：签名、返回字段、时序与副作用 |
+| [misc.md](./misc.md) | stores / router / styles / utils / 指令 / 独立窗口 / 静态资源 |
+| [widgets.md](../widgets.md) | 工具箱浮窗 + 桌面小组件（前端入口与主进程实现） |
 
+---
 ## 三、前端标准
 
-- **路由与页面**：页面路由懒加载，主视图用 `<KeepAlive :max="16">`；无 token 统一跳 `/login`，`401` 去重后跳登录；首次导航请求 `/api/me`，空闲时预取路由 chunk。
-- **请求**：统一 `axios`（`baseURL` + `Bearer` token），安全通道由 `setupSecureAxios` 装配；网络错误配合 `waitForBackendReady` 重试，写请求不自动重发。
-- **主题**：颜色、圆角与背景走 CSS 变量及 `data-theme` / `data-mode` / `data-topbar-color`，不在组件写死；细则见 [界面设计与交互](../topics/design-and-interaction.md)。
-- **组件**：图标统一走 `IconGlyph`；弹窗异步加载，配合 `v-preload` 悬停预取；Props / Emits 规范见 [components/README.md](./components/README.md)。
-- **状态与撤销**：跨页状态放 `stores/`；写操作登记 `/api/undo`，快捷键 `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`，实现见 [`useUndo.js`](../../../student-frontend/src/composables/useUndo.js) 与 [composables.md](./composables.md)。
+- **路由与页面**：页面路由懒加载，主视图用 `<KeepAlive :max="16">`（最多保活 16 个页面缓存）；无 `token`（登录令牌）统一跳 `/login`，`401`（未授权）去重后跳登录；首次导航请求 `/api/me`（当前账号信息接口），空闲时预取路由 `chunk`（代码分包）。
+- **请求**：统一 `axios`（HTTP 请求库）（`baseURL`（接口基址）+ `Bearer`（请求头认证方式）`token`），安全通道由 `setupSecureAxios`（安全通道装配函数）装配；网络错误配合 `waitForBackendReady`（等待后端就绪）重试，写请求不自动重发。
+- **主题**：颜色、圆角与背景走 CSS 变量及 `data-theme`（主题标识）/ `data-mode`（明暗模式）/ `data-topbar-color`（顶栏配色），不在组件写死；细则见 [界面设计与交互](../topics/design-and-interaction.md)。
+- **组件**：图标统一走 `IconGlyph`（统一图标组件）；弹窗异步加载，配合 `v-preload`（悬停预取指令）预取；Props / Emits 规范见 [components/README.md](./components/README.md)。
+- **状态与撤销**：跨页状态放 `stores/`（状态目录）；写操作登记 `/api/undo`（撤销记录接口），快捷键 `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`（撤销 / 重做），实现见 [`useUndo.js`](../../../student-frontend/src/composables/useUndo.js)（撤销组合式函数）与 [composables.md](./composables.md)。
+
+---

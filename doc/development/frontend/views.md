@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-frontend/
     └── src/
         ├── components/
@@ -54,11 +54,15 @@ project-name/
 
 15 个页面。路由定义见 [`src/router/index.js`](../../../student-frontend/src/router/index.js)，页面与路由的对应关系见下方「页面总表」。接口列为页面直接调用的后端接口（动态拼接的参数未逐条穷举）。
 
+---
+
 ## 综合概述
 
 - **定位**：前端页面层（`src/views/`），把组合式函数、组件与后端接口组装成可交互的页面；15 个页面与路由基本一对一。
-- **公共逻辑**：两张动态表格页共用 `useTableCRUD` + `DynamicTable`；看板 / 座位 / 相册分别复用 `useDashboardData` / `useSeatGrid` / `usePhotoTimeline`；写操作统一登记 `/api/undo`；路由与预取集中在 `router/index.js` 与 `prefetchRoutes()`。
-- **局限**：不展开组件内部实现与组合式函数签名（见 [components/README.md](./components/README.md)、[composables.md](./composables.md)），也不展开后端接口契约（见 [backend/routes.md](../backend/routes.md)）。
+- **公共逻辑**：两张动态表格页共用 `useTableCRUD`（表格增删改查组合式函数）+ `DynamicTable`（动态列表格组件）；看板 / 座位 / 相册分别复用 `useDashboardData`（首页数据聚合）/ `useSeatGrid`（座位网格）/ `usePhotoTimeline`（时间轴虚拟滚动）组合式函数；写操作统一登记 `/api/undo`（撤销记录接口）；路由与预取集中在 `router/index.js`（路由表）与 `prefetchRoutes()`（路由预取函数）。
+- **局限**：不展开组件内部实现与组合式函数签名（见 [components/README.md](./components/README.md)、[composables.md](./composables.md)），也不展开后端接口标准（见 [backend/routes.md](../backend/routes.md)）。
+
+---
 
 ## 详细说明
 
@@ -162,10 +166,14 @@ project-name/
 | `Login` | `routes/auth.js` + `routes/account.js`（`restore-offline`） | 登录页含离线恢复 |
 | 所有编辑页 | `routes/undo.js` | 撤销是横切能力 |
 
+---
+
 ## 注意事项
 
-- **页面只做组装**：表格 / 网格的状态与写库、撤销快照放 `useTableCRUD` / `useSeatGrid`，页面里不要重复实现，否则撤销与搜索会各走一套。
-- **写操作必须登记撤销**：编辑页的写接口要同步 `POST /api/undo`（设置页的「撤销记录」与 `Ctrl+Z` 都依赖它）；新增写接口时连 `settle` 一起补，见 [composables.md](./composables.md) 的 `useUndo`。
-- **表格统一用现成组件**：表头先行、空态、高度与滚动按上文「两类表格的共同标准」交给 `DynamicTable` / `GridView`，页面不要各写一套。
-- **页面文件必须被本页覆盖**：`docs-verify` 会检查 `src/views/` 下每个 `.vue` / `.js` 是否在本页出现，新增或改名页面要同步「页面总表」，否则校验失败。
-- **懒加载与预取**：页面路由与弹窗都按 `chunk` 懒加载，靠 `prefetchRoutes()`（路由空闲预热）与 `v-preload`（悬停 80ms 加载弹窗）预热；不要在首屏静态 `import` 弹窗组件。
+- **页面只做组装**：表格 / 网格的状态与写库、撤销快照放 `useTableCRUD`（表格增删改查组合式函数）/ `useSeatGrid`（座位网格组合式函数），页面里不要重复实现，否则撤销与搜索会各走一套。
+- **写操作必须登记撤销**：编辑页的写接口要同步 `POST /api/undo`（登记撤销的接口）（设置页的「撤销记录」与 `Ctrl+Z`（撤销快捷键）都依赖它）；新增写接口时连 `settle`（撤销落定处理）一起补，见 [composables.md](./composables.md) 的 `useUndo`（撤销 / 重做组合式函数）。
+- **表格统一用现成组件**：表头先行、空态、高度与滚动按上文「两类表格的共同标准」交给 `DynamicTable`（动态列表格）/ `GridView`（网格表），页面不要各写一套。
+- **页面文件必须被本页覆盖**：`docs-verify`（文档一致性校验脚本）会检查 `src/views/` 下每个 `.vue` / `.js` 是否在本页出现，新增或改名页面要同步「页面总表」，否则校验失败。
+- **懒加载与预取**：页面路由与弹窗都按 `chunk`（代码分包）懒加载，靠 `prefetchRoutes()`（路由预取函数）与 `v-preload`（悬停预取指令）预热；不要在首屏静态 `import`（导入语句）弹窗组件。
+
+---

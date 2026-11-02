@@ -1,4 +1,4 @@
-// 为开发文档生成「本篇涉及的文件」目录树（从仓库根目录到文件）。
+// 为开发文档生成「本篇涉及的文件」目录树。
 // 用法：
 //   node testjs/tools/doc-trees.mjs            # 写入
 //   node testjs/tools/doc-trees.mjs --dry-run  # 只打印，不改文件
@@ -22,6 +22,9 @@ const MARK_END = '<!-- doc-tree:end -->';
 // 需要生成树的文档（模块级 README 已在文件清单内画树；data-layer 已手工画过）
 const TARGETS = [
   'widgets.md',
+  'main-process/entry.md',
+  'main-process/modules.md',
+  'main-process/root-files.md',
   'backend/routes.md',
   'backend/services.md',
   'frontend/composables.md',
@@ -43,6 +46,11 @@ const TARGETS = [
   'testing/smoke.md',
   'testing/tools.md',
   'testing/units.md',
+  'topics/ai.md',
+  'topics/build-and-branches.md',
+  'topics/design-and-interaction.md',
+  'topics/performance.md',
+  'topics/security.md',
 ];
 
 function cleanDescription(raw) {
@@ -101,7 +109,7 @@ function sourceLinksOf(content, docDir) {
 }
 
 function buildTree(paths) {
-  const root = { name: 'project-name', type: 'dir', children: new Map() };
+  const root = { name: path.basename(ROOT), type: 'dir', children: new Map() };
   for (const [rel, desc] of paths) {
     const parts = rel.split('/');
     let node = root;
@@ -152,7 +160,7 @@ function blockFor(docRel) {
     MARK_START,
     '## 本篇涉及的文件',
     '',
-    '只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。',
+    '只展示本篇会讲到的代码文件；模块内其余文件见同级 README。',
     '',
     '```text',
     tree,

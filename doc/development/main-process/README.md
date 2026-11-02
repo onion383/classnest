@@ -1,7 +1,8 @@
-﻿# Electron 主进程开发文档
+# Electron 主进程开发文档
 
-本文档描述「班集」桌面应用 `electron/` 目录（Electron 主进程层）的职责、目录结构、逐个文件的功能，以及关键机制。内容基于源码逐文件阅读整理。本文件按「整体机制 → 文件清单 → 标准」组织。
+本文档描述「班集」桌面应用 `electron/` 目录（Electron 主进程层）的职责、目录结构、逐个文件的功能，以及关键机制。内容基于源码逐文件阅读整理。
 
+---
 ## 一、主进程整体机制
 
 ### 1. 主进程职责与运行方式
@@ -35,10 +36,10 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 - 监听 `app.on('second-instance')`：用户重复点击图标时，先 `tray.destroyTray()`，若主窗口存在则 `restore/show/focus`（最小化时先还原），否则调用 `createMainWindow()` 重建。
 - 注意：后端 fork 不能提前到 `ready` 之前——其 `env` 需要 `DB_MASTER_KEY`，而该值来自 `safeStorage` 解密；Windows 上 `safeStorage.isEncryptionAvailable()` 只有 `ready` 之后才为 `true`，提前调用会误走「生成随机新密钥」分支导致加密库打不开。因此 fork 放在 `whenReady` 内、建窗之后。
 
-#### 2.2 app:// 自定义协议（为何不用 file://）
+#### 2.2 app:// 自定义协议（不采用 file:// 的原因）
 
 - 打包模式用自定义 `app://` 安全协议加载前端，根目录为 `student-frontend/dist`。
-- 为什么不用 `file://`：`file://` 是「不透明 origin」，`localStorage` 仅会话内生效、每次重启即清空（表现为反复登录、设置还原）；`app://` 声明 `standard + secure + supportFetchAPI + corsEnabled + stream + codeCache` 后成为真实且持久化的 origin。
+- **不采用 `file://` 的原因**：`file://` 是「不透明 origin」，`localStorage` 仅会话内生效、每次重启即清空（表现为反复登录、设置还原）；`app://` 声明 `standard + secure + supportFetchAPI + corsEnabled + stream + codeCache` 后成为真实且持久化的 origin。
 - 特权声明 `protocol.registerSchemesAsPrivileged([...])` 必须在 `app ready` **之前**，放在 `main.js` 模块顶部；`ready` 之后的 `protocol.handle('app', ...)` 由 `main.protocol.js` 的 `setupAppProtocol` 完成（开发模式直接 `return`，不走该协议）。
 - 服务策略：启动时只 `readdir` 一次拿到顶级 html 入口名单，之后按路径规则流式返回，避免逐请求同步 `fs` 阻塞主进程；无扩展名或未登记的 html 路径回退 `index.html`（SPA 路由）；带 hash 的静态资源（js/css/wasm/图片/字体）设 `immutable` 长缓存，其余 `no-cache`；做了目录穿越防护（`file !== root && !file.startsWith(root + path.sep)` 返回 403）。
 - 渲染进程 V8 代码缓存：`setupRendererCodeCache` 在首个页面加载前调用 `session.defaultSession.setCodeCachePath(...)`（自定义协议需显式指定缓存目录），并按应用版本号（`.cc-version` 标记）后台清理旧版本条目，避免累积。
@@ -133,6 +134,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 - 以 `spawnSync(iscc, [setup.iss], { stdio: 'inherit' })` 编译 `electron/inno/setup.iss`，把退出码透传。
 - `setup.iss` 输出固定名 `班集-Setup-x.y.z.exe` 到 `release/`（Vue 3.6 预览通道为 `release36/`；便于 `main.updater.js` 按 `*-Setup-*.exe` 匹配资产），AppId 为固定 GUID（保证升级/卸载识别），`PrivilegesRequired=admin`（机器级安装到 `C:\Program Files\班集`，会请求 UAC）、`WizardStyle=modern`、`CloseApplications/RestartApplications=yes`（支持静默升级自动关旧进程/装完重启），安装界面由 [Code] 段自绘。
 
+---
 ## 二、主进程文件索引
 
 ### 1. 主进程目录树
@@ -172,21 +174,28 @@ electron/
 └── installer-assets/            安装器资源（图标 / 协议文本 / 输入框背景）
 ```
 
-### 2. 逐文件契约
+### 2. 逐文件职责与接口
 
-见 [files.md](./files.md)。
+| 覆盖范围 | 文档 | 主要内容 |
+| --- | --- | --- |
+| `electron/main/main.js` | [entry.md](./entry.md) | 入口编排：加载期顺序、主窗口、`whenReady`、引导/低版本提示、迁移与加密、入口 IPC、退出收尾 |
+| 21 个 `main.*.js` | [modules.md](./modules.md) | 逐模块职责、关键导出 / IPC 通道、依赖与被依赖 |
+| `electron/` 根文件与安装器资源 | [root-files.md](./root-files.md) | `preload.js`、`ipc-channels.json`、`startup.html`、图标、`afterPack.js`、`inno/`、`installer-assets/` |
 
+---
 ## 三、主进程标准
 
-- **模块依赖注入标准**：`main.js` 是编排者，`main.backend.js`/`main.perf.js`/`main.tray.js`/`main.widget.js`/`main.dialogs.js`/`main.apps.js`/`main.updater.js` 均通过 `registerXxxIpc(opts)` 注入窗口引用（getter 闭包，调用时取当前值）或回传出口，各模块内部不直接持有 `mainWindow` 变量。新增窗口引用时需同步更新这些注入项。
-- **async-ipc 与单向广播的分工**：请求-响应走 `ipcMain.handle`（`preload` 的 `validInvokeChannels`）；主进程 → 渲染层统一用 `from-main`，工具箱 → 主窗口用 `from-widget`；任何新通道必须同步加入 `preload.js` 白名单，否则前端调用会被静默拒绝或 reject。
-- **sandbox 默认开启**：所有窗口 `sandbox:true` 且 `contextIsolation:true`、`nodeIntegration:false`；如遇 Electron 版本回退导致沙箱启动崩溃，才考虑临时置 `false`（软件层仍由 contextIsolation 兜底）。
-- **`webSecurity` 仅开发模式关闭**，生产必须开启，禁止在打包后关闭网页安全策略。
-- **主窗口系「不透明 + 系统材质」，桌面组件「渲染层自绘磨砂」**：亚克力/云母材质在透明窗口上会被禁用，主窗口/迁移窗口/进度窗口仍遵循 `transparent:false + backgroundMaterial`，浮窗（工具箱）是唯一使用 `transparent:true` 的窗口。桌面组件要的是稳定的「桌面被模糊」观感（DWM 材质只做壁纸亮度采样 + 强着色、观感随 build 变），改为「壁纸图 + CSS 全局模糊 + 奶白遮罩」自绘（见 [widgets.md](../widgets.md)），不依赖系统材质，挂桌面层（`WS_CHILD`）时同样可用。
-- **safeStorage 时序**：`DB_MASTER_KEY` 依赖 `safeStorage`，只能在 `app ready` 之后生成/fork，切勿提前到模块加载期。DB 主密钥文件 `db-master.key` 与数据库同目录存放，会随数据目录一起迁移。
-- **写配置必须抛错**：`config.saveAppConfig` 写失败会抛出，调用方（如目录搬迁）应据此中止，避免「数据在新目录、配置却指向已删除旧目录」的错位状态。
-- **主动停止后端与自动重启**：任何需要重启后端的操作（目录搬迁、缩略图目录变更、加密转换、重连）都应先 `backend.stopBackendProcess()`（其内部已摘除自动重启监听并停心跳），再 `backend.startBackend()`，避免 fork 出两个后端。
-- **迁移/加密流程的窗口数保护**：执行前先创建进度窗口再关闭其它窗口，保证窗口数不为 0，避免触发 `window-all-closed` 导致应用提前退出；同时 `tray.beginCloseWithoutMenu()` 放行主窗口关闭。
+- **模块依赖注入标准**：`main.js`（主进程入口 / 编排者），`main.backend.js`（后端进程）/`main.perf.js`（性能采集）/`main.tray.js`（托盘）/`main.widget.js`（小组件窗口）/`main.dialogs.js`（系统对话框）/`main.apps.js`（常用软件）/`main.updater.js`（更新）均通过 `registerXxxIpc(opts)`（各模块注册 IPC 的标准函数）注入窗口引用（getter 闭包，调用时取当前值）或回传出口，各模块内部不直接持有 `mainWindow`（主窗口引用）变量。新增窗口引用时需同步更新这些注入项。
+- **async-ipc 与单向广播的分工**：请求-响应走 `ipcMain.handle`（Electron 请求-响应通道注册）；主进程 → 渲染层统一用 `from-main`（主进程发往渲染层），工具箱 → 主窗口用 `from-widget`（工具箱发往主窗口）；任何新通道必须同步加入 `preload.js`（预加载脚本）白名单，否则前端调用会被静默拒绝或 `reject`（返回失败的 Promise）。
+- **sandbox 默认开启**：所有窗口 `sandbox:true`（沙箱开关）且 `contextIsolation:true`（上下文隔离）、`nodeIntegration:false`（关闭 Node 集成）；如遇 Electron 版本回退导致沙箱启动崩溃，才考虑临时置 `false`（软件层仍由 `contextIsolation`（上下文隔离）兜底）。
+- **`webSecurity`（网页安全策略开关）仅开发模式关闭**，生产必须开启，禁止在打包后关闭网页安全策略。
+- **主窗口系「不透明 + 系统材质」，桌面组件「渲染层自绘磨砂」**：亚克力 / 云母材质在透明窗口上会被禁用，主窗口 / 迁移窗口 / 进度窗口仍遵循 `transparent:false`（不透明窗口）+ `backgroundMaterial`（系统背景材质），浮窗（工具箱）是唯一使用 `transparent:true`（透明窗口）的窗口。桌面组件要的是稳定的「桌面被模糊」观感（`DWM`（Windows 桌面窗口管理器）材质只做壁纸亮度采样 + 强着色、观感随 build 变），改为「壁纸图 + CSS 全局模糊 + 奶白遮罩」自绘（见 [widgets.md](../widgets.md)），不依赖系统材质，挂桌面层（`WS_CHILD`（子窗口样式））时同样可用。
+- **safeStorage 时序**：`DB_MASTER_KEY`（数据库主密钥）依赖 `safeStorage`（Electron 安全存储），只能在 `app ready`（应用就绪事件）之后生成 / `fork`（派生子进程），切勿提前到模块加载期。主密钥文件 `db-master.key` 与数据库同目录存放，会随数据目录一起迁移。
+- **写配置必须抛错**：`config.saveAppConfig`（保存应用配置的函数）写失败会抛出，调用方（如目录搬迁）应据此中止，避免「数据在新目录、配置却指向已删除旧目录」的错位状态。
+- **主动停止后端与自动重启**：任何需要重启后端的操作（目录搬迁、缩略图目录变更、加密转换、重连）都应先 `backend.stopBackendProcess()`（停止后端子进程，其内部已摘除自动重启监听并停心跳），再 `backend.startBackend()`（启动后端子进程），避免 `fork`（派生子进程）出两个后端。
+- **迁移/加密流程的窗口数保护**：执行前先创建进度窗口再关闭其它窗口，保证窗口数不为 0，避免触发 `window-all-closed`（所有窗口关闭事件）导致应用提前退出；同时 `tray.beginCloseWithoutMenu()`（托盘放行关闭主窗口的方法）放行主窗口关闭。
 - **测试开关**（均通过环境变量，默认关闭）：`FORCE_SETUP=1/0` 强制/跳过首次引导；`SIM_BACKEND_FAIL` 让后端起不来（验证失败页）；`SIM_BACKEND_CRASH=once|dead` 模拟运行期崩溃（验证重连/满 5 次进全屏）；`INP_DEBUG=1` 开 CDP 远程调试端口 9222；`NODE_EXEC_PATH` 指定开发模式后端 node 路径。
-- **启动计时的停收标准**：`rendererStartupLogged` 会在真正应用页 `did-finish-load` 后停收 `[startup]` 日志，新增页面/日志时需注意该口径（前端重启不计入启动耗时）。
-- **`app://` 与新入口页**：新增顶级 html 入口需确保其位于 `student-frontend/dist` 顶层（`setupAppProtocol` 启动时枚举 html 入口名单），否则会被当作 SPA 路由回退到 `index.html`。
+- **启动计时的停收标准**：`rendererStartupLogged`（启动日志停收标记）会在真正应用页 `did-finish-load`（页面加载完成事件）后停收 `[startup]` 日志，新增页面 / 日志时需注意该口径（前端重启不计入启动耗时）。
+- **`app://`（应用自定义协议）与新入口页**：新增顶级 html 入口需确保其位于 `student-frontend/dist` 顶层（`setupAppProtocol`（注册应用协议的启动逻辑）启动时枚举 html 入口名单），否则会被当作 SPA（单页应用）路由回退到 `index.html`（主页面）。
+
+---

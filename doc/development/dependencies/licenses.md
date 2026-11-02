@@ -1,6 +1,6 @@
 # 依赖许可证
 
-## 1. 收录方式
+## 一、收录方式
 
 - 全文：按许可证类型各收一份，放在 [`licenses/`](./licenses/)（原文从各包 `LICENSE` 文件复制，未改写）。
 - 版权行：逐包列出（取自各包 `LICENSE` 首条 Copyright）。
@@ -17,7 +17,10 @@
 | LGPL-2.1 | [`licenses/LGPL-2.1.txt`](./licenses/LGPL-2.1.txt) | `resources/ffmpeg/COPYING.LGPLv2.1` |
 | SIL OFL 1.1 | 仓库未收录全文 | 见第 4 节 |
 
-## 2. 前端依赖
+---
+
+## 各部分依赖汇总
+### 1. 前端依赖
 
 | 包 | 版本 | 许可证 | 版权行 |
 | --- | --- | --- | --- |
@@ -41,7 +44,7 @@
 | `tailwindcss` | 4.3.3 | MIT | 版权归 Tailwind Labs, Inc. |
 | `@tailwindcss/vite` | 4.3.3 | MIT | 版权归 Tailwind Labs, Inc. |
 
-## 3. 后端依赖
+### 2. 后端依赖
 
 | 包 | 版本 | 许可证 | 版权行 |
 | --- | --- | --- | --- |
@@ -58,7 +61,7 @@
 | `yauzl` | 3.4.0 | MIT | Copyright (c) 2014 Josh Wolfe |
 | `pinyin-match` | 1.2.10 | MIT | 同前端 |
 
-## 4. 根依赖与随包资源
+### 3. 根依赖与随包资源
 
 | 包 / 资源 | 版本 | 许可证 | 版权行 / 说明 |
 | --- | --- | --- | --- |
@@ -77,15 +80,17 @@
 | Noto Sans SC | — | SIL OFL 1.1 | 仓库未收录 OFL 全文；官方原文 <https://openfontlicense.org/open-font-license-official-text/>。分发字体时须随附该许可与版权声明，不得单独以字体名售卖 |
 | Chromium / Electron 组件 | 随 Electron 版本 | 各自许可 | 安装包内 `third-party-licenses.zip`（由 `electron/afterPack.js` 在打包后压缩 `LICENSES.chromium.html` 生成） |
 
-## 5. MPL-2.0 说明（DOMPurify）
+### 4. MPL-2.0 说明（DOMPurify）
 
 `dompurify` 声明为 `MPL-2.0 OR Apache-2.0`，本项目按 **Apache-2.0** 分支使用：
 
 - 不修改 DOMPurify 源码，只作为依赖引入；
 - 若未来修改其源码，需按 MPL-2.0 公开修改部分，或继续遵循 Apache-2.0 分支。
 
-## 6. 维护
+### 三、维护
 
 - 升级依赖后重跑本文件的核对：`package.json` 的 `license` 字段 + 包内 `LICENSE` 首条 Copyright。
 - 新增 Apache-2.0 / LGPL / OFL 类依赖时，确认随包分发许可文本，不允许删除 `third-party-licenses.zip`。
 - 许可证全文只从包内文件复制，不手写、不删改。
+
+---

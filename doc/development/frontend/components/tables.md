@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-frontend/
     └── src/
         ├── components/
@@ -24,15 +24,19 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口约定」；本节只补充组件特有接口。
+通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口标准」；本节只补充组件特有接口。
 
 6 个文件，分「动态列 `CRUD`（增删改查）表」「座位/课表/值日网格」「AI 表格预览」三组。全部是受控组件：状态由宿主或 `composable`（组合式函数）持有。
+
+---
 
 ## 综合概述
 
 - **定位**：表格与网格组件（`components/tables/`），覆盖动态列 CRUD 表、座位 / 课表 / 值日网格，以及 AI 表格预览。
-- **公共逻辑**：全部是**受控组件**——状态与写库在宿主或 `useTableCRUD` / `useSeatGrid`，组件只负责渲染、表头吸顶、排序筛选、行列拖拽与多选。
+- **公共逻辑**：全部是**受控组件**——状态与写库在宿主或 `useTableCRUD`（表格增删改查组合式函数）/ `useSeatGrid`（座位网格组合式函数），组件只负责渲染、表头吸顶、排序筛选、行列拖拽与多选。
 - **局限**：不展开组合式函数的签名与撤销登记（见 [composables.md](../composables.md)），也不展开页面如何组装（见 [views.md](../views.md)）。
+
+---
 
 ## 详细说明
 
@@ -78,9 +82,13 @@ project-name/
 - **内部实现**：拉取记录并补 `_rowKey`；列按后端字段元数据渲染。
 - **使用方**：AI 消息里的「查看记录」气泡。
 
+---
+
 ## 注意事项
 
-- **受控到底**：`DynamicTable` 内不发请求、不写库；新增写操作仍放 `useTableCRUD`，否则撤销与搜索会各走一套。
-- **三张 AI 表只读**：`AiGridPreview` / `AiProposalTable` / `AiRecordTable` 只做预览，不要改造成可编辑表。
-- **网格不要虚拟滚动**：`rowspan` 切片会错位，拖拽又依赖完整 `DOM`；`GridView` 与 `AiGridPreview` 都受影响。
-- **字段契约要同步**：`fields`（`DynamicTable`）与 `colHeaders`（`GridView`）必须与 `useTableCRUD` / 后端动态列接口一致，否则表头与数据错位。
+- **受控到底**：`DynamicTable`（动态列表格）内不发请求、不写库；新增写操作仍放 `useTableCRUD`（表格组合式函数），否则撤销与搜索会各走一套。
+- **三张 AI 表只读**：`AiGridPreview`（AI 排布预览表）/ `AiProposalTable`（AI 提案明细表）/ `AiRecordTable`（AI 记录预览表）只做预览，不要改造成可编辑表。
+- **网格不要虚拟滚动**：`rowspan`（跨行合并）切片会错位，拖拽又依赖完整 `DOM`（页面元素树）；`GridView`（网格表）与 `AiGridPreview`（AI 排布预览表）都受影响。
+- **字段标准要同步**：`fields`（字段列表，`DynamicTable`（动态列表格）用）与 `colHeaders`（列头列表，`GridView`（网格表）用）必须与 `useTableCRUD`（表格组合式函数）/ 后端动态列接口一致，否则表头与数据错位。
+
+---

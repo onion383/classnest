@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-frontend/
     └── src/
         ├── components/
@@ -40,15 +40,19 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口约定」；本节只补充组件特有接口。
+通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口标准」；本节只补充组件特有接口。
 
 21 个通用件，被各页面与弹窗复用。条目统一：定位 / 对外接口 / 内部实现 / 使用方与注意点。
+
+---
 
 ## 综合概述
 
 - **定位**：基础通用件（`components/base/`），21 个组件覆盖弹窗外壳、表单控件、通知、图标、时间轴与空态。
-- **公共逻辑**：对外接口遵守 [components/README.md](./README.md) 的「通用对外接口约定」；弹窗统一用 `DialogShell`，图标统一用 `IconGlyph`，通知统一走 `useNotification()`。
+- **公共逻辑**：对外接口遵守 [components/README.md](./README.md) 的「通用对外接口标准」；弹窗统一用 `DialogShell`（弹窗外壳组件），图标统一用 `IconGlyph`（统一图标组件），通知统一走 `useNotification()`（全局通知组合式函数）。
 - **局限**：本页只补充组件特有接口，通用 props / emits 的含义见 README，不重复；主题实现见 [misc.md](../misc.md)。
+
+---
 
 ## 详细说明
 
@@ -177,8 +181,12 @@ project-name/
 - **内部实现**：上一周/下一周按钮 emit `direction`，下拉选择 emit `update:currentWeek`。
 - **使用方**：`SeatView`、`ScheduleView`、`DutyView`。
 
+---
+
 ## 注意事项
 
-- **接口不要自造别名**：新增通用件沿用 `visible` / `modelValue` / `confirm` / `cancel` 等既有命名，否则与「通用对外接口约定」对不上。
-- **弹窗一律走 `DialogShell`**：遮罩、`Esc`、层级与过渡由外壳统一；只做自定义遮罩会漏掉弹窗点击提示（`no-dialog-pulse` 白名单同理）。
-- **通知走 `useNotification()`**：不要自己挂 toast，合并同文案与「撤销」按钮都由该组合式函数管理。
+- **接口不要自造别名**：新增通用件沿用 `visible`（显隐）/ `modelValue`（当前值）/ `confirm`（确认事件）/ `cancel`（取消事件）等既有命名，否则与「通用对外接口标准」对不上。
+- **弹窗一律走 `DialogShell`**：遮罩、`Esc`（退出键）、层级与过渡由外壳统一；只做自定义遮罩会漏掉弹窗点击提示（`no-dialog-pulse`（不弹遮罩提示的标记类）白名单同理）。
+- **通知走 `useNotification()`**：不要自己挂 `toast`（浮层提示），合并同文案与「撤销」按钮都由该组合式函数管理。
+
+---

@@ -4,7 +4,7 @@
 
 ## 1. 用户使用文档
 
-入口：[`user/README.md`](./user/README.md)，内含完整目录、阅读路径、写法与维护约定。只讲怎么用，不涉及源码结构与内部实现。
+入口：[`user/README.md`](./user/README.md)，内含完整目录、阅读路径、写法与维护标准。只讲怎么用，不涉及源码结构与内部实现。
 
 已写：32 篇全部完成，含卷首（01–03）、页面（10–24）、通用操作（30–33）、数据与安全（40–43）、设置（50–52）、支持（60–62）。从 [01 安装与首次启动](./user/01-install-and-first-run.md) 开始，或按 `user/README.md` 的场景表挑选。
 
@@ -16,10 +16,10 @@
 - 专题：AI、性能、打包与分支、界面设计与交互、安全
 - 依赖与许可证（含许可证原文）
 - 测试资产（`testjs/`）
-- 小组件、代码数量统计、文档核对台账
+- 小组件、代码数量统计、文档写作 / 更新 / 校验规则
 
 ## 3. 校验
 
-`npm run docs:verify` 检查死链、源码覆盖、路由、依赖版本与许可、关键计数、Mermaid 图结构等，失败时退出码非 0。断言明细与维护流程见 [`development/verification.md`](./development/verification.md)。
+`npm run docs:verify` 检查死链、源码覆盖、路由、依赖版本与许可、关键计数、Mermaid 图结构、用户手册索引、工具/测试脚本覆盖、doc-tree 结构、禁用词、英文标识配中文、字段标签加粗等，失败时退出码非 0。写作模板与规则、更新流程与映射、校验明细与记录见 [`development/dev-doc-verification.md`](development/dev-doc-verification.md)。
 
 > 过程性材料（需求对齐、评审草稿等）放在 `doc/开发文档/`，**不入库**，不属于这两套文档。

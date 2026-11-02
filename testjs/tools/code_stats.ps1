@@ -6,7 +6,7 @@ Git 代码与文档统计
 3. 代码文件明细按代码行降序
 4. 汇总维度：按后缀、按目录/模块
 5. 报告导出为 Markdown：doc/development/code-stats.md
-6. 代码与文档分开统计：代码按后缀白名单（源码/样式/标记/脚本/配置），文档单独统计 doc/ 下的 Markdown（原始行 / 非空行 / 字符数）；锁文件、资源等排除
+6. 代码与文档分开统计：代码按后缀白名单（源码/样式/标记/脚本/配置），文档单独统计 doc/ 与仓库根目录的 Markdown（原始行 / 非空行 / 字符数）；锁文件、资源等排除
 7. 文档统计单独成板块：按子目录汇总 + 文件明细，不含代码量口径
 8. 报告自身也计入文档：先生成占位版本，再把正文的行数 / 字符数反算回自身行，迭代到数值一致
 
@@ -26,7 +26,7 @@ Set-Location -LiteralPath $root
 
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host "Git 代码与文档统计（代码行 / 原始行 / 字符数）" -ForegroundColor Cyan
-Write-Host "自动遵循 .gitignore；文档单独统计 doc/ 下的 Markdown" -ForegroundColor Cyan
+Write-Host "自动遵循 .gitignore；文档单独统计 doc/ 与仓库根目录的 Markdown" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -71,7 +71,7 @@ foreach ($f in $fileList) {
     }
 }
 
-# ---- 文档统计：单独板块，只统计 doc/ 下的 Markdown ----
+# ---- 文档统计：单独板块，统计 doc/ 与仓库根目录的 Markdown ----
 # 与代码统计分开：文档不计「代码行」，用「原始行 / 非空行 / 字符数」衡量。
 # 按文件系统扫描，未提交的新文档也会计入；排除编辑器配置（.obsidian）与
 # 不入库的过程性材料（doc/开发文档）。统计报告自身先排除，生成正文后再补入（见两遍法）。
@@ -89,6 +89,13 @@ if (Test-Path -LiteralPath $docRoot) {
             ForEach-Object { $_.FullName.Substring($root.Length + 1) -replace '\\', '/' }
     )
 }
+# 仓库根目录的 Markdown（README.md 等文档入口）一并计入；LICENSE.md 属于法律文本，不计
+$rootDocFiles = @(
+    Get-ChildItem -LiteralPath $root -File -Filter '*.md' |
+        Where-Object { $_.Name -ne 'LICENSE.md' -and $_.Name -ne 'code-stats.md' } |
+        ForEach-Object { $_.Name }
+)
+$docFiles = @($docFiles + $rootDocFiles)
 
 # 行注释前缀（按后缀）——统计“代码行”时用于剔除整行注释
 function Get-LineCommentPrefixes {
@@ -187,10 +194,15 @@ function Measure-OneDoc {
         }
     }
 
-    # 模块：doc/ 下的第一段子目录；直接放在 doc/ 根下的归为「(doc 根目录)」
-    $norm = ($RelPath -replace '\\', '/').Substring(3).TrimStart('/')
-    $slash = $norm.IndexOf('/')
-    $module = if ($slash -lt 0 -or $norm.Length -eq 0) { '(doc 根目录)' } else { 'doc/' + $norm.Substring(0, $slash) }
+    # 模块：doc/ 下的第一段子目录；直接放在 doc/ 根下的归为「(doc 根目录)」；仓库根目录的归为「(仓库根目录)」
+    $normalizedPath = $RelPath -replace '\\', '/'
+    if ($normalizedPath -like 'doc/*') {
+        $norm = $normalizedPath.Substring(3).TrimStart('/')
+        $slash = $norm.IndexOf('/')
+        $module = if ($slash -lt 0 -or $norm.Length -eq 0) { '(doc 根目录)' } else { 'doc/' + $norm.Substring(0, $slash) }
+    } else {
+        $module = '(仓库根目录)'
+    }
 
     [PSCustomObject]@{
         FilePath = $RelPath
@@ -338,9 +350,9 @@ function New-Report {
     $md.Add('---')
     $md.Add('')
 
-    $md.Add('## 文档统计（doc/ 目录）')
+    $md.Add('## 文档统计（doc/ 与仓库根目录）')
     $md.Add('')
-    $md.Add('统计范围为 doc/ 下的 Markdown（排除 `.obsidian` 与 `doc/开发文档`）；**包含本报告自身**，自身数值由生成两遍后反算。')
+    $md.Add('统计范围为 doc/ 与仓库根目录的 Markdown（doc/ 内排除 `.obsidian` 与 `doc/开发文档`，根目录不含 `LICENSE.md`）；**包含本报告自身**，自身数值由生成两遍后反算。')
     $md.Add('')
     $md.Add('| 指标 | 数值 |')
     $md.Add('| --- | :---: |')
@@ -502,7 +514,7 @@ Write-Host "======================================" -ForegroundColor Cyan
 # ---- 控制台输出：文档统计（单独板块）----
 Write-Host ""
 Write-Host "======================================" -ForegroundColor Cyan
-Write-Host "【文档统计】doc/ 下的 Markdown（与代码分开统计）"
+Write-Host "【文档统计】doc/ 与仓库根目录的 Markdown（与代码分开统计）"
 Write-Host "序号`t子目录`t文件数`t非空行`t原始行`t字符数"
 Write-Host "======================================" -ForegroundColor Cyan
 $i = 0

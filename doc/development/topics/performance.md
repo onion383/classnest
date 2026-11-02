@@ -1,8 +1,43 @@
 # 性能专题：启动、内存与前后端优化
 
+<!-- doc-tree:start -->
+## 本篇涉及的文件
+
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
+
+```text
+classnest/
+├── electron/
+│   ├── main/
+│   │   ├── main.privateWorkingSet.js  # 与任务管理器「进程」页一致
+│   │   └── main.startup-timer.js
+│   └── afterPack.js  # 仅 win32
+└── testjs/
+    └── probe/
+        ├── bundle-diff.mjs  # 构建产物体积差异
+        ├── etag-revalidate-probe.cjs  # 缓存校验
+        ├── inp-probe.mjs  # 交互延迟（INP），自动起 Vite + 带调试口的 Electron，CDP 派发真实输入
+        ├── longframe-probe.mjs  # 长帧
+        ├── measure-startup.mjs  # 启动耗时；--backend-only / --dev / --json / --runs
+        └── pdf-leak-probe.mjs  # PDF 导出内存泄漏（看 V8 external）
+```
+<!-- doc-tree:end -->
+
 > 数据来源：`electron/main/*`、`student-backend/app.js`、`testjs/probe/*` 的实测记录与 `doc/开发文档/优化文档.md`（不入库）。文中数值是**历史实测值**，不是本次重新测量；改代码后用 `testjs/probe` 复测。
 
-## 1. 启动全链路
+---
+
+## 专题总览
+
+- **定位**：性能专题：启动全链路与计时口径、内存采样、前后端优化清单、打包体积与测量方法。
+- **测量口径**：启动计时以「后端就绪 + 首屏可见」为准；内存看 `PDH`（Windows 性能计数器）的专用工作集，不看任务管理器里的 `rss`（常驻内存）。
+- **局限**：文中数值是历史实测，换机 / 升级 / 改代码后需用 `testjs/probe` 复测（见文末「验证与注意事项」）。
+
+---
+
+## 详细说明
+
+### 1. 启动全链路
 
 ```mermaid
 flowchart TD
@@ -27,7 +62,7 @@ flowchart TD
 
 关键打点：`app.whenReady 就绪`、`协议注册完成`、`createMainWindow/createSetupWindow 完成`、`startBackend 完成`、`ready-to-show`、`Vite 就绪`、`loading 页面加载完成`、`Vite 页面加载完成`、`后端就绪`、`Vue 挂载完成`、`占位页移除（界面可见）`。
 
-## 2. 内存口径与采样
+### 2. 内存口径与采样
 
 | 口径 | 来源 | 用途 |
 | --- | --- | --- |
@@ -39,7 +74,7 @@ flowchart TD
 - 采样：`startMemSampling()`（开始内存采样）后台定时汇总「总计 / 近一分钟平均 / 自启动最高」；面板通过 `perf-snapshot`（性能快照）读取，`perf-restart-frontend`（重启前端）、`perf-restart-widget`（重启小组件）、`perf-relaunch-app`（重启应用）、`perf-gc`（触发垃圾回收）提供处置手段。
 - 非 Windows 或 koffi 不可用时返回 `null`，调用方回退 Electron 自带口径。
 
-## 3. 前端优化
+### 3. 前端优化
 
 | 优化 | 做法 | 目的 / 代价 |
 | --- | --- | --- |
@@ -59,7 +94,7 @@ flowchart TD
 
 **不做的事**：`GridView` 不做虚拟滚动（rowspan + 拖拽依赖完整 DOM）；首屏体积不是瓶颈（实测 325KB）；数据库索引合理，不再加。
 
-## 4. 后端优化
+### 4. 后端优化
 
 | 优化 | 做法 | 原因 |
 | --- | --- | --- |
@@ -74,7 +109,7 @@ flowchart TD
 | 缩略图内存缓存 | 索引 + 64MB LRU | 单请求 167us |
 | 心跳/看门狗 | 30s ping、4s 超时、连续 2 次判假死；请求失败触发即时探测 | 后端异常可快速发现并重连 |
 
-## 5. 打包体积与磁盘
+### 5. 打包体积与磁盘
 
 - [`afterPack.js`](../../../electron/afterPack.js)（仅 win32）：剔除 `vk_swiftshader.dll`、`vk_swiftshader_icd.json`、`vulkan-1.dll`、`dxcompiler.dll`、`dxil.dll`（约 -32MB）；`LICENSES.chromium.html`（约 19.4MB）压成 `third-party-licenses.zip`（自实现 CRC32 + `deflateRawSync`）。
 - 保留：`libGLESv2.dll` / `libEGL.dll` / `d3dcompiler_47.dll`（ANGLE）、`icudtl.dat`、`resources.pak`、`v8_context_snapshot.bin`、`snapshot_blob.bin`、`ffmpeg.dll`（视频播放）。
@@ -82,9 +117,11 @@ flowchart TD
 - `asarUnpack`（不打进 asar 包、保留为独立文件）：`resources/ffmpeg/**`（视频处理）、`student-backend/**`（后端子进程代码）、`node_modules/**`（原生模块）、`*.node`（原生二进制）。
 - 磁盘：用户数据在 `userData/data`；缩略图按库隔离、回收站有上限策略（`album-thumbs/`、`album-trash/`）。
 
-## 6. 测量方法与结论
+---
 
-| 命令 / 脚本 | 测什么 |
+## 验证与注意事项
+
+| 命令 / 脚本 | 测量内容 |
 | --- | --- |
 | `npm run inp` → [`testjs/probe/inp-probe.mjs`](../../../testjs/probe/inp-probe.mjs) | 交互延迟（INP），自动起 Vite + 带调试口的 Electron，CDP 派发真实输入 |
 | [`testjs/probe/measure-startup.mjs`](../../../testjs/probe/measure-startup.mjs) | 启动耗时；`--backend-only` / `--dev` / `--json` / `--runs` |
@@ -95,3 +132,5 @@ flowchart TD
 | 性能面板 | `perf-snapshot`（逐进程内存、总计、平均、最高）、`perf-startup`（启动时间线） |
 
 结论口径：**收益要能端到端测出来**。例如 Vapor 迁移「100% 收益来自 Vapor，但绝对收益 <1ms、首屏 gzip +41KB」，因此只作为可选通道；命名管道方案实测快 70% 但因 fetch adapter 对 204 误判导致页面闪跳，已全量回退。历史数据与推导在 `doc/开发文档/`（不入库）。
+
+---

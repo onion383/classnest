@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 ├── student-frontend/
 │   ├── src/
 │   │   ├── router/
@@ -68,11 +68,15 @@ project-name/
 
 本篇收拢前端其余基础设施：状态（仅一个 store）、路由、主题样式、工具函数、指令、引导 / 迁移窗口、静态资源与构建配置。页面与组件本身的职责见 [views.md](./views.md) 与 [components/README.md](./components/README.md)。
 
+---
+
 ## 综合概述
 
-- **定位**：前端公共基础设施层（`stores/`、`router/`、`styles/`、`utils/`、`subwindows/setup|migration`、`public/` 与构建配置），被所有页面、组件与独立窗口共用。
-- **公共逻辑**：主题只有一个 store（`useThemeStore().applyTheme()` 统一下发 `data-theme` / CSS 变量 / 背景图）；请求统一经 `setupApiClient` 装配（token、退避重试、安全通道）；token 与当前用户只经 `authStorage` 读写；主题样式按需加载（`themeLoader.js`）。
+- **定位**：前端公共基础设施层（`stores/`（状态目录）、`router/`（路由目录）、`styles/`（样式目录）、`utils/`（工具函数目录）、`subwindows/setup|migration`（首次引导 / 数据库迁移窗口）、`public/`（静态资源）与构建配置），被所有页面、组件与独立窗口共用。
+- **公共逻辑**：主题只有一个 store（`useThemeStore().applyTheme()`（主题仓库的应用主题方法）统一下发 `data-theme`（主题标识属性）/ CSS 变量 / 背景图）；请求统一经 `setupApiClient`（axios 装配函数，带 token、退避重试与安全通道）；token 与当前用户只经 `authStorage`（登录态唯一读写模块）读写；主题样式按需加载（`themeLoader.js`（主题样式加载器））。
 - **局限**：不展开页面与组件的内部实现，也不展开工具箱 / 桌面小组件（见 [widgets.md](../widgets.md)）；构建与分支细节见 [topics/build-and-branches.md](../topics/build-and-branches.md)。
+
+---
 
 ## 详细说明
 
@@ -177,10 +181,14 @@ project-name/
 - 根目录 [`eslint.config.mjs`](../../../eslint.config.mjs)，`npm run lint` 一次跑 `student-frontend/src`、`student-backend`、`electron`。
 - 只做低级错误护栏：不启用 `eslint:recommended` 与审美类 vue 规则，不挂进 `build`，不扫 `testjs/`。
 
+---
+
 ## 注意事项
 
-- **主题只走 store**：切主题统一调 `useThemeStore().applyTheme()`（`data-theme` / CSS 变量 / 背景图 / `theme-chrome` IPC 一起下发）；各窗口入口都先 `applyTheme()` 再挂载，否则首帧是默认主题。
-- **token 只走 `authStorage`**：`token` / `currentUser` 的裸存储键只能出现在 `authStorage.js`（`behavior/sfc-conventions.test.js` 会扫全量 SFC 拦截）。
-- **请求与资源地址统一封装**：接口经 `setupApiClient` 装配的实例（token、退避重试、安全通道），图片 / 背景用 `apiUrl` / `resourceUrl` 追加 token；直接拼裸地址会漏掉重试与鉴权。
-- **主题 CSS 按需加载**：主题样式由 `themeLoader.js` 按主题加载，夜间配色单独在 `theme-night.css`；新增主题或配色要落到对应 `theme-*.css`，改完跑 `radius-audit.js` 与主题切换检查。
-- **新增窗口入口要登记构建**：独立窗口的 HTML 入口必须写进 `vite.config.js` 的 `rollupOptions.input`，否则打包后找不到页面；入口脚本按 `widgets.md` 的做法先 `applyTheme()` 再挂载。
+- **主题只走 store**：切主题统一调 `useThemeStore().applyTheme()`（主题仓库的应用主题方法）（`data-theme`（主题标识属性）/ CSS 变量 / 背景图 / `theme-chrome`（通知主进程换窗口外观的 IPC）一起下发）；各窗口入口都先 `applyTheme()`（应用主题函数）再挂载，否则首帧是默认主题。
+- **token 只走 `authStorage`**：`token`（登录令牌）/ `currentUser`（当前用户）的裸存储键只能出现在 `authStorage.js`（登录态唯一读写模块）（`behavior/sfc-conventions.test.js`（架构标准行为测试）会扫全量 SFC（单文件组件）拦截）。
+- **请求与资源地址统一封装**：接口经 `setupApiClient`（axios 装配函数，带 token、退避重试与安全通道）装配的实例，图片 / 背景用 `apiUrl`（拼接口地址）/ `resourceUrl`（拼资源地址并附 token）追加 token；直接拼裸地址会漏掉重试与鉴权。
+- **主题 CSS 按需加载**：主题样式由 `themeLoader.js`（主题样式加载器）按主题加载，夜间配色单独在 `theme-night.css`（夜间配色样式文件）；新增主题或配色要落到对应 `theme-*.css`（各主题样式文件），改完跑 `radius-audit.js`（圆角使用审计脚本）与主题切换检查。
+- **新增窗口入口要登记构建**：独立窗口的 HTML 入口必须写进 `vite.config.js`（Vite 构建配置）的 `rollupOptions.input`（Rollup 打包入口清单），否则打包后找不到页面；入口脚本按 `widgets.md` 的做法先 `applyTheme()`（应用主题函数）再挂载。
+
+---

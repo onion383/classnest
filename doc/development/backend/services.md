@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 ├── student-backend/
 │   ├── routes/
 │   │   ├── dynamicTable.js
@@ -48,15 +48,18 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-抽出来的公共能力：为什么存在、导出什么、谁在用、有什么注意事项。--
+本篇说明抽出的公共能力：存在原因、导出内容、调用方与注意事项。
 
 ---
+
 ## 综合概述
 
-- **定位**：后端公共能力层（`services/`、`utils/`、根级媒体/扫描文件与安全通道），被路由与数据层复用。
-- **公共逻辑**：路由只做参数校验与编排；表格/历史/槽位/学生引用/账号会话/安全清洗/相册扫描等公共逻辑集中在这里；写库统一过 `sanitize`，跨表引用走 `studentRelations` / `studentRename`。
+- **定位**：后端公共能力层（`services/`（公共服务目录）、`utils/`（通用小工具目录）、根级媒体 / 扫描文件与安全通道），被路由与数据层复用。
+- **公共逻辑**：路由只做参数校验与编排；表格 / 历史 / 槽位 / 学生引用 / 账号会话 / 安全清洗 / 相册扫描等公共逻辑集中在这里；写库统一过 `sanitize`（数据清洗，按字段白名单过滤），跨表引用走 `studentRelations`（学生引用维护）/ `studentRename`（学生改名级联）。
 - **局限**：不展开每个 HTTP 接口、数据层多库与安全通道协议细节；这些见 [routes.md](./routes.md)、[data-layer.md](./data-layer.md)、[topics/security.md](../topics/security.md)。
+
 ---
+
 ## 详细说明
 
 ### 1. 表格与历史
@@ -87,7 +90,7 @@ project-name/
 
 #### [`services/dutyCells.js`](../../../student-backend/services/dutyCells.js) / [`services/dutyMode.js`](../../../student-backend/services/dutyMode.js) · 值日单元格工具
 - `dutyCells`：值日单元格/姓名引用工具，导出 `DUTY_MODES`、`dutyRoots`、`countDutyRefs`、`removeDutyName`、`renameDutyName`。
-- `dutyMode`：模式打包解包，导出 `MODES`、`toModeMap`、`unpackMode`、`packMode`、`normalizeMode`；**`items` 为空必须回数组**（契约被单测钉住）。
+- `dutyMode`：模式打包解包，导出 `MODES`、`toModeMap`、`unpackMode`、`packMode`、`normalizeMode`；**`items` 为空必须返回数组**（该返回标准由单元测试固定）。
 
 ### 2. 学生与账号
 
@@ -173,13 +176,16 @@ project-name/
 | [`utils/sql.js`](../../../student-backend/utils/sql.js) | SQL 辅助 | `now`、`isDateStr`、`cleanUp`、`maxPosition`、`buildInsert`、`buildUpdate` |
 
 ---
+
 ## 注意事项
 
-- 公共逻辑一旦被两个以上路由使用就下沉到 `services/`，路由只做参数校验与编排。
-- 所有写库入口必须先过 `sanitize`；所有跨表引用变更走 `studentRelations` / `studentRename`。
-- 扫描不再与 HTTP 共用进程：sharp 的 libuv 线程池是**进程级**的，只有 fork 才有独立池。
-- `fullScan` 先收齐清单、最后才删清单外的行；`collectMediaFiles` 返回 `null` 表示被中断，禁止兜成空数组（会删光索引）。
-- 断点用**文件路径**（增量）或**行 id**（虚拟相册），不用序号。
-- `state` 只由主进程写，`token` 标识本次扫描归属（防止旧扫描删掉新扫描记录）。
-- `INSERT OR IGNORE` 冲突时 `lastInsertRowid` 不可靠，必须回查真实 id。
-- 缩略图版本 `THUMB_VERSION` 与前端 `ALBUM_THUMB_VERSION` 必须同时 +1。
+- 公共逻辑一旦被两个以上路由使用就下沉到 `services/`（后端公共服务目录），路由只做参数校验与编排。
+- 所有写库入口必须先过 `sanitize`（数据清洗，按字段白名单过滤）；所有跨表引用变更走 `studentRelations`（学生引用维护）/ `studentRename`（学生改名级联）。
+- 扫描不再与 HTTP 共用进程：`sharp`（图片处理库）的 `libuv`（Node 异步 I/O 线程池）是**进程级**的，只有 `fork`（创建子进程）才有独立池。
+- `fullScan`（全量扫描）先收齐清单、最后才删清单外的行；`collectMediaFiles`（收集媒体文件）返回 `null` 表示被中断，禁止兜成空数组（会删光索引）。
+- 断点用**文件路径**（增量扫描）或**行 id**（虚拟相册），不用序号。
+- `state`（扫描状态）只由主进程写，`token`（扫描归属标记）标识本次扫描归属（防止旧扫描删掉新扫描记录）。
+- `INSERT OR IGNORE`（冲突则忽略的插入语句）冲突时 `lastInsertRowid`（最后插入的行号）不可靠，必须回查真实 id。
+- 缩略图版本 `THUMB_VERSION`（后端缩略图版本号）与前端 `ALBUM_THUMB_VERSION`（前端缩略图版本号）必须同时 +1。
+
+---

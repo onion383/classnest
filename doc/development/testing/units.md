@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── testjs/
     └── units/
         ├── albumScan.test.js  # 相册扫描的「索引被误删/清空」防护
@@ -19,13 +19,17 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-本层能证明什么、不能证明什么，见 [testing/README.md](./README.md) 的「各层能证明什么、不能证明什么」。
+本层的可信范围与局限，见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
+
+---
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），7 个 `node:test` 文件，钉纯函数与内存库上的数据层逻辑。
-- **公共逻辑**：零第三方依赖（`node:test` + `node:assert`），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=` / `--skip=` / `--bail` / `--list`）。
-- **局限**：不覆盖 HTTP 路由、UI、进程间链路与真实数据目录；分层能力见 [testing/README.md](./README.md) 的「各层能证明什么、不能证明什么」。
+- **定位**：单元测试层（`testjs/units/`），7 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
+- **局限**：不覆盖 HTTP 路由、UI、进程间链路与真实数据目录；分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
+
+---
 
 ## 详细说明
 
@@ -41,7 +45,11 @@ project-name/
 
 新增：在 `units/` 建 `*.test.js`，用 `node:test` 的 `test()` 编写，无需改配置。
 
+---
+
 ## 注意事项
 
 - **分层不要混写**：纯算法留在本层；组件行为语义放 [behavior.md](./behavior.md)，HTTP ↔ 前后端链路放 [smoke.md](./smoke.md)。
-- **不碰真实数据**：本层只用内存库、连接桩与纯函数；需要启动真实后端或真实 `DATA_DIR` 的用例不属于这一层。
+- **不碰真实数据**：本层只用内存库、连接桩与纯函数；需要启动真实后端或真实 `DATA_DIR`（数据目录）的用例不属于这一层。
+
+---

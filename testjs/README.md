@@ -6,14 +6,14 @@
 
 | 目录 | 定位 | 是否入库 |
 | --- | --- | --- |
-| `units/` | 单元测试（`node:test`）：单个零件的纯逻辑契约 | ✅ 入库 |
-| `behavior/` | 行为测试（`node:test`）：组件契约、失败语义、交互逻辑、架构标准校验 | ✅ 入库 |
+| `units/` | 单元测试（`node:test`）：单个零件的纯逻辑标准 | ✅ 入库 |
+| `behavior/` | 行为测试（`node:test`）：组件接口标准、失败语义、交互逻辑、架构标准校验 | ✅ 入库 |
 | `smoke/` | 冒烟脚本：起真后端/真链路，一次跑完能给出「有没有坏」的结论 | ✅ 入库 |
 | `probe/` | 过程探针：测量/诊断用，需要手动传参、耗时较长 | ✅ 入库 |
 | `tools/` | 工具脚本：种子数据、审计、统计等长期复用的辅助 | ✅ 入库 |
 | `tmp/` | 一次性验证脚本与中间产物，**默认不入库** | ❌ 忽略 |
 
-> 新脚本的归类判断：**输入输出可判定、毫秒级** → `units/`（算法）或 `behavior/`（语义/契约）；
+> 新脚本的归类判断：**输入输出可判定、毫秒级** → `units/`（算法）或 `behavior/`（语义/标准）；
 > **能重复执行 + 起真环境给「坏没坏」结论** → `smoke/`；**输出是数据/报告、不判对错** → `probe/` 或 `tools/`；
 > **只服务某一次排查** → `tmp/`。
 
@@ -42,7 +42,7 @@ npm run test:units        # node testjs/run-units.js（--only= / --skip= / --bai
 
 | 文件 | 覆盖范围 |
 | --- | --- |
-| `backend.test.js` | 后端数据层与纯逻辑：建表最终形态（四个合并表、旧逻辑名退化为只读视图、播种行数、`domain_history` payload → 三域历史视图的 JSON 映射、二次 `initSchema` 幂等、`slotStore` 逻辑名/可写列映射）、`sanitize` 系列清洗/校验、恢复密钥归一化/哈希/常数时间比较、请假时间窗与 SQL 时间戳、`dutyMode` 解包契约（items 空值必须回数组） |
+| `backend.test.js` | 后端数据层与纯逻辑：建表最终形态（四个合并表、旧逻辑名退化为只读视图、播种行数、`domain_history` payload → 三域历史视图的 JSON 映射、二次 `initSchema` 幂等、`slotStore` 逻辑名/可写列映射）、`sanitize` 系列清洗/校验、恢复密钥归一化/哈希/常数时间比较、请假时间窗与 SQL 时间戳、`dutyMode` 解包标准（items 空值必须回数组） |
 | `frontend.test.js` | 前端纯函数：图表命中算法（分带/行/饼图扇区/图例）、AI 图表数据解析（类型白名单、项数上限、饼图 Top N + 其他）、热力配色、`collectPdfText` 边界（循环引用/超深递归/空输入）、表格关键字过滤与「无结果」判定 |
 | `albumScan.test.js` | 相册扫描的「索引被误删/清空」防护 |
 | `refresh-virtual.test.js` | 虚拟相册刷新（按索引更新、补 EXIF/缩略图、源文件缺失保留行、幂等） |
@@ -61,16 +61,16 @@ npm run test:units        # node testjs/run-units.js（--only= / --skip= / --bai
 npm run test:behavior     # node testjs/run-behavior.js（--only= / --skip= / --bail / --list 可用）
 ```
 
-补「零件对不对」与「链路通不通」之间的那层：**组件行为语义与架构契约**。
+补「零件对不对」与「链路通不通」之间的那层：**组件行为语义与架构标准**。
 同样零依赖（静态扫描 + 桩件 + mock timers），毫秒级。六个模块分门别类：
 
 | 文件 | 钉住什么 |
 | --- | --- |
-| `expose-contract.test.js` | 跨组件契约：每次 `xxx.value.method()` 调用必须有 `defineExpose` 支撑（script setup 下漏 expose 会被 `?.` 静默吞成空转）；模板 ref 的组件必须有暴露面 |
+| `expose-contract.test.js` | 跨组件接口标准：每次 `xxx.value.method()` 调用必须有 `defineExpose` 支撑（script setup 下漏 expose 会被 `?.` 静默吞成空转）；模板 ref 的组件必须有暴露面 |
 | `failure-semantics.test.js` | 失败语义：写操作（函数名含 save/delete/… 且体内真 I/O）的 catch 必须可感知（notify/报错/兜底/回滚）；带意图注释（不阻断/不阻塞/不叠加/回滚…）的设计性吞豁免，逃生口注释 `behavior-ok` |
 | `sfc-conventions.test.js` | 架构标准校验（防清理成果回潮）：无 Options API、无 `getCurrentInstance`、token/currentUser 裸键只在 `authStorage.js`、模板静态 ref 不悬空 |
 | `useRowFocus.test.js` | 跨页行定位行为：签名去重、parse 改写 id、时机未到的内部重试（stub host + mock timers） |
-| `authStorage.test.js` | 登录态策略点契约：token 空值语义、坏 JSON 防御、setAuth/clearAuth 整套读写（mock localStorage） |
+| `authStorage.test.js` | 登录态策略点标准：token 空值语义、坏 JSON 防御、setAuth/clearAuth 整套读写（mock localStorage） |
 | `serialSaver.test.js` | 串行保存器：并发合并成一轮、失败即停不自动重试、每轮现取最新状态 |
 
 新增测试按「行为面」归类进对应文件；纯算法类的进 `units/`，别混在这里。
@@ -116,12 +116,12 @@ node testjs/run-smoke.cjs --bail     # 第一个失败就停
 | `mode-probe.mjs` | 日/夜模式切换开销测量 |
 | `ocr-probe.mjs` | OCR 可用性（Windows 有效） |
 | `pdf-leak-probe.mjs` | PDF 导出内存泄漏核查（看 V8 external，不看 rss） |
-| `widget-bottom-regression.ps1` | 桌面组件置底模式的回归检查：`-Drags N` 次合成拖动，逐项断言位移正确、尺寸不变、松手后仍压在 `Progman` 之上、无 `Application Error`（需应用在跑且置底模式已开） |
+| `widget-bottom-regression.ps1` | 桌面组件置底模式的回归检查：`-Drags N` 次合成拖动，逐项校验位移正确、尺寸不变、松手后仍压在 `Progman` 之上、无 `Application Error`（需应用在跑且置底模式已开） |
 | `widget-shot.ps1` | 把组件窗口临时提到最前截图（`-Out` 指定路径），截完自动按「第一个可见窗口之下」压回去，用于核对圆角/透明/蓝色 |
 | `toplevel-bottom-probe.cjs` | 「顶层置底」最小原型：顶层窗口 + 透明 CSS 圆角 + 真实鼠标拖动 + z 序自检，不含业务代码，可独立跑 |
 | `inject-drag.ps1` | 用 `SetCursorPos` + `mouse_event` 合成一次真实左键拖动（虚拟化坐标），配合上面几个脚本做输入验证 |
 
-`measure-startup.mjs` 的数据隔离在 `%LOCALAPPDATA%\BanjiiStartupMeasure`，不碰真实用户数据。
+`measure-startup.mjs` 的数据隔离在 `%LOCALAPPDATA%\ClassNestStartupMeasure`，不碰真实用户数据。
 
 > **关于已删除的 `pipe-*` 评估脚本**：它们曾用于「命名管道 + ACL 通信层方案」的评估与实测。
 > 该方案已因引入 5 层间接而收益仅约 1ms、且 axios fetch adapter 对 204 响应误判导致页面闪跳，

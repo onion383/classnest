@@ -1,12 +1,11 @@
 # 前端依赖明细（`student-frontend/package.json`）
 
-逐个：用途 → 实际使用位置 → 打包去向 → 许可证 → 备注。每节标题是「包名 + 版本 + 许可证」，中文用途写在标题下的「用途」行。
 
 ## 运行时依赖（15）
 
 ### [`@lucide/vue`](../../../student-frontend/node_modules/@lucide/vue) 1.58.0 · ISC · 线性图标库
 - 用途：线性图标源。
-- 使用位置：[`components/base/IconGlyph.vue`](../../../student-frontend/src/components/base/IconGlyph.vue) + [`IconGlyph.shapes.js`](../../../student-frontend/src/components/base/IconGlyph.shapes.js)、[`views/AboutView.vue`](../../../student-frontend/src/views/AboutView.vue)。
+- 使用位置：[`components/base/IconGlyph.vue`](../../../student-frontend/src/components/base/IconGlyph.vue)（统一图标组件）+ [`IconGlyph.shapes.js`](../../../student-frontend/src/components/base/IconGlyph.shapes.js)（图标形状数据）、[`views/AboutView.vue`](../../../student-frontend/src/views/AboutView.vue)（关于页）。
 - 打包：renderer bundle（按图标名静态引用，利于 tree-shaking）。
 - **备注**：新增图标要同时补 emoji（主题 `iconStyle` 可切换）。
 
@@ -18,7 +17,7 @@
 
 ### [`axios`](../../../student-frontend/node_modules/axios) 1.20.0 · MIT · HTTP 客户端
 - 用途：HTTP 客户端。
-- 使用位置：[`src/main.js`](../../../student-frontend/src/main.js)（全局配置 + 拦截器）、[`composables/secureAxios.js`](../../../student-frontend/src/composables/secureAxios.js)、[`utils/httpClient.js`](../../../student-frontend/src/utils/httpClient.js)、各页面。
+- 使用位置：[`src/main.js`](../../../student-frontend/src/main.js)（应用入口，全局配置 + 拦截器）、[`composables/secureAxios.js`](../../../student-frontend/src/composables/secureAxios.js)（安全通道装配）、[`utils/httpClient.js`](../../../student-frontend/src/utils/httpClient.js)（axios 装配）、各页面。
 - 打包：renderer bundle。
 - **备注**：网络错误重试逻辑在 `main.js` 响应拦截器；写请求不自动重发。
 
@@ -47,7 +46,7 @@
 
 ### [`jspdf-autotable`](../../../student-frontend/node_modules/jspdf-autotable) 5.0.9 · MIT · PDF 表格排版
 - 用途：PDF 表格排版。
-- 使用位置：[`ExportExcel.exporters.js`](../../../student-frontend/src/components/import-export/ExportExcel/ExportExcel.exporters.js)、[`exportFormats.js`](../../../student-frontend/src/composables/exportFormats.js)。
+- 使用位置：[`ExportExcel.exporters.js`](../../../student-frontend/src/components/import-export/ExportExcel/ExportExcel.exporters.js)（导出格式实现）、[`exportFormats.js`](../../../student-frontend/src/composables/exportFormats.js)（导出格式注册表）。
 
 ### [`marked`](../../../student-frontend/node_modules/marked) 18.1.1 · MIT · Markdown 解析库
 - 用途：Markdown → HTML。
@@ -55,12 +54,12 @@
 
 ### [`pinia`](../../../student-frontend/node_modules/pinia) 4.1.0 · MIT · 状态管理库
 - 用途：状态管理。
-- 使用位置：[`src/main.js`](../../../student-frontend/src/main.js)、[`stores/theme.js`](../../../student-frontend/src/stores/theme.js)、`IconGlyph`、`Sidebar`。
+- 使用位置：[`src/main.js`](../../../student-frontend/src/main.js)（应用入口）、[`stores/theme.js`](../../../student-frontend/src/stores/theme.js)（主题 store）、`IconGlyph`（图标组件）、`Sidebar`（侧边栏）。
 - **备注**：全应用只有一个 store（主题）。
 
 ### [`pinyin-match`](../../../student-frontend/node_modules/pinyin-match) 1.2.10 · MIT · 拼音模糊匹配
 - 用途：拼音模糊匹配。
-- 使用位置：[`components/base/SearchDialog.vue`](../../../student-frontend/src/components/base/SearchDialog.vue)、[`views/SettingsView/searchData.js`](../../../student-frontend/src/config/searchData.js)。
+- 使用位置：[`components/base/SearchDialog.vue`](../../../student-frontend/src/components/base/SearchDialog.vue)（全局搜索弹窗）、[`views/SettingsView/searchData.js`](../../../student-frontend/src/config/searchData.js)（搜索数据源）。
 - **备注**：后端也依赖同版本（AI 工具里的姓名匹配）。
 
 ### [`sortablejs`](../../../student-frontend/node_modules/sortablejs) 1.15.7 · MIT · 拖拽排序库
@@ -76,13 +75,15 @@
 
 ### [`vue-router`](../../../student-frontend/node_modules/vue-router) 5.4.0 · MIT · 路由库
 - 用途：路由。
-- 使用位置：[`router/index.js`](../../../student-frontend/src/router/index.js)、`App.vue`、`Sidebar.vue`。
+- 使用位置：[`router/index.js`](../../../student-frontend/src/router/index.js)（路由表）、`App.vue`（根组件）、`Sidebar.vue`（侧边栏）。
 
 ### [`xlsx`](../../../student-frontend/node_modules/xlsx) 0.20.3 · Apache-2.0 · 表格解析/导出库
 - 用途：Excel/CSV 解析与简单导出。
-- 使用位置：[`AiComposer.vue`](../../../student-frontend/src/components/ai/AiComposer/AiComposer.vue)（附件预览）、[`ExportExcel.exporters.js`](../../../student-frontend/src/components/import-export/ExportExcel/ExportExcel.exporters.js)。
+- 使用位置：[`AiComposer.vue`](../../../student-frontend/src/components/ai/AiComposer/AiComposer.vue)（AI 输入器，附件预览）、[`ExportExcel.exporters.js`](../../../student-frontend/src/components/import-export/ExportExcel/ExportExcel.exporters.js)（导出格式实现）。
 - 打包：renderer bundle（按需）。
 - **备注**：来源是 `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`（非 npm registry），升级时核对来源与许可。
+
+---
 
 ## 开发期依赖（4，不进产物）
 
@@ -94,3 +95,5 @@
 | [`@tailwindcss/vite`](../../../student-frontend/node_modules/@tailwindcss/vite) | 4.3.3 | MIT | Tailwind 的 Vite 插件 |
 
 许可证原文见 [licenses.md](./licenses.md)。
+
+---

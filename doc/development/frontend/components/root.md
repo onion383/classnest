@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 ├── student-frontend/
 │   └── src/
 │       ├── components/
@@ -28,13 +28,17 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口约定」；本节只补充组件特有接口。
+通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口标准」；本节只补充组件特有接口。
+
+---
 
 ## 综合概述
 
-- **定位**：`components/` 根目录的跨页组件：侧边栏、动画时钟、班干部管理、职务树、截断文本与 AI 图表。
-- **公共逻辑**：多数组件由页面直接引入、无全局状态；`Sidebar` 读路由与主题 store，`CadreManage` 内嵌在 `ClassroomView` 的班干部 Tab 内。
+- **定位**：`components/` 根目录的跨页组件：`Sidebar`（侧边栏）、`AnimatedClock`（动画时钟）、`CadreManage`（班干部管理）、`CadreTreeList`（职务树列表）、`ClippedText`（截断文本）与 `AiChart`（AI 图表）。
+- **公共逻辑**：多数组件由页面直接引入、无全局状态；`Sidebar` 读路由与主题 store（主题状态仓库），`CadreManage` 内嵌在 `ClassroomView`（学生页）的班干部 Tab 内。
 - **局限**：不展开班干部接口（见 [backend/routes.md](../../backend/routes.md)）与图表命中算法（见 [misc.md](../misc.md) 的 `utils/chartHit.js`）。
+
+---
 
 ## 详细说明
 
@@ -74,7 +78,11 @@ project-name/
 - **使用方**：`AiChatMessages`（图表工具结果）。
 - 注意：解析与命中算法有单测（[`testjs/units/frontend.test.js`](../../../../testjs/units/frontend.test.js)），改算法先跑单测。
 
+---
+
 ## 注意事项
 
-- **`Sidebar` 与路由 / 主题耦合**：新增页面要同时补路由表、侧边栏入口与本页说明；`active-class` 依赖异步路由 resolve，别去掉乐观高亮。
-- **`CadreManage` 数据模型独立**：走 `/api/cadres`，不是学生表；改学生表不会同步班干部数据。
+- **`Sidebar`（侧边栏组件）与路由 / 主题耦合**：新增页面要同时补路由表、侧边栏入口与本页说明；`active-class`（选中态类名）依赖异步路由 `resolve`（解析完成），别去掉乐观高亮。
+- **`CadreManage`（班干部管理组件）数据模型独立**：走 `/api/cadres`（班干部接口），不是学生表；改学生表不会同步班干部数据。
+
+---

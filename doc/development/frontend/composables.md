@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-frontend/
     └── src/
         ├── composables/
@@ -44,11 +44,15 @@ project-name/
 
 26 个文件：根目录 19 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
 
+---
+
 ## 综合概述
 
 - **定位**：前端组合式函数层（`src/composables/`），封装表格、网格、相册、数据请求与 AI 对话的复用逻辑。
-- **公共逻辑**：页面只负责组装与渲染，状态与写操作走 `useXxx`；写操作按表格/网格登记撤销；AI 状态与流式解析集中在 `composables/ai/`。
-- **局限**：不渲染 UI、不定义路由与后端接口；页面职责见 [views.md](./views.md)，接口契约见 [backend/routes.md](../backend/routes.md)。
+- **公共逻辑**：页面只负责组装与渲染，状态与写操作走 `useXxx`（以 `use` 开头的组合式函数）；写操作按表格 / 网格登记撤销；AI 状态与流式解析集中在 `composables/ai/`（AI 专用组合式函数目录）。
+- **局限**：不渲染 UI、不定义路由与后端接口；页面职责见 [views.md](./views.md)，接口标准见 [backend/routes.md](../backend/routes.md)。
+
+---
 
 ## 详细说明
 
@@ -176,8 +180,12 @@ project-name/
 | [`aiFiles.js`](../../../student-frontend/src/composables/ai/aiFiles.js) | 附件上传与文件列表管理 |
 | [`aiMarkdown.js`](../../../student-frontend/src/composables/ai/aiMarkdown.js) | Markdown 渲染：懒加载 `marked` + `dompurify`，模块级单例 |
 
+---
+
 ## 注意事项
 
-- 并发请求统一用 `useSeq` 判断「是否最新」，`await` 后写状态前必须校验，避免旧响应覆盖新状态。
-- 写操作登记撤销时，撤销键与对应页面/表格保持一致，否则 `Ctrl+Z` 无法回退。
-- `composables/ai/` 只服务 AI 页面与组件，不要在其他页面直接复用其流式状态。
+- 并发请求统一用 `useSeq`（竞态序号组合式函数）判断「是否最新」，`await`（等待异步请求返回）后写状态前必须校验，避免旧响应覆盖新状态。
+- 写操作登记撤销时，撤销键与对应页面/表格保持一致，否则 `Ctrl+Z`（撤销快捷键）无法回退。
+- `composables/ai/`（AI 专用组合式函数目录）只服务 AI 页面与组件，不要在其他页面直接复用其流式状态。
+
+---

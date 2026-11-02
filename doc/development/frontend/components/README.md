@@ -2,6 +2,7 @@
 
 共 76 个 `.vue`，按目录分节。所有组件都是 `SFC`（单文件组件）+ `<script setup>`（组合式 API 简洁脚本），多数带 `vapor`（Vue 3.6 Vapor 渲染模式）标记，见第 5 节。
 
+
 ## 1. 通用标准
 
 | 标准 | 说明 |
@@ -14,7 +15,7 @@
 | 图标 | 统一 `IconGlyph`（图标组件，全局注册），按主题 `iconStyle`（图标样式）在 `lucide`（线性图标）/ `emoji`（表情）间切换 |
 | 样式 | 只用主题 CSS 变量与工具类，不改主题全局皮肤；按钮悬浮态同带 `transition-theme`（主题过渡工具类） |
 
-### 1.1 通用对外接口约定
+### 1.1 通用对外接口标准
 
 各组件条目里的 `props` / `emits` 按下面的通用含义解释；组件特有接口在各自条目中补充说明。
 
@@ -49,6 +50,8 @@
 | `saved` | emit | 保存完成，payload 为保存后的记录或 id。 |
 | `apply` | emit | 应用当前配置/权重/排表结果。 |
 
+---
+
 ## 2. 目录索引
 
 目录名含义：`layout`（布局）、`base`（基础件）、`tables`（表格与网格）、`dialogs`（业务弹窗）、`import-export`（导入导出）、`ai`（AI 界面）、`album`（相册）、`data-manage`（数据管理）；根级组件直接在 `components/*.vue`。
@@ -65,20 +68,28 @@
 | [data-manage.md（数据管理）](./data-manage.md) | `data-manage/` | 4 |
 | [root.md（根级组件）](./root.md) | `components/*.vue` | 5 |
 
+---
+
 ## 3. 全局注册与跨页复用
 
 - `IconGlyph`（图标组件）在 [`src/main.js`](../../../../student-frontend/src/main.js) 全局注册，模板中直接 `<IconGlyph name="..." />`。
 - `ConfirmDialog`（确认框）、`DialogShell`（弹窗外壳）、`EmptySnapshot`（空态）、`CustomScrollbar`（自定义滚动条）被几乎所有业务弹窗复用，改动影响面大。
 - `ExportExcel`（导出面板）被 10 个页面复用，导出格式扩展集中在 [`ExportExcel.exporters.js`](../../../../student-frontend/src/components/import-export/ExportExcel/ExportExcel.exporters.js)（格式实现）与 [`src/composables/exportFormats.js`](../../../../student-frontend/src/composables/exportFormats.js)（格式注册）。
 
+---
+
 ## 4. 组件写法标准
 
-- `defineOptions({ name })` 与组件文件名一致；`props` 给默认值，数组/对象用工厂函数。
-- `v-model` 一律 `modelValue` + `update:modelValue`；双向绑定的事件统一叫 `update:*`。
-- 暴露给宿主的方法必须 `defineExpose`（`testjs/behavior/expose-contract.test.js` 会钉住）。
-- 禁止 `getCurrentInstance` / `$refs` / 实例代理（`testjs/behavior/sfc-conventions.test.js` 会钉住）。
+- `defineOptions({ name })`（声明组件选项，含组件名）与组件文件名一致；`props`（组件属性）给默认值，数组 / 对象用工厂函数（避免共享引用）。
+- `v-model`（双向绑定）一律 `modelValue`（当前值）+ `update:modelValue`（值更新事件）；双向绑定的事件统一叫 `update:*`。
+- 暴露给宿主的方法必须 `defineExpose`（组件对外暴露接口）（`testjs/behavior/expose-contract.test.js`（标准校验用例）会检查）。
+- 禁止 `getCurrentInstance`（取组件实例的函数）/ `$refs`（模板引用集合）/ 实例代理（`testjs/behavior/sfc-conventions.test.js`（架构标准用例）会检查）。
+
+---
 
 ## 5. Vapor 标记
 
-- 组件可写 `<script setup vapor>`；Vue 3.5 会逐字忽略该属性，因此同一份源码在 3.5 / 3.6 两条通道都能编译。
-- 拼错标记**不报错、只静默失效**，验证必须跑 `node testjs/probe/vapor-verify.mjs`（判据只看 `__vapor: true`）。
+- 组件可写 `<script setup vapor>`（Vapor 编译标记）；Vue 3.5 会逐字忽略该属性，因此同一份源码在 3.5 / 3.6 两条通道都能编译。
+- 拼错标记**不报错、只静默失效**，验证必须跑 `node testjs/probe/vapor-verify.mjs`（Vapor 产物校验脚本）（判据只看 `__vapor: true`（产物里的 Vapor 标记字段））。
+
+---

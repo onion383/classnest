@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-frontend/
     └── src/
         ├── components/
@@ -24,15 +24,19 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口约定」；本节只补充组件特有接口。
+通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口标准」；本节只补充组件特有接口。
 
 4 个文件；导出能力统一收口在 `ExportExcel`（导出面板组件）与其 `ExportExcel.exporters.js`（格式实现），格式实现见 [`src/composables/exportFormats.js`](../../../../student-frontend/src/composables/exportFormats.js)。
 
+---
+
 ## 综合概述
 
-- **定位**：导入导出组件（`components/import-export/`）：导出面板、相册索引导出、Excel 导入与视频缩略图。
-- **公共逻辑**：导出能力统一收口在 `ExportExcel`（面板）与其 `ExportExcel.exporters.js`，格式实现集中在 `composables/exportFormats.js`；文件名校验与保存走主进程 `save-file`。
+- **定位**：导入导出组件（`components/import-export/`）：`ExportExcel`（导出面板）、`ExportAlbumIndex`（相册索引导出）、`ImportExcel`（Excel 导入）与 `VideoThumb`（视频缩略图）。
+- **公共逻辑**：导出能力统一收口在 `ExportExcel`（导出面板）与其 `ExportExcel.exporters.js`（各格式实现文件），格式实现集中在 `composables/exportFormats.js`（导出格式注册表）；文件名校验与保存走主进程 `save-file`（保存文件对话框通道）。
 - **局限**：不展开各格式的实现细节（见 [composables.md](../composables.md) 与 `exportFormats.js`），也不展开后端导入与缩略图接口。
+
+---
 
 ## 详细说明
 
@@ -64,8 +68,12 @@ project-name/
 - **内部实现**：`<video preload="metadata">` 取首帧；失败/超时显示占位图标。
 - **使用方**：`AlbumView`（视频格子）。
 
+---
+
 ## 注意事项
 
-- **新增格式只改一处**：格式实现集中在 `composables/exportFormats.js`，不要在页面里另写导出逻辑。
-- **长表别开放图片格式**：长表 `HTML` / `PDF` 会让 `html2canvas` 崩溃，相册索引导出因此屏蔽图片格式。
-- **导入两边都校验**：前端先解析预览，后端仍会 `sanitize`（见 [backend/services.md](../../backend/services.md)），不要因为前端校验过就跳过服务端校验。
+- **新增格式只改一处**：格式实现集中在 `composables/exportFormats.js`（导出格式注册表），不要在页面里另写导出逻辑。
+- **长表别开放图片格式**：长表 `HTML`（网页）/ `PDF`（便携文档）等长文档会让 `html2canvas`（网页转图片库）因为内存占用过多容易崩溃，相册索引导出因此屏蔽图片格式。
+- **导入两边都校验**：前端先解析预览，后端仍会 `sanitize`（数据清洗）（见 [backend/services.md](../../backend/services.md)），不要因为前端校验过就跳过服务端校验。
+
+---

@@ -1,5 +1,5 @@
 {
-  "appId": "com.example.campus-assistant",
+  "appId": "com.classnest.app",
   "productName": "班集",
   "electronLanguages": ["zh-CN", "en-US"],
   "directories": {

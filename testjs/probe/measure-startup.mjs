@@ -25,10 +25,10 @@
 //     打包版是 GUI 程序，标准输出常常抓不到，此时本脚本自动改用上面这份 startup.log。
 //
 // 说明：
-//  - 数据完全隔离在 %LOCALAPPDATA%\BanjiiStartupMeasure（--user-data-dir + app-config.json），
+//  - 数据完全隔离在 %LOCALAPPDATA%\ClassNestStartupMeasure（--user-data-dir + app-config.json），
 //    不会动真实 %APPDATA% 下的数据，也不会触发单实例锁冲突。
 //    不用项目目录：项目目录易被杀软实时扫描锁文件，会让 Chromium 的 GPU 持久缓存
-//    报「另一个程序正在使用此文件」并导致 GPU 进程启动失败。可用环境变量 BANJI_ISO 覆盖。
+//    报「另一个程序正在使用此文件」并导致 GPU 进程启动失败。可用环境变量 CLASSNEST_ISO 覆盖。
 //  - 正式版模式会实际弹出主窗口（测量需要真实渲染），每次测完自动结束进程树。
 //  - Windows PowerShell 下中文可能显示为乱码，可先执行 `chcp 65001`。
 // =========================================================================
@@ -45,9 +45,9 @@ const BACKEND_DIR = path.join(ROOT, 'student-backend')
 const BACKEND_APP = path.join(BACKEND_DIR, 'app.js')
 // 隔离目录默认放 LOCALAPPDATA（不放项目目录）：项目目录易被杀软实时扫描锁住文件，
 // 会让 Chromium 的 GPU 持久缓存报「另一个程序正在使用此文件」并导致 GPU 进程启动失败。
-// 可用环境变量 BANJI_ISO 覆盖，例如 $env:BANJI_ISO="D:\tmp\banji-measure"
+// 可用环境变量 CLASSNEST_ISO 覆盖，例如 $env:CLASSNEST_ISO="D:\tmp\classnest-measure"
 // 非 Windows（无 LOCALAPPDATA）时退到系统临时目录：早期退回 ROOT 会把测量数据写进仓库
-const ISO_ROOT = process.env.BANJI_ISO || path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'BanjiiStartupMeasure')
+const ISO_ROOT = process.env.CLASSNEST_ISO || path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'ClassNestStartupMeasure')
 const ISO_USER_DATA = path.join(ISO_ROOT, 'user-data')
 const ISO_DATA = path.join(ISO_ROOT, 'data')
 const LOG_DIR = path.join(ISO_ROOT, 'logs')
@@ -58,7 +58,7 @@ const DEV_PORT = 5173
 function appLogCandidates() {
   if (opt.real) {
     const roaming = process.env.APPDATA || ''
-    return ['班集', 'campus-assistant'].map((n) => path.join(roaming, n, 'data', 'startup.log'))
+    return ['班集', 'classnest', 'campus-assistant'].map((n) => path.join(roaming, n, 'data', 'startup.log'))
   }
   return [
     path.join(ISO_USER_DATA, 'data', 'startup.log'),
@@ -263,9 +263,9 @@ function printHelp() {
   node testjs/measure-startup.mjs --timeout=60000  单次超时（默认 30000ms）
   node testjs/measure-startup.mjs --exe-args="--no-sandbox"   给被启动的 exe/electron 追加参数
 
-日志：%LOCALAPPDATA%\\BanjiiStartupMeasure\\logs\\runN.log              原始输出
-      %LOCALAPPDATA%\\BanjiiStartupMeasure\\user-data\\data\\startup.log 应用时间线（权威）
-说明：正式版模式会真的弹出窗口；每次测完自动结束进程树。环境变量 BANJI_ISO 可改隔离目录。
+日志：%LOCALAPPDATA%\\ClassNestStartupMeasure\\logs\\runN.log              原始输出
+      %LOCALAPPDATA%\\ClassNestStartupMeasure\\user-data\\data\\startup.log 应用时间线（权威）
+说明：正式版模式会真的弹出窗口；每次测完自动结束进程树。环境变量 CLASSNEST_ISO 可改隔离目录。
 `)
 }
 

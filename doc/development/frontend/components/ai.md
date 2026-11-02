@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-frontend/
     └── src/
         ├── components/
@@ -27,11 +27,15 @@ project-name/
 
 6 个文件，只负责渲染与交互；对话状态、流式解析、提案执行都在 [`views/AiAssistant.vue`](../../../../student-frontend/src/views/AiAssistant.vue) 与后端 `routes/ai/*`（跨层机制见 [topics/ai.md](../../topics/ai.md)）。
 
+---
+
 ## 综合概述
 
 - **定位**：AI 界面的纯展示 / 交互组件，属于 `components/ai/`，由 [AiAssistant.vue](../../../../student-frontend/src/views/AiAssistant.vue) 页面组装。
-- **公共逻辑**：只通过 `props` 接收状态、通过 `emits` 把动作交回父级；覆盖消息流、会话列表、提案面板、链接预览、流式尾巴与输入器。
+- **公共逻辑**：只通过 `props`（组件属性）接收状态、通过 `emits`（组件事件）把动作交回父级；覆盖消息流、会话列表、提案面板、链接预览、流式尾巴与输入器。
 - **局限**：不处理路由跳转、AI 请求、提案执行与撤销；这些在 `views/AiAssistant.vue` 与后端 `routes/ai/*`，跨层机制见 [topics/ai.md](../../topics/ai.md)。
+
+---
 
 ## 详细说明
 
@@ -123,8 +127,12 @@ project-name/
 - **内部实现**：`/` 触发技能候选（展开时上下键、回车、ESC 接管键盘），Enter 发送、Shift+Enter 换行；附件走 `POST /api/ai/upload`；权限、模型与联网开关由父级持久化。
 - **使用方**：`AiAssistant`。
 
+---
+
 ## 注意事项
 
-- `AiChatMessages` 与 `AiChangePanel` 的 `goto` 最终都由宿主 `AiAssistant` 处理路由，改 payload 形状时要同步父级。
-- `AiComposer` 的 `/` 技能、Enter/Shift+Enter、附件上传依赖父级传入的 `busy` / `askCurrent` 等状态，不能改成组件内部自持。
-- `AiProposalTable` 在 `tables/` 维护，本组只链接，避免两处改列或样式。
+- `AiChatMessages`（消息列表组件）与 `AiChangePanel`（改动确认面板）的 `goto`（跳转事件）最终都由宿主 `AiAssistant`（AI 页面）处理路由，改 `payload`（事件载荷）形状时要同步父级。
+- `AiComposer`（输入器组件）的 `/` 技能、`Enter` / `Shift+Enter` 快捷键、附件上传依赖父级传入的 `busy`（忙碌中）/ `askCurrent`（当前询问对象）等状态，不能改成组件内部自持。
+- `AiProposalTable`（AI 提案明细表）在 `tables/`（表格组件目录）维护，本组只链接，避免两处改列或样式。
+
+---

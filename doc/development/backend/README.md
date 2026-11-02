@@ -2,8 +2,9 @@
 
 Express 5 服务，由主进程 `child_process.fork`（创建 Node 子进程）拉起为独立子进程，仅监听 `127.0.0.1`（本机回环地址；端口取 `PORT`（后端监听端口环境变量），默认 3000），数据存放在本地加密 `SQLite`（嵌入式数据库）。
 
-本文件按「整体机制 → 逐文件清单 → 维护规则」组织：整体机制讲跨文件的运行约定，逐文件清单讲单个文件的实现细节，维护规则讲新增/修改时必须遵守的约束。
+本文件按「整体机制 → 逐文件清单 → 维护规则」组织：整体机制讲跨文件的运行标准，逐文件清单讲单个文件的实现细节，维护规则讲新增/修改时必须遵守的约束。
 
+---
 ## 一、后端整体机制
 
 ### 1. 后端职责与运行方式
@@ -60,15 +61,17 @@ Express 5 服务，由主进程 `child_process.fork`（创建 Node 子进程）�
 | `/api/dashboard`                    | [routes/dashboard.js](./routes.md)                                      | `DashboardView`（概览首页）                               |
 | `/api/widget-settings`              | [routes/widgetSettings.js](./routes.md)                                 | `DashboardView`（概览首页）、`SettingsView`（系统设置）、工具箱/桌面组件 |
 
+---
+
 ## 二、后端逐文件清单
 
 <!-- doc-tree:start -->
 ### 1. 后端目录树
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-backend/
     ├── dbManager/
     │   ├── dbManager.account.js  # 账号解析、注册/改名/恢复、登记表读写
@@ -96,9 +99,7 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-### 2. 目录与入口速查
-
-只到文件夹 / 入口文件级别；逐文件契约见对应子文档。
+### 2. 目录与入口
 
 | 位置                                 | 内容                                                                                            | 详见                                                     |
 | ---------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
@@ -110,10 +111,15 @@ project-name/
 | `routes/`                          | HTTP 接口与处理链                                                                                   | [routes.md](./routes.md)                               |
 | `services/`、`utils/`、`middleware/` | 公共能力、安全通道、清洗、工具、鉴权                                                                            | [services.md](./services.md)、[3. 后端鉴权与安全](#3.-后端鉴权与安全) |
 
+根目录媒体 / 扫描文件的分工：`albumOps.js`（相册回收站与缩略图删除）、`albumThumbs.js`（按库隔离的缩略图缓存）、`albumExif.js`（拍摄时间读取）、`albumScan.js`（扫描引擎，主 / 子进程共用）、`scanWorker.js`（扫描子进程生命周期）、`worker.scan.js`（子进程本体）。
+
+---
 
 ## 三、后端维护规则
 
-- 新增业务路由必须挂在 `auth(['teacher'])` 之后，否则 `db` Proxy 会抛「未绑定数据库连接」。
-- 每次写操作要同步登记撤销记录（见 [routes.md](./routes.md) 撤销小节），否则 `Ctrl+Z` 无效。
-- 新增表同时补 `schema/` 与迁移（`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`）；打开连接即执行 `initSchema`，存量库自动迁移。
-- 共享目录（`uploads/`、缩略图、回收站）不随删账号清理。
+- 新增业务路由必须挂在 `auth(['teacher'])`（鉴权中间件，只允许教师角色）之后，否则 `db` Proxy（数据库代理对象，按当前库转发查询）会抛「未绑定数据库连接」。
+- 每次写操作要同步登记撤销记录（见 [routes.md](./routes.md) 撤销小节），否则 `Ctrl+Z`（撤销快捷键）无效。
+- 新增表同时补 `schema/`（建表定义目录）与迁移（`CREATE TABLE IF NOT EXISTS`（表不存在才创建）+ `ALTER TABLE ADD COLUMN`（缺列时补列））；打开连接即执行 `initSchema`（建表 / 补列初始化函数），存量库自动迁移。
+- 共享目录（`uploads/`（上传文件目录）、缩略图、回收站）不随删账号清理。
+
+---

@@ -1,6 +1,38 @@
-# 打包与分支专题
+# 打包与分支专题：打包流程与开发分支
 
-## 1. 打包流程总览
+<!-- doc-tree:start -->
+## 本篇涉及的文件
+
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
+
+```text
+classnest/
+├── electron/
+│   ├── inno/
+│   │   ├── compile.mjs  # 按「INNO_SETUP_ISCC 环境变量 → PATH 中 iscc → 常见安装目录（…
+│   │   └── setup.iss  # 固定 AppId GUID（升级/卸载识别）、PrivilegesRequired=admi…
+│   ├── main/
+│   │   └── main.updater.js
+│   └── afterPack.js
+└── student-frontend/
+    ├── dev-vite.js  # 直连 vite（跳过两层 npm，实测省约 1.1s）；build 子命令原样透传
+    └── vite.config.js  # 5 个 HTML（网页）入口、base:'./'（相对路径基址）、build.target:…
+```
+<!-- doc-tree:end -->
+
+---
+
+## 专题总览
+
+- **定位**：打包与分支专题：`npm run electron:build`（打包总命令）全流程、产物裁剪与 Inno Setup 安装包、Vue 3.6 / 3.5 双分支。
+- **产物**：`release/`（默认通道）与 `release36/`（3.6 通道）；`afterPack`（产物精简钩子）负责剔除无用文件，安装包由 Inno Setup 编译。
+- **局限**：只记录本项目配置与剔除规则，不展开 electron-builder 的通用文档。
+
+---
+
+## 详细说明
+
+### 1. 打包流程总览
 
 ```mermaid
 flowchart TD
@@ -25,21 +57,21 @@ flowchart TD
 
 两个通道的产物目录刻意分离（`release/` 与 `release36/`），互不覆盖；安装包文件名固定为 `班集-Setup-x.y.z.exe`，便于 [`main.updater.js`](../../../electron/main/main.updater.js) 按 `*-Setup-*.exe` 匹配更新资产。
 
-## 2. 前端构建阶段
+### 2. 前端构建阶段
 
 - 入口脚本 [`student-frontend/dev-vite.js`](../../../student-frontend/dev-vite.js)：直连 `vite`（跳过两层 npm，实测省约 1.1s）；`build` 子命令原样透传。
 - [`vite.config.js`](../../../student-frontend/vite.config.js)：5 个 `HTML`（网页）入口、`base:'./'`（相对路径基址）、`build.target:'chrome120'`（目标浏览器版本）、`nonBlockingCss`（CSS 改非阻塞，先出画面后到样式）、`modulePreload.polyfill:false`（关闭模块预加载补丁）、`server.warmup`（开发服务器预热热点模块）。
 - 产物落在 `student-frontend/dist/`，由主进程 `app://` 协议加载（不是 `file://`）。
 - `public/` 中 `NotoSansSC-6.ttf` 只作 PDF 子集源，**不进安装包**；`.ttf.gz` 随包。
 
-## 3. electron-builder 阶段（[`electron-builder.json`](../../../electron-builder.json)）
+### 3. electron-builder 阶段（[`electron-builder.json`](../../../electron-builder.json)）
 
-- `productName: 班集`、`appId: com.example.campus-assistant`、`directories.output: release`、`win.target: dir`（安装包交给 Inno）。
+- `productName: 班集`、`appId: com.classnest.app`、`directories.output: release`、`win.target: dir`（安装包交给 Inno）。
 - `compression: maximum`；`npmRebuild: false`（原生模块已由 `@electron/rebuild` 预编译）。
 - `electronLanguages: zh-CN / en-US`；`electronDownload.mirror` 指向 npmmirror。
 - `electronFuses`（Electron 打包熔断开关）：`runAsNode: true`（允许后端以 `ELECTRON_RUN_AS_NODE`（纯 Node 模式）运行）、`enableCookieEncryption: true`（Cookie 加密）、关闭 `NodeCliInspectArguments`（命令行调试参数）/ `NodeOptionsEnvironmentVariable`（`NODE_OPTIONS` 环境变量）、`grantFileProtocolExtraPrivileges: false`（不给 `file://` 额外权限）、`onlyLoadAppFromAsar: true`（只从 `asar`（应用归档包）加载）。
 
-### 会被剔除的文件
+#### 会被剔除的文件
 
 | 规则 | 剔除内容 |
 | --- | --- |
@@ -51,27 +83,27 @@ flowchart TD
 | 前端静态 | `dist/NotoSansSC-6.ttf`、`dist/logo-icon.png` |
 | sharp wasm（`WebAssembly` 版图像处理库） | `@img/sharp-wasm32/**` |
 
-### 会保留 / 必须打进包里的
+#### 会保留 / 必须打进包里的
 
 - `electron/**`（除上述排除）、`student-frontend/dist/**`、`student-backend/**`、`resources/ffmpeg/**`、`package.json`。
 - `asarUnpack`：`resources/ffmpeg/**`、`**/student-backend/**`、`node_modules/**/*`、`**/*.node` —— 原生模块与后端子进程必须在 asar 外，否则无法 fork / 加载 `.node`。
 - 运行时 DLL：`libGLESv2.dll`、`libEGL.dll`、`d3dcompiler_47.dll`、`icudtl.dat`、`resources.pak`、`v8_context_snapshot.bin`、`snapshot_blob.bin`、`ffmpeg.dll`。
 - FFmpeg（LGPL 版）与许可声明（压缩后的 `third-party-licenses.zip`）。
 
-## 4. `afterPack` 精简（[`electron/afterPack.js`](../../../electron/afterPack.js)，仅 win32）
+### 4. `afterPack` 精简（[`electron/afterPack.js`](../../../electron/afterPack.js)，仅 win32）
 
 - 删除运行时不用的 Chromium 组件：`vk_swiftshader.dll`、`vk_swiftshader_icd.json`、`vulkan-1.dll`、`dxcompiler.dll`、`dxil.dll`（约 -32MB；依据是开 CDP 核对删除前后渲染/WebGL 一致）。
 - `LICENSES.chromium.html`（约 19.4MB）压成 `third-party-licenses.zip`（自实现 CRC32 + `deflateRawSync`，不引第三方依赖）；许可仍随包分发（**不得改为联网下载**）。
 - 明确不要删：ANGLE 三件套、`icudtl.dat`、`resources.pak`、快照文件、`ffmpeg.dll`。
 
-## 5. 安装包阶段（Inno Setup）
+### 5. 安装包阶段（Inno Setup）
 
 - [`inno/compile.mjs`](../../../electron/inno/compile.mjs)：按「`INNO_SETUP_ISCC` 环境变量 → PATH 中 `iscc` → 常见安装目录（Inno 6/7）→ 注册表 `InstallLocation`」定位 `ISCC.exe`；找不到时打印中文提示与下载地址并以退出码 1 结束；`spawnSync(iscc, [setup.iss], { stdio:'inherit' })` 编译。
 - [`inno/setup.iss`](../../../electron/inno/setup.iss)：固定 AppId GUID（升级/卸载识别）、`PrivilegesRequired=admin`（机器级安装，触发 UAC）、`WizardStyle=modern`、`CloseApplications/RestartApplications=yes`（静默升级自动关旧进程）、`#define MyAppVersion` 必须与 `package.json` 一致；界面由 `[Code]` 段自绘（logo/路径/协议勾选/协议弹窗）。
 - 资源：`installer.ico` / `uninstaller.ico` / `license.txt`（UTF-8 BOM）/ `field-bg.png` / `wizard-large.bmp` / `wizard-small.bmp` / `app-icon.png`。
 - `AppDir` 默认 `release`，3.6 通道传 `release36`。
 
-## 6. Vue 3.6 与 3.5 双分支
+### 6. Vue 3.6 与 3.5 双分支
 
 目标：**同一份源码同时被 3.5 与 3.6 编译**，默认走 3.5，按需切 3.6。
 
@@ -85,7 +117,9 @@ flowchart TD
 - **缓存隔离**：三条通道（`vue35-vdom` / `vue36-vdom` / `vue36-vapor`）各用一份 Vite 缓存目录，产物互不兼容，不能共用。
 - **构建产物**：`npm run build`（3.5）→ `release/`；`npm run build:new` + `electron:buildnew`（3.6）→ `release36/`。
 
-## 7. 验证与红线
+---
+
+## 验证与注意事项
 
 ```powershell
 npm run lint                      # 三块代码一次检查
@@ -98,3 +132,5 @@ npm run smoke                     # 发版前链路冒烟（约 1min）
 - **红线**：`resources/ffmpeg/` 与打包脚本（`electron/inno/compile.mjs`、`electron-builder.json`）不要随意动；FFmpeg 只保留 LGPL 版，改前核 `sha256`。
 - 打包前建议清理 `node_modules/.cache`；原生模块版本变更后需重新 `@electron/rebuild`。
 - 许可合规：Chromium 许可压缩后仍随包；依赖许可原文见 [dependencies/licenses.md](../dependencies/licenses.md)。
+
+---

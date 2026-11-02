@@ -54,9 +54,9 @@ AppName=班集
 AppVersion={#MyAppVersion}
 AppVerName=班集 {#MyAppVersion}
 AppPublisher=无聊的小洋葱
-AppPublisherURL=https://github.com/onion383/classmanagement
-AppSupportURL=https://github.com/onion383/classmanagement
-AppUpdatesURL=https://github.com/onion383/classmanagement/releases
+AppPublisherURL=https://github.com/onion383/classnest
+AppSupportURL=https://github.com/onion383/classnest
+AppUpdatesURL=https://github.com/onion383/classnest/releases
 VersionInfoVersion={#MyAppVersion}
 
 ; 安装到系统 Program Files（需管理员权限）。{autopf} 在 64 位安装模式下解析为
@@ -98,7 +98,7 @@ CloseApplications=yes
 RestartApplications=yes
 
 ; 防止多个安装实例并发（用 ASCII 名，免 UAC 下不涉及 Global 命名空间权限）
-SetupMutex=campus-assistant-setup
+SetupMutex=classnest-setup
 
 [Languages]
 ; Inno 6/7 自带简体中文语言文件

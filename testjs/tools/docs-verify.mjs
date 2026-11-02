@@ -109,12 +109,33 @@ const suite = [
     name: '主进程文件覆盖',
     src: [
       ...walk(path.join(ROOT, 'electron/main'), (p) => p.endsWith('.js')),
+      ...walk(path.join(ROOT, 'electron/inno')),
+      ...walk(path.join(ROOT, 'electron/installer-assets')),
       ...['preload.js', 'ipc-channels.json', 'afterPack.js', 'startup.html']
         .map((n) => path.join(ROOT, 'electron', n)).filter(exists)
     ],
     docs: [
       path.join(DOC_DIR, 'development/main-process/README.md'),
-      path.join(DOC_DIR, 'development/main-process/files.md')
+      path.join(DOC_DIR, 'development/main-process/entry.md'),
+      path.join(DOC_DIR, 'development/main-process/modules.md'),
+      path.join(DOC_DIR, 'development/main-process/root-files.md')
+    ],
+    key: (p) => path.basename(p)
+  },
+  {
+    name: '构建配置覆盖',
+    src: [
+      'electron-builder.json',
+      'eslint.config.mjs',
+      'student-frontend/vite.config.js',
+      'student-frontend/vite.perf.config.js',
+      'student-frontend/dev-vite.js'
+    ].map((n) => path.join(ROOT, n)).filter(exists),
+    docs: [
+      path.join(DOC_DIR, 'development/topics/build-and-branches.md'),
+      path.join(DOC_DIR, 'development/frontend/entry.md'),
+      path.join(DOC_DIR, 'development/dependencies/desktop.md'),
+      path.join(ROOT, 'README.md')
     ],
     key: (p) => path.basename(p)
   }
@@ -236,7 +257,11 @@ for (const s of suite) {
   for (const k of notUsed) problems.push(`文档声明但源码未读取的环境变量：${k}`)
 
   const channels = JSON.parse(read(path.join(ROOT, 'electron/ipc-channels.json')))
-  const docIpc = read(path.join(DOC_DIR, 'development/main-process/README.md')) + read(path.join(DOC_DIR, 'development/main-process/files.md')) + read(path.join(DOC_DIR, 'development/topics/security.md'))
+  const docIpc = read(path.join(DOC_DIR, 'development/main-process/README.md'))
+    + read(path.join(DOC_DIR, 'development/main-process/entry.md'))
+    + read(path.join(DOC_DIR, 'development/main-process/modules.md'))
+    + read(path.join(DOC_DIR, 'development/main-process/root-files.md'))
+    + read(path.join(DOC_DIR, 'development/topics/security.md'))
   const list = [...(channels.send || []), ...(channels.invoke || []), ...(channels.receive || [])]
   const missingChannels = list.filter((c) => !docIpc.includes(c))
   checks.push({ name: 'IPC 通道已写入文档', ok: missingChannels.length === 0, detail: `通道 ${list.length} 个，文档缺 ${missingChannels.length}` })
@@ -248,6 +273,7 @@ for (const s of suite) {
   const TYPES = /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram-v2|stateDiagram|erDiagram|gantt|pie|gitGraph|journey|mindmap|timeline|quadrantChart|block-beta|packet-beta|architecture-beta|radar-beta|treemap|sankey-beta|xyChart)\b/
   const badType = []
   const unclosed = []
+  const noCjk = []
   let total = 0
   for (const f of docFiles()) {
     const text = read(f)
@@ -258,12 +284,193 @@ for (const s of suite) {
       total++
       const first = m[1].split(/\r?\n/).find((l) => l.trim())
       if (!first || !TYPES.test(first.trim())) badType.push(`${rel(f)}: ${first ? first.trim() : '空块'}`)
+      if (!/[\u4e00-\u9fff]/.test(m[1])) noCjk.push(rel(f))
     }
   }
-  const ok = badType.length === 0 && unclosed.length === 0
-  checks.push({ name: 'Mermaid 图结构', ok, detail: `图 ${total} 张；围栏未闭合 ${unclosed.length}，图表类型非法 ${badType.length}` })
+  const ok = badType.length === 0 && unclosed.length === 0 && noCjk.length === 0
+  checks.push({ name: 'Mermaid 图结构', ok, detail: `图 ${total} 张；围栏未闭合 ${unclosed.length}，图表类型非法 ${badType.length}，图内无中文 ${noCjk.length}` })
   for (const f of unclosed) problems.push(`代码块围栏未闭合：${f}`)
   for (const b of badType) problems.push(`Mermaid 首行不是受支持的图表类型：${b}`)
+  for (const f of noCjk) problems.push(`Mermaid 图内没有中文节点文字：${f}`)
+}
+
+// 8) 用户手册索引 / 工具脚本覆盖 / doc-tree 结构 -----------------------------
+{
+  const userDir = path.join(DOC_DIR, 'user')
+  const userIndexFile = path.join(userDir, 'README.md')
+  const userIndex = exists(userIndexFile) ? read(userIndexFile) : ''
+  const userDocs = walk(userDir, (p) => p.endsWith('.md')).filter((p) => path.basename(p) !== 'README.md')
+  const notIndexed = userDocs.filter((p) => !userIndex.includes(path.basename(p)))
+  checks.push({ name: '用户手册索引', ok: notIndexed.length === 0, detail: `手册 ${userDocs.length} 篇，未进目录 ${notIndexed.length}` })
+  for (const p of notIndexed) problems.push(`用户手册未写入 user/README.md：${rel(p)}`)
+
+  const toolDir = path.join(ROOT, 'testjs/tools')
+  const toolsDocFile = path.join(DOC_DIR, 'development/testing/tools.md')
+  const toolsDoc = exists(toolsDocFile) ? read(toolsDocFile) : ''
+  const toolFiles = walk(toolDir, (p) => /\.(js|mjs|cjs|ps1)$/.test(p))
+  const notDocumented = toolFiles.filter((p) => !toolsDoc.includes(path.basename(p)))
+  checks.push({ name: '工具脚本覆盖', ok: notDocumented.length === 0, detail: `脚本 ${toolFiles.length} 个，未写入 tools.md ${notDocumented.length}` })
+  for (const p of notDocumented) problems.push(`工具脚本未写入 testing/tools.md：${rel(p)}`)
+
+  const testDocText = walk(path.join(DOC_DIR, 'development/testing'), (p) => p.endsWith('.md')).map(read).join('\n')
+  const testFiles = ['units', 'behavior', 'smoke', 'probe']
+    .flatMap((d) => walk(path.join(ROOT, 'testjs', d), (p) => /\.(js|mjs|cjs|ps1)$/.test(p)))
+  const testNotDocumented = testFiles.filter((p) => !testDocText.includes(path.basename(p)))
+  checks.push({ name: '测试脚本覆盖', ok: testNotDocumented.length === 0, detail: `脚本 ${testFiles.length} 个，未写入 testing/ ${testNotDocumented.length}` })
+  for (const p of testNotDocumented) problems.push(`测试脚本未写入 testing/：${rel(p)}`)
+
+  // doc-tree：标记成对，且树里每个路径在当前仓库真实存在（防止移动文件后目录树过期）
+  const MARK = /<!-- doc-tree:start -->([\s\S]*?)<!-- doc-tree:end -->/g
+  let treeDocs = 0
+  const badBlocks = []
+  const missingPaths = new Set()
+  for (const f of docFiles()) {
+    const text = read(f)
+    if (!text.includes('<!-- doc-tree:start -->')) continue
+    treeDocs++
+    const starts = (text.match(/<!-- doc-tree:start -->/g) || []).length
+    const ends = (text.match(/<!-- doc-tree:end -->/g) || []).length
+    if (starts !== 1 || ends !== 1) { badBlocks.push(`${rel(f)}（标记 ${starts}/${ends}）`); continue }
+    MARK.lastIndex = 0
+    let m
+    while ((m = MARK.exec(text)) !== null) {
+      const fence = m[1].match(/```text\r?\n([\s\S]*?)```/)
+      if (!fence) { badBlocks.push(`${rel(f)}（缺少 text 代码块）`); continue }
+      const stack = []
+      for (const line of fence[1].split(/\r?\n/)) {
+        if (!line.trim()) continue
+        const branchAt = line.search(/[├└]── /)
+        if (branchAt < 0) continue // 根行（仓库目录名），不参与路径拼接
+        if (branchAt % 4 !== 0) { badBlocks.push(`${rel(f)}（缩进 ${branchAt}：${line.trim()}）`); continue }
+        const level = branchAt / 4
+        const label = line.slice(branchAt + 4).split('  # ')[0].trim().replace(/\/$/, '')
+        stack.length = level
+        stack[level] = label
+        const target = path.join(ROOT, ...stack.slice(0, level + 1).filter(Boolean))
+        if (!exists(target)) missingPaths.add(rel(target))
+      }
+    }
+  }
+  const ok = badBlocks.length === 0 && missingPaths.size === 0
+  checks.push({ name: 'doc-tree 结构', ok, detail: `树 ${treeDocs} 份；标记异常 ${badBlocks.length}，路径不存在 ${missingPaths.size}` })
+  for (const b of badBlocks) problems.push(`doc-tree 标记/缩进异常：${b}`)
+  for (const p of missingPaths) problems.push(`doc-tree 列出但文件不存在：${p}`)
+}
+
+// 9) 禁用词 / 英文标识配中文 / 字段标签加粗 --------------------------------
+{
+  // 禁用词：开发文档禁「什么 / 怎么做 / 为什么 / 之类 / 约定」，全部文档禁「约定」
+  const BANNED_DEV = ['什么', '怎么做', '为什么', '之类', '约定']
+  const banned = []
+  for (const f of docFiles()) {
+    const isDev = rel(f).startsWith('doc/development/')
+    const words = isDev ? BANNED_DEV : ['约定']
+    read(f).split(/\r?\n/).forEach((line, i) => {
+      if (line.includes('禁用词')) return // 规则说明本身会列出禁用词，豁免
+      for (const w of words) {
+        if (line.includes(w)) banned.push(`${rel(f)}:${i + 1}（${w}）`)
+      }
+    })
+  }
+  checks.push({ name: '文档禁用词', ok: banned.length === 0, detail: `命中 ${banned.length} 处` })
+  for (const b of banned.slice(0, 20)) problems.push(`禁用词：${b}`)
+
+  // 英文标识配中文：代码围栏外的正文行，出现反引号标识时整行不能没有中文
+  // licenses.md 为许可证原文（法律文本必须保留英文），单独豁免
+  const bare = []
+  for (const f of docFiles()) {
+    if (!rel(f).startsWith('doc/development/') || path.basename(f) === 'licenses.md') continue
+    let inFence = false
+    read(f).split(/\r?\n/).forEach((line, i) => {
+      if (/^\s*```/.test(line)) { inFence = !inFence; return }
+      if (inFence) return
+      if (/`[^`]+`/.test(line) && !/[\u4e00-\u9fff]/.test(line)) bare.push(`${rel(f)}:${i + 1}`)
+    })
+  }
+  checks.push({ name: '英文标识配中文', ok: bare.length === 0, detail: `裸英文行 ${bare.length}` })
+  for (const b of bare.slice(0, 20)) problems.push(`正文只有英文标识、没有中文说明：${b}`)
+
+  // 字段标签加粗：条目内的固定标签必须写成 **定位**： 形式
+  const LABEL = /^(\s*[-*]\s*)?(定位|对外接口|内部实现|依赖与调用方|依赖|注意点|注意事项|入参|校验|撤销|用法|返回值|公共逻辑|局限)：/
+  const unbolded = []
+  for (const f of docFiles()) {
+    if (!rel(f).startsWith('doc/development/')) continue
+    let inFence = false
+    read(f).split(/\r?\n/).forEach((line, i) => {
+      if (/^\s*```/.test(line)) { inFence = !inFence; return }
+      if (inFence) return
+      if (LABEL.test(line)) unbolded.push(`${rel(f)}:${i + 1}`)
+    })
+  }
+  checks.push({ name: '字段标签加粗', ok: unbolded.length === 0, detail: `未加粗标签 ${unbolded.length}` })
+  for (const b of unbolded.slice(0, 20)) problems.push(`字段标签未加粗（应为 **标签**：）：${b}`)
+}
+
+// 10) 模块与文末分隔线 ------------------------------------------------------
+{
+  const bad = []
+  const tailBad = []
+  for (const f of docFiles()) {
+    if (!rel(f).startsWith('doc/development/')) continue
+    const lines = read(f).split(/\r?\n/)
+    let inFence = false
+    let seen = false
+    lines.forEach((line, i) => {
+      if (/^\s*```/.test(line)) { inFence = !inFence; return }
+      if (inFence || !/^## /.test(line)) return
+      if (seen) {
+        let j = i - 1
+        while (j >= 0 && lines[j].trim() === '') j--
+        if (j < 0 || lines[j].trim() !== '---') bad.push(`${rel(f)}:${i + 1}`)
+      }
+      seen = true
+    })
+    let last = lines.length - 1
+    while (last >= 0 && lines[last].trim() === '') last--
+    if (last < 0 || lines[last].trim() !== '---') tailBad.push(rel(f))
+  }
+  const ok = bad.length === 0 && tailBad.length === 0
+  checks.push({ name: '模块与文末分隔线', ok, detail: `模块间缺 ${bad.length}，文末缺 ${tailBad.length}` })
+  for (const b of bad.slice(0, 20)) problems.push(`H2 前缺 --- 分隔线：${b}`)
+  for (const t of tailBad.slice(0, 20)) problems.push(`文件末尾缺 --- 收尾：${t}`)
+}
+
+// 11) 用户手册结构 ----------------------------------------------------------
+{
+  const USER_DIR = path.join(DOC_DIR, 'user')
+  const REQUIRED = ['## 前言', '## 具体方法', '## 相关篇目', '## 维护记录']
+  const bad = []
+  const userDocs = walk(USER_DIR, (p) => p.endsWith('.md') && path.basename(p) !== 'README.md')
+  for (const f of userDocs) {
+    const text = read(f)
+    const lines = text.split(/\r?\n/)
+    const heads = []
+    let inFence = false
+    lines.forEach((line) => {
+      if (/^\s*```/.test(line)) inFence = !inFence
+      else if (!inFence && /^## /.test(line)) heads.push(line.trim())
+    })
+    if (heads.join('|') !== REQUIRED.join('|')) {
+      bad.push(`${rel(f)}（二级标题：${heads.join(' / ')}）`)
+      continue
+    }
+    for (let k = 1; k < heads.length; k++) {
+      let j = lines.indexOf(heads[k]) - 1
+      while (j >= 0 && lines[j].trim() === '') j--
+      if (j < 0 || lines[j].trim() !== '---') bad.push(`${rel(f)}（${heads[k]} 前缺 ---）`)
+    }
+    let last = lines.length - 1
+    while (last >= 0 && lines[last].trim() === '') last--
+    if (last < 0 || lines[last].trim() !== '---') bad.push(`${rel(f)}（文末缺 ---）`)
+    const front = text.split('## 前言')[1]?.split('## 具体方法')[0] || ''
+    for (const label of ['适用对象', '本篇解决的问题', '前提条件']) {
+      if (!front.includes(`- **${label}**`)) bad.push(`${rel(f)}（前言缺 ${label}）`)
+    }
+    const maint = text.split('## 维护记录')[1] || ''
+    if (!/版本/.test(maint) || !/改动/.test(maint)) bad.push(`${rel(f)}（维护记录缺版本/改动列）`)
+  }
+  checks.push({ name: '用户手册结构', ok: bad.length === 0, detail: `手册 ${userDocs.length} 篇，问题 ${bad.length}` })
+  for (const b of bad.slice(0, 20)) problems.push(`用户手册结构：${b}`)
 }
 
 // 输出 --------------------------------------------------------------------

@@ -3,26 +3,26 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-backend/
     ├── routes/
     │   ├── ai/
     │   │   ├── ai.tools/
     │   │   │   ├── tools.executors/
-    │   │   │   │   ├── executors.checks.js
-    │   │   │   │   ├── executors.common.js
-    │   │   │   │   ├── executors.image.js
-    │   │   │   │   ├── executors.impact.js
-    │   │   │   │   ├── executors.js
-    │   │   │   │   ├── executors.proposal.js
-    │   │   │   │   ├── executors.query.js
-    │   │   │   │   └── executors.snapshot.js
+    │   │   │   │   ├── executors.checks.js  # 数据体检、冲突检测与权重评分
+    │   │   │   │   ├── executors.common.js  # 通用小工具：日期解析、JSON 解析、姓名映射、拼音匹配、值日模式解包
+    │   │   │   │   ├── executors.image.js  # export_image（导出排布图规格）：课表 / 座位表 / 值日表 → 排布图参数
+    │   │   │   │   ├── executors.impact.js  # delete_impact（删除前影响预估）：只读统计引用情况
+    │   │   │   │   ├── executors.js  # 执行器门面：装配各域执行器、过程块文案与展示类工具
+    │   │   │   │   ├── executors.proposal.js  # 写入提案（propose_*（提案类工具）与批量操作）
+    │   │   │   │   ├── executors.query.js  # 查询、聚合、找人（姓名 / 拼音）与跨表检索
+    │   │   │   │   └── executors.snapshot.js  # 整库快照（snapshot_create（创建）/ snapshot_list（列表）/ s…
     │   │   │   ├── tools.js  # 工具注册表与 runTool 分发（query / propose_* / 图表 / 体检 …
-    │   │   │   ├── tools.schema.js
-    │   │   │   └── tools.subagent.js
+    │   │   │   ├── tools.schema.js  # 各工具的 JSON schema（入参 / 出参定义）与枚举（CHART_TYPES（图表类…
+    │   │   │   └── tools.subagent.js  # 子代理（子模型）执行入口：复用只读白名单并在执行前校验
     │   │   ├── ai.config.js  # GET/PUT /config（读取/保存配置）、GET /models（模型列表）、POS…
     │   │   ├── ai.constants.js  # 读写表白名单
     │   │   ├── ai.conversations.js  # POST /chat（对话）、POST /chat/stream（流式对话，SSE（服务器推…
@@ -60,23 +60,27 @@ project-name/
 ```
 <!-- doc-tree:end -->
 
-本文件回答两件事：每个路由文件挂在哪、有哪些接口；每个接口按什么流程处理。跨层机制（安全通道、AI 提案、撤销执行器细节）见 [README.md](./README.md)、[topics/ai.md](../topics/ai.md)。
+本文件说明两部分内容：每个路由文件的挂载位置与接口清单；每个接口的处理流程。跨层机制（安全通道、AI 提案、撤销执行器细节）见 [README.md](./README.md)、[topics/ai.md](../topics/ai.md)。
 
 接口路径和方法保留英文：`GET`（查询）、`POST`（新增/提交）、`PUT`（整体更新）、`PATCH`（局部更新）、`DELETE`（删除）；`router`（路由实例）注册处理函数，`req` / `res` / `next` 分别是请求对象 / 响应对象 / 下一个中间件，`req.params` / `req.query` / `req.body` 是路径参数 / 查询参数 / 请求体，`res.status(...)` 设置 HTTP 状态码（`HTTP` 即超文本传输协议）。
+
+---
 
 ## 综合概述
 
 - **定位**：后端 HTTP 路由层（`student-backend/routes/`），负责挂载点、接口清单与每个接口的处理链。
-- **公共逻辑**：所有业务接口经 `auth(['teacher'])` → JWT 校验 → `dbManager.withDb` 绑定当前库；路由内做参数校验、`sanitize` 清洗、事务写库、撤销登记与统一 JSON 响应。
+- **公共逻辑**：所有业务接口经 `auth(['teacher'])`（鉴权中间件，只允许教师角色）→ `JWT`（登录令牌）校验 → `dbManager.withDb`（按当前库执行回调的包装函数）绑定当前库；路由内做参数校验、`sanitize`（数据清洗）清洗、事务写库、撤销登记与统一 JSON 响应。
 - **局限**：不展开数据层加密/多库细节、安全通道握手、AI 提案与撤销执行器内部实现；这些见 [data-layer.md](./data-layer.md)、[topics/security.md](../topics/security.md)、[topics/ai.md](../topics/ai.md)。
 
----
-### 处理契约写法
 
-- 简单查询 / CRUD：表格一行写方法 / 路径 / 职责；写操作尽量补「写哪些表 / 是否登记撤销」。
+### 处理标准的写法
+
+- 简单查询 / CRUD：表格一行写方法 / 路径 / 职责；写操作尽量补「涉及的表 / 是否登记撤销」。
 - 复杂接口（注册登录、导出恢复、加密转换、AI 流式、撤销执行器）：在表格下按「入参校验 → 写库与事务 → 撤销 → 副作用 → 失败与局限」展开。
 - 跨层机制（安全通道、AI 提案、撤销执行器细节）只给链接，不在本文重复源码。
 - 示范：第 2 节的 `POST /register`。
+
+---
 
 ## 详细说明
 
@@ -117,7 +121,7 @@ flowchart TD
 | POST | `/register/confirm` | 确认恢复词后创建账号与加密库 |
 | POST | `/recover-password` | 恢复密钥哈希比对 → 重置密码 |
 
-#### 处理契约示范：`POST /register`（挂载 `/api`）
+#### 处理标准示范：`POST /register`（挂载 `/api`）
 
 - **入参**：`username`（账号名）、`role`（必须为 `teacher`）、`level`（`plain` / `nopass` / `password` / `privacy`）、`password`（目标为 `password` / `privacy` 时必填）；旧参数 `encrypted` / `privacy` 作为兼容回退。
 - **校验**：账号名走 `normalizeUsername` + `usernameError`；明文模式不允许带密码；超级隐私必须加密且必须带密码；密码少于 6 位拒绝；账号名跨所有库唯一（重复返回 `409`）。
@@ -269,7 +273,20 @@ flowchart TD
 其余 AI 文件（无 `router.get/post` 或只做内部能力，不单独挂接口）：
 
 - [`ai.js`](../../../student-backend/routes/ai/ai.js)（聚合挂载）、[`ai.constants.js`](../../../student-backend/routes/ai/ai.constants.js)（读写表白名单）、[`ai.helpers.js`](../../../student-backend/routes/ai/ai.helpers.js)（列元数据归一）、[`ai.llm.js`](../../../student-backend/routes/ai/ai.llm.js)（LLM 调用与工具集）、[`ai.subagent-tools.js`](../../../student-backend/routes/ai/ai.subagent-tools.js)（子代理只读白名单）。
-- 工具定义与执行：[`tools.schema.js`](../../../student-backend/routes/ai/ai.tools/tools.schema.js)、[`tools.subagent.js`](../../../student-backend/routes/ai/ai.tools/tools.subagent.js)、[`executors.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.js)、[`executors.common.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.common.js)、[`executors.checks.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.checks.js)、[`executors.image.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.image.js)、[`executors.impact.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.impact.js)、[`executors.proposal.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.proposal.js)、[`executors.query.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.query.js)、[`executors.snapshot.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.snapshot.js)。
+- 工具定义与执行（由 `tools.js`（工具门面）装配）：
+
+| 文件 | 职责 |
+| --- | --- |
+| [`tools.schema.js`](../../../student-backend/routes/ai/ai.tools/tools.schema.js) | 各工具的 JSON schema（入参 / 出参定义）与枚举（`CHART_TYPES`（图表类型）/ `AGG_FNS`（聚合函数）/ `MAX_BATCH_OPS`（批量操作上限）） |
+| [`tools.subagent.js`](../../../student-backend/routes/ai/ai.tools/tools.subagent.js) | 子代理（子模型）执行入口：复用只读白名单并在执行前校验 |
+| [`executors.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.js) | 执行器门面：装配各域执行器、过程块文案与展示类工具 |
+| [`executors.common.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.common.js) | 通用小工具：日期解析、JSON 解析、姓名映射、拼音匹配、值日模式解包 |
+| [`executors.checks.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.checks.js) | 数据体检、冲突检测与权重评分 |
+| [`executors.image.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.image.js) | `export_image`（导出排布图规格）：课表 / 座位表 / 值日表 → 排布图参数 |
+| [`executors.impact.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.impact.js) | `delete_impact`（删除前影响预估）：只读统计引用情况 |
+| [`executors.proposal.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.proposal.js) | 写入提案（`propose_*`（提案类工具）与批量操作） |
+| [`executors.query.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.query.js) | 查询、聚合、找人（姓名 / 拼音）与跨表检索 |
+| [`executors.snapshot.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.snapshot.js) | 整库快照（`snapshot_create`（创建）/ `snapshot_list`（列表）/ `snapshot_restore`（恢复）） |
 
 ### 9. 标准
 
@@ -277,9 +294,13 @@ flowchart TD
 - 新增接口必须同时更新 [frontend/views.md](../frontend/views.md) 的接口列与本文档。
 - 不在路由里直接拼表名；统一走 `tableService` 或固定白名单。
 
+---
+
 ## 注意事项
 
-- 新增业务路由必须挂在 `auth(['teacher'])` 之后，否则 `db` Proxy 会抛「未绑定数据库连接」。
-- 写操作要同步登记撤销记录，否则 `Ctrl+Z` 无效；撤销键与页面分组保持一致。
-- 加密转换、导出/恢复等复杂接口的顺序不可随意调整（关连接 → 退 WAL → 预检 → 备份 → rekey → 校验 → 回写 → 删备份）。
-- 接口路径或参数变化时，同步前端调用方与 [frontend/composables.md](../frontend/composables.md) 的契约。
+- 新增业务路由必须挂在 `auth(['teacher'])`（鉴权中间件，只允许教师角色）之后，否则 `db` Proxy（数据库代理对象，按当前库转发查询）会抛「未绑定数据库连接」。
+- 写操作要同步登记撤销记录，否则 `Ctrl+Z`（撤销快捷键）无效；撤销键与页面分组保持一致。
+- 加密转换、导出/恢复等复杂接口的顺序不可随意调整（关连接 → 退 `WAL`（写前日志）→ 预检（完整性检查）→ 备份 → `rekey`（重设库密钥）→ 校验 → 回写（登记）→ 删备份）。
+- 接口路径或参数变化时，同步前端调用方与 [frontend/composables.md](../frontend/composables.md) 的标准。
+
+---

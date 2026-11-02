@@ -1,6 +1,90 @@
 # 安全专题：架构、账号、传输、隔离与供应链
 
-## 1. 安全架构总览
+<!-- doc-tree:start -->
+## 本篇涉及的文件
+
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
+
+```text
+classnest/
+├── electron/
+│   ├── inno/
+│   │   └── setup.iss
+│   ├── main/
+│   │   ├── main.backend.js  # env 注入
+│   │   ├── main.config.js  # getMasterKey
+│   │   ├── main.desktop-layer.js
+│   │   ├── main.js
+│   │   ├── main.path-guard.js
+│   │   ├── main.privateWorkingSet.js
+│   │   ├── main.protocol.js
+│   │   ├── main.update-integrity.js
+│   │   ├── main.updater.js
+│   │   ├── main.web-prefs.js
+│   │   ├── main.webview-guard.js
+│   │   └── main.widget.js
+│   └── preload.js
+├── student-backend/
+│   ├── dbManager/
+│   │   ├── dbManager.account.js
+│   │   ├── dbManager.base.js
+│   │   ├── dbManager.js
+│   │   ├── dbManager.memory.js
+│   │   └── dbManager.skills.js
+│   ├── middleware/
+│   │   └── auth.js
+│   ├── routes/
+│   │   ├── ai/
+│   │   │   ├── ai.tools/
+│   │   │   │   ├── tools.executors/
+│   │   │   │   │   └── executors.proposal.js
+│   │   │   │   └── tools.subagent.js
+│   │   │   ├── ai.constants.js
+│   │   │   ├── ai.dataRoutes.js
+│   │   │   ├── ai.llm.js
+│   │   │   ├── ai.subagent-tools.js
+│   │   │   └── ai.upload.js
+│   │   ├── undo/
+│   │   │   └── undo.js
+│   │   └── auth.js
+│   ├── services/
+│   │   ├── bcryptAsync.js
+│   │   ├── businessRules.js
+│   │   ├── pdfDomShim.js
+│   │   ├── recoveryKey.js
+│   │   ├── sanitize.js  # 裁剪/类型归一/结构校验
+│   │   ├── secureChannel.js
+│   │   └── unzipSafe.js  # 拦符号链接、路径穿越、绝对路径、反斜杠
+│   ├── albumExif.js
+│   └── app.js
+├── student-frontend/
+│   └── src/
+│       ├── components/
+│       │   └── ai/
+│       │       └── AiComposer/
+│       │           └── AiComposer.vue
+│       ├── composables/
+│       │   ├── secureAxios.js
+│       │   └── secureChannel.js
+│       ├── utils/
+│       │   └── hbSubset.js
+│       └── views/
+│           └── AiAssistant.vue
+└── testjs/
+    ├── smoke/
+    │   └── unzip-safe-test.cjs
+    └── units/
+        ├── pathGuard.test.js
+        └── updateIntegrity.test.js
+```
+<!-- doc-tree:end -->
+
+---
+
+## 专题总览
+
+- **定位**：安全专题：进程 / 窗口 / IPC / 路径 / 网络 / 数据 / 认证 / 网页 / AI / 更新 / 打包的分层措施与威胁边界。
+- **边界**：账号与加密库的文件级细节见 [backend/data-layer.md](../backend/data-layer.md)，窗口与 IPC 的模块细节见 [main-process/README.md](../main-process/README.md)。
 
 | 层 | 措施 | 实现位置 |
 | --- | --- | --- |
@@ -22,15 +106,19 @@
 - 不承诺对抗已取得系统管理员权限的攻击者；不做代码签名校验（靠哈希 + HTTPS 分发）。
 - 不为 Web 端兜底，不引入浏览器兼容分支。
 
-## 2. 账号等级与权限
+---
 
-### 2.1 角色
+## 详细说明
+
+### 1. 账号等级与权限
+
+#### 1.1 角色
 
 - `users.role` 默认 `teacher`；注册接口**只放行 `teacher`**（`role !== 'teacher'` 直接 403「该角色正在开发中」）。
 - 业务接口统一 `auth(['teacher'])`；`authStatic()` 只校验 token、不校验角色（用于 `/uploads`、`/api/background`）。
 - token 载荷：`{ userId, username, role, dbSlug }`，有效期 7 天；登录同时写 httpOnly、`sameSite=lax` 的 `token` Cookie。
 
-### 2.2 安全等级（注册时的 `level`）
+#### 1.2 安全等级（注册时的 `level`）
 
 | 等级 | 库加密 | 登录密码 | 恢复词 | 库钥匙保存方式 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -46,7 +134,7 @@
 
 实现： [`dbManager.account.js`](../../../student-backend/dbManager/dbManager.account.js)、[`dbManager.base.js`](../../../student-backend/dbManager/dbManager.base.js)、[`routes/auth.js`](../../../student-backend/routes/auth.js)、[`services/recoveryKey.js`](../../../student-backend/services/recoveryKey.js)。
 
-## 3. 回环 HTTP 加密握手
+### 2. 回环 HTTP 加密握手
 
 1. **主密钥（认证锚点）**：主进程 `getMasterKey()` 每次运行生成 32 字节随机 `SECURE_MASTER`（进程内复用；后端崩溃重启仍复用），经 fork `env` 注入后端，经 `preload` 的 `--secure-channel` 标记告知渲染层。不落盘、不进传输。
 2. **握手**：前端 `POST /api/secure/handshake` 提交临时公钥 → 后端 `performHandshake` 生成 P-256 临时密钥对 → ECDH 求共享密 → `HKDF-SHA256(ikm=共享密, salt=K_master, info='campus-secure-v1', 32)` 派生会话密钥 → 返回 `{ sessionId, pub }`。
@@ -80,7 +168,7 @@ sequenceDiagram
 
 **局限**：只监听回环 + Host 白名单，防的是本机其它用户/进程与 DNS rebinding；加密防的是本机流量嗅探，不是防「同用户读进程内存」。
 
-## 4. 后端鉴权与清洗
+### 3. 后端鉴权与清洗
 
 - **Token 解析**（`resolveToken`）：`Authorization: Bearer` → `Cookie: token=` → `?token=`（只给 `<img>` / CSS `url()` 这类无法带头部的资源用）。
 - **鉴权**：`auth(requiredRoles)` 无 token 401、角色不符 403，随后 `dbManager.withDb(user.dbSlug || 'default', next)` 用 `AsyncLocalStorage` 绑定库；未绑定库的请求在 `db.current()` 直接抛「未绑定数据库连接」。
@@ -92,9 +180,9 @@ sequenceDiagram
 - **错误回包**：统一错误中间件只回 `{ error }`，不回栈。
 - **密码**：bcrypt 统一走 [`services/bcryptAsync.js`](../../../student-backend/services/bcryptAsync.js)，避免同步版阻塞事件循环。
 
-## 5. 网页隔离与 AI 权限隔离
+### 4. 网页隔离与 AI 权限隔离
 
-### 5.1 网页隔离（`<webview>` 抽屉）
+#### 4.1 网页隔离（`<webview>` 抽屉）
 
 - 外部网页只允许 `http/https`；`file:`、`data:`、`javascript:` 一律拒绝（`isHttpUrl` 唯一判定在 [`main.path-guard.js`](../../../electron/main/main.path-guard.js)）。
 - `will-attach-webview` 强制：删除 `preload`（外部网页拿不到 `window.electron`）、`nodeIntegration=false`、`contextIsolation=true`、`sandbox=true`、`webSecurity=true`。
@@ -104,7 +192,7 @@ sequenceDiagram
 
 实现：[`main.webview-guard.js`](../../../electron/main/main.webview-guard.js)。
 
-### 5.2 AI 权限隔离
+#### 4.2 AI 权限隔离
 
 | 能力 | 隔离方式 | 实现 |
 | --- | --- | --- |
@@ -119,7 +207,7 @@ sequenceDiagram
 | 附件 | 上传到系统临时目录、解析即删；模型只拿到文件名，需显式 `read_document` 才读取内容 | [`ai.upload.js`](../../../student-backend/routes/ai/ai.upload.js)、[`ai.llm.js`](../../../student-backend/routes/ai/ai.llm.js) |
 | 联网 | 联网搜索是独立开关，未启用时工具不可用；链接预览走隔离 webview，不进入主窗口 | [`AiComposer.vue`](../../../student-frontend/src/components/ai/AiComposer/AiComposer.vue)、[`main.webview-guard.js`](../../../electron/main/main.webview-guard.js) |
 
-## 6. 本地文件、账号与缓存结构
+### 5. 本地文件、账号与缓存结构
 
 ```
 <userData>/
@@ -150,15 +238,15 @@ sequenceDiagram
 
 实现：[`main.config.js`](../../../electron/main/main.config.js)、[`dbManager.base.js`](../../../student-backend/dbManager/dbManager.base.js)、[`main.protocol.js`](../../../electron/main/main.protocol.js)、[`main.widget.js`](../../../electron/main/main.widget.js)、[`main.backend.js`](../../../electron/main/main.backend.js)。
 
-## 7. npm 包风险、替换与业务补丁
+### 6. npm 包风险、替换与业务补丁
 
-### 7.1 已审计结论
+#### 6.1 已审计结论
 
 - `npm audit`（前端）：仅 `uuid<11.1.1` 的 2 个 moderate，**不可利用**——`exceljs` 只使用 uuid v4，且不传 `buf`，风险分支不会被执行。
 - **禁止** `npm audit fix --force`：它会把 `exceljs` 降级到 3.4.0，破坏导出功能。
 - 依赖无「装了不用」的冗余项（审计过）。
 
-### 7.2 用替换/自研降低风险面
+#### 6.2 用替换/自研降低风险面
 
 | 风险点 | 处理 | 实现 |
 | --- | --- | --- |
@@ -169,7 +257,7 @@ sequenceDiagram
 | PDF 字体子集依赖（`subset-font` 仅 Node） | 前端用 harfbuzzjs wasm，自管实例生命周期 | [`utils/hbSubset.js`](../../../student-frontend/src/utils/hbSubset.js) |
 | FFI / node-gyp 编译链 | 统一用 koffi（预编译 N-API），不引 `ffi-napi` | [`main.desktop-layer.js`](../../../electron/main/main.desktop-layer.js)、[`main.privateWorkingSet.js`](../../../electron/main/main.privateWorkingSet.js) |
 
-### 7.3 业务补丁（让危险分支不可达）
+#### 6.3 业务补丁（让危险分支不可达）
 
 - `exceljs` 的 uuid 漏洞分支**不执行**：只用 v4、不传 `buf`（见 7.1）。
 - 上传只做「读 + 魔数校验」，不把上传文件当可执行内容；图片解码交给 sharp；PDF/Word/Excel 只在解析线程内读文本，解析完删除临时文件。
@@ -177,7 +265,7 @@ sequenceDiagram
 - 表名/列名不接受前端直传：动态列走白名单正则；撤销与网格路由用固定集合。
 - 相册扫描「索引不凭空清空」：清单未收齐或目录读取失败时不执行删除（防数据丢失级事故）。
 
-## 8. 更新与打包安全
+### 7. 更新与打包安全
 
 - 更新地址与重定向后的最终地址都必须是 `https`；有 `sha256:` digest 就强制比对，没有则至少校验大小并记日志。
 - 安装器静默升级前会关闭旧进程；`AppId` 固定、机器级安装（UAC）。
@@ -186,7 +274,7 @@ sequenceDiagram
 
 实现：[`main.update-integrity.js`](../../../electron/main/main.update-integrity.js)、[`main.updater.js`](../../../electron/main/main.updater.js)、[`electron-builder.json`](../../../electron-builder.json)、[`electron/inno/setup.iss`](../../../electron/inno/setup.iss)。
 
-## 9. 其他容易漏掉的护栏
+### 8. 其他容易漏掉的护栏
 
 - **单实例锁**：`app.requestSingleInstanceLock()` 失败直接退出，重复启动只唤起已有窗口——避免两个实例同时写同一加密库。
 - **外部打开**：`open-external` 只放行 `http/https`；渲染层拿不到任意协议的 `shell.openExternal`。
@@ -198,29 +286,33 @@ sequenceDiagram
 - **登录态**：token 存在 `localStorage`（`app://` 同源、可持久化），XSS 面由「渲染层沙箱 + 外部内容只进隔离 webview + 不加载远程脚本」压住；token 不落日志。
 - **日志**：`backend.log` / `startup.log` 只写启动与错误信息，不写请求体与口令。
 
-## 10. 实现位置索引
+### 9. 实现位置索引
 
 | 主题 | 文件 |
 | --- | --- |
-| 窗口安全配置 | [`main.web-prefs.js`](../../../electron/main/main.web-prefs.js) |
-| IPC 白名单 | [`preload.js`](../../../electron/preload.js)、[`ipc-channels.json`](../../../electron/ipc-channels.json) |
-| 路径/URL 判定（含单测） | [`main.path-guard.js`](../../../electron/main/main.path-guard.js)、[`testjs/units/pathGuard.test.js`](../../../testjs/units/pathGuard.test.js) |
-| 网页隔离 | [`main.webview-guard.js`](../../../electron/main/main.webview-guard.js) |
-| 协议与目录穿越防护 | [`main.protocol.js`](../../../electron/main/main.protocol.js) |
-| 鉴权中间件 | [`middleware/auth.js`](../../../student-backend/middleware/auth.js) |
-| 安全通道（后端） | [`services/secureChannel.js`](../../../student-backend/services/secureChannel.js) |
-| 安全通道（前端） | [`composables/secureAxios.js`](../../../student-frontend/src/composables/secureAxios.js) |
-| 清洗/业务校验 | [`services/sanitize.js`](../../../student-backend/services/sanitize.js)、[`services/businessRules.js`](../../../student-backend/services/businessRules.js) |
-| 账号等级/隐私解锁 | [`dbManager.account.js`](../../../student-backend/dbManager/dbManager.account.js)、[`routes/auth.js`](../../../student-backend/routes/auth.js) |
-| 恢复密钥 | [`services/recoveryKey.js`](../../../student-backend/services/recoveryKey.js) |
-| AI 表白名单/提案 | [`ai.constants.js`](../../../student-backend/routes/ai/ai.constants.js)、[`executors.proposal.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.proposal.js) |
-| AI 子代理白名单 | [`ai.subagent-tools.js`](../../../student-backend/routes/ai/ai.subagent-tools.js) |
-| 更新完整性 | [`main.update-integrity.js`](../../../electron/main/main.update-integrity.js)、[`testjs/units/updateIntegrity.test.js`](../../../testjs/units/updateIntegrity.test.js) |
-| 解压防护 | [`services/unzipSafe.js`](../../../student-backend/services/unzipSafe.js)、[`testjs/smoke/unzip-safe-test.cjs`](../../../testjs/smoke/unzip-safe-test.cjs) |
+| 窗口安全配置 | [`main.web-prefs.js`](../../../electron/main/main.web-prefs.js)（窗口安全选项集中配置） |
+| IPC 白名单 | [`preload.js`](../../../electron/preload.js)（预加载脚本）、[`ipc-channels.json`](../../../electron/ipc-channels.json)（IPC 通道清单） |
+| 路径/URL 判定（含单测） | [`main.path-guard.js`](../../../electron/main/main.path-guard.js)（路径 / URL 判定）、[`testjs/units/pathGuard.test.js`](../../../testjs/units/pathGuard.test.js)（对应单元测试） |
+| 网页隔离 | [`main.webview-guard.js`](../../../electron/main/main.webview-guard.js)（网页隔离守卫） |
+| 协议与目录穿越防护 | [`main.protocol.js`](../../../electron/main/main.protocol.js)（自定义协议注册与目录穿越防护） |
+| 鉴权中间件 | [`middleware/auth.js`](../../../student-backend/middleware/auth.js)（接口鉴权中间件） |
+| 安全通道（后端） | [`services/secureChannel.js`](../../../student-backend/services/secureChannel.js)（后端安全通道实现） |
+| 安全通道（前端） | [`composables/secureAxios.js`](../../../student-frontend/src/composables/secureAxios.js)（前端安全通道装配） |
+| 清洗/业务校验 | [`services/sanitize.js`](../../../student-backend/services/sanitize.js)（数据清洗）、[`services/businessRules.js`](../../../student-backend/services/businessRules.js)（业务规则校验） |
+| 账号等级/隐私解锁 | [`dbManager.account.js`](../../../student-backend/dbManager/dbManager.account.js)（账号与加密库管理）、[`routes/auth.js`](../../../student-backend/routes/auth.js)（登录注册路由） |
+| 恢复密钥 | [`services/recoveryKey.js`](../../../student-backend/services/recoveryKey.js)（恢复密钥处理） |
+| AI 表白名单/提案 | [`ai.constants.js`](../../../student-backend/routes/ai/ai.constants.js)（AI 读写表白名单）、[`executors.proposal.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.proposal.js)（写入提案执行器） |
+| AI 子代理白名单 | [`ai.subagent-tools.js`](../../../student-backend/routes/ai/ai.subagent-tools.js)（子代理只读工具白名单） |
+| 更新完整性 | [`main.update-integrity.js`](../../../electron/main/main.update-integrity.js)（更新包完整性校验）、[`testjs/units/updateIntegrity.test.js`](../../../testjs/units/updateIntegrity.test.js)（对应单元测试） |
+| 解压防护 | [`services/unzipSafe.js`](../../../student-backend/services/unzipSafe.js)（安全解压）、[`testjs/smoke/unzip-safe-test.cjs`](../../../testjs/smoke/unzip-safe-test.cjs)（解压防护冒烟脚本） |
 
-## 11. 红线与勿再提
+---
+
+## 验证与注意事项
 
 - 安全基线已齐全（沙箱/隔离/Node 关闭/生产 webSecurity），**不要再提「补 Electron 安全配置」**。
 - `npm audit fix --force` 不要跑（降级 exceljs）。
 - 不要为了「更安全」改回命名管道或新增独立加密协议（已评估并全量回退，结论见 `doc/开发文档/通信层方案评估-命名管道与ACL.md`，不入库）。加密只在安全通道这一层做，业务层不重复加密。
 - 不要删除随包的许可文本；更新包校验不得改为只信 `Content-Length`。
+
+---

@@ -18,7 +18,7 @@ const fs = require('fs')
 const { assertHttpsUrl, verifyDownloadedFile } = require('./main.update-integrity')
 
 // GitHub 仓库信息（原先在 electron-builder.json 的 publish 里，现仅保留在代码常量中）
-const UPDATE_REPO = { owner: 'onion383', repo: 'classmanagement' }
+const UPDATE_REPO = { owner: 'onion383', repo: 'classnest' }
 // Inno 安装包资产名匹配（如「班集-Setup-0.8.0.exe」）
 const UPDATE_ASSET_RE = /setup.*\.exe$/i
 // 检查超时沿用既有 10s 风格；下载体积较大，整体超时放宽到 5 分钟
@@ -84,7 +84,7 @@ async function fetchLatestRelease() {
   try {
     const url = `https://api.github.com/repos/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest`
     const res = await fetch(url, {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'campus-assistant' },
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'ClassNest' },
       signal: controller.signal,
     })
     if (!res.ok) {
@@ -138,7 +138,7 @@ async function downloadInstaller(asset, version) {
     const downloadUrl = String(asset.browser_download_url || '')
     assertHttpsUrl(downloadUrl)
     const res = await fetch(downloadUrl, {
-      headers: { 'User-Agent': 'campus-assistant' },
+      headers: { 'User-Agent': 'ClassNest' },
       signal: controller.signal,
     })
     if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`)

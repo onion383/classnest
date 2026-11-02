@@ -36,12 +36,15 @@ student-backend/
     └── slotStore.js               # 物理槽位写入（逻辑名视图只读）
 ```
 
+---
 
 ## 综合概述
 
-- **定位**：后端数据层（加密 SQLite / 多库），覆盖 `db.js`、`dbManager/`、`schema/` 与备份/加密转换。
-- **公共逻辑**：每个请求经 `dbManager.withDb` 绑定当前班主任库；主密钥包裹/解包库钥匙；`initSchema` 每次打开连接执行建表与迁移；备份包与库加密转换按固定顺序执行。
+- **定位**：后端数据层（加密 SQLite / 多库），覆盖 `db.js`（数据库统一入口）、`dbManager/`（多库管理目录）、`schema/`（建表定义目录）与备份 / 加密转换。
+- **公共逻辑**：每个请求经 `dbManager.withDb`（按当前班主任库执行回调的包装函数）绑定当前库；主密钥包裹 / 解包库钥匙；`initSchema`（建表与补列的初始化函数）每次打开连接执行建表与迁移；备份包与库加密转换按固定顺序执行。
 - **局限**：不展开 HTTP 路由、业务规则与安全通道协议；这些见 [routes.md](./routes.md)、[services.md](./services.md)、[topics/security.md](../topics/security.md)。
+
+---
 
 ## 详细说明
 
@@ -114,8 +117,12 @@ flowchart LR
 - `convertDbEncryption(slug, encrypt, onProgress)` 严格顺序：关连接 → 退 WAL → 完整性预检 → 备份 → rekey → 转换后校验 → 回写登记 → 删备份；任一步失败从备份回滚，不留中间态。接口以 NDJSON 流上报步骤进度。
 - 删除账号不清理共享目录（`uploads/`、缩略图、回收站）。
 
+---
+
 ## 注意事项
 
-- 不要提前于 `app ready` 读取 `DB_MASTER_KEY`（safeStorage 在 Windows 上 ready 后才可用，否则会误生成随机新密钥导致旧库打不开）。
-- 改库密钥/目录前先 `backend.stopBackendProcess()`，等进程真正退出再操作（Windows 上句柄释放有延迟）。
-- 新增列必须同时更新 `initSchema` 与相关路由的 INSERT/UNDO 载荷，否则移动/撤销会丢字段（如相册的 `exif_date` / `date_src`）。
+- 不要提前于 `app ready`（Electron 应用就绪事件）读取 `DB_MASTER_KEY`（数据库主密钥）：`safeStorage`（Electron 安全存储）在 Windows 上就绪后才可用，否则会误生成随机新密钥，导致旧库打不开。
+- 改库密钥 / 目录前先 `backend.stopBackendProcess()`（停止后端子进程），等进程真正退出再操作（Windows 上文件句柄释放有延迟）。
+- 新增列必须同时更新 `initSchema`（建表 / 补列的初始化函数）与相关路由的 `INSERT`（写库语句）/ `UNDO`（撤销载荷），否则移动、撤销会丢字段（如相册的 `exif_date`（拍摄时间）/ `date_src`（时间来源））。
+
+---

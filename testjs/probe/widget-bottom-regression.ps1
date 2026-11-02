@@ -80,8 +80,11 @@ for ($n = 1; $n -le $Drags; $n++) {
 }
 
 Write-Output "failures=$fail"
-if (Test-Path (Join-Path $env:APPDATA 'campus-assistant\desktop-widget-pos.json')) {
-  Write-Output "posFile=$(Get-Content (Join-Path $env:APPDATA 'campus-assistant\desktop-widget-pos.json') -Raw)"
+foreach ($brand in @('classnest', 'campus-assistant')) {
+  $posFile = Join-Path $env:APPDATA "$brand\desktop-widget-pos.json"
+  if (Test-Path $posFile) {
+    Write-Output "posFile=$(Get-Content $posFile -Raw)"
+  }
 }
 # 失败必须让外层脚本/CI 能判定（否则输出 failures=N 也永远算通过）
 if ($fail -gt 0) { exit 1 }

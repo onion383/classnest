@@ -1,12 +1,12 @@
-﻿# 前端入口与构建（`student-frontend/`）
+# 前端入口与构建（`student-frontend/`）
 
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── student-frontend/
     ├── src/
     │   ├── subwindows/
@@ -32,6 +32,8 @@ project-name/
 
 5 个窗口入口、入口脚本与构建配置；目录树、整体机制见 [README.md](./README.md)。
 
+---
+
 ## 5 个窗口入口
 
 | HTML | 挂载点 | 入口 JS | 顶层组件 | 用途 |
@@ -46,7 +48,10 @@ project-name/
 
 [`src/App.vue`](../../../student-frontend/src/App.vue)：自绘标题栏（最小化/最大化/关闭）、登录页无侧边栏、`<KeepAlive :max="16">`（页面缓存，最多 16 个实例）、`NotificationToast`（通知吐司）、后端异常全屏遮罩、AI 悬浮入口、`ShutdownMenuDialog`（关闭选择弹窗）；`mounted`（挂载完成）里 `requestIdleCallback`（浏览器空闲回调）双重空闲后上报小组件就绪并预取路由。
 
+---
+
 ## 构建配置
 
 构建配置：[`vite.config.js`](../../../student-frontend/vite.config.js)（5 个入口、`nonBlockingCss` 把 CSS 改为非阻塞、`server.warmup` 预编译首屏、`/api` 与 `/uploads` 代理）、[`vite.perf.config.js`](../../../student-frontend/vite.perf.config.js)（性能测量）、[`resize-bg.mjs`](../../../student-frontend/resize-bg.mjs)（背景图压缩）。
 
+---

@@ -88,9 +88,9 @@
       <div class="text-text-muted/70">可自由使用、修改与分发（含商业用途）；分发时保留版权声明与许可声明即可</div>
       <div>
         Copyright &copy; 无聊的小洋葱 2026 &nbsp;|&nbsp;
-        <a href="https://github.com/onion383/classmanagement" target="_blank" rel="noopener" @click="openExternal($event, 'https://github.com/onion383/classmanagement')" class="text-primary hover:underline">仓库地址</a>
+        <a href="https://github.com/onion383/classnest" target="_blank" rel="noopener" @click="openExternal($event, 'https://github.com/onion383/classnest')" class="text-primary hover:underline">仓库地址</a>
       </div>
-      <div class="text-text-muted/50">https://github.com/onion383/classmanagement</div>
+      <div class="text-text-muted/50">https://github.com/onion383/classnest</div>
     </div>
 
     <!-- 协议弹窗 -->

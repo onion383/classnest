@@ -3,10 +3,10 @@
 <!-- doc-tree:start -->
 ## 本篇涉及的文件
 
-只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+只展示本篇会讲到的代码文件；模块内其余文件见同级 README。
 
 ```text
-project-name/
+classnest/
 └── testjs/
     └── probe/
         ├── _sample-big.cjs  # 大样张数据生成（供相册/表格探针复用）
@@ -36,18 +36,22 @@ project-name/
         ├── viewer-anim-probe.cjs  # 查看器切换动画
         ├── viewer-load-probe.cjs  # 查看器图片加载
         ├── viewer-open-probe.cjs  # 照片查看器打开耗时
-        ├── widget-bottom-regression.ps1  # 置底回归：-Drags N 次合成拖动，断言位移正确、尺寸不变、松手仍在 Progman 之…
+        ├── widget-bottom-regression.ps1  # 置底回归：-Drags N 次合成拖动，校验位移正确、尺寸不变、松手仍在 Progman 之…
         └── widget-shot.ps1  # 把组件窗口临时提到最前截图（-Out 指定路径，截完压回）
 ```
 <!-- doc-tree:end -->
 
-本层能证明什么、不能证明什么，见 [testing/README.md](./README.md) 的「各层能证明什么、不能证明什么」。
+本层的可信范围与局限，见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
+
+---
 
 ## 综合概述
 
 - **定位**：过程探针层（`testjs/probe/`），29 个脚本（28 个探针 + 1 个样例），需要手动传参、耗时较长或拉起完整应用。
-- **公共逻辑**：多数自行启动 Vite / 带调试口的 Electron，或复用 `_sample-big.cjs` 生成样张；输出是数据/报告，结论写到本页或 `doc/开发文档/`。
-- **局限**：**不是回归测试**，不能当判据、也不进冒烟；能证明什么见 [testing/README.md](./README.md)。
+- **公共逻辑**：多数自行启动 `Vite`（前端开发服务器）/ 带调试口的 `Electron`，或复用 `_sample-big.cjs`（大样张生成脚本）生成样张；输出是数据/报告，结论写到本页或 `doc/开发文档/`。
+- **局限**：**不是回归测试**，不能当判据、也不进冒烟；可信范围见 [testing/README.md](./README.md)。
+
+---
 
 ## 详细说明
 
@@ -55,7 +59,7 @@ project-name/
 
 | 脚本 | 用途 / 参数 |
 | --- | --- |
-| [`measure-startup.mjs`](../../../testjs/probe/measure-startup.mjs) | 启动耗时；`--backend-only` / `--dev` / `--json` / `--runs` / `--exe`；数据隔离在 `%LOCALAPPDATA%\BanjiiStartupMeasure` |
+| [`measure-startup.mjs`](../../../testjs/probe/measure-startup.mjs) | 启动耗时；`--backend-only` / `--dev` / `--json` / `--runs` / `--exe`；数据隔离在 `%LOCALAPPDATA%\ClassNestStartupMeasure` |
 | [`longframe-probe.mjs`](../../../testjs/probe/longframe-probe.mjs) | 长帧定位（主线程阻塞点） |
 | [`inp-probe.mjs`](../../../testjs/probe/inp-probe.mjs) | 交互延迟（INP）：自动起 Vite + 带调试口的 Electron，CDP 派发真实输入（`npm run inp`） |
 | [`inp-compare.mjs`](../../../testjs/probe/inp-compare.mjs) | 两组配置的 INP 对比（如 3.5 / 3.6、VDOM / Vapor） |
@@ -107,13 +111,17 @@ project-name/
 | [`mode-probe.mjs`](../../../testjs/probe/mode-probe.mjs) | 日/夜模式切换开销 |
 | [`ocr-probe.mjs`](../../../testjs/probe/ocr-probe.mjs) | OCR 可用性（仅 Windows） |
 | [`widget-shot.ps1`](../../../testjs/probe/widget-shot.ps1) | 把组件窗口临时提到最前截图（`-Out` 指定路径，截完压回） |
-| [`widget-bottom-regression.ps1`](../../../testjs/probe/widget-bottom-regression.ps1) | 置底回归：`-Drags N` 次合成拖动，断言位移正确、尺寸不变、松手仍在 `Progman` 之上、无 `Application Error` |
+| [`widget-bottom-regression.ps1`](../../../testjs/probe/widget-bottom-regression.ps1) | 置底回归：`-Drags N` 次合成拖动，校验位移正确、尺寸不变、松手仍在 `Progman` 之上、无 `Application Error` |
 | [`_sample-big.cjs`](../../../testjs/probe/_sample-big.cjs) | 大样张数据生成（供相册/表格探针复用） |
 
 > 已删除的 `pipe-*` 评估脚本：命名管道 + ACL 方案实测收益约 1ms，且 axios fetch adapter 对 204 误判导致页面闪跳，已全量回退；结论见 `doc/开发文档/通信层方案评估-命名管道与ACL.md`（不入库）。
+
+---
 
 ## 注意事项
 
 - **参数以脚本头部为准**：本页用途摘要来自脚本名与 `testjs/README.md`，运行前先读各脚本文件头注释，别照抄本页猜参数。
 - **不要进冒烟 / CI**：探针需要真实桌面、真实应用与较长耗时，只做一次性测量；判据类检查放 [smoke.md](./smoke.md)。
-- **桌面窗口类探针会动真实窗口**：`widget-bottom-regression.ps1` 会合成真实拖动、`widget-shot.ps1` 会把组件临时提到最前截图；运行前先收好正在使用的窗口，避免误操作。
+- **桌面窗口类探针会动真实窗口**：`widget-bottom-regression.ps1`（置底回归探针）会合成真实拖动、`widget-shot.ps1`（组件截图探针）会把组件临时提到最前截图；运行前先收好正在使用的窗口，避免误操作。
+
+---

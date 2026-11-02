@@ -19,6 +19,7 @@
     "test:units": "node testjs/run-units.js",
     "check:boundaries": "node testjs/tools/error-boundary-check.cjs",
     "check:boundaries:strict": "node testjs/tools/error-boundary-check.cjs --strict",
+    "docs:verify": "node testjs/tools/docs-verify.mjs",
     "build": "cd student-frontend && npm run build",
     "build:new": "node student-frontend/dev-vite.js --vue36 build",
     "build:win:inno": "node electron/inno/compile.mjs",

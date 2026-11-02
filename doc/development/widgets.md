@@ -1,0 +1,161 @@
+# 班集 · 小组件文档
+
+<!-- doc-tree:start -->
+## 本篇涉及的文件
+
+只展示本篇会讲到的代码文件（从仓库根目录到文件）；模块内其余文件见同级 README。
+
+```text
+project-name/
+├── electron/
+│   └── preload.js
+└── student-frontend/
+    └── src/
+        └── subwindows/
+            ├── desktop-widget/
+            │   ├── DesktopWidget.vue  # 桌面小组件界面：时钟（AnimatedClock）、最近倒计时、下一节课、左栏课程、右栏今日…
+            │   └── main.js  # 桌面小组件入口
+            └── widget/
+                ├── main.js  # 工具箱浮窗入口
+                ├── Note.vue  # 工具箱·屏幕注释（截图标注）
+                ├── RollCall.vue  # 工具箱·点名器
+                ├── Screenshot.vue  # 工具箱·一键截屏
+                ├── Timer.vue  # 工具箱·正计时 / 倒计时
+                └── WidgetApp.vue  # 工具箱主界面：悬浮图标（左键展开菜单，右键呼出退出菜单）、功能菜单网格、可拖动
+```
+<!-- doc-tree:end -->
+
+本文覆盖「班集」的两个独立窗口入口子系统——**工具箱浮窗**（`widget`，悬浮小工具窗口）与**桌面小组件**（`desktop-widget`，桌面常驻面板），跨渲染层（`student-frontend/src/subwindows/widget`、`src/desktop-widget`）与主进程（`electron/main.widget.js`，进程管理与 `IPC`（进程间通信））。
+
+此前这部分内容附在前端文档的「浮窗与独立窗口」小节，现独立成文；前端其余内容见 [frontend/README.md](./frontend/README.md) 与 [frontend/misc.md](./frontend/misc.md)，主进程侧完整说明见 [main-process/README.md](./main-process/README.md)。
+
+## 综合概述
+
+- **定位**：两个独立窗口形态——工具箱浮窗（`src/subwindows/widget/`）与桌面小组件（`src/subwindows/desktop-widget/`），以及对应的主进程窗口管理与数据接口。
+- **公共逻辑**：两个窗口与主窗口同进程、同 origin，共享登录态与主题；主进程负责窗口创建、置底/置顶、拖动与 IPC；设置通过 `widget-settings` 接口读写。
+- **局限**：不展开主进程全部模块与前端组件细节；主进程见 [main-process/README.md](./main-process/README.md)，其余前端组件见 [frontend/components/README.md](./frontend/components/README.md)。
+
+## 详细说明
+
+### 一、构成
+
+两者都是「独立 HTML 入口 + 独立顶层组件」的独立渲染窗口，由主进程单独创建：
+
+| 子系统 | HTML 入口（网页入口） | 入口 JS（JavaScript 脚本） | 顶层组件 | 用途 |
+| --- | --- | --- | --- | --- |
+| 工具箱浮窗 | `widget.html` | `src/subwindows/widget/main.js` | `src/subwindows/widget/WidgetApp.vue` | 悬浮工具箱：正/倒计时、点名、屏幕注释、一键截屏 |
+| 桌面小组件 | `desktop-widget.html` | `src/subwindows/desktop-widget/main.js` | `src/subwindows/desktop-widget/DesktopWidget.vue` | 桌面常驻信息面板：时钟、倒计时、下节课、课程、值日与人数 |
+
+两者均在 `vite.config.js`（Vite 构建配置）的 `rollupOptions.input`（Rollup 打包入口配置）中登记；主进程 `electron/main.widget.js` 负责窗口创建与生命周期。
+
+### 二、工具箱浮窗（`src/subwindows/widget/`）
+
+| 文件                                                                                  | 职责                                      | 关键点                                                                                                                                    |
+| ----------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| [`widget/main.js`](../../student-frontend/src/subwindows/widget/main.js)               | 工具箱浮窗入口                                 | `setupApiClient({ baseURL: 'http://localhost:3000' })`（token / 重试 / 安全通道统一装配，见 `utils/httpClient.js`）；`applyTheme()` 后挂载 `#widget-app` |
+| [`widget/WidgetApp.vue`](../../student-frontend/src/subwindows/widget/WidgetApp.vue)   | 工具箱主界面：悬浮图标（左键展开菜单，右键呼出退出菜单）、功能菜单网格、可拖动 | 状态 `tool`/`menu`/… 切换；从 `GET /api/widget-settings` 读取启用配置                                                                              |
+| [`widget/Timer.vue`](../../student-frontend/src/subwindows/widget/Timer.vue)           | 工具箱·正计时 / 倒计时                           | 仅前端计时                                                                                                                                  |
+| [`widget/RollCall.vue`](../../student-frontend/src/subwindows/widget/RollCall.vue)     | 工具箱·点名器                                 | `GET /api/students` 取名单后随机点名                                                                                                           |
+| [`widget/Note.vue`](../../student-frontend/src/subwindows/widget/Note.vue)             | 工具箱·屏幕注释（截图标注）                          | 读 `GET /api/widget-settings`；使用 `ColorSwatch`                                                                                          |
+| [`widget/Screenshot.vue`](../../student-frontend/src/subwindows/widget/Screenshot.vue) | 工具箱·一键截屏                                | 读 `GET /api/widget-settings`                                                                                                           |
+
+### 三、桌面小组件（`src/subwindows/desktop-widget/`）
+
+| 文件                                                                                                        | 职责                                                      | 关键点                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`desktop-widget/main.js`](../../student-frontend/src/subwindows/desktop-widget/main.js)                     | 桌面小组件入口                                                 | 经 `setupApiClient({ getToken })` 装配（见 `utils/httpClient.js`）；token 直接读 `localStorage`（与主窗口同 origin 同一份，`storage` 事件负责失效）；**接入主题**（pinia + `useThemeStore().applyTheme()` + storage 事件跟随，照抄工具箱浮窗做法）——组件要自己画磨砂背景，必须知道当前主题/日夜间与背景图；**主题 CSS 不阻塞挂载**：先挂载骨架，`applyTheme()` 内部按需加载的样式到达后自动重绘                                                                                                                                           |
+| [`desktop-widget/DesktopWidget.vue`](../../student-frontend/src/subwindows/desktop-widget/DesktopWidget.vue) | 桌面小组件界面：时钟（`AnimatedClock`）、最近倒计时、下一节课、左栏课程、右栏今日值日与人数情况 | `GET/PUT /api/widget-settings/apps`；`GET /api/schedule`、`/api/duty`、`/api/countdowns`、`/api/leaves`、`/api/students`（失败时降级为空数据）；**常用软件固定 8 槽（4 列 × 2 行）**，空槽点击添加，满 8 个后不再出现添加入口；支持把桌面上的快捷方式 / 文件夹 / 文件直接拖进面板；**磨砂背景自绘**：`.dw-wallpaper`（柔光渐变）+ `.dw-veil`（奶白遮罩）两层，日/夜两套配色（见下「磨砂背景」）；**面板跳转**：课程 / 今日值日 / 人数情况 / 倒计时整块可点，经 `desktop-widget-open-page` 与父子进程 IPC 唤醒主窗口并跳到 `/schedule`、`/duty`、`/leaves`、`/activities?tab=countdown` |
+
+### 四、主进程侧（`electron/main.widget.js`）
+
+窗口生命周期与 IPC 全部集中在 `electron/main.widget.js`（导出 `registerWidgetIpc`、`createWidgetWindow`、`hideWidgetWindow`、`showWidgetWindow`、`createDesktopWidgetWindow`、`getWidgetWindow`、`getDesktopWidgetWindow`、`setDesktopWidgetWindow`、`isDesktopEnabled`）。
+
+桌面组件窗口就在主进程里，点击面板的 `desktop-widget-open-page` 直接进 `main.widget.js` 的 `openMainPage()`：唤醒/重建主窗口，等真实页面加载完成（跳过开发模式的 `data:` 占位页）后发送 `from-main: { type:'navigate', path }`，由 `App.vue` 执行 `$router.push`。
+
+**工具箱浮窗**：
+
+- 窗口属性：`frame:false`（无系统边框）+ `transparent:true`（透明窗口）、`alwaysOnTop`（置顶）、`skipTaskbar`（不在任务栏显示）、不可缩放。
+- 尺寸为「视觉内容 + 2×`WIDGET_SHADOW_MARGIN`(16px)」，用于绘制阴影。
+- **会话级显隐采用「隐藏即 `destroy`（销毁）」**（而非仅 `hide`（隐藏）），以释放整个渲染进程；重启用 `lastWidgetBounds`（上次窗口位置）复原位置。
+- **菜单面板底部「退出工具箱」按钮**：与右键「关闭工具箱」同一动作（渲染层发 `widget-exit` → 主进程 `exitToolbox()`）。点击后先用项目已有组件 `ConfirmDialog` 二次确认「确认退出工具箱吗？下次启动需要在设置里重新启用。」——浮窗平时只有图标大小、塞不下弹窗，所以确认前先切全屏（`widget-fullscreen`），取消时 `widget-restore` 恢复到全屏前的尺寸与位置（菜单保持展开）。
+- **右键菜单「关闭工具箱」**：关闭浮窗的同时把持久化开关 `toolboxEnabled` 一并置 false——主进程只负责隐藏窗口并通知主窗口（`from-main` 的 `toolbox-close-request`），由主窗口 `GET`（查询）完整设置后整体 `PUT`（整体更新）写回（后端是整体覆盖，只传 `toolboxEnabled` 会把两个保存路径清空）。因此设置页「是否启用工具箱」会同步变为关闭，下次启动也不再出现。设置页已去掉独立的「本次启用工具箱」开关：它只影响本次运行，与右键关闭的语义重复；现在「是否启用工具箱」本身即时生效（`widget-set-session-visible`）。
+
+**桌面小组件（主进程内窗口）**：
+
+- **宽 320、高度约屏幕 95%，无边框、`transparent:true`（逐像素透明，四角圆角靠页面 CSS 绘制）、不置顶、不可缩放。** 透明是必须的：置底模式的圆角不再用 `SetWindowRgn`，而是让页面把四角之外留空（详见下文「圆角改为页面自绘」）。底色 `backgroundColor:
+- **窗口跑在主进程里**：由 `main.widget.js` 的 `createDesktopWidgetWindow()` 创建/销毁（与工具箱同一套生命周期），`desktop-widget-enabled` 开关实时生效。
+- **为什么从独立进程合并回来（v0.8.x）**：早期窗口要 `SetParent` 挂进桌面层，必须隔离「Explorer 重启级联销毁子窗口 → Electron 原生崩溃」；置底改成「顶层窗口 + z 序」之后这个诱因消失，于是挪回主进程，省掉一个 Chromium browser/GPU 进程、整套 spawn/重建/启动即崩降级，以及 `widget-session.json` 快照交接（`main.desktop-widget-process.js`、`desktop-widget-host.js`、`main.widget-session.js` 已删除）。
+  - **代价**：browser 进程级原生崩溃不再隔离（与工具箱同等风险水平）；渲染进程崩溃仍然隔离，且窗口用 `webContents.on('render-process-gone')` 自动 `reload()` 兜底。
+  - **登录态/主题怎么过去**：同进程、同 profile、同 origin（dev 都是 `127.0.0.1:5173`，打包都是 `app://local`），`localStorage` 本来就是同一份，组件直接读；主窗口改 token/主题时本窗口的 `storage` 事件实时同步，不再有快照与 10s 轮询。
+- **置底是唯一形态，没有开关**：设置页只保留「启用桌面小组件」。窗口创建即插层（`attach()`），失败时退回普通顶层窗口（非 Windows / koffi 缺失），只影响层级不影响可用性。`get-desktop-layer-state` 仍返回真实状态（渲染层只用于日志与拖动手柄样式），其中 `autoDisabled` / `faultStreak` 恒为 `false` / `0`（独立进程时代的字段，保留是为了不改变 IPC 形状）。
+- **常驻桌面最底层（Windows）**：**固定开启**（没有设置项）。实现是**顶层窗口 + z 序插到 `Progman` 之上**（桌面挂件的通行做法），**不再 `SetParent`**：`attach()` 用 `SetWindowPos(hwnd, 当前紧挨 Progman 上方的那个窗口, NOMOVE|NOSIZE|NOACTIVATE)` 把窗口插到「桌面图标之上、所有普通窗口之下」；`isJustAboveDesktop()` 从 `Progman` 往上走、跳过 `Default IME`/`MSCTFIME UI` 这类**不可见**系统窗口，途中遇到自己才算到位（遇到可见窗口则说明自己压在它上面，不合格）。效果：被任何应用窗口盖住、Alt+Tab 不出现、`Win+D` 不隐藏，但仍可点击、可拖动、可圆角。用户点击会激活窗口并把它抬到最前，所以 `focus`/`blur` 与拖动结束后都调 `reassert()` 压回底层。
+- **为什么放弃 `SetParent`（重要，别再改回去）**：旧实现用 `SetParent` 把窗口做成 `Progman` 的 `WS_CHILD` 子窗口（Rainmeter 那套）。在 Electron 上这条路**不可用**：只要这个子窗口被移动（真实鼠标拖动、外部程序 `SetWindowPos` 都算），宿主进程就以 `0xC000041D` 原生崩溃——日志表现为 `dragstart` 后几十毫秒进程消失、8~10 秒后自动重建（WER 抓 dump 会把进程 hold 住几秒，所以看起来像"卡一下又回来了"）。试过且**都无效**的缓解手段：拖动前 `ReleaseCapture` 放掉鼠标捕获、去掉 `SetWindowRgn` 圆角区域、每次移动后重裁区域、`SWP_NOSENDCHANGING` 抑制 `WM_WINDOWPOSCHANGING`、主进程轮询光标搬窗口——只能降低概率。同一套移动代码作用在普通顶层窗口上连续 200 帧完全稳定，差异就在「跨进程父窗口」。
+- **圆角改为页面自绘**：窗口 `transparent:true` + `backgroundColor:'#00000000'`，`DesktopWidget.vue` 的 `.dw-wallpaper` / `.dw-veil` 两层铺满的底色加 `border-radius: 12px`，四角外侧真的透出壁纸（带抗锯齿）。**不要再用 `SetWindowRgn`**：实测「非矩形窗口 + 移动」是另一条易崩路径（带圆角区域时第 3~15 次移动必崩）；而顶层窗口 + 透明本来就没有系统边框，不需要它去裁黑边。
+  - 主题 CSS 会给 `body`（及 `body::before/::after`）上底色（glass `#f0f4f8`、glass2 `#e9edf8`、night `#182238`…），会把四角重新填实；`desktop-widget.html` 里用 `:root body{background:transparent!important}` 压掉，只保留页面自绘的渐变/遮罩（视觉与改前完全一致，只有四角从方的变圆的）。
+- **上屏顺序**：`show:false` 创建 → 等页面首帧（渲染层 `desktop-widget-content-ready`）→ `attach()` 插层并用 `isJustAboveDesktop()` 校验 → **才 `showInactive()`** → 显示后再 `reassert()` 一次。反过来（先显示再压底层）会先以普通顶层窗口浮到最前闪一下。全程以判定结果为准，不靠固定延时。
+- **拖动**：两种形态共用同一条路径（窗口始终是顶层窗口）。渲染层 `pointerdown/pointermove` 上报 `screenX/screenY`（CSS 像素 = DIP），host 用 `getContentBounds()` 缓存起点、每帧 `setContentBounds({x, y, width, height})` 搬窗口、松手 `setContentSize()` 兜底并写入 `userData/desktop-widget-pos.json`（重建后回到上次位置）。**每帧必须带上宽高**：只改位置会让 Electron 每帧重算边框/客户区尺寸、误差累计，窗口越拖越大（工具箱浮窗当年同一个问题，见 `main.widget.js` 的 `widget-drag-*`）。
+- **降级**：非 Windows / koffi 不可用 / 找不到 `Progman` 时 `attach()` 返回 false，退回普通顶层窗口（可点可拖，只是不再常驻最底层）；总开关是 `main.desktop-layer.js` 顶部的 `DESKTOP_LAYER_ENABLED`。
+- **`--no-desktop-layer` / `desktop-widget-desktop-layer` 通道**：已随独立进程与开关一起删除。
+- **验证（置底模式）**：`testjs/probe/widget-bottom-regression.ps1 -Drags 3` —— 自动找到压在 `Progman` 上方的组件窗口，合成 3 次真实拖动并断言：位移正确、**尺寸不变**（防「越拖越大」）、松手后仍在 `Progman` 之上、无 `Application Error` 崩溃事件；`widget-shot.ps1 -Out <png>` 把组件临时提到最前截图（截完自动压回），用于核对圆角/透明/蓝色；`toplevel-bottom-probe.cjs` 是不含业务代码的最小原型，可单独跑起来手拖。
+
+#### 磨砂背景（自绘：柔光渐变 + 奶白遮罩）
+
+**为什么不再用系统亚克力**：Win11 的 `backgroundMaterial:'acrylic'`（DWM 系统背景材质）只做「壁纸亮度采样 + 强着色」——壁纸颜色会被洗成中性灰，观感还随 Windows build 变（预览版更透、正式版更实）。实测（26H2 正式版 26300.9711）：整窗透明、页面也全透明的组件，空白区像素是中性灰 `84,84,84`（暗色）/ `211,211,211`（浅色），`stdev≈0.1`；紧邻的鲜蓝壁纸颜色完全透不出来。而且它的明暗跟随**系统**（`AppsUseLightTheme`），与组件 UI 跟随的**应用**主题不是一回事。补充实测：同机**原生 Win32**（不经 Electron）设 `DWMWA_SYSTEMBACKDROP_TYPE=Acrylic` 同样是中性灰 → 是 DWM/驱动层行为，不是 Electron 用法问题。
+
+**现方案（与引导窗口同一套配方）**：渲染层自己合成磨砂。
+
+| 层 | 实现 |
+| --- | --- |
+| `DesktopWidget.vue` → `.dw-wallpaper` | `position: fixed; inset: 0`；`background-image` = glass2 同色系柔光渐变 `radial-gradient(circle at 30% 20%, #dbe7ff 0%, #eef2fb 45%, #e6eefb 100%)`（夜间 `#2a3155 → #1b2036 → #141827`）。纯渐变无需 blur（加了只多一层 GPU 合成） |
+| `DesktopWidget.vue` → `.dw-veil` | 压在渐变层上的奶白遮罩：日间 `rgba(246,248,252,.9)`、夜间 `rgba(15,21,38,.88)` |
+| `DesktopWidget.vue` → `.glass-panel` | 再叠半透明卡片：日间 `rgba(255,255,255,.42)`、夜间 `rgba(42,50,76,.62)` |
+| `main.widget.js`（`createDesktopWidgetWindow`） | 窗口 `transparent:true` + `backgroundMaterial:'none'` + `backgroundColor:'#00000000'`（逐像素透明，四角由页面 CSS 圆角留空；首帧前不上屏，所以不会闪底色） |
+| `DesktopWidget.vue` → 夜间 | 渲染层监听 `prefers-color-scheme`（Electron 会把 Windows 深色/浅色切换实时推给页面），命中时给根节点加 `.dw-night`：遮罩压深、卡片换 `rgba(42,50,76,.62)`、文字 `#e7eaf6`/`#a9b1c9`、强调 `#93a8ff`（glass2 夜色调）。**跟随系统，不跟应用主题里手选的日/夜**；切换实时生效，无需重启组件 |
+
+**取舍（已知）**：
+- 这是**纯自绘**，不反映桌面真实内容（不再读壁纸图）：换来的是跨 Windows build 观感完全一致、无 IPC 传图、无「贴图与桌面对不齐」的错位感；
+- **置底（顶层置底）形态下同样可用** —— 自绘磨砂不依赖系统材质，也不依赖窗口是不是子窗口。
+
+**其它仍成立的结论**：
+- 窗口是**逐像素透明**的（`transparent:true`），四角由页面 CSS 绘制；系统材质本来就没用（见上文），所以透明不影响观感；
+- 卡片上的 `backdrop-filter` 在这个窗口里没有实际收益（背景已经是模糊层），保留只为兜底，可随时删。
+
+**显示时机的两个注意事项（实测）**：
+- 顶层窗口用 `show()` **不抢焦点**，而 `showInactive()` 反而会抢 —— 与直觉相反。故顶层用 `show()`，且延后到 `ready-to-show` 再显示（避免闪出空底色）。
+- 置底形态：先 `attach()` 插层 + `isJustAboveDesktop()` 校验，再 `showInactive()`（不抢焦点）；显示后再 `reassert()` 一次。
+
+**拖动只有一套**：两种形态下窗口都是顶层窗口，统一由渲染层上报 `screenX/screenY`、主进程用 `setContentBounds`（每帧带宽高）搬窗口；**不要用 `-webkit-app-region`**（它会让 Chromium 走原生移动循环，历史上在子窗口形态下直接崩进程）。渲染层仍保留 `get-desktop-layer-state` 询问当前形态，但只用于调试日志与手势提示，不再切换拖动实现。
+
+**组件必须接主题**：此前桌面组件完全没有接入主题 store，故卡片配色不会跟随主题切换。`main.js` 现按工具箱浮窗的同一套做法接入（pinia + `useThemeStore().applyTheme()` + storage 事件实时跟随）。
+
+**验证**：磨砂全在渲染层，`win.webContents.capturePage()` 就能抓到完整效果（不依赖 DWM），或系统截屏后按窗口矩形裁剪；日间/夜间各出一张，检查遮罩、卡片、文字三层的明暗是否一致。**注意**：要等 `applyTheme()` 与首屏数据完成（约 1s）再抓，否则抓到的是默认主题/空数据。
+- **启动时序**：窗口以 `show:false` 创建并加载页面；等渲染层发 `desktop-widget-content-ready`（Vue 挂载后的 `nextTick`，host 侧 8s 兜底）→ 置底形态先 `attach()` 插层并用 `isJustAboveDesktop()` 校验 → 再 `showInactive()`（顶层形态直接 `show()`）→ 显示后 `reassert()` 一次。**顺序不能反**：先显示再插层会先以普通顶层窗口浮到最前闪一下。数据在窗口显示后继续加载，避免后端未就绪时被兜底拖慢上屏。
+- **兼容**：`main.widget.js` 的 `getDesktopWidgetWindow()` 现在返回伪窗口对象（`isDestroyed`/`close`/`destroy`/`webContents:null`），托盘「关闭主窗口和桌面组件」、性能面板的重启/内存列表等既有调用方无需改动；主动 `stop()` 的退出不会被自动重建（`onExit` 用 `child !== proc` 区分主动停止与意外崩溃）。
+- 位置持久化：拖动落点写入 `userData/desktop-widget-pos.json`（只存 DIP 的 x/y，尺寸始终是 320 × 工作区 95%），重建后按它还原；文件损坏/首次运行回退到右上角。
+
+**主要 IPC 通道**（均需在 [preload.js](../../electron/preload.js) 白名单登记）：
+
+- `on`（单向接收消息）：`widgets-ready`（小组件就绪）、`desktop-widget-enabled`（桌面组件启用）、`desktop-widget-content-ready`（内容就绪）、`desktop-widget-open-page`（打开主窗口页面）、`desktop-widget-drag-start/move/end`（拖动开始/移动/结束）、`widget-resize`（调整尺寸）、`widget-move-to`（移动到指定位置）、`widget-center`（居中）、`widget-restore-position`（恢复位置）、`widget-fullscreen`（全屏）、`widget-restore`（恢复尺寸）、`widget-set-ignore-mouse`（鼠标穿透）、`widget-set-visible`（显隐）、`widget-drag-start/move/end`（浮窗拖动）、`widget-context-menu`（右键菜单）、`widget-set-session-visible`（本次会话显隐）、`to-widget` / `to-main`（发往浮窗 / 主窗口）
+- `handle`（请求-响应）：`get-session-widget-visible`（读取本次会话显隐）、`get-master-key`（取主密钥）、`get-desktop-layer-state`（桌面置底状态）、`apps-select-file`（选择文件）、`apps-resolve-paths`（解析路径）、`apps-launch`（启动软件）（`get-main-token` / `get-widget-session` 随独立进程一起删除）
+
+> 常用软件的三个 `apps-*` 通道定义在 `electron/main/main.apps.js`，由主进程统一注册（组件窗口已在主进程内，不再需要 host 里重复注册）；拖入路径由该文件的 `apps-resolve-paths` 批量解析名称与系统图标。
+
+### 五、数据接口
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET / PUT /api/widget-settings` | 工具箱启用配置、常用软件列表（**最多 8 个，后端按上限截断**）、首页班级信息（另有 `GET/PUT /apps`、`GET/PUT /class-info`） |
+| `GET /api/students` | 点名器取名单、桌面组件人数统计 |
+| `GET /api/schedule`、`/api/duty`、`/api/countdowns`、`/api/leaves` | 桌面小组件信息面板数据 |
+
+## 注意事项
+
+- **IPC 白名单**：新增小组件相关通道必须同步加入 `electron/preload.js` 的白名单，否则前端调用会被静默拒绝或 `Promise.reject`。
+- **常用软件上限 8**：渲染层固定渲染 8 个槽位（空槽即添加入口），满额后不再渲染空槽；后端 `routes/widgetSettings.js` 的 `MAX_DESKTOP_APPS` 再做一次截断，接口层同样写不进第 9 个。
+- **拖入文件的真实路径**：Electron 32 起 `File.path` 已移除，必须经 preload 暴露的 `window.electron.getPathForFile(file)`（内部走 `webUtils`）获取；拿不到时回退 `file.path`。拖入的快捷方式 / 文件夹 / 普通文件统一交给 `apps-resolve-paths` 取名称与系统图标，点击后由 `shell.openPath` 打开。
+- **常用软件排序**：无需手柄，**常态/编辑态都能直接拖图标**；轻点仍是启动应用（移动超过 3px 才进入拖拽，真拖动后会吞掉随后补发的 click）。用 `pointerdown + setPointerCapture` 自实现，不用 HTML5 `draggable`（在无边框常驻窗口里 `dragstart` 可能根本不触发，表现为图标拖不动）。拖拽动画复用表格拖拽的思路（`composables/tableDragFx.js` / `GridView.drag.js`）：跟手虚影、中间项 `transform` 逐格让位、蓝色落点框 + 落点虚影，松手后用 WAAPI 从虚影停住的位置滑入最终槽位；几何只在按下时缓存一次，拖动过程不再读布局。
+- **常用软件持久化**：组件常驻、可能早于后端/登录态启动，`loadApps` 失败时会每 3 秒重试，且 `appsLoaded` 为 false 时**禁止任何 PUT**，避免「空列表 + 本次新增」覆盖数据库里的旧列表；写入失败还会重试两次。桌面组件窗口的 token 也不再永久缓存空值，并在 `storage` 的 `token` 变化时清缓存，登录后无需重启组件即可恢复读写。
+- **主题按钮权重**：毛玻璃主题的 `:root:is([data-theme=...]) button` 权重很高，会覆盖普通类选择器的 `position/border/border-radius`。删除按钮必须写成 `button.app-op` 并对定位/描边加 `!important`，否则会掉回 flex 流、跑到图标下方。
+- **主题一致性**：两个入口都先在 `main.js` 中 `applyTheme()`、再挂载顶层组件，保证浮窗/桌组件外观跟随当前主题。
+- **token 来源**：两个窗口同进程同 origin，直接读 `localStorage.getItem('token')`；主窗口登录/退出时组件的 `storage` 事件会清掉缓存，下一个请求重新读取（不再有 `get-main-token` IPC）。
+- **多窗口并存**：工具箱浮窗与桌面小组件可同时存在，但同一时刻各自至多一个实例；重建前需先销毁旧窗口。

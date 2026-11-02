@@ -2,12 +2,12 @@
 
 开发期辅助脚本集合。**都不参与打包**，也不被应用代码引用。
 
-## 目录约定
+## 目录标准
 
 | 目录 | 定位 | 是否入库 |
 | --- | --- | --- |
 | `units/` | 单元测试（`node:test`）：单个零件的纯逻辑契约 | ✅ 入库 |
-| `behavior/` | 行为测试（`node:test`）：组件契约、失败语义、交互逻辑、架构约定钉子 | ✅ 入库 |
+| `behavior/` | 行为测试（`node:test`）：组件契约、失败语义、交互逻辑、架构标准校验 | ✅ 入库 |
 | `smoke/` | 冒烟脚本：起真后端/真链路，一次跑完能给出「有没有坏」的结论 | ✅ 入库 |
 | `probe/` | 过程探针：测量/诊断用，需要手动传参、耗时较长 | ✅ 入库 |
 | `tools/` | 工具脚本：种子数据、审计、统计等长期复用的辅助 | ✅ 入库 |
@@ -30,7 +30,7 @@
 板块 runner 统一站 `testjs/` 下（`run-units.js` / `run-behavior.js` / `run-smoke.cjs` / `run-all.js`），
 输出同款 per-file `PASS/FAIL` 明细 + 板块汇总。units/behavior 的共用核心是 `_suite-run.cjs`：
 并行逐文件跑 `node --test`、支持 `--only=` / `--skip=` / `--bail` / `--list`（与 run-smoke 同款旗标）。
-**不要给 units/behavior 加 run-smoke 的环境机制**（端口/产物顺序/SKIP 约定）——那是冒烟的环境依赖逼出来的。
+**不要给 units/behavior 加 run-smoke 的环境机制**（端口/产物顺序/`SKIP`（跳过）规则）——那是冒烟的环境依赖逼出来的。
 
 ## 1. 单元测试 `units/`
 
@@ -68,7 +68,7 @@ npm run test:behavior     # node testjs/run-behavior.js（--only= / --skip= / --
 | --- | --- |
 | `expose-contract.test.js` | 跨组件契约：每次 `xxx.value.method()` 调用必须有 `defineExpose` 支撑（script setup 下漏 expose 会被 `?.` 静默吞成空转）；模板 ref 的组件必须有暴露面 |
 | `failure-semantics.test.js` | 失败语义：写操作（函数名含 save/delete/… 且体内真 I/O）的 catch 必须可感知（notify/报错/兜底/回滚）；带意图注释（不阻断/不阻塞/不叠加/回滚…）的设计性吞豁免，逃生口注释 `behavior-ok` |
-| `sfc-conventions.test.js` | 架构约定钉子（防清理成果回潮）：无 Options API、无 `getCurrentInstance`、token/currentUser 裸键只在 `authStorage.js`、模板静态 ref 不悬空 |
+| `sfc-conventions.test.js` | 架构标准校验（防清理成果回潮）：无 Options API、无 `getCurrentInstance`、token/currentUser 裸键只在 `authStorage.js`、模板静态 ref 不悬空 |
 | `useRowFocus.test.js` | 跨页行定位行为：签名去重、parse 改写 id、时机未到的内部重试（stub host + mock timers） |
 | `authStorage.test.js` | 登录态策略点契约：token 空值语义、坏 JSON 防御、setAuth/clearAuth 整套读写（mock localStorage） |
 | `serialSaver.test.js` | 串行保存器：并发合并成一轮、失败即停不自动重试、每轮现取最新状态 |
@@ -87,7 +87,7 @@ node testjs/run-smoke.cjs --bail     # 第一个失败就停
 
 **每个脚本也可以单独跑**：`node testjs/smoke/<文件名>`。
 
-约定：
+标准：
 - 退出码 `0` = 通过，非 0 = 失败；**退出码 `3` = 脚本自己判定「环境不具备，跳过」**（如缺产物文件），不计失败。
 - 需要后端在跑的脚本（`auth-smoke.js`）在后端未监听 3000 端口时判为跳过。
 - 有产物顺序依赖：`pdf-subset-verify.mjs` 先生成子集，`font-subset-verify.mjs` 再核对（`run-smoke.cjs` 的 ORDER_HINT 已排好）。
@@ -132,10 +132,12 @@ node testjs/run-smoke.cjs --bail     # 第一个失败就停
 
 | 脚本 | 用途 |
 | --- | --- |
+| `docs-verify.mjs` | 开发文档一致性校验（死链 / 源码覆盖 / 路由 / 依赖版本与许可 / 关键计数）；`npm run docs:verify`，只读、失败退出码 1 |
 | `seed-test-data.js` | 灌测试数据。`npm run seed`；`SEED_BASE` / `SEED_USER` / `SEED_PASSWORD` 可覆盖。**需后端在跑** |
 | `comment-audit.js` | 注释保真审计：比对拆分前后的注释，只读不改。`AUDIT_BASE=<git ref>` 指定基准 |
 | `album-sql-args.js` | 相册 SQL 参数构造的辅助核对 |
-| `code_stats.ps1` | 代码量统计（PowerShell） |
+| `code_stats.ps1` | 代码与文档量统计（PowerShell；文档统计单独成板块） |
+| `doc-trees.mjs` | 生成 / 刷新开发文档开头的「本篇涉及的文件」目录树；`node testjs/tools/doc-trees.mjs`（`--dry-run` 预览） |
 
 `seed-test-data.js` 是幂等的：按业务键去重，重复运行不会堆重复数据。产出账号 `测试班主任` / `test1234`。
 

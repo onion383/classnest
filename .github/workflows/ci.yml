@@ -184,13 +184,13 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $src = 'release/win-unpacked'
           if (-not (Test-Path $src)) { throw "未找到解包目录 $src（electron-builder --dir 未成功？）" }
-          # 归档根目录用应用名，解压后直接得到「班集/班集.exe」
+          # 归档根目录用英文应用名，解压后直接得到「ClassNest/ClassNest.exe」
           $stageRoot = Join-Path $env:RUNNER_TEMP 'portable'
-          $stage = Join-Path $stageRoot '班集'
+          $stage = Join-Path $stageRoot 'ClassNest'
           Remove-Item $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item -Path (Join-Path $src '*') -Destination $stage -Recurse -Force
-          $zip = "release/班集-免安装-$version-win-x64.zip"
+          $zip = "release/ClassNest-Portable-$version-win-x64.zip"
           Remove-Item $zip -Force -ErrorAction SilentlyContinue
           # 优先 7-Zip（runner 预装，快且压缩率高），没有则退回系统自带的 Compress-Archive
           $sevenZip = @('C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe') |
@@ -210,7 +210,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $zip = "release/班集-源码-$version.zip"
+          $zip = "release/ClassNest-Source-$version.zip"
           Remove-Item $zip -Force -ErrorAction SilentlyContinue
           git archive --format=zip "--prefix=classnest-$version/" -o $zip HEAD
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zip)) { throw '源码包生成失败' }
@@ -225,10 +225,10 @@ jobs:
           path: |
             release/*-Setup-*.exe
             release/*-Setup-*.exe.sha256
-            release/*-免安装-*.zip
-            release/*-免安装-*.zip.sha256
-            release/*-源码-*.zip
-            release/*-源码-*.zip.sha256
+            release/*-Portable-*.zip
+            release/*-Portable-*.zip.sha256
+            release/*-Source-*.zip
+            release/*-Source-*.zip.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -278,7 +278,7 @@ jobs:
           - 版本：v${VERSION}
           - 提交：${GITHUB_SHA}
           - 流水线：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          - 资产：安装包（Setup.exe）、免安装版（ZIP）、源码（ZIP），各附 SHA-256
+          - 资产：安装包（ClassNest-Setup-*.exe）、免安装版（ClassNest-Portable-*.zip）、源码（ClassNest-Source-*.zip），各附 SHA-256
           - 已通过：版本号一致性、ESLint、单元 + 行为快测、冒烟测试
 
           人工核对安装包与更新说明后，再在 GitHub 上手动发布。"

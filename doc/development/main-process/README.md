@@ -132,7 +132,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 
 - 定位 Inno Setup 6/7 的 `ISCC.exe`，顺序为：环境变量 `INNO_SETUP_ISCC` → PATH 中 `iscc`（`where`/`which`）→ 常见安装目录（`Inno Setup 6/7`）→ 注册表卸载表 `InstallLocation`；找不到时打印中文提示与下载地址并以退出码 1 结束。
 - 以 `spawnSync(iscc, [setup.iss], { stdio: 'inherit' })` 编译 `electron/inno/setup.iss`，把退出码透传。
-- `setup.iss` 输出固定名 `班集-Setup-x.y.z.exe` 到 `release/`（Vue 3.6 预览通道为 `release36/`；便于 `main.updater.js` 按 `*-Setup-*.exe` 匹配资产），AppId 为固定 GUID（保证升级/卸载识别），`PrivilegesRequired=admin`（机器级安装到 `C:\Program Files\班集`，会请求 UAC）、`WizardStyle=modern`、`CloseApplications/RestartApplications=yes`（支持静默升级自动关旧进程/装完重启），安装界面由 [Code] 段自绘。
+- `setup.iss` 输出固定名 `ClassNest-Setup-x.y.z.exe` 到 `release/`（Vue 3.6 预览通道为 `release36/`；便于 `main.updater.js` 按 `*-Setup-*.exe` 匹配资产），AppId 为固定 GUID（保证升级/卸载识别），`PrivilegesRequired=admin`（机器级安装到 `C:\Program Files\班集`，会请求 UAC）、`WizardStyle=modern`、`CloseApplications/RestartApplications=yes`（支持静默升级自动关旧进程/装完重启），安装界面由 [Code] 段自绘。
 
 ---
 ## 二、主进程文件索引

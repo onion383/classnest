@@ -46,7 +46,7 @@ classnest/
 | 文件 | 职责 | 关键导出 / IPC 通道 | 依赖与被依赖 |
 | --- | --- | --- | --- |
 | [`inno/compile.mjs`](../../../electron/inno/compile.mjs) | 定位 Inno Setup 6/7 的 `ISCC.exe`（环境变量→PATH→常见目录→注册表），并编译 `setup.iss`；找不到时给出中文提示与下载地址 | 无（ESM 脚本，`process.exit` 返回编译结果）；读 `INNO_SETUP_ISCC` 环境变量 | 依赖 node:fs/child_process/url/path；由 `package.json` 构建脚本调用 |
-| [`inno/setup.iss`](../../../electron/inno/setup.iss) | Inno Setup 安装脚本：自定义安装界面（居中 logo/标题/安装路径/协议勾选）、协议弹窗、静默升级参数、AppId 固定 GUID、输出 `班集-Setup-x.y.z.exe` | 无（编译期脚本）；`#define MyAppVersion` 需与 `package.json` version 一致 | 被 `compile.mjs` 编译；引用 `..\app-icon.png`、`..\installer-assets\*`、`inno/ChineseSimplified.isl`、`{#AppDir}\win-unpacked\*`（`AppDir` 默认 `release`，Vue 3.6 预览通道传 `release36`） |
+| [`inno/setup.iss`](../../../electron/inno/setup.iss) | Inno Setup 安装脚本：自定义安装界面（居中 logo/标题/安装路径/协议勾选）、协议弹窗、静默升级参数、AppId 固定 GUID、输出 `ClassNest-Setup-x.y.z.exe` | 无（编译期脚本）；`#define MyAppVersion` 需与 `package.json` version 一致 | 被 `compile.mjs` 编译；引用 `..\app-icon.png`、`..\installer-assets\*`、`inno/ChineseSimplified.isl`、`{#AppDir}\win-unpacked\*`（`AppDir` 默认 `release`，Vue 3.6 预览通道传 `release36`） |
 | [`inno/ChineseSimplified.isl`](../../../electron/inno/ChineseSimplified.isl) | 安装界面简体中文译文（Inno 6.5.0+ 译文，来源与维护者见文件头），随仓库分发 | 无（编译期语言文件） | 被 `setup.iss` 的 `[Languages]` 按相对路径引用；官方 Inno 安装包不自带该文件，CI 不再依赖本机语言包 |
 | [`inno/wizard-large.bmp`](../../../electron/inno/wizard-large.bmp) | 安装向导左侧大图（modern 风格，164x314） | 无 | 被 `setup.iss` 引用 |
 | [`inno/wizard-small.bmp`](../../../electron/inno/wizard-small.bmp) | 安装向导右上角小图（55x55） | 无 | 被 `setup.iss` 引用 |

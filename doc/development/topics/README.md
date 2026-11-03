@@ -10,7 +10,7 @@
 | [security.md](./security.md) | 机制 | 安全分层、账号等级、回环加密握手、鉴权与清洗、网页与 AI 隔离、本地文件、npm 与更新安全 |
 | [design-and-interaction.md](./design-and-interaction.md) | 规范 | 设计基线、主题令牌与三套预设、日夜模式、排版、动画、图标、交互规范与红线 |
 | [performance.md](./performance.md) | 测量 | 启动全链路与计时口径、内存采样、前后端优化、打包体积、测量方法与复测条件 |
-| [build-and-branches.md](./build-and-branches.md) | 流程 | 打包全流程、`afterPack` 剔除规则、Inno Setup 产物、Vue 3.6 / 3.5 双分支 |
+| [build-and-branches.md](./build-and-branches.md) | 流程 | 打包全流程、`afterPack` 剔除规则、Inno Setup 产物、Vue 3.6 / 3.5 双分支、CI/CD 流水线与草稿发布 |
 
 ---
 

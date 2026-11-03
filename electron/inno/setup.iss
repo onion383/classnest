@@ -37,7 +37,7 @@
 
 ; ---- 版本号：需与 package.json 的 version 保持一致 -------------------------
 #define MyAppVersion "0.8.0"
-#define MyAppExeName "班集.exe"
+#define MyAppExeName "ClassNest.exe"
 
 ; ---- 打包输出目录名 --------------------------------------------------------
 ; 两条通道各用各的目录，安装包不会互相覆盖：
@@ -71,9 +71,9 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 
-; 输出：固定文件名「班集-Setup-x.y.z.exe」，便于更新逻辑按资产名匹配（*-Setup-*.exe）
+; 输出：固定文件名「ClassNest-Setup-x.y.z.exe」，便于更新逻辑按资产名匹配（*-Setup-*.exe）
 OutputDir=..\..\{#AppDir}
-OutputBaseFilename=班集-Setup-{#MyAppVersion}
+OutputBaseFilename=ClassNest-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 SetupLogging=yes

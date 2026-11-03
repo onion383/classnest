@@ -19,7 +19,7 @@ const { assertHttpsUrl, verifyDownloadedFile } = require('./main.update-integrit
 
 // GitHub 仓库信息（原先在 electron-builder.json 的 publish 里，现仅保留在代码常量中）
 const UPDATE_REPO = { owner: 'onion383', repo: 'classnest' }
-// Inno 安装包资产名匹配（如「班集-Setup-0.8.0.exe」）
+// Inno 安装包资产名匹配（如「ClassNest-Setup-0.8.0.exe」）
 const UPDATE_ASSET_RE = /setup.*\.exe$/i
 // 检查超时沿用既有 10s 风格；下载体积较大，整体超时放宽到 5 分钟
 const UPDATE_CHECK_TIMEOUT = 10000
@@ -127,7 +127,7 @@ async function downloadInstaller(asset, version) {
   const { pipeline } = require('stream/promises')
   const dir = path.join(app.getPath('userData'), 'update-cache')
   fs.mkdirSync(dir, { recursive: true })
-  const fileName = String((asset && asset.name) || `班集-Setup-${version}.exe`)
+  const fileName = String((asset && asset.name) || `ClassNest-Setup-${version}.exe`)
   const target = path.join(dir, fileName)
   try { fs.rmSync(target, { force: true }) } catch (_) { /* 清理旧文件失败忽略 */ }
 

@@ -1,6 +1,7 @@
 {
   "appId": "com.classnest.app",
   "productName": "班集",
+  "executableName": "ClassNest",
   "electronLanguages": ["zh-CN", "en-US"],
   "directories": {
     "output": "release"

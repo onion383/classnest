@@ -157,11 +157,13 @@ npm run electron:build     # 构建 + electron-builder（--dir）+ Inno 安装�
 npm run build:win:inno     # 仅生成安装包（需先完成 electron-builder 打包）
 ```
 
-- 安装包输出 `release/班集-Setup-x.y.z.exe`（3.6 通道为 `release36/`）。
+- 安装包输出 `release/ClassNest-Setup-x.y.z.exe`（3.6 通道为 `release36/`）。
 
 - 打包前建议清理编译缓存（`node_modules/.cache`）后再执行。
 
 - 打包流程、剔除/保留清单与双通道机制见 [打包与分支专题](doc/development/topics/build-and-branches.md)。
+
+- CI/CD：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑测试，push 到 `main` 或手动触发时打包；产物（安装包、免安装 ZIP、源码 ZIP，各附 `.sha256`）自动存入 Draft Release（草稿，不自动发布）。
 
 ## 环境变量
 

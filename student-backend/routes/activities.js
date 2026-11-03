@@ -42,6 +42,56 @@ router.delete('/:id', (req, res) => {
   res.json({ message: '删除成功' });
 });
 
+// POST /api/activities/import —— 从 Excel 导入活动（按表头名映射，列顺序可任意）
+// 校验与清洗完全复用 cleanUp：日期列按 table_meta 类型归一，空串落成 null。
+router.post('/import', (req, res) => {
+  try {
+    const { fields, rows } = req.body || {};
+    if (!Array.isArray(fields) || !Array.isArray(rows)) {
+      return res.status(400).json({ error: '缺少有效的字段或数据' });
+    }
+    const cell = (row, names) => {
+      for (const n of names) {
+        const i = fields.indexOf(n);
+        if (i >= 0) {
+          const v = row[i];
+          if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+        }
+      }
+      return '';
+    };
+
+    const startPos = maxPosition('activities');
+    const insert = db.prepare(
+      `INSERT INTO activities (时间, 主题, 地点, 参与人员, 简介, created_at, position) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+
+    const list = rows.map((row, idx) => {
+      const rowNo = idx + 1;
+      const theme = cell(row, ['主题', '活动主题', '名称']);
+      if (!theme) throw new Error(`第 ${rowNo} 行缺少「主题」`);
+      const data = cleanUp({
+        时间: cell(row, ['时间', '活动时间']),
+        主题: theme,
+        地点: cell(row, ['地点']),
+        参与人员: cell(row, ['参与人员', '参与人']),
+        简介: cell(row, ['简介', '说明']),
+      }, EDITABLE, 'activities');
+      return { ...data, created_at: now(), position: startPos + idx + 1 };
+    });
+
+    const insertMany = db.transaction((items) => {
+      for (const item of items) {
+        insert.run(item.时间, item.主题, item.地点, item.参与人员, item.简介, item.created_at, item.position);
+      }
+    });
+    insertMany(list);
+    res.json({ message: `成功导入 ${list.length} 条活动` });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 // 供 /api/dashboard 聚合复用（挂在 router 函数对象上，不影响既有路由）
 module.exports.readAll = readAll;

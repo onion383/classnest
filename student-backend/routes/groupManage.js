@@ -21,7 +21,7 @@ function ensureDefaultDim() {
       db.prepare('UPDATE group_dimensions SET is_default = 1, sort_order = 1 WHERE id = ?').run(existsByName.id);
     } else {
       db.prepare(
-        `INSERT INTO group_dimensions (name, leader_title, members_per_group, group_count, is_default, sort_order, male_group_count, female_group_count) VALUES (?, '宿舍长', 6, 0, 1, 1, 3, 3)`
+        `INSERT INTO group_dimensions (name, leader_title, members_per_group, group_count, is_default, sort_order, male_group_count, female_group_count) VALUES (?, '宿舍长', 6, 0, 1, 1, 0, 0)`
       ).run('宿舍组');
     }
   });
@@ -435,6 +435,103 @@ router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
     res.json({ dimensions: listDimensions(), ...data });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/group-manage/dimensions/:dimId/import —— 从 Excel 导入小组成员
+ * body: { fields, rows }
+ * 列：`小组`（必填）、`姓名`（必填）、`备注`（可选）
+ *
+ * 语义是「合并追加」：同名小组存在则复用，不存在的普通维度会自动新建；
+ * 同一小组内重复姓名会跳过，不会重复写入。内置宿舍维度不允许新建小组（宿舍数由设置决定）。
+ */
+router.post('/dimensions/:dimId/import', (req, res) => {
+  try {
+    const dimId = Number(req.params.dimId);
+    const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(dimId);
+    if (!dim) return res.status(404).json({ error: '维度不存在' });
+    const { fields, rows } = req.body || {};
+    if (!Array.isArray(fields) || !Array.isArray(rows)) {
+      return res.status(400).json({ error: '缺少有效的字段或数据' });
+    }
+
+    const cell = (row, names) => {
+      for (const n of names) {
+        const i = fields.indexOf(n);
+        if (i >= 0) {
+          const v = row[i];
+          if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+        }
+      }
+      return '';
+    };
+
+    const perGroupLimit = dim.members_per_group > 0
+      ? Math.min(dim.members_per_group, MAX_MEMBERS_PER_GROUP)
+      : MAX_MEMBERS_PER_GROUP;
+
+    let createdGroups = 0;
+    let addedMembers = 0;
+    let skippedMembers = 0;
+
+    const tx = db.transaction(() => {
+      const findGroup = db.prepare('SELECT id, name FROM groups WHERE dimension_id = ? AND name = ? ORDER BY sort_order, id LIMIT 1');
+      const insertGroup = db.prepare('INSERT INTO groups (dimension_id, name, sort_order) VALUES (?, ?, ?)');
+      const findMember = db.prepare('SELECT id FROM group_members WHERE group_id = ? AND member_name = ?');
+      const insertMember = db.prepare('INSERT INTO group_members (group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?)');
+      const countMembers = db.prepare('SELECT COUNT(*) AS n FROM group_members WHERE group_id = ?');
+      const maxGroupSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM groups WHERE dimension_id = ?');
+      const maxMemberSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM group_members WHERE group_id = ?');
+      const countGroups = db.prepare('SELECT COUNT(*) AS n FROM groups WHERE dimension_id = ?');
+
+      rows.forEach((row, idx) => {
+        const rowNo = idx + 1;
+        const groupName = cell(row, ['小组', '小组名', '组名']);
+        const memberName = cell(row, ['姓名', '成员姓名', '成员']);
+        const remark = cell(row, ['备注']);
+        if (!groupName) throw new Error(`第 ${rowNo} 行缺少「小组」`);
+        if (!memberName) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
+
+        let group = findGroup.get(dimId, groupName);
+        if (!group) {
+          if (dim.is_default) {
+            throw new Error(`第 ${rowNo} 行：内置宿舍组不能新建小组「${groupName}」，请先在「设置」里调整男/女生宿舍数`);
+          }
+          if (countGroups.get(dimId).n >= MAX_GROUP_COUNT) {
+            throw new Error(`第 ${rowNo} 行：小组数量不能超过 ${MAX_GROUP_COUNT} 个`);
+          }
+          const sort = (maxGroupSort.get(dimId).m || 0) + 1;
+          const info = insertGroup.run(dimId, groupName, sort);
+          group = { id: info.lastInsertRowid, name: groupName };
+          createdGroups += 1;
+        }
+
+        if (findMember.get(group.id, memberName)) {
+          skippedMembers += 1;
+          return;
+        }
+        const cur = countMembers.get(group.id).n;
+        if (cur >= perGroupLimit) {
+          throw new Error(`第 ${rowNo} 行：「${group.name}」人数已达上限 ${perGroupLimit} 人`);
+        }
+        const sort = (maxMemberSort.get(group.id).m || 0) + 1;
+        ensureProvisionalStudent(memberName);
+        insertMember.run(group.id, memberName, remark, sort);
+        addedMembers += 1;
+      });
+    });
+    tx();
+
+    const data = loadDimension(dimId);
+    res.json({
+      message: `成功导入 ${addedMembers} 名成员${createdGroups ? `，新建 ${createdGroups} 个小组` : ''}`,
+      skipped: skippedMembers,
+      dimensions: listDimensions(),
+      ...data,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 

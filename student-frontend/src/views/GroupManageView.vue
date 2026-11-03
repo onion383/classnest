@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="h-full flex flex-col">
     <!-- 顶部标题栏（与其他页面统一） -->
     <div class="w-full bg-surface shadow-md rounded-xl mb-6 px-5 py-3 border border-border min-h-[4.5rem] flex items-center">
@@ -19,6 +19,9 @@
       <button @mouseenter="prefetch(loadSmartGroupDialog)" @click="onSmartGroup" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme">🧠 智能分组</button>
       <button @click="loadAll" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh transition-theme">
         <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
+      </button>
+      <button v-if="activeDim" @click="importVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
+        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
       </button>
       <button @mouseenter="prefetch(loadExportExcel)" @click="openExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
         <IconGlyph name="download" :size="14" tint="current" /> 导出分组
@@ -44,12 +47,15 @@
     <EmptySnapshot
       v-else-if="active && active.dimension.is_default && !(active.groups || []).length"
       class="flex-1"
-      icon="🏠"
+      icon="home"
       text="还没有宿舍分组"
       min-height="220px"
       action-text="去设置"
       action-icon="settings"
+      secondary-action-text="从 Excel 表格批量导入"
+      secondary-action-icon="download"
       @action="openSettings"
+      @secondary-action="openImportDialog"
     />
 
     <!-- 分组卡片网格（仅内置宿舍维度：男女分区列）。
@@ -150,12 +156,15 @@
     <EmptySnapshot
       v-else-if="active && !(active.groups || []).length"
       class="flex-1"
-      icon="🗂"
+      icon="box"
       text="还没有设置组数"
       min-height="220px"
       action-text="去设置"
       action-icon="settings"
+      secondary-action-text="从 Excel 表格批量导入"
+      secondary-action-icon="download"
       @action="openSettings"
+      @secondary-action="openImportDialog"
     />
 
     <!-- 普通维度：单一横排网格 + 添加小组。玻璃外观挂本分支（同宿舍分支的口径）。
@@ -343,7 +352,17 @@
     <Transition name="dialog">
     <div v-if="showAddGroup" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10003]" @click.self="showAddGroup = false">
       <div class="bg-surface p-6 rounded-xl w-96 shadow-card dialog-card border border-border">
-        <h3 class="text-lg font-bold text-text mb-4">添加小组</h3>
+        <div class="flex items-center gap-3 mb-4">
+          <h3 class="text-lg font-bold text-text">添加小组</h3>
+          <button
+            type="button"
+            @click="openImportFromAddGroup"
+            class="bg-warning hover:bg-warning-hover text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-theme cursor-pointer"
+            title="从 Excel 表格批量导入"
+          >
+            <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+          </button>
+        </div>
         <p class="text-xs text-text-muted mb-4">在「{{ activeDim?.name }}」分组类型下新增一个小组。</p>
         <label class="block text-sm text-text-secondary mb-1">小组名字</label>
         <input v-model="addGroupName" placeholder="如：302" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" />
@@ -427,6 +446,17 @@
       :group-source="groupExportSource"
       @update:is-visible="exportVisible = $event"
     />
+
+    <!-- ============ 导入弹窗（小组 + 姓名 + 备注，导入到当前维度） ============ -->
+    <ImportExcel
+      v-if="importMounted"
+      :visible="importVisible"
+      :existingFields="importFields"
+      :requiredFields="['小组', '姓名']"
+      :templateName="'分组标准导入表'"
+      @import-data="onImportData"
+      @cancel="importVisible = false"
+    />
   </div>
 </template>
 
@@ -451,6 +481,8 @@ const loadSmartGroupDialog = () => import('../components/dialogs/SmartGroupDialo
 const SmartGroupDialog = defineAsyncComponent(loadSmartGroupDialog);
 const loadExportExcel = () => import('../components/import-export/ExportExcel/ExportExcel.vue');
 const ExportExcel = defineAsyncComponent(loadExportExcel);
+const loadImportExcel = () => import('../components/import-export/ImportExcel.vue');
+const ImportExcel = defineAsyncComponent(loadImportExcel);
 
 const { success, error, info } = useNotification();
 
@@ -708,8 +740,8 @@ const genderSections = computed(() => {
   const d = active.value;
   if (!d || !d.dimension.is_default) return [];
   return [
-    { title: '男生宿舍', icon: '👦', groups: d.groups.filter(g => g.gender === 0) },
-    { title: '女生宿舍', icon: '👧', groups: d.groups.filter(g => g.gender === 1) },
+    { title: '男生宿舍', icon: 'male', groups: d.groups.filter(g => g.gender === 0) },
+    { title: '女生宿舍', icon: 'female', groups: d.groups.filter(g => g.gender === 1) },
   ];
 });
 
@@ -810,8 +842,8 @@ function openSettings() {
     leader_title: activeDim.value.leader_title,
     members_per_group: activeDim.value.members_per_group,
     group_count: activeDim.value.group_count,
-    male_group_count: activeDim.value.male_group_count || 3,
-    female_group_count: activeDim.value.female_group_count || 3,
+    male_group_count: activeDim.value.male_group_count ?? 0,
+    female_group_count: activeDim.value.female_group_count ?? 0,
     name_rule: 'custom',
   });
   showSettings.value = true;
@@ -903,6 +935,12 @@ function confirmDeleteDim() {
 function openAddGroup() {
   addGroupName.value = '';
   showAddGroup.value = true;
+}
+
+// 添加小组弹窗左上角的批量导入：关掉单条新增，直接打开导入弹窗（写入当前维度）
+function openImportFromAddGroup() {
+  showAddGroup.value = false;
+  importVisible.value = true;
 }
 
 async function submitAddGroup() {
@@ -1569,9 +1607,41 @@ const groupExportSource = computed(() => {
   };
 });
 async function openExport() {
-  if (!active.value || active.value.groups.length === 0) return useNotification().info('暂无小组可导出');
+  const groups = active.value && Array.isArray(active.value.groups) ? active.value.groups : []
+  if (!active.value || groups.length === 0) { info('暂无小组可导出'); return }
+  // 只有组名、没有任何成员时也视为空数据，避免弹出全是空表的导出面板
+  const hasMembers = groups.some(g => Array.isArray(g.members) && g.members.length > 0)
+  if (!hasMembers) { info('暂无小组成员可导出'); return }
   exportMounted.value = true;
   exportVisible.value = true;
+}
+
+// ============ 导入（小组 + 姓名 + 备注，写入当前维度） ============
+const importVisible = ref(false);
+const importMounted = ref(false);
+watch(importVisible, (n) => { if (n) importMounted.value = true; });
+const importFields = [{ name: '小组' }, { name: '姓名' }, { name: '备注' }];
+// 空态里的「从 Excel 表格批量导入」：预取导入弹窗 chunk 后打开（写入当前维度）
+function openImportDialog() {
+  prefetch(loadImportExcel);
+  importVisible.value = true;
+}
+async function onImportData({ fields, rows }) {
+  importVisible.value = false;
+  if (activeDimId.value == null) return;
+  const before = buildGroupSnapshot();
+  try {
+    const data = await api(`/dimensions/${activeDimId.value}/import`, {
+      method: 'POST',
+      body: JSON.stringify({ fields, rows }),
+    });
+    dimensions.value = data.dimensions || [];
+    if (data.dimension) active.value = { dimension: data.dimension, groups: data.groups };
+    success(data.message || '导入成功');
+    recordGroupStructure(before, buildGroupSnapshot());
+  } catch (e) {
+    error(e.message);
+  }
 }
 
 // 跨页定位：标题栏全局搜索点「分组」结果跳转 /group-manage?focus=dim:<dimId>:<groupId>。

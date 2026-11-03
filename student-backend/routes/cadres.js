@@ -179,4 +179,97 @@ router.post('/members/:id/move', (req, res) => {
 });
 
 
+/**
+ * POST /api/cadres/import —— 从 Excel 导入班干部职务与担任学生
+ * body: { fields, rows }
+ * 列：`职务`（必填）、`上级职务`（可选，按名称匹配已有职务）、`可担任人数`（可选，仅新建时生效）、
+ *     `担任学生`（可选，支持「张三、李四」等多种分隔符）
+ *
+ * 语义是「合并追加」：同一上级下同名职务复用，已有成员不重复添加；
+ * 导出文件可以原样导回（先序遍历保证上级行排在下级行之前）。
+ */
+router.post('/import', (req, res) => {
+  try {
+    const { fields, rows } = req.body || {};
+    if (!Array.isArray(fields) || !Array.isArray(rows)) {
+      return res.status(400).json({ error: '缺少有效的字段或数据' });
+    }
+
+    const cell = (row, names) => {
+      for (const n of names) {
+        const i = fields.indexOf(n);
+        if (i >= 0) {
+          const v = row[i];
+          if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+        }
+      }
+      return '';
+    };
+    // 「担任学生」既支持顿号/逗号/分号/斜杠，也支持空格分隔
+    const splitNames = (raw) => String(raw || '')
+      .split(/[、,，;；/|\s]+/)
+      .map((s) => cleanText(s))
+      .filter(Boolean);
+
+    const list = rows.map((row, idx) => {
+      const rowNo = idx + 1;
+      const title = cleanText(cell(row, ['职务', '职务名称']));
+      if (!title) throw new Error(`第 ${rowNo} 行缺少「职务」`);
+      const parentName = cleanText(cell(row, ['上级职务', '上级']));
+      const maxRaw = cell(row, ['可担任人数', '人数上限']);
+      let maxCount = null;
+      if (maxRaw !== '') {
+        const n = Number(maxRaw);
+        if (!Number.isFinite(n) || n < 1) throw new Error(`第 ${rowNo} 行的「可担任人数」需要是大于 0 的数字`);
+        maxCount = Math.max(1, Math.floor(n));
+      }
+      const students = splitNames(cell(row, ['担任学生', '姓名', '学生']));
+      return { rowNo, title, parentName, maxCount, students };
+    });
+
+    const tx = db.transaction(() => {
+      const findParent = db.prepare('SELECT id FROM cadres WHERE name = ? ORDER BY id LIMIT 2');
+      const findNode = db.prepare('SELECT id, name, max_count FROM cadres WHERE name = ? AND parent_id = ? ORDER BY id LIMIT 1');
+      const insertNode = db.prepare('INSERT INTO cadres (name, parent_id, max_count, sort_order) VALUES (?, ?, ?, ?)');
+      const maxNodeSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM cadres');
+      const findMember = db.prepare('SELECT id FROM cadre_members WHERE cadre_id = ? AND student_name = ?');
+      const countMembers = db.prepare('SELECT COUNT(*) AS n FROM cadre_members WHERE cadre_id = ?');
+      const maxMemberSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM cadre_members WHERE cadre_id = ?');
+      const insertMember = db.prepare('INSERT INTO cadre_members (cadre_id, student_id, student_name, sort_order) VALUES (?, ?, ?, ?)');
+      const findStudent = db.prepare('SELECT id FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2');
+
+      for (const item of list) {
+        let parentId = 0;
+        if (item.parentName) {
+          const parents = findParent.all(item.parentName);
+          if (parents.length === 0) throw new Error(`第 ${item.rowNo} 行的上级职务「${item.parentName}」不存在`);
+          if (parents.length > 1) throw new Error(`第 ${item.rowNo} 行的上级职务「${item.parentName}」有重名，请先在页面里区分`);
+          parentId = parents[0].id;
+        }
+        let node = findNode.get(item.title, parentId);
+        if (!node) {
+          const sort = maxNodeSort.get().m + 1;
+          const info = insertNode.run(item.title, parentId, item.maxCount || 1, sort);
+          node = { id: info.lastInsertRowid, name: item.title, max_count: item.maxCount || 1 };
+        }
+        for (const name of item.students) {
+          if (findMember.get(node.id, name)) continue;
+          if (countMembers.get(node.id).n >= node.max_count) {
+            throw new Error(`第 ${item.rowNo} 行：「${node.name}」人数已达上限 ${node.max_count} 人`);
+          }
+          const sameName = findStudent.all(name);
+          const studentId = sameName.length === 1 ? sameName[0].id : null;
+          const sort = maxMemberSort.get(node.id).m + 1;
+          insertMember.run(node.id, studentId, name, sort);
+        }
+      }
+    });
+    tx();
+
+    res.json({ message: `成功导入 ${list.length} 行班干部数据`, tree: buildTree() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 module.exports = router;

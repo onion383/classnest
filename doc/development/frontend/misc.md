@@ -124,7 +124,7 @@ classnest/
 | [`saveFile.js`](../../../student-frontend/src/utils/saveFile.js) | 保存对话框与写文件（经主进程 `save-file`） | 导出组件 |
 | [`fileName.js`](../../../student-frontend/src/utils/fileName.js) | 文件名校验/清洗、默认名生成 | 导出组件 |
 | [`csvCell.js`](../../../student-frontend/src/utils/csvCell.js) | CSV 单元格转义（逗号/引号/换行） | CSV 导出 |
-| [`importSheet.js`](../../../student-frontend/src/utils/importSheet.js) | Excel/CSV 解析与表头归一化 | `ImportExcel` |
+| [`importSheet.js`](../../../student-frontend/src/utils/importSheet.js) | Excel/CSV 解析、表头识别与模糊匹配：`normalizeLoose`（全角/空白/标点/星期写法归一）、`matchCandidate`（编辑距离 + 包含关系，同分返回候选）、`resolveHeader`（按同义词顺序解析实际列名） | `ImportExcel`、`DutyView`、`DutySettingsDialog` |
 | [`tableSearch.js`](../../../student-frontend/src/utils/tableSearch.js) | 表格关键字过滤与「无结果」判定 | `useTableCRUD`、`DynamicTable` |
 | [`albumMedia.js`](../../../student-frontend/src/utils/albumMedia.js) | 媒体类型判定、缩略图版本拼接、`parseThumbBatch` 二进制解析 | `AlbumView`、`useThumbBatch` |
 | [`heatColor.js`](../../../student-frontend/src/utils/heatColor.js) | 热力配色（分数/密度映射） | `DashboardView`、`ScoreManagement` |

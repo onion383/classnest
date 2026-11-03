@@ -20,6 +20,7 @@
               <button @click="openArrangement(seatView)" @mouseenter="prefetch(loadArrangementDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="brain" :size="14" tint="current" /> 智能排表</button>
               <button @click="seatView === 'active' ? refreshActive() : refreshMaster()" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="openImport(seatView)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> {{ seatView === 'active' ? '从模板导入' : '从实行导入' }}</button>
+              <button @click="openExcelImport(seatView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
               <button @click="seatView === 'active' ? openActiveExport() : openMasterExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
             </div>
 
@@ -78,6 +79,18 @@
               <ExportExcel v-if="masterExportMounted" :is-visible="masterExportVisible" :rows="masterExportRows" :fields="masterExportFields" defaultFilename="座位模板" @update:is-visible="masterExportVisible = $event" />
             </template>
 
+            <!-- 从 Excel 导入（按「行号 + 列名」匹配当前显示的座位矩阵） -->
+            <ImportExcel
+              v-if="importMounted"
+              :visible="importVisible"
+              :existingFields="importFields"
+              :requiredFields="['行号']"
+              :templateName="importTarget === 'master' ? '座位模板标准导入表' : '当前座位表标准导入表'"
+              previewMode="grid"
+              @import-data="onImportData"
+              @cancel="importVisible = false"
+            />
+
             <!-- 座位位置权重表：与座位表同构，格内填数字权重（切换之外，只一张） -->
             <div class="mt-8 mb-4 flex items-center gap-3">
               <h2 class="text-xl font-semibold text-text flex items-center gap-2 min-h-7"><IconGlyph name="chart" :size="20" /> 座位位置权重表</h2>
@@ -129,7 +142,7 @@
             <EmptySnapshot
               v-if="!historyLoading && !historySnapshot"
               text="暂未有历史快照，无法结算座位指数"
-              icon="📊"
+              icon="chart"
               min-height="188px"
             />
             <div v-else class="bg-surface rounded-lg border border-border p-6">
@@ -313,6 +326,8 @@ import { weightHeatRgb, weightHeatFg } from '../utils/heatColor.js'
 // 弹窗类组件懒加载：打开时才加载对应 chunk。loader 抽出为命名函数，
 // 可用 @mouseenter="prefetch(loadXxx)" 在悬停按钮时预取，点击时即时弹出。
 const ExportExcel = defineAsyncComponent(() => import('../components/import-export/ExportExcel/ExportExcel.vue'))
+const loadImportExcel = () => import('../components/import-export/ImportExcel.vue')
+const ImportExcel = defineAsyncComponent(loadImportExcel)
 const loadSettingsDialog = () => import('../components/dialogs/SeatSettingsDialog.vue')
 const SeatSettingsDialog = defineAsyncComponent(loadSettingsDialog)
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
@@ -591,6 +606,95 @@ function openActiveExport() {
 function openMasterExport() {
   if (!hasSeatData(masterSeats.value)) return useNotification().info('座位模板为空，无法导出')
   masterExportVisible.value = true
+}
+
+// ==================== 从 Excel 导入（按「行号 + 列名」匹配当前显示的矩阵） ====================
+// 导入是在现有座位表上覆盖文件里出现的格子：文件里的空单元格会清空对应座位，
+// 文件未包含的行保持原样。行号/列名必须与当前页面一致，避免把数据写到错误的座位。
+const importVisible = ref(false)
+const importMounted = ref(false)
+const importTarget = ref('active')
+watch(importVisible, (n) => { if (n) importMounted.value = true })
+const importFields = computed(() => {
+  const grid = importTarget.value === 'master' ? masterGrid : activeGrid
+  return [{ name: '行号' }, ...grid.colHeaders.value.filter(h => h !== '走廊').map(h => ({ name: h }))]
+})
+function openExcelImport(target) {
+  importTarget.value = target
+  importVisible.value = true
+}
+async function onImportData({ fields, rows }) {
+  importVisible.value = false
+  const grid = importTarget.value === 'master' ? masterGrid : activeGrid
+  if (!grid.loaded.value) return notifyError('座位表尚未加载完成，请稍后再试')
+
+  const headers = grid.colHeaders.value
+  const rowsCount = Number(grid.rows.value) || 0
+  const colsCount = Number(grid.cols.value) || 0
+  // 显示列 → 真实列（-1 表示走廊列，不接收导入值）
+  const realColMap = []
+  let real = 0
+  const totalDisplay = getDisplayColCount(colsCount, grid.mode.value, grid.showAisle.value)
+  for (let d = 0; d < totalDisplay; d++) {
+    if (isAisleCol(d, colsCount, grid.mode.value, grid.showAisle.value)) realColMap[d] = -1
+    else realColMap[d] = real++
+  }
+
+  // 以当前座位为底稿，只覆盖文件里出现的格子
+  const next = []
+  for (let r = 0; r < rowsCount; r++) {
+    const src = grid.seats.value[r] || []
+    const row = []
+    for (let c = 0; c < colsCount; c++) row.push(src[c] === undefined ? null : src[c])
+    next.push(row)
+  }
+
+  const objects = rows.map(row => {
+    const obj = {}
+    fields.forEach((name, i) => { obj[name] = String(row[i] ?? '').trim() })
+    return obj
+  })
+
+  const errors = []
+  let touched = 0
+  objects.forEach((obj, idx) => {
+    const label = obj['行号']
+    if (!label) return
+    const row = grid.displayRows.value.find(r => r.label === label)
+    if (!row || row._isPodium) {
+      errors.push(`第 ${idx + 1} 行：找不到座位行「${label}」`)
+      return
+    }
+    const r = row._lessonIdx
+    if (r == null || r < 0 || r >= rowsCount) {
+      errors.push(`第 ${idx + 1} 行「${label}」超出当前座位表范围`)
+      return
+    }
+    headers.forEach((h, d) => {
+      if (h === '走廊') return
+      const realCol = realColMap[d]
+      if (realCol == null || realCol < 0) return
+      const val = obj[h]
+      if (val === undefined) return
+      next[r][realCol] = (val === '' || val === '走廊') ? null : val
+      touched += 1
+    })
+  })
+
+  if (errors.length) {
+    notifyError(errors[0] + (errors.length > 1 ? `（共 ${errors.length} 处不匹配）` : ''))
+    return
+  }
+  if (touched === 0) {
+    notifyError('没有匹配到可导入的座位，请检查行号与列名是否与页面一致')
+    return
+  }
+
+  const before = (grid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
+  const ok = await grid.saveSeats(next)
+  if (!ok) return
+  recordGridSnapshotUndo('座位表', importTarget.value === 'master' ? 'seat_template' : 'seat_layout', before, next, '从 Excel 导入')
+  notifySuccess(`已从 Excel 导入${importTarget.value === 'master' ? '座位模板' : '当前座位表'}`)
 }
 
 async function applySmartArrangement(result) {

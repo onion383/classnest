@@ -1,16 +1,18 @@
 <template>
-  <div v-if="!messages.length" class="h-full flex items-center justify-center">
-    <div class="text-center text-text-muted text-sm space-y-2">
-      <div class="text-3xl">🤖</div>
-      <div>你可以问我班级数据，例如：</div>
-      <div class="space-y-1 text-xs">
-        <div>「这个月班费支出了多少」</div>
-        <div>「有多少同学在请病假」</div>
-        <div>「新增一个学生 张三」</div>
-      </div>
-      <button v-if="!busy" @click="$emit('new')" class="text-info hover:underline">开始新对话</button>
+  <EmptySnapshot
+    v-if="!messages.length"
+    bare
+    class="h-full"
+    icon="ai"
+    text="你可以问我班级数据，例如："
+    min-height="0"
+  >
+    <div class="space-y-1 text-xs text-text-muted text-center">
+      <div>「这个月班费支出了多少」</div>
+      <div>「有多少同学在请病假」</div>
+      <div>「新增一个学生 张三」</div>
     </div>
-  </div>
+  </EmptySnapshot>
 
   <template v-for="(m, i) in messages" :key="i">
   <!-- 自动反馈消息（回答提问 / 执行或取消提案）不作为用户气泡展示：其内容已写入原助手消息的思维链 -->
@@ -263,6 +265,7 @@
 <script setup vapor>
 import AiChart from '../AiChart.vue'
 import AiRecordTable from '../tables/AiRecordTable.vue'
+import EmptySnapshot from '../base/EmptySnapshot.vue'
 import AiStreamTail from './AiStreamTail.vue'
 import {
   hasProcess, processTitle, stepIcon, stepClass, stepSeconds, toggleStepDetail,

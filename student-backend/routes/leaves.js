@@ -108,6 +108,84 @@ router.post('/today-columns', (req, res) => {
   res.json({ message: '列顺序已保存' });
 });
 
+// POST /api/leaves/import —— 从 Excel 导入请假记录
+// 入参沿用 ImportExcel 的 { fields, rows }；表头顺序可任意调整。
+router.post('/import', (req, res) => {
+  try {
+    const { fields, rows } = req.body || {};
+    if (!Array.isArray(fields) || !Array.isArray(rows)) {
+      return res.status(400).json({ error: '缺少有效的字段或数据' });
+    }
+
+    const cell = (row, names) => {
+      for (const n of names) {
+        const i = fields.indexOf(n);
+        if (i >= 0) {
+          const v = row[i];
+          if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+        }
+      }
+      return '';
+    };
+
+    const insert = db.prepare(
+      `INSERT INTO leave_records
+        (position, student_id, 姓名, 类型, 开始时间, 结束时间, 家长联系电话, 学生联系电话, 状态, 返校时间, 备注, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const startPos = maxPosition('leave_records');
+
+    const list = rows.map((row, idx) => {
+      const rowNo = idx + 1;
+      const name = cell(row, ['姓名']);
+      const xuehao = cell(row, ['学号']);
+      let student = null;
+      if (xuehao) student = db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE 学号 = ?').get(xuehao) || null;
+      if (!student && name) {
+        const sameName = db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2').all(name);
+        if (sameName.length === 1) student = sameName[0];
+      }
+
+      const finalName = name || (student && student.姓名) || '';
+      if (!finalName) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
+      const start = sanitizeField(cell(row, ['开始时间']), 'leave_records', '开始时间');
+      const end = sanitizeField(cell(row, ['结束时间']), 'leave_records', '结束时间');
+      if (!start || !end) throw new Error(`第 ${rowNo} 行缺少「开始时间」或「结束时间」`);
+
+      validateRow('leave_records', { 开始时间: start, 结束时间: end });
+
+      return {
+        position: startPos + idx + 1,
+        student_id: student ? student.id : null,
+        姓名: finalName,
+        类型: sanitizeField(cell(row, ['类型']) || '其他', 'leave_records', '类型'),
+        开始时间: start,
+        结束时间: end,
+        家长联系电话: cell(row, ['家长联系电话']) || (student && student.家长联系电话) || null,
+        学生联系电话: cell(row, ['学生联系电话']) || (student && student.学生联系电话) || null,
+        状态: sanitizeField(cell(row, ['状态']) || '请假中', 'leave_records', '状态'),
+        返校时间: cell(row, ['返校时间']) ? sanitizeField(cell(row, ['返校时间']), 'leave_records', '返校时间', '日期') : null,
+        备注: cell(row, ['备注']) || null,
+        created_at: now(),
+      };
+    });
+
+    const insertMany = db.transaction((items) => {
+      for (const item of items) {
+        insert.run(
+          item.position, item.student_id, item.姓名, item.类型, item.开始时间, item.结束时间,
+          item.家长联系电话, item.学生联系电话, item.状态, item.返校时间, item.备注, item.created_at
+        );
+      }
+    });
+    insertMany(list);
+    renumber('leave_records');
+    res.json({ message: `成功导入 ${list.length} 条请假记录` });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // DELETE /api/leaves/:id 删除
 router.delete('/:id', (req, res) => {
     db.prepare('DELETE FROM leave_records WHERE id = ?').run(Number(req.params.id));

@@ -66,14 +66,17 @@ const props = defineProps({
   placeholder: { type: String, default: '请选择' },
   disabled: { type: Boolean, default: false },
   // 紧凑模式：缩小 trigger 高度，用于标题条等高度受限场景
-  compact: { type: Boolean, default: false }
+  compact: { type: Boolean, default: false },
+  // 不限高、不出内部滚动条：选项不多且需要一眼全部看到时用（如导出格式的 8 项，
+  // 默认 220px 上限会把最后的「图片 / PDF」藏到折叠区外）
+  noScroll: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
 
 const open = ref(false)
 const hoverIdx = ref(-1)
-const menuPos = ref({ left: 0, top: 0, width: 0 })
+const menuPos = ref({ left: 0, top: 0, width: 0, up: false, max: 220 })
 // menuZ：下拉菜单的层级。菜单 Teleport 到 body 后自成一层，必须压过"包住触发器的浮层"，
 // 否则会被弹窗遮罩/AI 悬浮窗盖住（点开看不到或只看到一角）。
 const menuZ = ref(10010)
@@ -112,18 +115,40 @@ const menuStyle = computed(() => {
     zIndex: menuZ.value,
   }
   if (fs) style.fontSize = fs
+  // 向上展开时把菜单底边贴到触发器上沿（top 记的是触发器上沿）
+  if (menuPos.value.up) style.transform = 'translateY(-100%)'
+  // 覆盖 select.css 里的 max-height: 220px；高度按视口可用空间给足，短列表（如导出格式 8 项）不再出滚动条
+  if (props.noScroll) style.maxHeight = menuPos.value.max + 'px'
   return style
 })
+
+// 菜单每项高度（select.css：14px 字号 + 上下 7px padding ≈ 34px），用于判断向下还是向上展开
+const MENU_ITEM_H = 34
+const MENU_PAD = 12
+
+function placeMenu() {
+  const rect = rootRef.value?.getBoundingClientRect()
+  if (!rect) return
+  const need = Math.min(list.value.length * MENU_ITEM_H + MENU_PAD, props.noScroll ? Infinity : 220)
+  const below = window.innerHeight - rect.bottom - 8
+  const above = rect.top - 8
+  // 下方放不下而上方更宽裕时向上展开，避免菜单被窗口底边裁掉（PDF 这一项曾因此看不见）
+  const up = need > below && above > below
+  menuPos.value = {
+    left: rect.left,
+    top: up ? rect.top - 4 : rect.bottom + 4,
+    width: rect.width,
+    up,
+    max: Math.max(120, up ? above : below),
+  }
+}
 
 function toggle() {
   if (props.disabled) return
   open.value = !open.value
   hoverIdx.value = open.value ? list.value.findIndex(o => o.value === props.modelValue) : -1
   if (open.value) {
-    const rect = rootRef.value?.getBoundingClientRect()
-    if (rect) {
-      menuPos.value = { left: rect.left, top: rect.bottom + 4, width: rect.width }
-    }
+    placeMenu()
     menuZ.value = _layerZ()
   }
 }
@@ -143,7 +168,7 @@ function _layerZ() {
 }
 
 function move(step) {
-  if (!open.value) { open.value = true; return }
+  if (!open.value) { open.value = true; placeMenu(); return }
   const n = list.value.length
   if (!n) return
   let i = hoverIdx.value
@@ -172,7 +197,7 @@ function onViewportChange() {
     open.value = false
     return
   }
-  menuPos.value = { left: rect.left, top: rect.bottom + 4, width: rect.width }
+  placeMenu()
 }
 
 onMounted(() => {

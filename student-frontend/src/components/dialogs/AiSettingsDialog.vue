@@ -16,6 +16,15 @@
             <AppSwitch :model-value="enabled" aria-label="启用 AI" @change="toggleEnabled" />
           </div>
 
+          <!-- 其他页面小窗开关 -->
+          <div class="flex items-start justify-between gap-4 mb-6">
+            <div class="min-w-0">
+              <div class="text-sm font-medium text-text">在其他页面显示 AI 助手小窗</div>
+              <p class="text-xs text-text-muted mt-1 leading-relaxed">登录页与 AI 助手页面本身不显示；关闭后只保留 AI 助手页面入口。</p>
+            </div>
+            <AppSwitch :model-value="floatingEnabled" aria-label="在其他页面显示 AI 助手小窗" @change="toggleFloating" />
+          </div>
+
           <!-- 密钥管理 -->
           <div class="flex items-center justify-between mb-3">
             <span class="text-sm font-bold text-text">密钥管理</span>
@@ -29,7 +38,15 @@
           </div>
 
           <!-- 密钥卡片列表 -->
-          <div v-if="!models.length" class="border border-border rounded-lg p-4 text-center text-sm text-text-muted">暂无密钥，点击右上角「添加模型」</div>
+          <EmptySnapshot
+            v-if="!models.length"
+            icon="ai"
+            text="暂无密钥"
+            min-height="220px"
+            action-text="添加模型"
+            action-icon="plus"
+            @action="openAdd"
+          />
           <div v-else class="space-y-3">
             <div
               v-for="m in models"
@@ -100,6 +117,7 @@ import axios from 'axios'
 import { ref, computed, watch } from 'vue'
 import AppHelp from '../base/AppHelp.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
+import EmptySnapshot from '../base/EmptySnapshot.vue'
 import AppSelect from '../base/AppSelect.vue'
 import AppSwitch from '../base/AppSwitch.vue'
 import AddModelDialog from './AddModelDialog.vue'
@@ -120,6 +138,7 @@ const emit = defineEmits(['close', 'saved'])
 const bodyRef = ref(null)
 
 const enabled = ref(false);
+const floatingEnabled = ref(true)
 const models = ref([]);
 const loadError = ref('')      // 配置/可用模型加载失败的提示；空串表示正常
 const modelDialog = ref(false) // 是否打开「添加模型」二次弹窗
@@ -193,6 +212,7 @@ async function refreshModelsOnly() {
     ])
     if (!seq.isLatest(my)) return
     enabled.value = cfg.data.success && cfg.data.data.enabled
+    floatingEnabled.value = cfg.data.success ? cfg.data.data.floatingEnabled !== false : true
     models.value = list.data.success ? list.data.data : []
     remapChoices()
   } catch (err) {
@@ -213,6 +233,7 @@ async function load() {
     ])
     if (!seq.isLatest(my)) return
     enabled.value = cfg.data.success && cfg.data.data.enabled
+    floatingEnabled.value = cfg.data.success ? cfg.data.data.floatingEnabled !== false : true
     models.value = list.data.success ? list.data.data : []
     // 先拉取所有服务商可用模型列表，再一次性更新 modelChoices（避免中间态闪烁）
     const providers = [...new Set(models.value.map((m) => m.provider))]
@@ -271,6 +292,17 @@ async function toggleEnabled(value) {
     // 不回滚的话界面显示「已启用」、后端仍是关闭，用户接着点「保存」会一路撞墙。
     enabled.value = prev
     reportError(err, { action: '切换 AI 开关' })
+  }
+}
+async function toggleFloating(value) {
+  const prev = floatingEnabled.value
+  floatingEnabled.value = !!value
+  try {
+    await axios.put('/api/ai/config', { floatingEnabled: floatingEnabled.value })
+    emit('saved')
+  } catch (err) {
+    floatingEnabled.value = prev
+    reportError(err, { action: '切换 AI 小窗设置' })
   }
 }
 // 切换该模型的推理开关（即时保存，无需确定按钮）

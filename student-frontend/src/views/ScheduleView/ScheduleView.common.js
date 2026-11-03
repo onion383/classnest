@@ -1,6 +1,5 @@
 // ===== 课程表：公共构建（显示行/导出行/行列调整、导出入口、跨页定位） =====
 // 纯代码搬运自 ScheduleView.vue 的 methods，未改写逻辑；经 ctx 闭包调用（script setup）。
-import { useNotification } from '../../composables/useNotification.js'
 import { applyRouteRowFocus } from '../../composables/useRowFocus.js'
 
 // ctx 契约：状态 ref（.value 访问）、临时字段、notify* 函数、host（applyRouteRowFocus 的宿主 { route, router }）与跨模块方法。
@@ -189,11 +188,11 @@ export function useScheduleCommon(ctx, { SECTION_NAMES }) {
     },
     // 导出课表：无数据时直接提示，不弹导出选项弹窗
     openActiveExport() {
-      if (!ctx.hasScheduleData(ctx.activeCells.value)) return useNotification().info('暂无课表数据可导出')
+      if (!ctx.hasScheduleData(ctx.activeCells.value)) return ctx.notifyInfo('暂无课表数据可导出')
       ctx.activeExportVisible.value = true
     },
     openMasterExport() {
-      if (!ctx.hasScheduleData(ctx.masterCells.value)) return useNotification().info('课表模板为空，无法导出')
+      if (!ctx.hasScheduleData(ctx.masterCells.value)) return ctx.notifyInfo('课表模板为空，无法导出')
       ctx.masterExportVisible.value = true
     },
   }

@@ -966,6 +966,17 @@
 :root[data-theme="base"][data-mode="night"] .empty-action-btn:hover {
   background: #1b3358;
 }
+/* 空态「从 Excel 表格批量导入」：夜间把文字提亮，保持暖色可读 */
+:root[data-theme="base"][data-mode="night"] .empty-import-btn {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.32);
+  box-shadow: none;
+}
+:root[data-theme="base"][data-mode="night"] .empty-import-btn:hover {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.24);
+}
 :root[data-theme="base"][data-mode="night"] [class*="fixed"][class*="inset-0"][class*="bg-black/"]:not([class*="bg-black/9"]):not([class*="bg-black/8"]) {
   background-color: rgba(0, 0, 0, 0.55) !important;
   backdrop-filter: none !important;

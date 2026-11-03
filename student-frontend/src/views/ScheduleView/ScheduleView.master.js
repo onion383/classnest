@@ -4,7 +4,7 @@ import axios from 'axios'
 import { recordGridCellUndo, recordGridSnapshotUndo } from '../../composables/useUndo.js'
 import { createSerialSaver } from '../../utils/serialSaver.js'
 
-export function useScheduleMaster(ctx, { API_BASE, DEFAULT_SECTIONS }) {
+export function useScheduleMaster(ctx, { API_BASE }) {
   return {
     // ============= 一般课表操作 =============
     async refreshMaster() {
@@ -27,16 +27,13 @@ export function useScheduleMaster(ctx, { API_BASE, DEFAULT_SECTIONS }) {
           };
           ctx.masterColHeaders.value = ctx.masterSettings.value.days;
         } else {
+          // 首次进入不预置作息时间：保持空 sections，等用户在「设置」里添加并保存。
           ctx.masterSettings.value = {
-            sections: JSON.parse(JSON.stringify(DEFAULT_SECTIONS)),
+            sections: null,
             periods: [],
             days: ctx.masterColHeaders.value
           };
           ctx.masterColHeaders.value = ctx.masterSettings.value.days;
-          // 口径同 loadActive：失败要说出来，否则每次进页面都像首跑
-          if (!await ctx.saveMaster()) {
-            ctx.notifyError('默认课表设置保存失败，本次修改可能无法保留');
-          }
         }
         ctx.masterCells.value = ctx.adjustCells(ctx.masterCells.value, ctx.masterSettings.value);
         ctx._masterLoadOk.value = true;

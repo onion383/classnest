@@ -161,6 +161,9 @@
         <button @click="refresh" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh transition-theme">
           <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
         </button>
+        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
+          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        </button>
         <button @mouseenter="prefetch(loadExportExcel)" @click="openRecordsExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
           <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
         </button>
@@ -189,6 +192,8 @@
             @cancelNewRow="cancelNewRow"
             @contextmenu.prevent="() => {}"
             @selectionChange="() => {}"
+            empty-import-text="从 Excel 表格批量导入"
+            @empty-import="openImportDialog"
           >
             <template #row-actions-extra="{ row }">
               <button v-if="!row._isNew" @click="openEditLeave(row)" class="bg-info hover:bg-blue-700 text-text-inverse px-1.5 py-0.5 rounded mr-1 transition-theme">编辑</button>
@@ -212,6 +217,7 @@
       @update="updateLeave"
       @delete="rec => deleteLeave(rec?.id)"
       @ask-save-phones="askSavePhones"
+      @import="openBatchImportFromAdd"
       @cancel="addDialogVisible = false"
     />
 
@@ -225,6 +231,17 @@
       :defaultFilename="exportFilename"
       @export-finish="() => {}"
       @update:is-visible="exportVisible = $event"
+    />
+
+    <!-- 从 Excel 导入弹窗 -->
+    <ImportExcel
+      v-if="importMounted"
+      :visible="importDialogVisible"
+      :existingFields="leaveFields"
+      :requiredFields="['姓名', '开始时间', '结束时间']"
+      :templateName="'请假记录标准导入表'"
+      @import-data="onImportData"
+      @cancel="importDialogVisible = false"
     />
 
     <!-- 确认弹窗 -->
@@ -272,6 +289,8 @@ const loadAddLeaveDialog = () => import('../components/dialogs/AddLeaveDialog.vu
 const AddLeaveDialog = defineAsyncComponent(loadAddLeaveDialog)
 const loadExportExcel = () => import('../components/import-export/ExportExcel/ExportExcel.vue')
 const ExportExcel = defineAsyncComponent(loadExportExcel)
+const loadImportExcel = () => import('../components/import-export/ImportExcel.vue')
+const ImportExcel = defineAsyncComponent(loadImportExcel)
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
 const OverdueLeaveDialog = defineAsyncComponent(() => import('../components/dialogs/OverdueLeaveDialog.vue'))
 
@@ -309,6 +328,8 @@ const editingCell = ref(null)
 const newRow = ref(null)
 const exportVisible = ref(false)
 const exportMounted = ref(false)
+const importDialogVisible = ref(false)
+const importMounted = ref(false)
 // 导出内容来源：today 今日到班 / records 请假记录 / stats 请假统计
 const exportKind = ref('records')
 const confirm = ref({ visible: false, message: '', ok: null })
@@ -459,6 +480,7 @@ const timelineNodes = computed(() => {
 // 懒加载弹窗保活：首次打开后保持挂载，关闭只降 visible，保留退出动画
 watch(addDialogVisible, (n) => { if (n) addDialogMounted.value = true })
 watch(exportVisible, (n) => { if (n) exportMounted.value = true })
+watch(importDialogVisible, (n) => { if (n) importMounted.value = true })
 watch(() => confirm.value.visible, (n) => { if (n) confirmMounted.value = true })
 watch(overdueDialogVisible, (n) => { if (n) overdueDialogMounted.value = true })
 // 跨页定位：标题栏全局搜索点「请假记录」结果跳转 /leaves?focus=<id>
@@ -545,6 +567,21 @@ async function refresh() {
   notifySuccess(activeTab.value === 'today' ? '已刷新 今日请假 数据' : '已刷新 请假记录 数据')
   checkOverdue()
 }
+async function onImportData({ fields, rows }) {
+  importDialogVisible.value = false
+  try {
+    const res = await axios.post(`${API}/leaves/import`, { fields, rows })
+    notifySuccess(res.data.message || '导入成功')
+    await loadAll()
+  } catch (err) {
+    reportError(err, { action: '导入请假记录' })
+  }
+}
+// 表格空态里的「从 Excel 表格批量导入」：预取导入弹窗 chunk 后打开
+function openImportDialog() {
+  prefetch(loadImportExcel)
+  importDialogVisible.value = true
+}
 // 当前时间字符串，格式与结束时间保持一致（YYYY-MM-DD HH:mm）
 function nowStr() {
   return formatDateTime(new Date())
@@ -597,6 +634,12 @@ async function submitAdd(payload) {
 function openAddLeave() {
   editingLeave.value = null
   addDialogVisible.value = true
+}
+// 请假登记弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+function openBatchImportFromAdd() {
+  addDialogVisible.value = false
+  importMounted.value = true
+  importDialogVisible.value = true
 }
 function openEditLeave(item) {
   editingLeave.value = item

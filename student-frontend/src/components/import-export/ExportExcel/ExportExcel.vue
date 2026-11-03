@@ -43,7 +43,7 @@
 
       <div class="mb-4">
         <p class="font-semibold mb-2">导出格式：</p>
-        <AppSelect v-model="exportFormat" class="w-full" :options="formatOptions" />
+        <AppSelect v-model="exportFormat" class="w-full" :options="formatOptions" no-scroll />
       </div>
 
       <div class="mb-4">
@@ -52,8 +52,10 @@
       </div>
 
       <div class="text-right">
-        <button @click="cancel" class="bg-surface-hover text-text border border-border px-4 py-1.5 rounded-lg mr-2 cursor-pointer">取消</button>
-        <button @click="doExport" class="bg-info text-text-inverse border-none px-4 py-1.5 rounded-lg cursor-pointer" :disabled="exportDisabled">导出</button>
+        <button @click="cancel" :disabled="exporting" class="bg-surface-hover text-text border border-border px-4 py-1.5 rounded-lg mr-2 cursor-pointer transition-opacity duration-200 disabled:opacity-60 disabled:cursor-not-allowed">取消</button>
+        <button ref="exportBtnRef" @click="doExport" class="export-btn bg-info text-text-inverse border-none px-4 py-1.5 rounded-lg cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed" :style="exportBtnStyle" :disabled="exportDisabled || exporting">
+          <span class="export-label">{{ exportBtnLabel }}</span>
+        </button>
       </div>
     </div>
   </div>
@@ -62,7 +64,7 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, watch, toRef } from 'vue'
+import { ref, computed, watch, toRef, onMounted, nextTick } from 'vue'
 import AppSelect from '../../base/AppSelect.vue'
 import { useNotification } from '../../../composables/useNotification';
 import { useExportFormats } from './ExportExcel.exporters.js';
@@ -140,6 +142,47 @@ const exportDisabled = computed(() => {
   return selectedColumns.value.length === 0;
 });
 
+// 导出进行中：按钮置灰并显示进度（各格式在耗时阶段通过 ctx.reportProgress 上报）
+const exporting = ref(false)
+const exportProgress = ref(0)
+function reportProgress(pct) {
+  if (!exporting.value) return
+  const n = Number(pct)
+  if (!Number.isFinite(n)) return
+  exportProgress.value = Math.max(0, Math.min(100, Math.round(n)))
+}
+
+// 导出按钮：默认保持「导出」的原生宽度；导出时用显式宽度 + CSS transition 双向平滑展开/收起
+const exportBtnRef = ref(null)
+const exportBtnLabel = computed(() => (exporting.value ? `导出中 ${exportProgress.value}%` : '导出'))
+const idleWidth = ref(0)
+const busyWidth = ref(0)
+const exportBtnStyle = computed(() => {
+  if (!idleWidth.value || !busyWidth.value) return {}
+  return {
+    width: `${exporting.value ? busyWidth.value : idleWidth.value}px`,
+    // 内联 transition：避免被主题的全局 button 过渡规则覆盖
+    transition: 'width 0.22s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.2s ease, background-color 0.2s ease, color 0.2s ease'
+  }
+})
+// 用 canvas 按按钮实际字体量两段文案宽度，不依赖隐藏节点是否参与布局
+let measureCanvas = null
+function measureExportWidths() {
+  const el = exportBtnRef.value
+  if (!el) return
+  const cs = getComputedStyle(el)
+  const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+  if (!measureCanvas) measureCanvas = document.createElement('canvas')
+  const c2d = measureCanvas.getContext('2d')
+  if (!c2d) return
+  c2d.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+  idleWidth.value = Math.ceil(c2d.measureText('导出').width + pad) + 2
+  busyWidth.value = Math.ceil(c2d.measureText('导出中 100%').width + pad) + 2
+}
+onMounted(() => { nextTick(measureExportWidths) })
+// 弹窗从隐藏变可见时重新量一次（懒加载/主题切换后字体度量可能变化）
+watch(effectiveVisible, (v) => { if (v) nextTick(measureExportWidths) })
+
 // 跨模块共享的上下文：状态为 ref（模块内 .value 访问），通知函数与方法直接挂上；
 // useExportFormats 的返回方法与本组件方法在下方 Object.assign 回填
 const ctx = {
@@ -158,6 +201,8 @@ const ctx = {
   disableExport: toRef(props, 'disableExport'),
   notifySuccess, notifyError, notifyInfo,
   emit,
+  exporting,
+  reportProgress,
 }
 const fmt = useExportFormats(ctx)
 
@@ -172,11 +217,14 @@ function close() {
 }
 function cancel() { close(); }
 async function doExport() {
+  if (exporting.value) return
   // ---------- 分组导出模式 ----------
   if (isGroupMode.value) {
     if (selectedGroups.value.length === 0) { notifyInfo('请至少选择一个小组'); return; }
     const dateStr = localDateStr();
     const finalFilename = `${filename.value}_${dateStr}`;
+    exportProgress.value = 10
+    exporting.value = true
     try {
       let saved = true;
       switch (exportFormat.value) {
@@ -191,15 +239,20 @@ async function doExport() {
         default: saved = await ctx.exportGroupHTML(selectedGroups.value, finalFilename);
       }
       if (saved) {
+        reportProgress(100)
         notifySuccess(`已成功导出 ${FORMAT_LABELS[exportFormat.value] || '文件'}`)
         emit('export-finish');
+        close();
       }
+      // saved 为空串：用户在系统保存对话框中点了取消（或保存失败），保留弹窗便于重新导出
     } catch (err) {
       console.error('导出失败:', err);
       notifyError('导出失败，请重试')
       emit('export-error', err);
+    } finally {
+      exporting.value = false
+      exportProgress.value = 0
     }
-    close();
     return;
   }
 
@@ -218,6 +271,8 @@ async function doExport() {
   const dateStr = localDateStr();
   const finalFilename = `${filename.value}_${dateStr}`;
 
+  exportProgress.value = 10
+  exporting.value = true
   try {
     let saved = true
     switch (exportFormat.value) {
@@ -232,16 +287,21 @@ async function doExport() {
       default: saved = await ctx.exportHTMLTable(exportRows, selectedFields, finalFilename);
     }
     if (saved) {
+      reportProgress(100)
       const label = FORMAT_LABELS[exportFormat.value] || '文件'
       notifySuccess(`已成功导出 ${label}`)
       emit('export-finish');
+      close();
     }
+    // saved 为空串：用户在系统保存对话框中点了取消（或保存失败），保留弹窗便于重新导出
   } catch (err) {
     console.error('导出失败:', err);
     notifyError('导出失败，请重试')
     emit('export-error', err);
+  } finally {
+    exporting.value = false
+    exportProgress.value = 0
   }
-  close();
 }
 
 Object.assign(ctx, fmt, { open, close, cancel, doExport })
@@ -269,6 +329,15 @@ defineExpose({ open, close })
 .filename-input {
   transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
+/* 导出按钮：宽度在「导出」与「导出中 100%」两个实测值之间双向过渡（transition 由内联样式给出） */
+.export-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+.export-label { display: inline-block; }
 .filename-input:focus {
   border-color: #3b82f6 !important;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.28) !important;

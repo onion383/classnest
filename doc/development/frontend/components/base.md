@@ -71,9 +71,9 @@ classnest/
 ### [AppSelect.vue](../../../../student-frontend/src/components/base/AppSelect.vue) · 自定义下拉框
 - **定位**：替代原生 `<select>`，圆角 + 毛玻璃，支持紧凑模式；用于设置页、表格筛选、弹窗等所有选择场景。
 - **对外接口**：
-  - `props`（组件属性）：`modelValue`（当前值，`[String,Number]`，默认空串）/ `options`（候选项数组，`['A']` 或 `[{value,label,disabled}]`）/ `placeholder`（占位文案，默认「请选择」）/ `disabled`（禁用，默认 false）/ `compact`（紧凑模式，默认 false）
+  - `props`（组件属性）：`modelValue`（当前值，`[String,Number]`，默认空串）/ `options`（候选项数组，`['A']` 或 `[{value,label,disabled}]`）/ `placeholder`（占位文案，默认「请选择」）/ `disabled`（禁用，默认 false）/ `compact`（紧凑模式，默认 false）/ `noScroll`（按视口空间给足高度、短列表不出滚动条，默认 false）
   - `emits`（组件事件）：`update:modelValue(value)`（值更新）/ `change(value)`（变更）；无插槽。
-- **内部实现**：`toggle()` 开合并按触发器矩形定位；`_layerZ()` 沿祖先链取最大 `z-index`（层叠层级）再 +10（保证压过宿主浮层）；`move(step)` 上下键循环并跳过 `disabled`（禁用项）；`commit(i)` 选中并触发事件；`onDocClick(e)` 外部点击关闭；`onViewportChange()` 滚动/`resize`（窗口尺寸变化）重排、抛出视口即收起。
+- **内部实现**：`placeMenu()` 按触发器矩形与视口上下剩余空间定位（下方放不下且上方更宽裕时向上展开）；`_layerZ()` 沿祖先链取最大 `z-index`（层叠层级）再 +10（保证压过宿主浮层）；`move(step)` 上下键循环并跳过 `disabled`（禁用项）；`commit(i)` 选中并触发事件；`onDocClick(e)` 外部点击关闭；`onViewportChange()` 滚动/`resize`（窗口尺寸变化）重排、抛出视口即收起。
 - **使用方**：`GroupManageView`、`Login`、`DutyView`、`ScoreManagement`、`AlbumView`、`SettingsView`、`WeekSwitcher`、`SearchBar`、`DynamicTable`、`AiSettingsDialog`、`DutyArrangementDialog`、`SmartArrangementDialog` 等。
 - 注意：菜单 `Teleport`（传送组件）到 `body`（页面主体）并手动同步父级字号；不要改成容器内绝对定位，会被 `overflow`（溢出裁剪）裁掉。
 
@@ -113,9 +113,9 @@ classnest/
 
 ### [EmptySnapshot.vue](../../../../student-frontend/src/components/base/EmptySnapshot.vue) · 空态占位
 - **定位**：历史快照/列表无数据时的统一空态，可带操作按钮。
-- **对外接口**：`props: text('暂未有历史快照') / icon('🗓') / minHeight('320px') / actionText / actionIcon`；`emits: action`。
-- **使用方**：`DutyView`、`ScheduleView`、`SeatView`、列表型表格。
-- 注意：按钮必须带 `action-text` / `action-icon`，颜色用 `bg-info`，不要手搓插槽按钮。
+- **对外接口**：`props: text('暂未有历史快照') / icon('🗓') / minHeight('320px') / actionText / actionIcon / secondaryActionText / secondaryActionIcon / bare(false)`；`emits: action / secondaryAction`。
+- **使用方**：`DutyView`、`ScheduleView`、`SeatView`、列表型表格、`AiAssistant`、`AiSettingsDialog`。
+- 注意：按钮必须带 `action-text` / `action-icon`，颜色用 `bg-info`，不要手搓插槽按钮；嵌入已有玻璃卡片时传 `bare`，避免双层底色/描边。
 
 ### [IconGlyph.vue](../../../../student-frontend/src/components/base/IconGlyph.vue) · 统一图标
 - **定位**：全应用图标入口，按主题 `iconStyle` 在 lucide 与 emoji 间切换。
@@ -126,7 +126,7 @@ classnest/
 
 ### [LeaveTimeline.vue](../../../../student-frontend/src/components/base/LeaveTimeline.vue) · 通用时间轴
 - **定位**：请假/加减分/活动的时间轴展示，支持右侧操作区与空态。
-- **对外接口**：`props: nodes / typeOptions / title('🗓️ 请假时间轴') / alignRight(false) / maxHeight(420) / fillHeight(false) / emptyText('暂无匹配的时间轴记录') / emptyActionText / loading`；`emits: emptyAction`；插槽 `content`、`ops`。
+- **对外接口**：`props: nodes / typeOptions / title('🗓️ 请假时间轴') / alignRight(false) / maxHeight(420) / fillHeight(false) / emptyText('暂无匹配的时间轴记录') / emptyActionText / emptySecondaryActionText / loading`；`emits: emptyAction / emptySecondaryAction`；插槽 `content`、`ops`。
 - **内部实现**：按节点日期分组渲染，虚拟化省略（数据量有限）。
 - **使用方**：`LeaveManagement`、`ScoreManagement`、`ActivitiesView`。
 

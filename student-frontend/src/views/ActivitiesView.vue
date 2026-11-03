@@ -14,6 +14,9 @@
       <div class="mb-4 flex items-center gap-3 opbar">
         <button @mouseenter="prefetch(loadAddActivityDialog)" @click="openAddActivity" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">＋ 新增活动</button>
         <button @click="refreshActivities" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
+        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">
+          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        </button>
         <button @mouseenter="prefetch(loadExportExcel)" @click="openActivityExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">📥 导出活动</button>
       </div>
 
@@ -59,6 +62,9 @@
       <div class="mb-4 flex items-center gap-3 opbar">
         <button @mouseenter="prefetch(loadAddCountdownDialog)" @click="openAddCountdown" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">＋ 添加倒计时</button>
         <button @click="refreshCountdowns" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme">🔄 刷新</button>
+        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
+          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        </button>
         <button @mouseenter="prefetch(loadExportExcel)" @click="openCountdownExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme"><IconGlyph name="download" :size="14" tint="current" /> 导出 EXCEL 表格</button>
       </div>
 
@@ -96,6 +102,7 @@
       @confirm="submitActivity"
       @update="updateActivity"
       @delete="rec => deleteActivity(rec?.id)"
+      @import="openImportFromActivityAdd"
       @cancel="actDialogVisible = false"
     />
 
@@ -107,6 +114,7 @@
       @confirm="submitCountdown"
       @update="updateCountdown"
       @delete="rec => deleteCountdown(rec?.id)"
+      @import="openImportFromCountdownAdd"
       @cancel="cntDialogVisible = false"
     />
 
@@ -144,6 +152,17 @@
       @export-finish="() => {}"
       @update:is-visible="cntExportVisible = $event"
     />
+
+    <!-- 从 Excel 导入（按当前页签切换活动 / 倒计时的表头） -->
+    <ImportExcel
+      v-if="importMounted"
+      :visible="importDialogVisible"
+      :existingFields="importFields"
+      :requiredFields="importRequiredFields"
+      :templateName="activeTab === 'countdown' ? '倒计时标准导入表' : '班级活动标准导入表'"
+      @import-data="onImportData"
+      @cancel="importDialogVisible = false"
+    />
   </div>
 </template>
 
@@ -168,6 +187,8 @@ const AddCountdownDialog = defineAsyncComponent(loadAddCountdownDialog)
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
 const loadExportExcel = () => import('../components/import-export/ExportExcel/ExportExcel.vue')
 const ExportExcel = defineAsyncComponent(loadExportExcel)
+const loadImportExcel = () => import('../components/import-export/ImportExcel.vue')
+const ImportExcel = defineAsyncComponent(loadImportExcel)
 
 const API = '/api'
 
@@ -224,6 +245,9 @@ const cntDialogVisible = ref(false)
 const cntDialogMounted = ref(false)
 const cntExportVisible = ref(false)
 const cntExportMounted = ref(false)
+// Excel 导入（活动 / 倒计时共用同一个弹窗，表头随当前页签切换）
+const importDialogVisible = ref(false)
+const importMounted = ref(false)
 // 通用确认
 const confirm = ref({ visible: false, message: '', ok: null })
 const confirmMounted = ref(false)
@@ -301,6 +325,14 @@ const countdownExportRows = computed(() => countdowns.value.map(c => {
 }))
 const countdownExportFields = computed(() => ['名称', '截止日', '剩余天数', '状态', '包含截止日当天'].map(name => ({ name })))
 
+// 导入列：活动要「主题」，倒计时要「名称 + 截止日」；其余列都可选
+const importFields = computed(() => (activeTab.value === 'countdown'
+  ? [{ name: '名称' }, { name: '截止日' }, { name: '包含这一天' }]
+  : [{ name: '时间' }, { name: '主题' }, { name: '地点' }, { name: '参与人员' }, { name: '简介' }]))
+const importRequiredFields = computed(() => (activeTab.value === 'countdown'
+  ? ['名称', '截止日']
+  : ['主题']))
+
 // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y 撤销、重做：活动与倒计时各自独立，按当前 tab 切换对应历史栈
 const { success } = useNotification()
 const resolveKey = () => (activeTab.value === 'countdown' ? 'countdowns' : 'activities')
@@ -313,6 +345,7 @@ watch(actDialogVisible, (n) => { if (n) actDialogMounted.value = true })
 watch(cntDialogVisible, (n) => { if (n) cntDialogMounted.value = true })
 watch(actExportVisible, (n) => { if (n) actExportMounted.value = true })
 watch(cntExportVisible, (n) => { if (n) cntExportMounted.value = true })
+watch(importDialogVisible, (n) => { if (n) importMounted.value = true })
 watch(() => confirm.value.visible, (n) => { if (n) confirmMounted.value = true })
 // 跨页定位：标题栏全局搜索点「班级活动 / 倒计时」结果跳转 /activities?focus=<id>
 watch(() => route.query.focus, () => { _applyRowFocus() })
@@ -385,6 +418,12 @@ async function refreshCountdowns() {
 }
 // ---------- 活动 CRUD ----------
 function openAddActivity() { editingActivity.value = null; actDialogVisible.value = true }
+// 新增活动弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+function openImportFromActivityAdd() {
+  actDialogVisible.value = false
+  importMounted.value = true
+  importDialogVisible.value = true
+}
 function openEditActivity(a) { editingActivity.value = a; actDialogVisible.value = true }
 function activityByKey(key) { return activityMap.value[key] }
 async function submitActivity(payload) {
@@ -426,6 +465,12 @@ async function deleteActivity(id) {
 }
 // ---------- 倒计时 CRUD ----------
 function openAddCountdown() { editingCountdown.value = null; cntDialogVisible.value = true }
+// 添加倒计时弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+function openImportFromCountdownAdd() {
+  cntDialogVisible.value = false
+  importMounted.value = true
+  importDialogVisible.value = true
+}
 function openEditCountdown(c) { editingCountdown.value = c; cntDialogVisible.value = true }
 function countdownByKey(key) { return countdownMap.value[key] }
 async function submitCountdown(payload) {
@@ -474,6 +519,18 @@ function openActivityExport() {
 function openCountdownExport() {
   if (countdownExportRows.value.length === 0) return useNotification().info('暂无倒计时可导出')
   cntExportVisible.value = true
+}
+// ---------- 导入 ----------
+async function onImportData({ fields, rows }) {
+  importDialogVisible.value = false
+  const isCountdown = activeTab.value === 'countdown'
+  try {
+    const res = await axios.post(`${API}/${isCountdown ? 'countdowns' : 'activities'}/import`, { fields, rows })
+    useNotification().success(res.data.message || '导入成功')
+    await loadAll()
+  } catch (err) {
+    reportError(err, { action: isCountdown ? '导入倒计时' : '导入活动' })
+  }
 }
 // ---------- 跳转 ----------
 function goAlbum() {

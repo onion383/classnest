@@ -5,6 +5,8 @@ function migrateAi(conn) {
     CREATE TABLE IF NOT EXISTS ai_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       enabled INTEGER DEFAULT 0,
+      -- 在其他页面显示 AI 助手小窗（1 显示 / 0 隐藏，默认显示，保持旧行为）
+      floating_enabled INTEGER DEFAULT 1,
       provider TEXT DEFAULT 'deepseek',
       base_url TEXT DEFAULT '',
       model TEXT DEFAULT '',
@@ -48,6 +50,12 @@ function migrateAi(conn) {
     );
     CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, id);
   `);
+
+  // 旧库升级：ai_settings 建表时还没有 floating_enabled，需要补列。
+  const aiCols = conn.prepare('PRAGMA table_info(ai_settings)').all().map((c) => c.name);
+  if (!aiCols.includes('floating_enabled')) {
+    conn.exec('ALTER TABLE ai_settings ADD COLUMN floating_enabled INTEGER DEFAULT 1');
+  }
 }
 
 module.exports = { migrateAi };

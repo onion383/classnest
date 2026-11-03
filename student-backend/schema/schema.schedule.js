@@ -36,30 +36,8 @@ function migrateSchedule(conn) {
     DROP TABLE IF EXISTS schedule_settings;
   `);
 
-  // 学期表播种：列表为空时建一条「当前学期」（按当前月份推算默认起止日期）。
-  //   7 月 ~ 次年 1 月 → 本年 9/1 ~ 次年 1/31，名字「XXXX秋季学期」
-  //   1 月            → 去年 9/1 ~ 本年 1/31，名字「XXXX秋季学期」
-  //   2 月 ~ 6 月      → 本年 2/1 ~ 6/30，名字「XXXX夏季学期」
-  function autoSemesterName(startDate) {
-    const year = Number(String(startDate).slice(0, 4)) || new Date().getFullYear();
-    const month = Number(String(startDate).slice(5, 7)) || 1;
-    return month >= 7 ? `${year}秋季学期` : `${year}夏季学期`;
-  }
-  function autoSemesterRange() {
-    const y = new Date().getFullYear();
-    const m = new Date().getMonth() + 1;
-    if (m >= 7) return { start: `${y}-09-01`, end: `${y + 1}-01-31` };
-    if (m === 1) return { start: `${y - 1}-09-01`, end: `${y}-01-31` };
-    return { start: `${y}-02-01`, end: `${y}-06-30` };
-  }
-  {
-    const count = conn.prepare('SELECT COUNT(*) AS c FROM semesters').get().c;
-    if (!count) {
-      const range = autoSemesterRange();
-      conn.prepare('INSERT INTO semesters (name, start_date, end_date, is_current) VALUES (?,?,?,1)')
-        .run(autoSemesterName(range.start), range.start, range.end);
-    }
-  }
+  // 学期不再在迁移时自动播种：首次进入课程表时学期列表为空，
+  // 由用户在「作息时间设置」里填写学期开始日期后再创建当前学期。
 }
 
 module.exports = { migrateSchedule };

@@ -25,13 +25,17 @@
       </div>
     </div>
 
-    <!-- 配置未就绪提示 -->
-    <div v-else-if="!enabled" class="flex-1 flex items-center justify-center text-sm text-text-muted chat-surface border border-border bg-white/55 backdrop-blur-md ai-glass-panel">
-      <div class="text-center space-y-2">
-        <div>AI 助手尚未启用</div>
-        <button @click="showSettings = true" class="text-info hover:underline inline-block cursor-pointer">点击【<IconGlyph name="settings" :size="13" tint="current" class="align-middle inline-block" /> 设置】填写 API Key 并启用</button>
-      </div>
-    </div>
+    <!-- 配置未就绪提示：直接复用统一空态组件 -->
+    <EmptySnapshot
+      v-else-if="!enabled"
+      class="flex-1"
+      icon="ai"
+      text="AI 助手尚未启用"
+      min-height="320px"
+      action-text="去设置"
+      action-icon="settings"
+      @action="showSettings = true"
+    />
 
     <template v-else-if="enabled">
       <!-- 外层容器同时是抽屉的定位父级：抽屉作为聊天卡片的「兄弟」而非后代，
@@ -438,6 +442,7 @@ import AiLinkPanel from '../components/ai/AiLinkPanel.vue'
 import AiChangePanel from '../components/ai/AiChangePanel.vue'
 import AiChatMessages from '../components/ai/AiChatMessages.vue'
 import CustomScrollbar from '../components/base/CustomScrollbar.vue'
+import EmptySnapshot from '../components/base/EmptySnapshot.vue'
 import AiComposer from '../components/ai/AiComposer/AiComposer.vue'
 import { ensureMarkdown, buildBlocks, updateLiveRender } from '../composables/ai/aiMarkdown.js'
 import {

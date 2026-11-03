@@ -7,6 +7,7 @@
 // 所有写库路径（AI 整块写入 / 座位 / 值日 / 请假）共用同一入口 validateRow，避免逐处打补丁。
 
 const { db } = require('../db');
+const { resolveNames } = require('./provisionalStudents');
 
 // —— 通用工具 ——
 function toObj(v) {
@@ -70,8 +71,11 @@ function parseDutyItems(raw) {
   return { names, maps };
 }
 
-// 值日名单校验：项目名须属于已配置的劳动项目、星期须属于设置的星期、姓名须是班级学生，
+// 值日名单校验：项目名须属于已配置的劳动项目、星期须属于设置的星期，
 // 且每个「项目 · 星期」的人数须与设置里的 count 严格相等。
+// 名单里的姓名与座位表同一口径：名册外的人名**不拒绝**，直接登记为临时学生（is_provisional=1）。
+// 值日表存的是姓名而不是 id，建临时学生后名字才有稳定身份——值日指数、候选框、改名级联都认得到它；
+// 也让 AI 整块写入 / 智能排表等「不经前端 /students/resolve」的写路径同样能落库。
 // 仅在 settings 里确实配置了项目 / 人数时才校验（避免设置未初始化时误伤）。
 // 兼容两种提交形态：PUT /api/duty 传来的「单模式内容」（{项目:{星期:[...]}}）、
 // 整块写入（AI propose_json_write 等）传来的 {daily,big} 打包内容。
@@ -88,6 +92,8 @@ function assertDutyRefs(cells, name) {
   // 单模式提交（看不出是哪个模式）时，人数取 daily 与 big 的并集（同名以 daily 优先）
   const unionMap = new Map([...maps.big, ...maps.daily]);
   const names = studentNameSet();
+  // 名单里尚未登记的人名：校验完结构后统一建档（同一批去重，同名只建一条）
+  const unknown = new Set();
 
   const layers = isModeMap
     ? ['daily', 'big'].map((m) => ({ mode: m, layer: obj[m] })).filter((x) => x.layer && typeof x.layer === 'object')
@@ -114,13 +120,24 @@ function assertDutyRefs(cells, name) {
           throw new Error(`值日的「${item} · ${day}」应排 ${cnt} 人，实际 ${list.length} 人（字段「${name}」）`);
         }
         list.forEach((n) => {
-          if (typeof n === 'string' && n && !names.has(n)) {
-            throw new Error(`值日名单里的「${n}」不是班级学生（字段「${name}」）`);
-          }
+          if (typeof n !== 'string') return;
+          const nm = n.trim();
+          if (nm && !names.has(nm)) unknown.add(nm);
         });
       });
     });
   });
+
+  // 名册外的人名登记为临时学生（与座位表直接输入姓名的处理一致）：不阻断保存，
+  // 但必须落成真实学生记录，否则值日指数等按身份统计的功能会漏掉这个人。
+  if (unknown.size) {
+    const results = resolveNames([...unknown], { create: true });
+    results.forEach((r) => {
+      // 已存在（含正式名册里的同名重名）都无需报错：名字本来就认得到
+      if (!r || r.id || r.ambiguous) return;
+      throw new Error(`值日名单里的「${r.name}」无法登记为学生${r.error ? `（${r.error}）` : ''}（字段「${name}」）`);
+    });
+  }
 }
 
 // —— 请假：结束时间必须晚于开始时间（两者都提供时才校验）——

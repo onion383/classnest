@@ -115,9 +115,10 @@ async function saveAiExport(spec) {
       })
       dataRows.forEach((row) => {
         const dr = ws.addRow(row)
-        dr.eachCell((c) => {
-          c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }
-        })
+        // 逐列取单元格写样式：eachCell 会跳过空值/null 单元格，这些格子会缺边框
+        for (let i = 1; i <= columns.length; i++) {
+          ws.getCell(dr.number, i).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }
+        }
       })
       for (let i = 1; i <= columns.length; i++) ws.getColumn(i).width = 18
       const buf = await wb.xlsx.writeBuffer()

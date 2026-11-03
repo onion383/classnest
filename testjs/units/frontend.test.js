@@ -457,6 +457,69 @@ test('parseSheet：标题行被跳过，空行被忽略，必填缺失行计入 
   assert.equal(parsed.skipped, 1)
 })
 
+test('importSheet 模糊匹配：宽松归一 + 表头同义词解析', async () => {
+  const { normalizeLoose, matchCandidate, resolveHeader } = await loadImportSheet()
+  // 全角、空白、括号说明、导出前缀都归一到同一个词
+  assert.equal(normalizeLoose('d_周 一'), '周一')
+  assert.equal(normalizeLoose('劳动项目（名称）'), '劳动项目名称')
+  assert.equal(normalizeLoose('ＤＡＹ＿１'), 'day1')
+  assert.equal(normalizeLoose('星期日'), '周日')
+  assert.equal(normalizeLoose('礼拜天'), '周日')
+  assert.equal(normalizeLoose('周1'), '周一')
+  assert.equal(normalizeLoose('星期7'), '周日')
+
+  // 精确命中优先；包含关系（项目 ⊂ 劳动项目）次之
+  assert.deepEqual(matchCandidate('项目', ['项目', '劳动项目']), { value: '项目', score: 1, exact: true })
+  assert.equal(matchCandidate('劳动项目', ['项目', '人数']).value, '项目')
+
+  // 多个候选同分时不擅自选择，交回候选让调用方提示
+  const tie = matchCandidate('扫地', ['扫地拖地', '扫地擦窗'])
+  assert.equal(tie.value, null)
+  assert.deepEqual(tie.ambiguous, ['扫地拖地', '扫地擦窗'])
+
+  // 表头按候选顺序匹配：文件里的「劳动项目 / 星期一」都能被认出来
+  assert.equal(resolveHeader(['劳动项目', '星期一'], ['项目', '劳动项目']), '劳动项目')
+  assert.equal(resolveHeader(['劳动项目', '星期一'], ['周一']), '星期一')
+  assert.equal(resolveHeader(['劳动项目', '礼拜天'], ['周日']), '礼拜天')
+})
+
+test('detectHeader：按已知字段清单识别表头，避免把数据行/说明行当表头', async () => {
+  const { parseSheet } = await loadImportSheet()
+  const data = [
+    ['值日安排表'],
+    ['说明：项目后面填学生姓名'],
+    ['劳动项目', '', '周一', '星期二'],
+    ['扫地', '张三', '李四', '王五'], // 数据行非空格比表头更多
+    ['拖地', '赵六', '钱七', '孙八'],
+  ]
+  const parsed = parseSheet(data, [['项目', '劳动项目']], ['项目', '周一', '周二'])
+  assert.equal(parsed.headerRowIndex, 2)
+  assert.deepEqual(parsed.fields, ['劳动项目', '周一', '星期二'])
+  // 空表头那一列只跳过自己：周一/星期二仍取第 2/3 列
+  assert.deepEqual(parsed.rows, [
+    { 劳动项目: '扫地', 周一: '李四', 星期二: '王五' },
+    { 劳动项目: '拖地', 周一: '钱七', 星期二: '孙八' },
+  ])
+})
+
+test('parseSheet：必填列支持同义写法，不再因表头差异过滤整表', async () => {
+  const { parseSheet } = await loadImportSheet()
+  const data = [
+    ['劳动项目', '人数'],
+    ['扫地', '2'],
+  ]
+  const parsed = parseSheet(data, [['项目', '劳动项目']])
+  assert.equal(parsed.skipped, 0)
+  assert.deepEqual(parsed.rows, [{ 劳动项目: '扫地', 人数: '2' }])
+  assert.deepEqual(parsed.requiredColumns, ['劳动项目'])
+  assert.deepEqual(parsed.missingRequired, [])
+
+  // 完全认不到的必填列：明确回传缺失列名，供弹窗提示
+  const miss = parseSheet([['姓名', '学号'], ['张三', '1001']], [['项目', '劳动项目']])
+  assert.deepEqual(miss.missingRequired, ['项目'])
+  assert.deepEqual(miss.rows, [])
+})
+
 test('parseSheet：同名表头加序号后缀，两列数据都保留', async () => {
   const { parseSheet } = await loadImportSheet()
   const data = [

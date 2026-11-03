@@ -7,10 +7,11 @@ const router = express.Router();
 // ---------------- 配置 ----------------
 function currentSettings() {
   // 启用状态来自 ai_settings；模型参数来自当前选中的模型
-  const en = db.prepare('SELECT enabled FROM ai_settings WHERE id = 1').get() || {};
+  const en = db.prepare('SELECT enabled, floating_enabled FROM ai_settings WHERE id = 1').get() || {};
   const m = db.prepare('SELECT * FROM ai_models WHERE is_active = 1').get() || {};
   return {
     enabled: !!en.enabled,
+    floatingEnabled: en.floating_enabled == null ? true : !!en.floating_enabled,
     provider: m.provider || 'deepseek',
     base_url: m.base_url || '',
     model: m.model || '',
@@ -117,15 +118,21 @@ async function testConnection(cfg) {
   }
 }
 
-// GET /api/ai/config —— 仅返回当前启用状态
+// GET /api/ai/config —— 返回启用状态 + 其他页面小窗开关
 router.get('/config', (req, res) => {
-    res.json({ success: true, data: { enabled: !!currentSettings().enabled } });
+    const s = currentSettings();
+  res.json({ success: true, data: { enabled: s.enabled, floatingEnabled: s.floatingEnabled } });
 });
 
-// PUT /api/ai/config —— 仅切换启用状态
+// PUT /api/ai/config —— 切换启用状态 / 小窗开关（只更新请求里带了的字段）
 router.put('/config', (req, res) => {
-    const { enabled } = req.body;
-  db.prepare('UPDATE ai_settings SET enabled = ? WHERE id = 1').run(enabled ? 1 : 0);
+    const body = req.body || {};
+  if (body.enabled !== undefined) {
+    db.prepare('UPDATE ai_settings SET enabled = ? WHERE id = 1').run(body.enabled ? 1 : 0);
+  }
+  if (body.floatingEnabled !== undefined) {
+    db.prepare('UPDATE ai_settings SET floating_enabled = ? WHERE id = 1').run(body.floatingEnabled ? 1 : 0);
+  }
   res.json({ success: true, message: '已保存' });
 });
 

@@ -76,10 +76,87 @@ router.put('/:id', (req, res) => {
   res.json({ message: '修改成功' });
 });
 
-// DELETE /api/scores/:id 删除
-router.delete('/:id', (req, res) => {
-    db.prepare('DELETE FROM score_records WHERE id = ?').run(Number(req.params.id));
-  res.json({ message: '删除成功' });
+// POST /api/scores/import —— 从 Excel 导入加分/扣分记录
+// 入参沿用 ImportExcel 的 { fields, rows, mode }；mode 为 personal/group，避免导错对象类型。
+router.post('/import', (req, res) => {
+  try {
+    const { fields, rows, mode } = req.body || {};
+    if (!Array.isArray(fields) || !Array.isArray(rows)) {
+      return res.status(400).json({ error: '缺少有效的字段或数据' });
+    }
+
+    // 按表头名取单元格；Excel 文件列顺序可以任意调整
+    const cell = (row, names) => {
+      for (const n of names) {
+        const i = fields.indexOf(n);
+        if (i >= 0) {
+          const v = row[i];
+          if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+        }
+      }
+      return '';
+    };
+
+    const insert = db.prepare(
+      `INSERT INTO score_records
+        (student_id, 姓名, 学号, 类型, 项目, 分值, 原因, 加分时间, created_at, source, group_name, 成员数)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+
+    const list = rows.map((row, idx) => {
+      const rowNo = idx + 1;
+      const groupName = cell(row, ['小组', '小组名', 'group_name']);
+      const name = cell(row, ['姓名']);
+      const xuehao = cell(row, ['学号']);
+      const isGroup = mode === 'group' || (!mode && groupName);
+      if (isGroup && !groupName) throw new Error(`第 ${rowNo} 行缺少「小组」`);
+      if (!isGroup && !name) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
+
+      let student = null;
+      if (!isGroup) {
+        if (xuehao) student = db.prepare('SELECT id, 姓名, 学号 FROM students WHERE 学号 = ?').get(xuehao) || null;
+        if (!student && name) {
+          const sameName = db.prepare('SELECT id, 姓名, 学号 FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2').all(name);
+          if (sameName.length === 1) student = sameName[0];
+        }
+      }
+
+      const type = sanitizeField(cell(row, ['类型']) || '加分', 'score_records', '类型');
+      const scoreRaw = cell(row, ['分值']);
+      const fen = scoreRaw === '' ? 0 : sanitizeField(scoreRaw, 'score_records', '分值');
+      const time = sanitizeField(cell(row, ['加分时间']) || now(), 'score_records', '加分时间', '日期');
+      const memberCount = isGroup ? (normNumber(cell(row, ['成员数']), '成员数') ?? 0) : 0;
+
+      return {
+        student_id: isGroup ? null : (student ? student.id : null),
+        姓名: isGroup ? null : (name || (student && student.姓名) || null),
+        学号: isGroup ? null : (xuehao || (student && student.学号) || null),
+        类型: type,
+        项目: cell(row, ['项目']) || null,
+        分值: fen ?? 0,
+        原因: cell(row, ['原因']) || null,
+        加分时间: time,
+        created_at: now(),
+        source: isGroup ? 'group' : 'personal',
+        group_name: isGroup ? groupName : null,
+        成员数: memberCount,
+      };
+    });
+
+    const insertMany = db.transaction((items) => {
+      for (const item of items) {
+        insert.run(
+          item.student_id, item.姓名, item.学号, item.类型, item.项目,
+          item.分值, item.原因, item.加分时间, item.created_at,
+          item.source, item.group_name, item.成员数
+        );
+      }
+    });
+    insertMany(list);
+    res.json({ message: `成功导入 ${list.length} 条加分记录` });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 module.exports = router;

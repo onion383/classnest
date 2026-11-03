@@ -317,3 +317,53 @@ main h3.text-xl {
   outline: 2px solid rgba(30, 58, 107, 0.55);
   outline-offset: 2px;
 }
+
+/* 空态操作区：主操作 + 「从 Excel 表格批量导入」两条出路竖排。
+   间距比空态自身内容的 12px 更大一些，避免两个按钮挨得太近、看起来像同一个控件。 */
+.empty-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+/* ==================== 空态的「从 Excel 表格批量导入」按钮 ====================
+   与 .empty-action-btn（淡蓝「添加」）并列，但走暖色毛玻璃：
+   「添加」是在空表里手写一条，「批量导入」是把已有表格搬进来 —— 用暖色把两条路分开，
+   同时保持次级权重（半透明底 + 细描边，不抢空态文案的视觉主体）。
+   glass 主题下按钮本身还会叠一层主题的玻璃描边，与工具栏导出按钮观感一致；
+   base / glass2 退化为半透明暖色底，颜色语义不变。 */
+.empty-import-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 108px;
+  padding: 8px 20px;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.4;
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  box-shadow:
+    inset 0 0 0 20px rgba(255, 255, 255, 0.28),
+    0 2px 10px rgba(180, 83, 9, 0.10);
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.15s ease;
+}
+.empty-import-btn:hover {
+  color: #78350f;
+  background: rgba(245, 158, 11, 0.26);
+}
+/* 与 .empty-action-btn 一致：按下轻微缩放，不做上浮/换色以外的夸张反馈 */
+.empty-import-btn:active {
+  transform: scale(0.98);
+}
+.empty-import-btn:focus-visible {
+  outline: 2px solid rgba(180, 83, 9, 0.55);
+  outline-offset: 2px;
+}

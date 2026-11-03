@@ -561,11 +561,8 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
         await fetchRows()
         selectedCount.value = 0
         selectedRowKeys.value = []
-        // 有失败时区分原因：只要存在「至少保留一个学生」保护导致的失败，就优先给明确提示条
         const fails = results.filter(r => !r.ok)
-        if (fails.some(f => /保留.{0,2}一个学生/.test(f.msg || ''))) {
-          notifyError('至少需要保留一个学生')
-        } else if (fails.length) {
+        if (fails.length) {
           notifyError('部分记录删除失败，请重试')
         }
       } catch (err) {

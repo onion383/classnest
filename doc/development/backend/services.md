@@ -87,6 +87,7 @@ classnest/
 - **定位**：跨表业务校验。
 - **导出**：`validateRow`、`assertLeaveWindow`（请假时间窗与 SQL 时间戳）、`assertSeatRefs`（座位引用）、`assertDutyRefs`（值日引用）。
 - 被对应路由写操作前调用；`assertDutyRefs` 的单模式根分支是刻意兼容，勿删。
+- `assertDutyRefs` 遇到名册外姓名不拒绝，改为调用 `provisionalStudents.resolveNames` 登记为临时学生（与座位表直接输入姓名同口径）。
 
 #### [`services/dutyCells.js`](../../../student-backend/services/dutyCells.js) / [`services/dutyMode.js`](../../../student-backend/services/dutyMode.js) · 值日单元格工具
 - `dutyCells`：值日单元格/姓名引用工具，导出 `DUTY_MODES`、`dutyRoots`、`countDutyRefs`、`removeDutyName`、`renameDutyName`。

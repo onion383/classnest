@@ -47,12 +47,25 @@
         class="dt-empty-btn"
         @click="$emit('clearSearch')"
       >清除搜索</button>
-      <button
-        v-else-if="emptyActionText && !readonly"
-        type="button"
-        class="dt-empty-btn"
-        @click="onAddRowBarClick"
-      >{{ emptyActionText }}</button>
+      <!-- 空态操作区：主按钮（添加）在上，批量导入在下 —— 两者是「空表时的两条出路」，
+           竖排比并排更容易读懂，也不会把窄屏撑成一行放不下。 -->
+      <div
+        v-else-if="(emptyActionText && !readonly) || emptyImportText"
+        class="dt-empty-actions"
+      >
+        <button
+          v-if="emptyActionText && !readonly"
+          type="button"
+          class="dt-empty-btn"
+          @click="onAddRowBarClick"
+        >{{ emptyActionText }}</button>
+        <button
+          v-if="emptyImportText"
+          type="button"
+          class="empty-import-btn"
+          @click="$emit('emptyImport')"
+        >{{ emptyImportText }}</button>
+      </div>
     </div>
 
     <!-- 判定中：同高静默占位，**不渲染表头**。
@@ -397,6 +410,9 @@ const props = defineProps({
     // 空态按钮文案。传空字符串即不渲染按钮；只读表 / 禁用「添加一行」的表也会自动不显示
     // （那种表点了也加不了行，留着是个死按钮）。
     emptyActionText: { type: String, default: '点击添加' },
+    // 空态里的「批量导入」按钮文案。传空字符串即不渲染（默认关闭）。
+    // 只负责渲染按钮并抛出事件，具体打开哪个导入弹窗由页面决定 —— 表格不知道导入来源。
+    emptyImportText: { type: String, default: '' },
     // 数据是否已就绪。false 时不渲染空态 —— 异步加载期间 rows 也是空数组，
     // 不区分的话会在数据回来前先闪一下「还没有数据」。
     emptyReady: { type: Boolean, default: true },
@@ -443,6 +459,8 @@ const emit = defineEmits([
     'retry',
     // 搜索无结果态里的「清除搜索」
     'clearSearch',
+    // 空态里的「从 Excel 表格批量导入」：表格只抛事件，由页面打开自己的导入弹窗
+    'emptyImport',
 ])
 
 // 模板 ref（静态名自动绑定）；动态 :ref（editInput-* / newRowInput）由函数 ref 收集进 cellInputRefs
@@ -697,6 +715,7 @@ const ctx = {
   emptyText: toRef(props, "emptyText"),
   emptyLabel: toRef(props, "emptyLabel"),
   emptyActionText: toRef(props, "emptyActionText"),
+  emptyImportText: toRef(props, "emptyImportText"),
   emptyReady: toRef(props, "emptyReady"),
   loadError: toRef(props, "loadError"),
   errorText: toRef(props, "errorText"),
@@ -1712,6 +1731,14 @@ th.col-header {
    让用户一眼看出「还是这块区域，只是结论不同」 */
 .dt-error .dt-empty-icon { color: var(--color-danger, #ef4444); }
 .dt-error .dt-empty-text { color: var(--color-text-secondary, #64748b); }
+/* 空态操作区：主按钮 + 「从 Excel 表格批量导入」竖排。
+   单独一列 18px 间距，比外层 16px 略大 —— 两个按钮属于同一组选择，但也要一眼看出是两个入口。 */
+.dt-empty-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
 /* 空态按钮：淡蓝底 + 深蓝字（#D9E5F8 太浅，配白字只有 1.3:1，读不出来）。
    这组色值在 GridView 的 .grid-empty-btn 里有一份完全相同的副本，改颜色要两边一起改。 */
 .dt-empty-btn {

@@ -46,6 +46,9 @@
       <div class="mb-4 flex items-center gap-3 opbar">
         <button @mouseenter="prefetch(loadAddScoreDialog)" @click="openAdd" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">＋ 添加{{ isGroup ? '小组' : '个人' }}加分</button>
         <button @click="refresh" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
+        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">
+          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        </button>
         <button @mouseenter="prefetch(loadExportExcel)" @click="openExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">📥 导出{{ isGroup ? '小组' : '个人' }}加分</button>
       </div>
 
@@ -57,9 +60,11 @@
         :title="isGroup ? '🗓️ 今日小组加减分时间轴' : '🗓️ 今日个人加减分时间轴'"
         :empty-text="isGroup ? '今天还没有小组加分' : '今天还没有人加分'"
         empty-action-text="去加分"
+        empty-secondary-action-text="从 Excel 表格批量导入"
         :loading="loading"
         align-right
         @empty-action="openAdd"
+        @empty-secondary-action="openImportDialog"
       >
         <template #content="{ node }">
           <div class="text-sm text-text">
@@ -85,6 +90,9 @@
       <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
         <button @click="refreshStats" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh transition-theme">
           <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
+        </button>
+        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
+          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
         </button>
         <button @click="openStatsExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
           <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
@@ -118,7 +126,9 @@
           hide-add-row
           :empty-label="isGroup ? '小组加分' : '个人加分'"
           :empty-action-text="isGroup ? '＋ 添加小组加分' : '＋ 添加个人加分'"
+          empty-import-text="从 Excel 表格批量导入"
           @add-new-row-at-bottom="openAdd"
+          @empty-import="openImportDialog"
           @start-edit="startEdit"
           @save-cell="saveCell"
           @delete-row="onDeleteRow"
@@ -139,6 +149,7 @@
       @confirm="submitAdd"
       @update="updateScore"
       @delete="rec => deleteScore(rec?.id)"
+      @import="openBatchImportFromAdd"
       @cancel="addDialogVisible = false"
     />
 
@@ -163,6 +174,17 @@
       :default-filename="exportFilename"
       @export-finish="() => {}"
       @update:is-visible="exportVisible = $event"
+    />
+
+    <!-- 从 Excel 导入弹窗 -->
+    <ImportExcel
+      v-if="importMounted"
+      :visible="importDialogVisible"
+      :existingFields="importFields"
+      :requiredFields="importRequiredFields"
+      :templateName="'加分记录标准导入表'"
+      @import-data="onImportData"
+      @cancel="importDialogVisible = false"
     />
   </div>
 </template>
@@ -192,6 +214,8 @@ const AddScoreDialog = defineAsyncComponent(loadAddScoreDialog)
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
 const loadExportExcel = () => import('../components/import-export/ExportExcel/ExportExcel.vue')
 const ExportExcel = defineAsyncComponent(loadExportExcel)
+const loadImportExcel = () => import('../components/import-export/ImportExcel.vue')
+const ImportExcel = defineAsyncComponent(loadImportExcel)
 
 const API = '/api'
 
@@ -213,6 +237,8 @@ const addDialogMounted = ref(false)
 const editingRecord = ref(null)
 const exportVisible = ref(false)
 const exportMounted = ref(false)
+const importDialogVisible = ref(false)
+const importMounted = ref(false)
 const exportKind = ref('today')   // today 今日加分记录 / stats 加分统计
 const confirm = ref({ visible: false, message: '', ok: null })
 const confirmMounted = ref(false)
@@ -341,6 +367,12 @@ const scoreFields = computed(() => scoreCols.value.map(name => ({
   options: name === '类型' ? ['加分', '扣分'] : undefined
 })))
 
+// 从 Excel 导入：表头与页面导出的列保持一致；个人/小组由当前「加分对象」决定
+const importFields = computed(() => isGroup.value
+  ? [{ name: '小组' }, { name: '成员数' }, { name: '类型' }, { name: '项目' }, { name: '分值' }, { name: '加分时间' }, { name: '原因' }]
+  : [{ name: '姓名' }, { name: '学号' }, { name: '类型' }, { name: '项目' }, { name: '分值' }, { name: '加分时间' }, { name: '原因' }])
+const importRequiredFields = computed(() => isGroup.value ? ['小组'] : ['姓名'])
+
 // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y 撤销、重做加分表
 const { success: n } = useNotification()
 useUndoShortcut('score_records', {
@@ -351,6 +383,7 @@ useUndoShortcut('score_records', {
 // 懒加载弹窗保活：首次打开后保持挂载，关闭只降 visible，保留退出动画
 watch(addDialogVisible, (v) => { if (v) addDialogMounted.value = true })
 watch(exportVisible, (v) => { if (v) exportMounted.value = true })
+watch(importDialogVisible, (v) => { if (v) importMounted.value = true })
 watch(() => confirm.value.visible, (v) => { if (v) confirmMounted.value = true })
 // 跨页定位：标题栏全局搜索点「加扣分记录」结果跳转 /scores?focus=<id>
 watch(() => route.query.focus, () => { _applyRowFocus() })
@@ -418,9 +451,30 @@ async function refresh() {
 async function refreshStats() {
   if (await loadAll()) useNotification().success('已刷新 加分统计 数据')
 }
+async function onImportData({ fields, rows }) {
+  importDialogVisible.value = false
+  try {
+    const res = await axios.post(`${API}/scores/import`, { fields, rows, mode: scoreMode.value })
+    useNotification().success(res.data.message || '导入成功')
+    await loadAll()
+  } catch (err) {
+    reportError(err, { action: '导入加分记录' })
+  }
+}
+// 表格空态里的「从 Excel 表格批量导入」：预取导入弹窗 chunk 后打开
+function openImportDialog() {
+  prefetch(loadImportExcel)
+  importDialogVisible.value = true
+}
 function openAdd() {
   editingRecord.value = null
   addDialogVisible.value = true
+}
+// 加分弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+function openBatchImportFromAdd() {
+  addDialogVisible.value = false
+  importMounted.value = true
+  importDialogVisible.value = true
 }
 // 导出今日加分：无数据时直接提示，不弹导出选项弹窗
 function openExport() {

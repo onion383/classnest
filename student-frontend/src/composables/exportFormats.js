@@ -62,35 +62,45 @@ async function exportXLSX(cols, body, name, title) {
   const titleRow = ws.addRow([title])
   ws.mergeCells(1, 1, 1, Math.max(cols.length, 1))
   titleRow.height = 24
-  titleRow.eachCell((c) => {
+  // 逐列取单元格写样式：eachCell 会跳过空值/null 单元格，空单元格就没边框
+  for (let i = 1; i <= cols.length; i++) {
+    const c = ws.getCell(1, i)
     c.font = { bold: true, size: 14, color: { argb: 'FF000000' } }
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } }
     c.alignment = { horizontal: 'center', vertical: 'middle' }
     c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }
-  })
+  }
   const headRow = ws.addRow(cols)
-  headRow.eachCell((c) => {
+  for (let i = 1; i <= cols.length; i++) {
+    const c = ws.getCell(headRow.number, i)
     c.font = { bold: true, color: { argb: 'FFFFFFFF' } }
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4CAF50' } }
     c.alignment = { horizontal: 'center', vertical: 'middle' }
     c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }
-  })
+  }
   for (const row of body) {
     const dr = ws.addRow(row)
-    dr.eachCell((c) => {
+    for (let i = 1; i <= cols.length; i++) {
+      const c = ws.getCell(dr.number, i)
       c.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true }
       c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }
-    })
+    }
   }
   // 列宽：按内容最长字符数（中文按 2.2 宽）估算
+  // 表头也要按同一套「中文记 2.2 宽」来量，否则纯中文长表头（如「家长联系电话」）
+  // 会刚好卡边，Excel 里相邻列表头文字互相压住；留 8 余量。
+  const displayLen = (v) => {
+    let n = 0
+    for (const ch of s(v)) n += /[\u4e00-\u9fa5]/.test(ch) ? 2.2 : 1
+    return n
+  }
   for (let i = 1; i <= cols.length; i++) {
-    let maxLen = cols[i - 1].length
+    let maxLen = displayLen(cols[i - 1])
     body.forEach((row) => {
-      let len = 0
-      for (const ch of s(row[i - 1])) len += /[\u4e00-\u9fa5]/.test(ch) ? 2.2 : 1
+      const len = displayLen(row[i - 1])
       if (len > maxLen) maxLen = len
     })
-    ws.getColumn(i).width = Math.max(12, Math.min(maxLen + 6, 60))
+    ws.getColumn(i).width = Math.max(12, Math.min(maxLen + 8, 60))
   }
   const buf = await wb.xlsx.writeBuffer()
   return saveBlobWithDialog(`${name}.xlsx`, new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
@@ -158,16 +168,25 @@ async function exportPDF(cols, body, name, title) {
     fontLoaded = true
   } catch (e) { console.warn('中文字体加载失败:', e) }
   const pdfFont = fontLoaded ? 'NotoSansSC' : 'helvetica'
-  doc.setFontSize(16)
-  doc.setFont(pdfFont, 'normal')
-  doc.text(title, doc.internal.pageSize.getWidth() / 2, 15, { align: 'center' })
+  const pageWidth = doc.internal.pageSize.getWidth()
+  // 标题在每页重画（只画一次的话，第 2 页起只有表头没有标题，打印留档时对不上）
+  const drawTitle = () => {
+    doc.setFontSize(20)
+    doc.setFont(pdfFont, 'normal')
+    doc.text(title, pageWidth / 2, 16, { align: 'center' })
+  }
   autoTable(doc, {
-    startY: 22,
+    startY: 26,
+    // 每页顶部留出标题高度，表头（showHead）默认就是每页重复
+    margin: { top: 26 },
+    showHead: 'everyPage',
+    willDrawPage: drawTitle,
     head: [cols],
     body,
     theme: 'grid',
-    styles: { font: pdfFont, fontStyle: 'normal', fontSize: 9, cellPadding: 1.5, halign: 'left', valign: 'middle' },
-    headStyles: { font: pdfFont, fontStyle: 'normal', fillColor: [76, 175, 80], textColor: 255, halign: 'center' },
+    // 黑白版式：表头不填色、正文黑字（导出 PDF 只用边框区分层级，便于打印与复印）
+    styles: { font: pdfFont, fontStyle: 'normal', fontSize: 12, cellPadding: 1.5, halign: 'left', valign: 'middle', textColor: [0, 0, 0] },
+    headStyles: { font: pdfFont, fontStyle: 'bold', fillColor: [255, 255, 255], textColor: [0, 0, 0], halign: 'center', lineWidth: 0.1 },
   })
   return saveBlobWithDialog(`${name}.pdf`, doc.output('blob'))
 }

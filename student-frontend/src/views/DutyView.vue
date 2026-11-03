@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div>
     <div class="w-full bg-surface shadow-md rounded-xl mb-6 px-5 py-3 border border-border min-h-[4.5rem] flex items-center justify-between">
       <h1 class="text-2xl font-bold text-text flex items-center gap-2">
@@ -24,6 +24,7 @@
               <button @click="openArrange(dutyView)" @mouseenter="prefetch(loadArrangementDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded">🧠 智能排表</button>
               <button @click="dutyView === 'active' ? refreshActive() : refreshMaster()" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="openImport(dutyView)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> {{ dutyView === 'active' ? '从模板导入' : '从实行导入' }}</button>
+              <button @click="openExcelImport(dutyView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
               <button @click="dutyView === 'active' ? openActiveExport() : openMasterExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出值日表</button>
             </div>
 
@@ -35,12 +36,15 @@
                    否则设置请求失败也会被误认成「没配项目」），所以换成引导页把人引到设置去。 -->
               <EmptySnapshot
                 v-if="settingsLoaded && !settingsItems.length"
-                icon="🧹"
+                icon="duty"
                 text="还没有值日设置"
                 min-height="200px"
                 action-text="去设置"
                 action-icon="settings"
+                secondary-action-text="从 Excel 表格批量导入"
+                secondary-action-icon="download"
                 @action="settingsVisible = true"
+                @secondary-action="openExcelImport('active')"
                 @mouseenter="prefetch(loadSettingsDialog)"
               />
               <GridView
@@ -74,12 +78,15 @@
               <!-- 同当前值日：项目没配置 → 没有行，给引导页（模板与当前值日共用同一份全局项目设置） -->
               <EmptySnapshot
                 v-if="settingsLoaded && !settingsItems.length"
-                icon="🧹"
+                icon="duty"
                 text="还没有值日设置"
                 min-height="200px"
                 action-text="去设置"
                 action-icon="settings"
+                secondary-action-text="从 Excel 表格批量导入"
+                secondary-action-icon="download"
                 @action="settingsVisible = true"
+                @secondary-action="openExcelImport('master')"
                 @mouseenter="prefetch(loadSettingsDialog)"
               />
               <GridView
@@ -107,6 +114,18 @@
               />
               <ExportExcel v-if="masterExportMounted" :is-visible="masterExportVisible" :rows="masterExportRows" :fields="exportFields" defaultFilename="值日模板" @update:is-visible="masterExportVisible = $event" />
             </template>
+
+            <!-- 从 Excel 导入（按「劳动项目 + 星期列」匹配当前显示的值日矩阵） -->
+            <ImportExcel
+              v-if="importMounted"
+              :visible="importVisible"
+              :existingFields="importFields"
+              :requiredFields="[['项目', '劳动项目', '值日项目', '项目名称', '劳动项目名称']]"
+              :templateName="importTarget === 'master' ? '值日模板标准导入表' : '当前值日表标准导入表'"
+              previewMode="grid"
+              @import-data="onImportData"
+              @cancel="importVisible = false"
+            />
           </section>
 
           <!-- 值日项目权重表：与值日表同构（项目×星期），格内填数字权重，热力图展示 -->
@@ -125,7 +144,7 @@
                  判定同样要带 settingsLoaded：设置请求失败时 items 会停在初始 []，否则会误报「没配项目」。 -->
             <EmptySnapshot
               v-if="settingsLoaded && !settingsItems.length"
-              icon="🧹"
+              icon="duty"
               text="还没有值日设置"
               min-height="200px"
               action-text="去设置"
@@ -327,6 +346,7 @@ import { syncStudentNamesFromRows, syncStudentNames } from '../composables/useSy
 import { createRowReuseCache } from '../utils/rowReuse.js'
 import { applyRouteRowFocus } from '../composables/useRowFocus.js'
 import { weightHeatRgb, weightHeatFg } from '../utils/heatColor.js'
+import { resolveHeader, matchCandidate } from '../utils/importSheet.js'
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk。loader 抽出为命名函数，
 // 可用 @mouseenter="prefetch(loadXxx)" 在悬停按钮时预取，点击时即时弹出。
@@ -337,6 +357,8 @@ const DutyArrangementDialog = defineAsyncComponent(loadArrangementDialog)
 const loadWeightAlgoDialog = () => import('../components/dialogs/DutyWeightAlgorithmDialog.vue')
 const DutyWeightAlgorithmDialog = defineAsyncComponent(loadWeightAlgoDialog)
 const ExportExcel = defineAsyncComponent(() => import('../components/import-export/ExportExcel/ExportExcel.vue'))
+const loadImportExcel = () => import('../components/import-export/ImportExcel.vue')
+const ImportExcel = defineAsyncComponent(loadImportExcel)
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
 const loadDutyRecordSettingsDialog = () => import('../components/dialogs/DutyRecordSettingsDialog.vue')
 const DutyRecordSettingsDialog = defineAsyncComponent(loadDutyRecordSettingsDialog)
@@ -886,6 +908,116 @@ function openActiveExport() {
 function openMasterExport() {
   if (!hasDutyData(masterCells.value)) return useNotification().info('值日模板为空，无法导出')
   masterExportVisible.value = true
+}
+
+// ==================== 从 Excel 导入（按「劳动项目 + 星期列」匹配当前显示的值日矩阵） ====================
+// 只覆盖文件里出现的「项目 × 星期」格：多人用顿号/逗号/空格分隔；
+// 文件里空白的格子会清空该格名单，未出现在文件里的项目保持原样。
+const importVisible = ref(false)
+const importMounted = ref(false)
+const importTarget = ref('active')
+watch(importVisible, (n) => { if (n) importMounted.value = true })
+const importFields = computed(() => [{ name: '项目' }, ...settingsDays.value.map(d => ({ name: d }))])
+function openExcelImport(target) {
+  // 空态里的第二入口没有鼠标悬停预取，点击时先拉起导入弹窗 chunk 再打开
+  prefetch(loadImportExcel)
+  importTarget.value = target
+  importVisible.value = true
+}
+// 表头/项目名做宽松匹配：允许「劳动项目 / 项目名称」「d_周一 / 星期一 / 周一」等写法，
+// 以及项目名里多空格、全角括号、后缀说明等常见的手工表格差异。
+function dayHeaderAliases(day) {
+  const week = day.replace(/^周/, '星期')
+  const worship = day.replace(/^周/, '礼拜')
+  return [day, week, worship]
+}
+async function onImportData({ fields, rows }) {
+  importVisible.value = false
+  const isMaster = importTarget.value === 'master'
+  const cellsRef = isMaster ? masterCells : activeCells
+  const itemNames = settingsItems.value.map(it => String(it.name ?? '').trim()).filter(Boolean)
+  const itemSet = new Set(itemNames)
+  const projectHeader = resolveHeader(fields, ['项目', '劳动项目', '值日项目', '项目名称', '劳动项目名称'])
+  // 先把每个设置里的星期映射到文件里的实际列名，避免逐行重复匹配
+  const dayHeaders = new Map(settingsDays.value.map(day => [day, resolveHeader(fields, dayHeaderAliases(day))]))
+  const objects = rows.map(row => {
+    const obj = {}
+    fields.forEach((name, i) => { obj[name] = String(row[i] ?? '').trim() })
+    return obj
+  })
+
+  const errors = []
+  const fuzzyNotes = []
+  const next = JSON.parse(JSON.stringify(cellsRef.value || {}))
+  // 同一「项目 · 星期」出现在多行时（手工表格常见：项目行下按人数拆多行）要合并人名，
+  // 不能后一行覆盖前一行；这个集合记录本次导入已经写过的格子。
+  const seenItemDay = new Set()
+  let lastItem = ''
+  let touched = 0
+  objects.forEach((obj, idx) => {
+    if (!projectHeader) return
+    const rawItem = obj[projectHeader]
+    // 网格预览里的讲台行是装饰行，不参与值日项目匹配
+    if (rawItem === '讲台') return
+    // 项目名只在首行写、下面合并留空的手工表：该行有星期内容时沿用上一行的项目
+    const hasDayValue = settingsDays.value.some(day => {
+      const header = dayHeaders.get(day)
+      return header && obj[header] !== undefined && obj[header] !== ''
+    })
+    const itemRaw = rawItem || (hasDayValue ? lastItem : '')
+    if (!itemRaw) return
+    let item = itemRaw
+    if (!itemSet.has(item)) {
+      const hit = matchCandidate(itemRaw, itemNames, { threshold: 0.72 })
+      if (hit && hit.value) {
+        item = hit.value
+        fuzzyNotes.push(`${itemRaw}→${item}`)
+      } else {
+        const near = hit && hit.ambiguous ? `（相近项目：${hit.ambiguous.join('、')}）` : ''
+        errors.push(`第 ${idx + 1} 行：劳动项目「${itemRaw}」不在当前值日设置里${near}`)
+        return
+      }
+    }
+    lastItem = item
+    if (!next[item] || typeof next[item] !== 'object') next[item] = {}
+    settingsDays.value.forEach(day => {
+      const header = dayHeaders.get(day)
+      if (!header) return
+      const raw = obj[header]
+      if (raw === undefined) return
+      const names = raw
+        ? raw.split(/[、,，;；/|\s]+/).map(s => s.trim()).filter(Boolean)
+        : []
+      const key = `${item}\u0000${day}`
+      if (seenItemDay.has(key)) {
+        // 同一项目的后续行：追加并去重，避免把上面几行的人名覆盖掉
+        next[item][day] = [...new Set([...(next[item][day] || []), ...names])]
+      } else {
+        next[item][day] = names
+        seenItemDay.add(key)
+      }
+      touched += 1
+    })
+  })
+
+  if (errors.length) {
+    notifyError(errors[0] + (errors.length > 1 ? `（共 ${errors.length} 处不匹配）` : ''))
+    return
+  }
+  if (touched === 0) {
+    notifyError('没有匹配到可导入的项目与星期，请检查表头是否与页面一致')
+    return
+  }
+
+  const prev = cellsRef.value
+  cellsRef.value = next
+  const ok = isMaster ? await persistMaster('从 Excel 导入') : await persistActive('从 Excel 导入')
+  if (!ok) return
+  recordGridSnapshotUndo('值日表', isMaster ? 'duty_template' : 'duty_layout', prev, next, '从 Excel 导入')
+  const matchedTip = fuzzyNotes.length
+    ? `（已自动匹配：${fuzzyNotes.slice(0, 3).join('、')}${fuzzyNotes.length > 3 ? ' 等' : ''}）`
+    : ''
+  notifySuccess(`已从 Excel 导入${isMaster ? '值日模板' : '当前值日表'}${matchedTip}`)
 }
 
 // ==================== 历史记录 ====================

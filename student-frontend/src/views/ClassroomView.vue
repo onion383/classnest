@@ -31,7 +31,7 @@
         <IconGlyph name="trash" :size="14" tint="current" /> 批量删除 ({{ selectedCount }})
       </button>
       <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 导入
+        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
       </button>
       <button
         @click="openExport"
@@ -87,6 +87,7 @@
       :newRow="newRow"
       :protectedColumns="['学号', '姓名']"
       emptyLabel="学生"
+      empty-import-text="从 Excel 表格批量导入"
       :load-error="loadError"
       error-text="学生名单加载失败"
       @retry="fetchStudents"
@@ -112,6 +113,7 @@
       @selectionChange="onSelectionChange"
       @moveSelectedRows="onMoveSelectedRows"
       @edit-row="openEditDialog"
+      @empty-import="openImportDialog"
     />
 
     <ExportExcel
@@ -130,6 +132,8 @@
       :visible="importDialogVisible"
       :existingFields="visibleFields"
       :requiredFields="['姓名']"
+      :templateColumns="allBusinessFields"
+      :templateName="'学生信息标准导入表'"
       @import-data="onImportData"
       @cancel="importDialogVisible = false"
     />
@@ -149,6 +153,7 @@
       :title="editingRow ? '修改学生' : '添加学生'"
       :initial-values="addInitialValues"
       @confirm="onSubmitStudent"
+      @import="openBatchImportFromAdd"
       @cancel="addDialogVisible = false"
     />
     </template>
@@ -320,6 +325,13 @@ function openAddDialog() {
   addDialogVisible.value = true
 }
 
+// 添加学生弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+function openBatchImportFromAdd() {
+  addDialogVisible.value = false
+  importMounted.value = true
+  importDialogVisible.value = true
+}
+
 // 操作列「修改」：打开同一个弹窗，只是预填 + 走更新分支
 function openEditDialog(row) {
   if (newRow.value) newRow.value = null
@@ -344,6 +356,13 @@ async function onSubmitStudent(data) {
   } catch (err) {
     reportError(err, { action: isEdit ? '保存' : '添加' })
   }
+}
+
+// 表格空态里的「从 Excel 表格批量导入」：先预取导入弹窗 chunk，再打开。
+// 空表是首次使用最常见的入口，用户不必回工具栏再找一遍「从 Excel 表格批量导入」。
+function openImportDialog() {
+  prefetch(loadImportExcel)
+  importDialogVisible.value = true
 }
 
 const tableElement = computed(() => {

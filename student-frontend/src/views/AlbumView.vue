@@ -71,11 +71,17 @@
         </button>
       </div>
 
-      <!-- 空状态 -->
-      <div v-if="!activeAlbum" class="bg-surface rounded-xl border border-border p-12 text-center text-text-muted">
-        <p class="text-lg mb-2">还没有相册</p>
-        <p class="text-sm">点击「新建相册」选择照片所在文件夹，系统会自动扫描并建立索引。</p>
-      </div>
+      <!-- 空状态：空态卡片 + 新建相册按钮，占满剩余高度，与有数据时同高，避免切换跳动 -->
+      <EmptySnapshot
+        v-if="!activeAlbum"
+        class="flex-1"
+        icon="album"
+        text="还没有相册"
+        min-height="320px"
+        action-text="新建相册"
+        action-icon="folder"
+        @action="openNewAlbum"
+      />
 
       <!-- 照片按日期分组（网格窗口化虚拟滚动） -->
       <div v-else class="flex-1 min-h-0 flex flex-col">
@@ -168,9 +174,16 @@
     <!-- ==================== 相册：封面卡片 ==================== -->
     <div v-else class="flex-1 min-h-0 flex flex-col">
 
-      <p v-if="albums.length === 0" class="bg-surface rounded-xl border border-border p-12 text-center text-text-muted">
-        还没有相册，点击「新建相册」选择照片所在文件夹，系统会自动扫描并建立索引。
-      </p>
+      <EmptySnapshot
+        v-if="albums.length === 0"
+        class="flex-1"
+        icon="album"
+        text="还没有相册"
+        min-height="320px"
+        action-text="新建相册"
+        action-icon="folder"
+        @action="openNewAlbum"
+      />
 
       <div v-else class="flex-1 min-h-0 overflow-auto pr-1">
         <div class="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-5">
@@ -455,6 +468,7 @@ import VideoThumb from '../components/import-export/VideoThumb.vue'
 import AppSelect from '../components/base/AppSelect.vue'
 import ViewSwitch from '../components/base/ViewSwitch.vue'
 import AlbumYearRuler from '../components/album/AlbumYearRuler.vue'
+import EmptySnapshot from '../components/base/EmptySnapshot.vue'
 import IconGlyph from '../components/base/IconGlyph.vue'
 import { albumThumbUrl, albumFileUrl } from '../utils/albumMedia'
 import { pad2 } from '../utils/dateTime.js'

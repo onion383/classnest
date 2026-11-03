@@ -43,8 +43,8 @@ classnest/
 ### [DynamicTable/DynamicTable.vue](../../../../student-frontend/src/components/tables/DynamicTable/DynamicTable.vue) · 动态列 CRUD 表
 - **定位**：学生表、班费表等「列可增删」的表格；是 [`useTableCRUD`](../../../../student-frontend/src/composables/useTableCRUD.js)（表格增删改查组合式函数）的纯展示层。
 - 对外接口（关键）：
-  - `props`（组件属性）：`fields`（字段，必填）/ `rows`（行数据，必填）/ `newRow`（新行）/ `sortField`（排序字段）/ `sortOrder`（排序方向）/ `editingCell`（正在编辑的单元格）/ `maxRows`（最大行数）/ `hideSelectAll`（隐藏全选）/ `hideMoveButtons`（隐藏移动按钮）/ `hideAddRow`（隐藏添加行）/ `minTableHeight`（最小高度）/ `maxHeight`（最大高度）
-  - `emits`（组件事件）：`contextmenu`（右键菜单）/ `search`（搜索）/ `toggleSort`（切换排序）/ `saveNewRow`（保存新行）/ `cancelNewRow`（取消新行）/ `startEdit`（开始编辑）/ `saveCell`（保存单元格）/ `moveRow`（移动行）/ `deleteRow`（删除行）/ `addNewRowAtBottom`（底部新增行）/ `updateNewRow`（更新新行）/ `manageReceipt`（管理收据）/ `swapRows`（交换行）/ `swapColumns`（交换列）/ `moveSelectedRows`（移动选中行）/ `selectionChange`（选中变化）
+  - `props`（组件属性）：`fields`（字段，必填）/ `rows`（行数据，必填）/ `newRow`（新行）/ `sortField`（排序字段）/ `sortOrder`（排序方向）/ `editingCell`（正在编辑的单元格）/ `maxRows`（最大行数）/ `hideSelectAll`（隐藏全选）/ `hideMoveButtons`（隐藏移动按钮）/ `hideAddRow`（隐藏添加行）/ `minTableHeight`（最小高度）/ `maxHeight`（最大高度）/ `emptyActionText`（空态主按钮文案）/ `emptyImportText`（空态「从 Excel 表格批量导入」按钮文案，传空字符串即隐藏）
+  - `emits`（组件事件）：`contextmenu`（右键菜单）/ `search`（搜索）/ `toggleSort`（切换排序）/ `saveNewRow`（保存新行）/ `cancelNewRow`（取消新行）/ `startEdit`（开始编辑）/ `saveCell`（保存单元格）/ `moveRow`（移动行）/ `deleteRow`（删除行）/ `addNewRowAtBottom`（底部新增行）/ `updateNewRow`（更新新行）/ `manageReceipt`（管理收据）/ `swapRows`（交换行）/ `swapColumns`（交换列）/ `moveSelectedRows`（移动选中行）/ `selectionChange`（选中变化）/ `emptyImport`（点击空态批量导入按钮）
   - `slots`（插槽）：`empty-actions`（空态按钮）
 - **内部实现**：列头排序/搜索、双击编辑、行内新增行、多选、行列拖拽（交换/移动）、底部「点击添加一行」；列宽快照与增删行动画；内部另定义 `TransitionGroup`（多元素进出过渡组件）包装子组件。
 - **使用方**：`ClassroomView`、`FeeManagement`、`LeaveManagement`、`ScoreManagement`、`ImportExcel`、`DeduplicateDialog`。
@@ -62,7 +62,7 @@ classnest/
   - `emits`（组件事件）：`update:cells`（单元格更新）/ `swapRows`（交换行）/ `swapColumns`（交换列）/ `update:row-meta`（行元信息更新）/ `cell-dblclick`（单元格双击）
 - **内部实现**：单元格拖选/长按多选、双击编辑、候选下拉（`Teleport`（传送组件）+ `fixed`（固定定位），与座位表候选一致）、行列拖拽交换、行元信息编辑；`maxHeight`（最大高度）在弹窗调用方传 0 关闭。
 - **使用方**：`SeatView`、`ScheduleView`、`DutyView`、`DutyArrangementDialog`、`SmartArrangementDialog`、`AiGridPreview`。
-- 注意：**不要加 `virtual scroll`（虚拟滚动）**（`rowspan`（跨行合并）切片会错位，且拖拽依赖完整 `DOM`（页面元素树））；空态一律不做。
+- 注意：**不要加 `virtual scroll`（虚拟滚动）**（`rowspan`（跨行合并）切片会错位，且拖拽依赖完整 `DOM`（页面元素树））；组件本身不做空态，课程表无作息设置时由 `ScheduleView` 在 `GridView` 外换成 `EmptySnapshot`。
 
 ### [AiGridPreview.vue](../../../../student-frontend/src/components/tables/AiGridPreview.vue) · AI 排布预览
 - **定位**：把 AI 提案里的课表/座位/值日排布渲染成网格预览（只读）。

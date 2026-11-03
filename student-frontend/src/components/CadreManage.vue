@@ -1,13 +1,19 @@
 <template>
   <div class="h-full flex flex-col relative">
-    <!-- 工具栏按钮：视图切换 + 设置 + 刷新 -->
+    <!-- 工具栏按钮：修改 + 添加职务 + 增加下级 + 刷新 -->
     <div class="mb-4 flex items-center gap-3 opbar">
       <button @click="onEditSelected" :disabled="!selectedNode" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
-        <IconGlyph name="settings" :size="14" tint="current" /> 设置
+        <IconGlyph name="edit" :size="14" tint="current" /> 修改
       </button>
       <button @click="onAddRoot" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5 cursor-pointer">＋ 添加职务</button>
       <button @click="onAddChildSelected" :disabled="!selectedNode" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">＋ 增加下级</button>
       <button @click="onRefresh" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
+      <button @click="openExport" @mouseenter="prefetch(loadExportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5 cursor-pointer">
+        <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
+      </button>
+      <button @click="importVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5 cursor-pointer">
+        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+      </button>
     </div>
 
     <!-- ====== 树状视图（智能排表式嵌套列表） ====== -->
@@ -21,7 +27,7 @@
 
       <!-- 职务树：智能排表式嵌套列表，可拖拽排序（拖空白区可上移为顶级） -->
       <div v-else class="pb-2" @dragover.prevent @drop="onDropEmpty" @click.self="selectedId = null">
-        <p class="text-xs text-text-muted mb-2">点击任意职务行可选中（选中后高亮蓝框）；选中后可用上方「增加下级」「设置」。按住 <span class="font-bold">⠿</span> 拖动可调整顺序；拖到某职务行前后可在同级重排，拖到某职务下方虚线框可将它变为下级；成员可跨职务拖动。操作即时保存。</p>
+        <p class="text-xs text-text-muted mb-2">点击任意职务行可选中（选中后高亮蓝框）；选中后可用上方「增加下级」「修改」。按住 <span class="font-bold">⠿</span> 拖动可调整顺序；拖到某职务行前后可在同级重排，拖到某职务下方虚线框可将它变为下级；成员可跨职务拖动。操作即时保存。</p>
         <CadreTreeList
           v-for="root in tree"
           :key="root.id"
@@ -42,12 +48,45 @@
     <!-- 职务树：细滑块 + 淡入；根容器 relative，覆盖层落在卡片右侧内边距里 -->
     <CustomScrollbar :target="treeScrollRef" compact :arrows="false" auto-hide :min-thumb="22" />
 
+    <!-- ============ 导出弹窗（复用 ExportExcel，导出去平后的职务名单） ============ -->
+    <ExportExcel
+      v-if="exportMounted"
+      :is-visible="exportVisible"
+      :rows="exportRows"
+      :fields="exportFields"
+      default-filename="班干部名单"
+      title="导出班干部名单"
+      @update:is-visible="exportVisible = $event"
+    />
+
+    <!-- ============ 导入弹窗（与导出列一致，可直接把导出文件导回） ============ -->
+    <ImportExcel
+      v-if="importMounted"
+      :visible="importVisible"
+      :existingFields="importFields"
+      :requiredFields="['职务']"
+      :templateName="'班干部标准导入表'"
+      @import-data="onImportData"
+      @cancel="importVisible = false"
+    />
+
     <!-- ============ 新增/编辑职务弹窗 ============ -->
     <Teleport to="body">
     <Transition name="dialog">
     <div v-if="nodeDialogVisible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10003]" @click.self="nodeDialogVisible = false">
       <div class="bg-surface p-6 rounded-xl w-96 shadow-card dialog-card border border-border">
-        <h3 class="text-lg font-bold text-text mb-4">{{ editTarget ? '编辑职务' : (parentTarget ? '添加下级职务' : '添加职务') }}</h3>
+        <div class="flex items-center gap-3 mb-4">
+          <h3 class="text-lg font-bold text-text">{{ editTarget ? '编辑职务' : (parentTarget ? '添加下级职务' : '添加职务') }}</h3>
+          <button
+            v-if="!editTarget"
+            type="button"
+            @click="openImportFromNodeDialog"
+            class="bg-warning hover:bg-warning-hover text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-theme cursor-pointer"
+            title="从 Excel 表格批量导入"
+          >
+            <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+          </button>
+        </div>
         <label class="block text-sm text-text-secondary mb-1">职务名称</label>
         <input v-model="nodeForm.name" placeholder="如：学习委员、组长" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" autofocus />
         <label class="block text-sm text-text-secondary mb-1">可担任人数</label>
@@ -81,11 +120,18 @@
 
 <script setup vapor>
 import { getToken } from '../utils/authStorage.js'
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch, defineAsyncComponent } from 'vue'
+import { prefetch } from '../utils/dialogPrefetch.js'
 import axios from 'axios'
 import CadreTreeList from './CadreTreeList.vue'
 import CustomScrollbar from './base/CustomScrollbar.vue'
 import { useNotification } from '../composables/useNotification'
+
+// 导出弹窗懒加载：首次点开时才加载 ExportExcel 的代码块
+const loadExportExcel = () => import('./import-export/ExportExcel/ExportExcel.vue')
+const ExportExcel = defineAsyncComponent(loadExportExcel)
+const loadImportExcel = () => import('./import-export/ImportExcel.vue')
+const ImportExcel = defineAsyncComponent(loadImportExcel)
 
 const { success, error, info } = useNotification()
 
@@ -97,7 +143,7 @@ const allStudents = ref([])
 // 职务树滚动容器（自定义滚动条的目标）
 const treeScrollRef = ref(null)
 
-// 当前选中的职务行（选中后高亮蓝框，供工具栏「增加下级 / 设置」使用）
+// 当前选中的职务行（选中后高亮蓝框，供工具栏「增加下级 / 修改」使用）
 const selectedId = ref(null)
 const selectedNode = computed(() => (selectedId.value == null ? null : findNode(tree.value, selectedId.value)))
 
@@ -127,6 +173,70 @@ async function onRefresh() {
   if (await loadTree()) success('已刷新班干部数据')
 }
 
+// ============ 导出（复用 ExportExcel，导出去平后的职务名单） ============
+const exportMounted = ref(false)
+const exportVisible = ref(false)
+// 固定列：层级用「上级职务 + 层级」表达，同一职务的多名担任学生合并到一行
+const exportFields = [
+  { name: '序号' },
+  { name: '职务' },
+  { name: '上级职务' },
+  { name: '层级' },
+  { name: '担任学生' },
+  { name: '已担任人数' },
+  { name: '可担任人数' }
+]
+// 先序遍历职务树，保证导出顺序与页面从上到下的展示顺序一致
+const exportRows = computed(() => {
+  const rows = []
+  let seq = 0
+  const walk = (nodes, parentName, level) => {
+    for (const node of nodes || []) {
+      seq += 1
+      const members = node.members || []
+      rows.push({
+        id: node.id,
+        序号: seq,
+        职务: node.name,
+        上级职务: parentName || '',
+        层级: level,
+        担任学生: members.map(m => m.student_name).join('、'),
+        已担任人数: members.length,
+        可担任人数: node.max_count
+      })
+      walk(node.children, node.name, level + 1)
+    }
+  }
+  walk(tree.value, '', 1)
+  return rows
+})
+function openExport() {
+  if (tree.value.length === 0) return info('暂无班干部数据可导出')
+  exportMounted.value = true
+  exportVisible.value = true
+}
+
+// ============ 导入（列与导出表一致，序号/层级/已担任人数是派生列，导入时忽略） ============
+const importVisible = ref(false)
+const importMounted = ref(false)
+watch(importVisible, (n) => { if (n) importMounted.value = true })
+const importFields = [
+  { name: '职务' },
+  { name: '上级职务' },
+  { name: '担任学生' },
+  { name: '可担任人数' }
+]
+async function onImportData({ fields, rows }) {
+  importVisible.value = false
+  try {
+    const res = await api({ url: '/cadres/import', method: 'post', data: { fields, rows } })
+    tree.value = (res.data && res.data.tree) || []
+    success((res.data && res.data.message) || '导入成功')
+  } catch (e) {
+    error((e.response && e.response.data && e.response.data.error) || e.message)
+  }
+}
+
 async function fetchStudents() {
   try {
     const res = await api({ url: '/students' })
@@ -153,6 +263,11 @@ function onAddRoot() {
   Object.assign(nodeForm, { name: '', max_count: 1 })
   nodeDialogVisible.value = true
 }
+// 添加职务弹窗左上角的批量导入：关掉单条新增，直接打开导入弹窗
+function openImportFromNodeDialog() {
+  nodeDialogVisible.value = false
+  importVisible.value = true
+}
 function onAddChild(node) {
   editTarget.value = null
   parentTarget.value = node
@@ -170,7 +285,7 @@ function onAddChildSelected() {
   if (!selectedNode.value) return info('请先选择一个职务')
   onAddChild(selectedNode.value)
 }
-// 工具栏「设置」：编辑当前选中职务（与行内「编辑职务」一致）
+// 工具栏「修改」：编辑当前选中职务（与行内「编辑职务」一致）
 function onEditSelected() {
   if (!selectedNode.value) return info('请先选择一个职务')
   onEdit(selectedNode.value)

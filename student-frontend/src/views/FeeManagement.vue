@@ -39,7 +39,7 @@
         <IconGlyph name="trash" :size="14" tint="current" /> 批量删除 ({{ selectedCount }})
       </button>
       <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 导入
+        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
       </button>
       <button
         @click="openExport"
@@ -152,6 +152,7 @@
       @clear-search="onClearSearch"
       :protectedColumns="['收据']"
       emptyLabel="班费"
+      empty-import-text="从 Excel 表格批量导入"
       :load-error="loadError"
       error-text="班费记录加载失败"
       @retry="fetchRecords"
@@ -172,6 +173,7 @@
       @selectionChange="onSelectionChange"
       @moveSelectedRows="onMoveSelectedRows"
       @edit-row="openEditDialog"
+      @empty-import="openImportDialog"
     />
     <ExportExcel
       v-if="exportMounted"
@@ -189,6 +191,8 @@
       :visible="importDialogVisible"
       :existingFields="visibleFields"
       :requiredFields="['收支编码']"
+      :templateColumns="allBusinessFields"
+      :templateName="'班费记录标准导入表'"
       @import-data="onImportData"
       @cancel="importDialogVisible = false"
     />
@@ -208,6 +212,7 @@
       :title="editingRow ? '修改记录' : '添加记录'"
       :initial-values="addInitialValues"
       @confirm="onSubmitRecord"
+      @import="openBatchImportFromAdd"
       @cancel="addDialogVisible = false"
     />
   </div>
@@ -381,6 +386,13 @@ function openAddDialog() {
   addDialogVisible.value = true
 }
 
+// 添加记录弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+function openBatchImportFromAdd() {
+  addDialogVisible.value = false
+  importMounted.value = true
+  importDialogVisible.value = true
+}
+
 // 操作列「修改」：打开同一个弹窗，只是预填 + 走更新分支
 function openEditDialog(row) {
   if (newRow.value) newRow.value = null
@@ -456,6 +468,13 @@ const monthlyExpense = computed(() => {
 const tableElement = computed(() => {
   return dynamicTable.value?.rootEl || null
 })
+
+// 表格空态里的「从 Excel 表格批量导入」：预取导入弹窗 chunk 后打开。
+// 与工具栏的「从 Excel 表格批量导入」共用同一个弹窗，只是把入口也放到空表上。
+function openImportDialog() {
+  prefetch(loadImportExcel)
+  importDialogVisible.value = true
+}
 
 // ==================== 删除记录 ====================
 function deleteRecord(id) {

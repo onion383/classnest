@@ -1,7 +1,16 @@
 <template>
   <DialogShell :visible="visible" :z-index="50" overlay-class="bg-black/30">
       <div class="bg-surface rounded-xl p-6 w-[680px] max-w-[94vw] shadow-card border border-border dialog-card">
-        <h3 class="text-lg font-bold mb-4">值日设置</h3>
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">值日设置</h3>
+          <button
+            @click="importVisible = true"
+            class="bg-warning text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5"
+            title="从 Excel 批量导入劳动项目"
+          >
+            <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+          </button>
+        </div>
 
         <!-- 时间（星期几） -->
         <div class="mb-5">
@@ -108,14 +117,31 @@
           <button class="bg-surface-hover px-4 py-2 rounded text-text" @click="cancel">取消</button>
           <button class="bg-info text-text-inverse px-4 py-2 rounded" @click="save">保存设置</button>
         </div>
+
+        <!-- 从 Excel 导入：只填充当前弹窗的劳动项目列表，仍需点「保存设置」才落库 -->
+        <ImportExcel
+          v-if="importMounted"
+          :visible="importVisible"
+          :existingFields="importFields"
+          :requiredFields="[['劳动项目', '项目', '劳动项目名称', '项目名称', '值日项目']]"
+          :templateName="'值日设置标准导入表'"
+          @import-data="onImportData"
+          @cancel="importVisible = false"
+        />
       </div>
   </DialogShell>
 </template>
 
 <script setup vapor>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, defineAsyncComponent } from 'vue'
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
+import IconGlyph from '../base/IconGlyph.vue'
+import { useNotification } from '../../composables/useNotification.js'
+import { resolveHeader, normalizeLoose } from '../../utils/importSheet.js'
+
+const loadImportExcel = () => import('../import-export/ImportExcel.vue')
+const ImportExcel = defineAsyncComponent(loadImportExcel)
 
 const WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const DEFAULT_POOL = ['擦黑板', '倒垃圾', '拖地', '扫地', '摆桌子']
@@ -217,6 +243,77 @@ function confirmAdd() {
   newPoolName.value = ''
 }
 function defaultPoolHas(name) { return DEFAULT_POOL.includes(name) }
+
+// ==================== 从 Excel 导入劳动项目 ====================
+const importVisible = ref(false)
+const importMounted = ref(false)
+watch(importVisible, (v) => { if (v) importMounted.value = true })
+const importFields = [
+  { name: '劳动项目' },
+  { name: '人数' },
+  { name: '辛苦度' }
+]
+// 文本里取数字：先取阿拉伯数字（全角先归一），没有再认「两 / 六 / 十」等中文数字
+const CN_DIGITS = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 }
+function pickNumber(raw) {
+  const s = String(raw == null ? '' : raw).normalize('NFKC').trim()
+  const m = s.replace(/[，,]/g, '').match(/\d+(\.\d+)?/)
+  if (m) return Number(m[0])
+  const cn = s.match(/[一二两三四五六七八九十]/)
+  return cn ? CN_DIGITS[cn[0]] : null
+}
+// 人数：接受「2」「2人」「两 名」「２人」等写法；提取不到数字时回退默认 1
+function parseCount(raw) {
+  if (raw == null || raw === '') return 1
+  const n = pickNumber(raw)
+  return n == null ? 1 : Math.max(1, Math.round(n) || 1)
+}
+// 辛苦度：接受「0.6」「60%」「6 成」「六成」等写法；0.6 为默认
+function parseDifficulty(raw) {
+  if (raw == null || raw === '') return 0.6
+  const s = String(raw).normalize('NFKC')
+  const n = pickNumber(s)
+  if (n == null) return 0.6
+  const value = s.includes('%') ? n / 100 : (/成/.test(s) ? n / 10 : n)
+  return Number.isFinite(value) ? Math.max(0, value) : 0.6
+}
+function onImportData({ fields, rows }) {
+  importVisible.value = false
+  // 表头宽松匹配：劳动项目 / 项目 / 项目名称、人数 / 需要人数、辛苦度 / 难度 等
+  const nameHeader = resolveHeader(fields, ['劳动项目', '项目', '劳动项目名称', '项目名称', '值日项目'])
+  const countHeader = resolveHeader(fields, ['人数', '需要人数', '人数需求', '每班人数'])
+  const diffHeader = resolveHeader(fields, ['辛苦度', '辛苦程度', '难度', '劳动强度'])
+  if (!nameHeader) {
+    useNotification().error('未识别到「劳动项目」列，请检查表头')
+    return
+  }
+  const objects = rows.map(row => {
+    const obj = {}
+    fields.forEach((name, i) => { obj[name] = String(row[i] ?? '').trim() })
+    return obj
+  })
+  const errors = []
+  const next = []
+  const seen = new Set()
+  objects.forEach((obj, idx) => {
+    const rowNo = idx + 1
+    const name = obj[nameHeader]
+    if (!name) { errors.push(`第 ${rowNo} 行缺少「劳动项目」`); return }
+    const key = normalizeLoose(name)
+    if (seen.has(key)) return // 同名项目（含多空格/全角写法）只取第一行，避免重复项
+    seen.add(key)
+    const count = parseCount(countHeader ? obj[countHeader] : '')
+    const difficulty = parseDifficulty(diffHeader ? obj[diffHeader] : '')
+    next.push({ name, difficulty, count })
+  })
+  if (errors.length) {
+    useNotification().error(errors[0] + (errors.length > 1 ? `（共 ${errors.length} 处问题）` : ''))
+    return
+  }
+  if (!next.length) return useNotification().info('没有可导入的劳动项目')
+  localItems.value = next
+  useNotification().success(`已导入 ${next.length} 个劳动项目，请确认后点「保存设置」`)
+}
 function save() {
   // 过滤空姓名
   const items = localItems.value

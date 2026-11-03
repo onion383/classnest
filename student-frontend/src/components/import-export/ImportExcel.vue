@@ -5,6 +5,20 @@
     <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]">
       <div class="bg-surface p-5 rounded-lg w-[900px] max-h-[85vh] flex flex-col shadow-card dialog-card">
       <h3 class="text-lg font-bold mb-3">从文件导入数据</h3>
+      <!-- 标准导入表下载：表头与导入要求一致，照着填识别成功率更高 -->
+      <div v-if="templateHeaders.length" class="mb-3">
+        <!-- opbar：让按钮命中工具栏同款毛玻璃样式（glass 主题的 .opbar button 规则） -->
+        <div class="opbar flex flex-wrap items-center gap-3">
+          <span class="text-sm text-text">下载标准导入表</span>
+          <button
+            type="button"
+            @click="downloadTemplate"
+            class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded transition-theme cursor-pointer"
+            title="点击下载标准导入表"
+          >点击下载</button>
+        </div>
+        <p class="text-xs text-text-muted mt-1.5">推荐使用标准导入表导入，识别成功率更高，使用其他格式表格也可以导入</p>
+      </div>
       <!-- 文件选择：点击或拖入均可，选中后显示文件名 + 关闭按钮 -->
       <div class="mb-4">
         <div
@@ -14,10 +28,10 @@
           @dragenter.prevent="dragOver = true"
           @dragleave.prevent="dragOver = false"
           @drop.prevent="onFileDrop"
-          class="dropzone flex items-center justify-center gap-2 h-20 cursor-pointer select-none border-2 border-dashed rounded-xl text-inverse"
+          class="dropzone flex items-center justify-center gap-2 h-36 cursor-pointer select-none border-2 border-dashed rounded-xl text-inverse"
           :class=" dragOver ? 'dropzone-active' : ''"
         >
-          <span class="text-sm">点击选择文件，或将文件拖到此处</span>
+          <span class="text-base">点击选择文件，或将文件拖到此处</span>
         </div>
         <div
           v-else
@@ -33,9 +47,21 @@
       <div v-if="previewRows.length > previewLimit" class="text-text-secondary text-sm mb-2">
         表格仅显示前 {{ previewLimit }} 行（共 {{ previewRows.length }} 行）；导入会写入全部行。
       </div>
-      <!-- 预览表格 -->
+      <!-- 预览表格：行状表用 DynamicTable；矩阵表（课程表/座位/值日）用 GridView 还原网状外观 -->
       <div class="flex-1 overflow-auto border border-border rounded" v-if="previewFields.length && previewRows.length">
+        <GridView
+          v-if="previewMode === 'grid'"
+          :colHeaders="gridPreviewHeaders"
+          :rows="gridPreviewRows"
+          :showRowNumber="true"
+          hideMetaColumns
+          :rowHeaderLabel="gridPreviewRowHeaderLabel"
+          :disableRowDrag="true"
+          :minTableHeight="0"
+          :emptyReady="true"
+        />
         <DynamicTable
+          v-else
           :fields="previewFields"
           :rows="visibleRows"
           emptyActionText=""
@@ -49,7 +75,6 @@
           :sortOrder="sortOrder"
         />
       </div>
-      <div v-else class="text-center py-6 text-text-secondary">请选择一个文件进行解析</div>
       <!-- 底部按钮 -->
       <div class="flex justify-between items-center mt-4">
         <span class="text-sm text-text-secondary">共 {{ previewRows.length }} 行{{ previewRows.length > previewLimit ? '（预览前 ' + previewLimit + ' 行）' : '' }}</span>
@@ -66,17 +91,25 @@
 
 <script setup vapor>
 import DynamicTable from '../tables/DynamicTable/DynamicTable.vue';
+// 网格预览只在矩阵表（课程表/座位/值日）用，懒加载避免行状表也拖入整块 GridView
+const GridView = defineAsyncComponent(() => import('../tables/GridView/GridView.vue'));
 import { parseSheet } from '../../utils/importSheet.js';
+import { saveBlobWithDialog } from '../../utils/saveFile.js';
 import { useSeq } from '../../composables/useSeq.js';
 import '../../styles/dialog-transition.css';
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, defineAsyncComponent } from 'vue';
 
 defineOptions({ name: 'ImportExcel' });
 
 const props = defineProps({
   visible: Boolean,
   existingFields: { type: Array, default: () => [] },
-  requiredFields: { type: Array, default: () => ['收支编码'] }
+  requiredFields: { type: Array, default: () => ['收支编码'] },
+  // 标准导入表：不传 templateColumns 时用 existingFields 的表头；templateName 为标题/下载文件名
+  templateColumns: { type: Array, default: () => [] },
+  templateName: { type: String, default: '' },
+  // 预览形态：table=行状表（默认）；grid=矩阵表（课程表/座位/值日），用网格组件还原
+  previewMode: { type: String, default: 'table' }
 });
 
 const emit = defineEmits(['import-data', 'cancel']);
@@ -108,6 +141,106 @@ const visibleRows = computed(() => {
     ? previewRows.value.slice(0, previewLimit.value)
     : previewRows.value
 });
+
+// ==================== 矩阵预览（课程表 / 座位 / 值日） ====================
+// 文件是「行号/项目 + 各列」的矩阵：第一列作为行标题，其余列作为网格列；
+// 用 GridView 渲染，讲台行、走廊列等特殊格式与主表保持一致。
+const gridPreviewHeaders = computed(() => {
+  const fields = previewFields.value.map(f => f.name)
+  return fields.slice(1).map(h => (h.startsWith('d_') ? h.slice(2) : h))
+})
+const gridPreviewRowHeaderLabel = computed(() => {
+  const first = previewFields.value[0]?.name || '行号'
+  return first === '项目' ? '劳动项目' : first
+})
+const gridPreviewRows = computed(() => {
+  const fields = previewFields.value.map(f => f.name)
+  if (!fields.length) return []
+  const rowKeyField = fields[0]
+  const dataFields = fields.slice(1)
+  const rowList = visibleRows.value
+  // 走廊列：导出时每行都会写成「走廊」，命中任一即视为走廊列
+  const aisleCols = new Set(
+    dataFields.map((h, i) => i).filter(i => rowList.some(r => String(r[dataFields[i]] ?? '').trim() === '走廊'))
+  )
+  const bodyCount = rowList.filter(r => String(r[rowKeyField] ?? '').trim() !== '讲台').length
+  let firstBodySeen = false
+  return rowList.map((r) => {
+    const label = String(r[rowKeyField] ?? '').trim()
+    if (label === '讲台') {
+      // 与座位主表一致：讲台行整行合并居中
+      return { _rowKey: r._rowKey, label, _isPodium: true, _isReadonly: true, cells: [] }
+    }
+    const cells = dataFields.map((h, ci) => {
+      if (aisleCols.has(ci)) {
+        // 与主表一致：首行跨行显示竖排「走廊」，其余行隐藏该列
+        if (!firstBodySeen) return { course: '', _isAisle: true, _aisleRowSpan: Math.max(1, bodyCount) }
+        return { course: '', _isAisleHidden: true }
+      }
+      return { course: String(r[h] ?? '') }
+    })
+    firstBodySeen = true
+    return { _rowKey: r._rowKey, label, _isReadonly: true, cells }
+  })
+})
+
+// 标准导入表的列：优先用调用方显式给的 templateColumns，否则沿用 existingFields 的表头
+const templateHeaders = computed(() => {
+  const src = props.templateColumns.length ? props.templateColumns : props.existingFields
+  return (src || []).map(c => (typeof c === 'string' ? c : (c && c.name))).filter(Boolean)
+})
+// 表头识别的期望字段：模板列 + 必填列（必填列可能是同义写法数组，拍平后一并参与命中）
+const expectedHeaders = computed(() => {
+  const required = (props.requiredFields || []).flatMap(f => (Array.isArray(f) ? f : [f]))
+  return [...new Set([...templateHeaders.value, ...required].filter(Boolean))]
+})
+
+// 标准导入表：合并居中的标题 + 表头 + 20 行空白数据区，全部带细框线。
+// 用 exceljs（与导出面板同一套库）而不是 xlsx：SheetJS 社区版写不出单元格样式/合并。
+async function downloadTemplate() {
+  const headers = templateHeaders.value
+  if (!headers.length) return
+  try {
+    const { default: ExcelJS } = await import('exceljs')
+    const workbook = new ExcelJS.Workbook()
+    const sheet = workbook.addWorksheet('标准导入表')
+    const colCount = headers.length
+    const EMPTY_ROWS = 20
+
+    // 标题：第 1 行合并居中
+    sheet.getCell(1, 1).value = props.templateName || '标准导入表'
+    sheet.getCell(1, 1).font = { bold: true, size: 14 }
+    sheet.getCell(1, 1).alignment = { horizontal: 'center', vertical: 'middle' }
+
+    // 表头：第 2 行加粗居中
+    headers.forEach((name, i) => {
+      const cell = sheet.getCell(2, i + 1)
+      cell.value = name
+      cell.font = { bold: true }
+      cell.alignment = { horizontal: 'center', vertical: 'middle' }
+    })
+
+    // 全框线：标题行 + 表头 + 20 行空白（先铺边框再合并，保证合并区四边都有线）
+    const thin = { style: 'thin' }
+    const border = { top: thin, left: thin, bottom: thin, right: thin }
+    for (let r = 1; r <= 2 + EMPTY_ROWS; r++) {
+      for (let c = 1; c <= colCount; c++) sheet.getCell(r, c).border = border
+    }
+    sheet.mergeCells(1, 1, 1, colCount)
+
+    sheet.getRow(1).height = 28
+    sheet.getRow(2).height = 22
+    headers.forEach((name, i) => {
+      sheet.getColumn(i + 1).width = Math.max(12, String(name).length + 8)
+    })
+
+    const buffer = await workbook.xlsx.writeBuffer()
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    await saveBlobWithDialog(`${props.templateName || '标准导入表'}.xlsx`, blob)
+  } catch (e) {
+    parseError.value = '标准导入表生成失败：' + e.message
+  }
+}
 
 function triggerFileSelect() { fileInput.value.click(); }
 function onFileDrop(e) {
@@ -160,6 +293,43 @@ function handleFile(e) {
   };
   reader.readAsArrayBuffer(file);
 }
+// CSV 编码兜底：Excel 另存的 CSV 常是 GBK，直接交给 SheetJS 按二进制读会把中文解成乱码，
+// 表头/项目名全都匹配不上。这里先严格按 UTF-8 解码，失败再按 GBK（Electron/Chromium 均支持）。
+function decodeCsv(bytes) {
+  const tryDecode = (label) => {
+    try { return new TextDecoder(label, { fatal: true }).decode(bytes) } catch (_) { return null }
+  }
+  const utf8 = tryDecode('utf-8')
+  // 合法 UTF-8 且含中文（或纯 ASCII）就按 UTF-8；
+  // 能解码成 UTF-8 但非 ASCII 且没有中文，多半是 GBK 被误读成拉丁字符，改用 GBK 重解。
+  const pureAscii = utf8 != null && !/[^\x00-\x7F]/.test(utf8)
+  const hasCjk = utf8 != null && /[\u4e00-\u9fa5]/.test(utf8)
+  const text = (pureAscii || hasCjk) ? utf8 : (tryDecode('gbk') || utf8)
+  return text ? text.replace(/^\uFEFF/, '') : null
+}
+
+// 多 Sheet 选择：逐个解析（最多 5 个），取「数据行最多 + 识别列最多」的 Sheet。
+// 首个 Sheet 可能是说明页/目录页，无脑取 SheetNames[0] 会让整次导入识别失败。
+function pickSheet(XLSX, workbook) {
+  let best = null
+  const names = (workbook && workbook.SheetNames ? workbook.SheetNames : []).slice(0, 5)
+  for (const name of names) {
+    const sheet = workbook.Sheets[name]
+    if (!sheet) continue
+    const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false })
+    if (!Array.isArray(data) || !data.length) continue
+    // 表头识别与行映射抽到 utils/importSheet.js：
+    // 表头保留原始列下标，空表头只跳过自己，不会让它右边的列整体左移（串列）
+    const parsed = parseSheet(data, props.requiredFields, expectedHeaders.value)
+    if (!parsed.fields.length) continue
+    // 有数据行优先；缺必填列的 Sheet 降权，避免选中「说明页」
+    const score = parsed.rows.length * 100 + parsed.fields.length
+      - (parsed.missingRequired.length ? 50 : 0)
+    if (!best || score > best.score) best = { score, parsed }
+  }
+  return best
+}
+
 async function parseFile() {
   if (!fileData.value) return;
   const my = seq.current();
@@ -169,19 +339,25 @@ async function parseFile() {
   const XLSX = await import('xlsx');
   if (!seq.isLatest(my)) return;
   try {
-    const workbook = XLSX.read(fileData.value, { type: 'array' });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+    let workbook = null
+    // CSV 先按正确编码转成文本再解析：GBK 文件必须走这条，否则中文全是乱码
+    if (/\.csv$/i.test(fileName.value || '')) {
+      const text = decodeCsv(fileData.value)
+      if (text) workbook = XLSX.read(text, { type: 'string' })
+    }
+    if (!workbook) workbook = XLSX.read(fileData.value, { type: 'array' })
     if (!seq.isLatest(my)) return;
-    if (!data || data.length === 0) { parseError.value = '文件无有效数据'; return; }
-    // 表头识别与行映射抽到 utils/importSheet.js：
-    // 表头保留原始列下标，空表头只跳过自己，不会让它右边的列整体左移（串列）
-    const parsed = parseSheet(data, props.requiredFields);
+    const picked = pickSheet(XLSX, workbook)
+    if (!picked) { parseError.value = '文件无有效数据'; return; }
+    const parsed = picked.parsed
     if (!seq.isLatest(my)) return;
     if (parsed.fields.length === 0) { parseError.value = '未识别到列标题'; return; }
     previewFields.value = parsed.fields.map(h => ({ name: h, type: '文字' }));
     filteredCount.value = parsed.skipped;
+    // 必填列没识别到：给出具体缺哪一列，而不是只显示「已过滤 N 条」让用户猜
+    if (parsed.missingRequired && parsed.missingRequired.length) {
+      parseError.value = `未识别到必填列：${parsed.missingRequired.join('、')}（已识别列：${parsed.fields.join('、')}）`;
+    }
     // 就地在 parseSheet 新建的对象上加内部字段，不再展开拷贝：
     // 大表（几万行）展开一份等于把所有单元格字符串再引用一遍、行对象翻倍。
     parsed.rows.forEach((row, idx) => {

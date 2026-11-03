@@ -22,9 +22,14 @@ export function useScheduleHistory(ctx, API_BASE) {
           ctx.historyCurrentWeek.value = ctx.historyWeeks.value[0].week_start;
         }
 
-        // 如果有选中的周，加载其快照
+        // 如果有选中的周，加载其快照；否则清掉旧快照，避免刷新后列表已空却仍显示上一周
         if (ctx.historyCurrentWeek.value) {
           await ctx.loadHistorySnapshot();
+        } else {
+          ctx.historySnapshot.value = null;
+          ctx.historyCells.value = [];
+          ctx.historySettings.value = { sections: null, periods: [], days: ['周一', '周二', '周三', '周四', '周五'] };
+          ctx.historyColHeaders.value = ['周一', '周二', '周三', '周四', '周五'];
         }
       } catch (e) {
         console.error('获取历史周列表失败', e);

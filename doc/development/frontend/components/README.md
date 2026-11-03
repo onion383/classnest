@@ -11,7 +11,7 @@
 | 浮层 | 下拉、候选、右键菜单统一 `Teleport`（挂载到 body 的传送组件）+ `position: fixed`（固定定位），避免被父级 `overflow`（溢出裁剪）/`transform`（变换）/`backdrop-filter`（背景模糊）裁剪 |
 | 层级 | 浮层 `z-index`（层叠层级）从祖先链动态取（如 `AppSelect` 的 `_layerZ()`），不写死魔法数字 |
 | 弹窗 | 统一 `<Transition name="dialog">`（进出过渡组件）+ `.dialog-card`（弹窗卡片动画类）；遮罩点击由 `utils/dialogOverlayPulse.js` 接管（提示「请关闭弹窗」，不关闭） |
-| 空态 | 列表型 `DynamicTable`（动态列表格）用 `EmptySnapshot`（空态组件），操作按钮走 `action-text` / `action-icon` / `@action`；`GridView`（网格表）不做空态 |
+| 空态 | 列表型 `DynamicTable`（动态列表格）用 `EmptySnapshot`（空态组件），操作按钮走 `action-text` / `action-icon` / `@action`；`GridView`（网格表）组件本身不做空态，课程表无作息设置时由页面外层换成 `EmptySnapshot` |
 | 图标 | 统一 `IconGlyph`（图标组件，全局注册），按主题 `iconStyle`（图标样式）在 `lucide`（线性图标）/ `emoji`（表情）间切换 |
 | 样式 | 只用主题 CSS 变量与工具类，不改主题全局皮肤；按钮悬浮态同带 `transition-theme`（主题过渡工具类） |
 

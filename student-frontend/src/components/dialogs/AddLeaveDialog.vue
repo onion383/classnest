@@ -1,7 +1,18 @@
 <template>
   <DialogShell :visible="visible" :z-index="10001" @overlay="$emit('cancel')">
     <div class="bg-surface p-5 rounded-xl w-[520px] max-w-full shadow-lg dialog-card">
-      <h3 class="text-lg font-bold mb-4 text-text">{{ isEdit ? '编辑请假记录' : '请假登记' }}</h3>
+      <div class="flex items-center gap-3 mb-4">
+        <h3 class="text-lg font-bold text-text">{{ isEdit ? '编辑请假记录' : '请假登记' }}</h3>
+        <button
+          v-if="!isEdit"
+          type="button"
+          @click="$emit('import')"
+          class="bg-warning hover:bg-warning-hover text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-theme cursor-pointer"
+          title="从 Excel 表格批量导入"
+        >
+          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        </button>
+      </div>
 
       <!-- 编辑模式：只读学生姓名 -->
       <div v-if="isEdit" class="mb-3">
@@ -136,7 +147,7 @@ const props = defineProps({
   // 非空时进入编辑模式（传入一条请假记录）
   editingRecord: { type: Object, default: null }
 })
-const emit = defineEmits(['cancel', 'delete', 'update', 'ask-save-phones', 'confirm'])
+const emit = defineEmits(['cancel', 'delete', 'update', 'ask-save-phones', 'confirm', 'import'])
 
 const keyword = ref('');
 const listVisible = ref(false)

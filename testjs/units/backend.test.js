@@ -85,9 +85,8 @@ test('播种：槽位行数与默认配置正确', () => {
   assert.equal(count(conn, 'SELECT COUNT(*) c FROM schedule_slots'), 2)
   assert.equal(count(conn, 'SELECT COUNT(*) c FROM duty_slots'), 5)
   assert.equal(count(conn, 'SELECT COUNT(*) c FROM seat_slots'), 4)
-  // 学期播种恰好一条当前学期
-  assert.equal(count(conn, 'SELECT COUNT(*) c FROM semesters'), 1)
-  assert.equal(count(conn, "SELECT COUNT(*) c FROM semesters WHERE is_current = 1"), 1)
+  // 学期不再默认播种：首次进入由用户填写学期日期后再创建
+  assert.equal(count(conn, 'SELECT COUNT(*) c FROM semesters'), 0)
 
   // 逻辑名读取（经视图）应拿到默认值
   const duty = conn.prepare('SELECT days, items FROM duty_settings').get()
@@ -180,7 +179,7 @@ test('initSchema 幂等：二次执行不重复播种、不丢已有数据', () 
   assert.equal(count(conn, 'SELECT COUNT(*) c FROM schedule_slots'), 2)
   assert.equal(count(conn, 'SELECT COUNT(*) c FROM duty_slots'), 5)
   assert.equal(count(conn, 'SELECT COUNT(*) c FROM seat_slots'), 4)
-  assert.equal(count(conn, 'SELECT COUNT(*) c FROM semesters'), 1)
+  assert.equal(count(conn, 'SELECT COUNT(*) c FROM semesters'), 0)
   assert.equal(conn.prepare('SELECT cells FROM schedule').get().cells, cells)
   // 视图仍然可用
   assert.equal(conn.prepare('SELECT COUNT(*) c FROM duty_layout').get().c, 1)

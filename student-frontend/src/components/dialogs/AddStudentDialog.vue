@@ -1,7 +1,19 @@
 <template>
   <DialogShell :visible="visible" :z-index="10001" @overlay="$emit('cancel')">
     <div class="bg-surface p-5 rounded-xl w-[600px] max-w-full shadow-lg dialog-card relative">
-      <h3 class="text-lg font-bold mb-4 text-text">{{ title }}</h3>
+      <div class="flex items-center gap-3 mb-4">
+        <h3 class="text-lg font-bold text-text">{{ title }}</h3>
+        <!-- 批量导入入口：与课程表「设置」弹窗一致，放在弹窗左上角标题旁；编辑模式不显示 -->
+        <button
+          v-if="!isEdit"
+          type="button"
+          @click="$emit('import')"
+          class="bg-warning hover:bg-warning-hover text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-theme cursor-pointer"
+          title="从 Excel 表格批量导入"
+        >
+          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        </button>
+      </div>
 
       <!-- p-1：聚焦时输入框有 3px 外发光（box-shadow），滚动容器 overflow 会裁掉四边，留出内边距避免蓝色边（尤其最下面一排的底边）被挡住 -->
       <div ref="bodyRef" class="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto p-1 app-custom-scroll">
@@ -69,7 +81,7 @@ import CustomScrollbar from '../base/CustomScrollbar.vue'
 import DialogShell from '../base/DialogShell.vue'
 import '../../styles/dialog-transition.css'
 import { useNotification } from '../../composables/useNotification.js'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 defineOptions({ name: 'AddStudentDialog' })
 
@@ -82,7 +94,11 @@ const props = defineProps({
   // 不传（或传空对象）= 新增模式，表单保持空白。
   initialValues: { type: Object, default: () => ({}) }
 })
-const emit = defineEmits(['confirm', 'cancel'])
+const emit = defineEmits(['confirm', 'cancel', 'import'])
+
+// 编辑模式：传入了带 id 的已有记录。批量导入只在新增时提供，
+// 修改单个学生/记录时按钮没有意义，直接隐藏。
+const isEdit = computed(() => !!props.initialValues?.id)
 
 // 表单滚动容器（自定义滚动条的目标）
 const bodyRef = ref(null)

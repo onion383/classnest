@@ -8,7 +8,7 @@
 
       <div class="mb-4">
         <p class="font-semibold mb-2">导出格式：</p>
-        <AppSelect v-model="exportFormat" class="w-full" :options="FORMAT_OPTIONS" />
+        <AppSelect v-model="exportFormat" class="w-full" :options="FORMAT_OPTIONS" no-scroll />
       </div>
 
       <div class="mb-4">
@@ -74,13 +74,16 @@ async function doExport() {
       const rows = (props.content || '').split(/\r?\n/).map((line) => [line])
       saved = await runTableExport({ format: exportFormat.value, columns: ['内容'], rows, filename: name, title: name })
     }
-    if (saved) notifySuccess(`已成功导出 ${FORMAT_LABELS[exportFormat.value] || '文件'}`)
+    // saved 为空串：用户在系统保存对话框中点了取消（或保存失败），保留弹窗便于重新导出
+    if (saved) {
+      notifySuccess(`已成功导出 ${FORMAT_LABELS[exportFormat.value] || '文件'}`)
+      emit('update:visible', false)
+    }
   } catch (err) {
     console.error('导出失败:', err)
     notifyError('导出失败，请重试')
   } finally {
     exporting.value = false
-    emit('update:visible', false)
   }
 }
 </script>

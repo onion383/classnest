@@ -6,7 +6,7 @@ import { recordGridSnapshotUndo } from '../../composables/useUndo.js'
 import { createSerialSaver } from '../../utils/serialSaver.js'
 import { getSemesterStart, invalidateSemesterStart } from '../../utils/semesterStart.js'
 
-export function useScheduleActive(ctx, { API_BASE, DEFAULT_SECTIONS }) {
+export function useScheduleActive(ctx, { API_BASE }) {
   return {
     // ============= 实行课表操作 =============
     async refreshActive() {
@@ -29,17 +29,13 @@ export function useScheduleActive(ctx, { API_BASE, DEFAULT_SECTIONS }) {
           };
           ctx.activeColHeaders.value = ctx.activeSettings.value.days;
         } else {
+          // 首次进入不预置作息时间：保持空 sections，等用户在「设置」里添加并保存。
           ctx.activeSettings.value = {
-            sections: JSON.parse(JSON.stringify(DEFAULT_SECTIONS)),
+            sections: null,
             periods: [],
             days: ctx.activeColHeaders.value
           };
           ctx.activeColHeaders.value = ctx.activeSettings.value.days;
-          // 首跑写入默认设置。saveActive 走串行器，失败只返回 false 不抛，
-          // 不接这个返回值的话：库里仍然没有设置，下次进来又当首跑，用户只会觉得「设置没保存」。
-          if (!await ctx.saveActive()) {
-            ctx.notifyError('默认课表设置保存失败，本次修改可能无法保留');
-          }
         }
         ctx.activeCells.value = ctx.adjustCells(ctx.activeCells.value, ctx.activeSettings.value);
 

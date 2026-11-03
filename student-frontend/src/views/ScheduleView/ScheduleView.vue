@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div>
     <!-- 顶部标题栏 -->
     <div class="w-full bg-surface shadow-md rounded-xl mb-6 px-5 py-3 border border-border min-h-[4.5rem] flex items-center">
@@ -17,10 +17,24 @@
               <button @click="activeSettingsVisible = true" @mouseenter="prefetch(loadSettingsDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
               <button @click="refreshActive" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="applyMasterVisible = true" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> 从模板导入</button>
+              <button @click="openImport('active')" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
               <button @click="openActiveExport" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
             </div>
 
+            <EmptySnapshot
+              v-if="_activeLoadOk && !activeError && activeDisplayRows.length === 0"
+              icon="schedule"
+              text="还没有作息设置"
+              min-height="400px"
+              action-text="去设置"
+              action-icon="settings"
+              secondary-action-text="从 Excel 表格批量导入"
+              secondary-action-icon="download"
+              @action="activeSettingsVisible = true"
+              @secondary-action="openImport('active')"
+            />
             <GridView
+              v-else
               :title="activeTitle"
               :anchorPrefix="'s'"
               :colHeaders="activeColHeaders"
@@ -73,10 +87,24 @@
               <button @click="masterSettingsVisible = true" @mouseenter="prefetch(loadSettingsDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
               <button @click="refreshMaster" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="applyActiveVisible = true" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> 从实行导入</button>
+              <button @click="openImport('master')" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
               <button @click="openMasterExport" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
             </div>
 
+            <EmptySnapshot
+              v-if="_masterLoadOk && !masterError && masterDisplayRows.length === 0"
+              icon="schedule"
+              text="还没有作息设置"
+              min-height="400px"
+              action-text="去设置"
+              action-icon="settings"
+              secondary-action-text="从 Excel 表格批量导入"
+              secondary-action-icon="download"
+              @action="masterSettingsVisible = true"
+              @secondary-action="openImport('master')"
+            />
             <GridView
+              v-else
               :anchorPrefix="'m'"
               :colHeaders="masterColHeaders"
               :rows="masterDisplayRows"
@@ -117,10 +145,27 @@
               @update:is-visible="masterExportVisible = $event"
             />
           </section>
+
+          <!-- 从 Excel 导入（按「行号 + 星期列」匹配当前显示的课表矩阵） -->
+          <ImportExcel
+            v-if="importMounted"
+            :visible="importVisible"
+            :existingFields="importFields"
+            :requiredFields="['行号']"
+            :templateName="importTarget === 'master' ? '一般课表标准导入表' : '实行课表标准导入表'"
+            previewMode="grid"
+            @import-data="onImportData"
+            @cancel="importVisible = false"
+          />
         </div>
 
-        <!-- ==================== 历史课程表记录标签页（占位） ==================== -->
+        <!-- ==================== 历史课程表记录标签页 ==================== -->
         <div v-else-if="activeTab === 'history'" class="relative">
+          <h2 class="text-xl font-semibold text-text flex items-center gap-2 min-h-7 mb-3"><IconGlyph name="calendar" :size="20" /> 历史课程表记录</h2>
+          <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
+            <button @click="refreshHistory" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
+            <button @click="openHistoryExport" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
+          </div>
           <Transition :name="slideDir">
             <div :key="historyCurrentWeek" class="history-content">
               <!-- 表头先行：加载中也渲染 GridView（列头默认周一~周五，快照到了再校正），
@@ -139,6 +184,14 @@
               />
             </div>
           </Transition>
+          <ExportExcel
+            v-if="historyExportMounted"
+            :is-visible="historyExportVisible"
+            :rows="historyExportRows"
+            :fields="historyExportFields"
+            defaultFilename="历史课表记录"
+            @update:is-visible="historyExportVisible = $event"
+          />
           <!-- 快照菜单栏：周切换 + 下拉框 + 保存/删除按钮，同处一条毛玻璃栏 -->
           <WeekSwitcher
             v-model:currentWeek="historyCurrentWeek"
@@ -214,7 +267,7 @@ import Tabs from '../../components/base/Tabs.vue';
 import WeekSwitcher from '../../components/base/WeekSwitcher.vue';
 import { shiftDateStr } from '../../utils/dateTime.js';
 import { useNotification } from '../../composables/useNotification.js';
-import { useUndoShortcut } from '../../composables/useUndo.js';
+import { useUndoShortcut, recordGridSnapshotUndo } from '../../composables/useUndo.js';
 import { createRowReuseCache } from '../../utils/rowReuse.js';
 import { useScheduleCommon } from './ScheduleView.common.js';
 import { useScheduleMaster } from './ScheduleView.master.js';
@@ -228,34 +281,14 @@ defineOptions({ name: 'ScheduleView' })
 const loadSettingsDialog = () => import('../../components/dialogs/SettingsDialog.vue');
 const SettingsDialog = defineAsyncComponent(loadSettingsDialog);
 const ExportExcel = defineAsyncComponent(() => import('../../components/import-export/ExportExcel/ExportExcel.vue'));
+const loadImportExcel = () => import('../../components/import-export/ImportExcel.vue');
+const ImportExcel = defineAsyncComponent(loadImportExcel);
 const ConfirmDialog = defineAsyncComponent(() => import('../../components/base/ConfirmDialog.vue'));
 
 const API_BASE = '/api';
 
-const DEFAULT_SECTIONS = {
-  morning: [
-    { name: '第1节', start: '08:10', end: '08:55', type: 'lesson' },
-    { name: '第2节', start: '09:05', end: '09:50', type: 'lesson' },
-    { name: '大课间', start: '09:50', end: '10:20', type: 'rest' },
-    { name: '第3节', start: '10:20', end: '11:05', type: 'lesson' },
-    { name: '第4节', start: '11:15', end: '12:00', type: 'lesson' }
-  ],
-  noon: [
-    { name: '午休', start: '12:00', end: '14:00', type: 'rest' }
-  ],
-  afternoon: [
-    { name: '第5节', start: '14:30', end: '15:15', type: 'lesson' },
-    { name: '第6节', start: '15:25', end: '16:10', type: 'lesson' }
-  ],
-  evening: [
-    { name: '休息', start: '17:00', end: '18:30', type: 'rest' }
-  ],
-  night: [
-    { name: '晚修1', start: '19:00', end: '19:45', type: 'lesson' },
-    { name: '晚修2', start: '19:55', end: '20:40', type: 'lesson' }
-  ]
-};
-
+// 课程表不再预置作息时间：首次进入 settings 为空时显示空表，
+// 由用户点「设置」自行添加时段并保存，后端不会再收到自动生成的默认节次。
 const SECTION_NAMES = {
   morning: '上午',
   noon: '中午',
@@ -273,7 +306,7 @@ const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
 const rowFocusHost = { route, router }
-const { success: notifySuccess, error: notifyError } = useNotification()
+const { success: notifySuccess, error: notifyError, info: notifyInfo } = useNotification()
 
 // 行对象复用缓存（非响应式）：编辑一格时只重建真正变化的那一行，避免整表重画
 const masterRowReuse = createRowReuseCache();
@@ -359,13 +392,13 @@ const ctx = {
   _activeSaveErrorShown: false,
   _masterSaveErrorShown: false,
   masterRowReuse, activeRowReuse,
-  notifySuccess, notifyError,
+  notifySuccess, notifyError, notifyInfo,
   host: rowFocusHost,
   emit: () => {},
 }
 const common = useScheduleCommon(ctx, { SECTION_NAMES })
-const master = useScheduleMaster(ctx, { API_BASE, DEFAULT_SECTIONS })
-const active = useScheduleActive(ctx, { API_BASE, DEFAULT_SECTIONS })
+const master = useScheduleMaster(ctx, { API_BASE })
+const active = useScheduleActive(ctx, { API_BASE })
 const history = useScheduleHistory(ctx, API_BASE)
 Object.assign(ctx, common, master, active, history)
 
@@ -378,7 +411,7 @@ const {
   applyMasterToActive, applyActiveToMaster,
 } = { ...master, ...active }
 const {
-  loadHistorySnapshot, captureHistorySnapshot, requestDeleteHistorySnapshot, confirmDeleteHistorySnapshot, onSwitchWeek,
+  loadHistorySnapshot, fetchHistoryWeeks, captureHistorySnapshot, requestDeleteHistorySnapshot, confirmDeleteHistorySnapshot, onSwitchWeek,
 } = history
 const { retryFailedLoads, _applyRowFocus } = common
 
@@ -463,6 +496,108 @@ const historyDisplayRows = computed(() => {
   const rows = ctx.buildDisplayRows(historyCells.value, historySettings.value);
   return rows.map(row => ({ ...row, _isReadonly: true }));
 });
+
+// ---- 历史课程表记录：刷新 / 导出 ----
+const historyExportVisible = ref(false)
+const historyExportMounted = ref(false)
+watch(historyExportVisible, (v) => { if (v) historyExportMounted.value = true })
+
+const historyExportFields = computed(() => {
+  const fields = [{ name: '行号' }]
+  historyColHeaders.value.forEach(h => fields.push({ name: h }))
+  return fields
+})
+const historyExportRows = computed(() => {
+  const headers = historyColHeaders.value
+  return historyDisplayRows.value.map(row => {
+    const obj = { '行号': row.label }
+    row.cells.forEach((cell, idx) => {
+      const headerName = headers[idx] || `列${idx + 1}`
+      obj[headerName] = cell.course || ''
+    })
+    return obj
+  })
+})
+
+async function refreshHistory() {
+  await fetchHistoryWeeks()
+  notifySuccess('已刷新历史课表记录')
+}
+
+function openHistoryExport() {
+  if (!historySnapshot.value || !historyExportRows.value.length) {
+    notifyInfo('暂无历史课表记录可导出')
+    return
+  }
+  historyExportVisible.value = true
+}
+
+// ==================== 从 Excel 导入（实行 / 一般课表） ====================
+// 导入按「行号 + 星期列」匹配当前显示的矩阵：行号必须与页面上的节次名一致，
+// 只写入课程行；休息/大课间等非课程行不做导入。导出的表格可原样导回。
+const importVisible = ref(false)
+const importMounted = ref(false)
+const importTarget = ref('active')
+watch(importVisible, (n) => { if (n) importMounted.value = true })
+const importFields = computed(() => {
+  const heads = importTarget.value === 'master' ? masterColHeaders.value : activeColHeaders.value
+  return [{ name: '行号' }, ...heads.filter(h => h !== '走廊').map(h => ({ name: h }))]
+})
+function openImport(target) {
+  // 空态里的第二入口没有鼠标悬停预取，点击时先拉起导入弹窗 chunk 再打开
+  prefetch(loadImportExcel)
+  importTarget.value = target
+  importVisible.value = true
+}
+async function onImportData({ fields, rows }) {
+  importVisible.value = false
+  const isMaster = importTarget.value === 'master'
+  const displayRows = (isMaster ? masterDisplayRows : activeDisplayRows).value
+  const heads = (isMaster ? masterColHeaders : activeColHeaders).value
+  const sourceCells = isMaster ? masterCells.value : activeCells.value
+  const objects = rows.map(row => {
+    const obj = {}
+    fields.forEach((name, i) => { obj[name] = String(row[i] ?? '').trim() })
+    return obj
+  })
+
+  const errors = []
+  const next = JSON.parse(JSON.stringify(sourceCells || []))
+  objects.forEach((obj, idx) => {
+    const label = obj['行号']
+    if (!label) return
+    const row = displayRows.find(r => r.label === label)
+    if (!row) { errors.push(`第 ${idx + 1} 行：找不到行号「${label}」`); return }
+    const hasValue = heads.some(h => h !== '走廊' && obj[h])
+    if (row._lessonIdx === undefined) {
+      if (hasValue) errors.push(`第 ${idx + 1} 行「${label}」不是课程行，不能导入`)
+      return
+    }
+    const li = row._lessonIdx
+    const rowCells = Array.isArray(next[li]) ? [...next[li]] : []
+    while (rowCells.length < heads.length) rowCells.push({ course: '' })
+    heads.forEach((h, ci) => {
+      if (h === '走廊') return
+      const val = obj[h]
+      if (val === undefined) return
+      rowCells[ci] = { ...(rowCells[ci] || {}), course: val }
+    })
+    next[li] = rowCells
+  })
+  if (errors.length) {
+    notifyError(errors[0] + (errors.length > 1 ? `（共 ${errors.length} 处不匹配）` : ''))
+    return
+  }
+
+  const prev = JSON.parse(JSON.stringify(sourceCells || []))
+  const target = isMaster ? masterCells : activeCells
+  target.value = next
+  const ok = await (isMaster ? master.saveMaster() : active.saveMaster())
+  if (!ok) return
+  recordGridSnapshotUndo('课程表', isMaster ? 'master_schedule' : 'schedule', prev, next, '从 Excel 导入')
+  notifySuccess(`已从 Excel 导入${isMaster ? '一般课表' : '实行课表'}`)
+}
+
 const weekNumber = computed(() => {
   if (!semesterStart.value) return '';
   const start = new Date(semesterStart.value);

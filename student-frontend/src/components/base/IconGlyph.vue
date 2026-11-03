@@ -66,6 +66,7 @@ const MAP = {
   activity: { lucide: 'PartyPopper', emoji: '🎉', color: '#fb7185' },
   ai: { lucide: 'Bot', emoji: '🤖', color: '#38bdf8' },
   settings: { lucide: 'Settings', emoji: '⚙️', color: '#94a3b8' },
+  edit: { lucide: 'SquarePen', emoji: '✏️', color: '#3b82f6' },
   about: { lucide: 'Info', emoji: 'ℹ️', color: '#94a3b8' },
 
   // ---- 通用（按钮多为 tint=current 继承文字色）----
@@ -87,6 +88,9 @@ const MAP = {
   calendar: { lucide: 'CalendarDays', emoji: '🗓️', color: '#0ea5e9' },
   chart: { lucide: 'BarChart3', emoji: '📊', color: '#6366f1' },
   users: { lucide: 'Users', emoji: '👥', color: '#60a5fa' },
+  // 分组空态：男生/女生宿舍分区
+  male: { lucide: 'Mars', emoji: '👦', color: '#60a5fa' },
+  female: { lucide: 'Venus', emoji: '👧', color: '#f472b6' },
   toolbox: { lucide: 'Toolbox', emoji: '🧰', color: '#64748b' },
   user: { lucide: 'User', emoji: '👤', color: '#60a5fa' },
   palette: { lucide: 'Palette', emoji: '🎨', color: '#ec4899' },

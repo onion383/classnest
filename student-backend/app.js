@@ -118,7 +118,6 @@ app.use('/api/background', authStatic(), express.static(dbManager.backgroundDir)
 app.use('/api', authRoutes);
 app.use('/api/account', accountRoutes);
 app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students', {
-  minCount: 1,
   protectedColumns: ['学号', '姓名'],
   extraRoutes: (router) => {
     // 姓名解析：值日/座位/小组成员里直接输入的名字 → 稳定的 students.id。
@@ -191,7 +190,7 @@ app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students',
             leave: !!rel.leave, score: !!rel.score, seat: !!rel.seat, duty: !!rel.duty,
             group: !!rel.group, cadre: !!rel.cadre,
           });
-          deleteRow('students', id, { minCount: 1 });
+          deleteRow('students', id);
         })();
         res.json({ message: '已删除学生及其关联记录', removed });
       } catch (err) {

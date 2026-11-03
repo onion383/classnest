@@ -118,8 +118,9 @@
     @confirm="seatDraftPromptVisible = false"
   />
 
-  <!-- AI 助手：悬浮呼出按钮与浮窗（登录页不显示；AI 助手页面本身已有完整对话界面，也不再渲染悬浮按钮；AI 未启用时同样不显示悬浮按钮） -->
-  <template v-if="$route.path !== '/login' && $route.path !== '/ai-assistant' && aiEnabled && !aiIconHidden">
+  <!-- AI 助手：悬浮呼出按钮与浮窗（登录页不显示；AI 助手页面本身已有完整对话界面，也不再渲染悬浮按钮；
+       AI 未启用或设置里关闭「在其他页面显示 AI 助手小窗」时同样不显示） -->
+  <template v-if="$route.path !== '/login' && $route.path !== '/ai-assistant' && aiEnabled && aiFloatingEnabled && !aiIconHidden">
     <Teleport to="body">
       <button
         ref="aiIcon"
@@ -262,6 +263,8 @@ const mainScrollRef = ref(null)
 const assistantOpen = ref(false)
 // AI 助手是否已启用（null=尚未查到，先用隐藏态，避免图标闪一下又消失）
 const aiEnabled = ref(null)
+// 设置项：是否在其他页面显示 AI 助手小窗（默认显示，保持旧行为）
+const aiFloatingEnabled = ref(true)
 // 本次运行是否已从图标右键菜单「本次退出」隐藏悬浮图标（不持久化，重启恢复）
 const aiIconHidden = ref(false)
 const assistantPos = ref({ x: null, y: null })
@@ -584,12 +587,14 @@ async function loadAiEnabled() {
   if (!getToken()) return
   try {
     const { data } = await axios.get('/api/ai/config')
-    aiEnabled.value = !!(data && data.success && data.data && data.data.enabled)
+    const d = (data && data.success && data.data) || {}
+    aiEnabled.value = !!d.enabled
+    aiFloatingEnabled.value = d.floatingEnabled !== false
   } catch (_) {
     aiEnabled.value = false
   }
-  // 若浮窗正开着而此时 AI 已被停用，一并收起，避免留下一个打不开的窗口
-  if (!aiEnabled.value) assistantOpen.value = false
+  // 若浮窗正开着而此时 AI 已被停用或小窗已关闭，一并收起，避免留下一个打不开的窗口
+  if (!aiEnabled.value || !aiFloatingEnabled.value) assistantOpen.value = false
 }
 function onAiConfigChanged() {
   loadAiEnabled()

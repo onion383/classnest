@@ -151,6 +151,7 @@ flowchart TD
 
 - **签名**：`createDynamicTableRouter(tableName, { minCount, protectedColumns, fieldTypeOverrides, extraRoutes })`。
 - 挂载：`/api/students`（`students`，保护 `学号/姓名`）、`/api/fee-records`（`fee_records`）。
+- 学生表未设置 `minCount`（可删空）；班费记录仍保留最少一条。
 
 | 方法 | 路径 | 处理要点 |
 | --- | --- | --- |
@@ -182,19 +183,19 @@ flowchart TD
 `GET/PUT /settings`、`GET/PUT /`、`PUT /save`、`GET/PUT /template`、`POST /apply-master`、`GET/PUT /weight`、`GET/PUT/DELETE /draft`、`GET /daily`；历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。模式 `daily` / `big` 由 `services/dutyMode.js` 解包。
 
 #### [`routes/leaves.js`](../../../student-backend/routes/leaves.js)（`/api/leaves`） · 请假路由
-`GET /`、`POST /`、`PUT /:id`、`POST /reorder`（记录排序）、`GET/POST /today-columns`（今日列配置）、`DELETE /:id`、`POST /:id/return`（销假）、`POST /:id/unreturn`（撤销销假）、`POST /:id/cancel`（取消请假）。
+`GET /`、`POST /`、`PUT /:id`、`POST /reorder`（记录排序）、`GET/POST /today-columns`（今日列配置）、`POST /import`（Excel 导入，按 `学号`/唯一 `姓名` 匹配学生）、`DELETE /:id`、`POST /:id/return`（销假）、`POST /:id/unreturn`（撤销销假）、`POST /:id/cancel`（取消请假）。
 
 #### [`routes/scores.js`](../../../student-backend/routes/scores.js)（`/api/scores`） · 加减分路由
-`GET /`、`POST /`、`PUT /:id`、`DELETE /:id`；个人/小组目标由 `target_type` 区分。
+`GET /`、`POST /`、`PUT /:id`、`POST /import`（Excel 导入，`mode` 为 `personal` / `group`，避免个人与小组加错类型）、`DELETE /:id`；个人/小组目标由 `source`（`personal` / `group`）区分。
 
 #### [`routes/groupManage.js`](../../../student-backend/routes/groupManage.js)（`/api/group-manage`） · 分组管理路由
-`GET /bootstrap`（维度+小组+成员一次取回）、`GET /:dimId`、维度 CRUD（`POST /dimensions`、`PUT/DELETE /dimensions/:id`、`POST /dimensions/move`）、小组 CRUD（`POST /dimensions/:dimId/groups`、`PUT/DELETE /groups/:id`）、成员（`POST /groups/:groupId/members`、`PUT/DELETE /group-members/:id`、`POST /group-members/move`）、智能分组写回 `POST /dimensions/:dimId/apply-grouping`。
+`GET /bootstrap`（维度+小组+成员一次取回）、`GET /:dimId`、维度 CRUD（`POST /dimensions`、`PUT/DELETE /dimensions/:id`、`POST /dimensions/move`）、小组 CRUD（`POST /dimensions/:dimId/groups`、`PUT/DELETE /groups/:id`）、成员（`POST /groups/:groupId/members`、`PUT/DELETE /group-members/:id`、`POST /group-members/move`）、智能分组写回 `POST /dimensions/:dimId/apply-grouping`、Excel 导入 `POST /dimensions/:dimId/import`（`小组` + `姓名` + `备注`，同名小组复用、重复姓名跳过）。
 
 #### [`routes/activities.js`](../../../student-backend/routes/activities.js) / [`routes/countdowns.js`](../../../student-backend/routes/countdowns.js) · 活动路由
-各四条：`GET /`、`POST /`、`PUT /:id`、`DELETE /:id`。
+各五条：`GET /`、`POST /`、`PUT /:id`、`DELETE /:id`、`POST /import`（Excel 导入；活动必填 `主题`，倒计时必填 `名称` + `截止日`）。
 
 #### [`routes/cadres.js`](../../../student-backend/routes/cadres.js)（`/api/cadres`） · 班干部路由
-班干部职务与成员：`GET /`（查询）、`POST /`（新增）、`PUT /:id`（更新）、`DELETE /:id`（删除）、`POST /:id/members`（新增成员）、`DELETE /members/:id`（删除成员）、`POST /:id/move`（移动职务）、`POST /members/:id/move`（移动成员）。
+班干部职务与成员：`GET /`（查询）、`POST /`（新增）、`PUT /:id`（更新）、`DELETE /:id`（删除）、`POST /:id/members`（新增成员）、`DELETE /members/:id`（删除成员）、`POST /:id/move`（移动职务）、`POST /members/:id/move`（移动成员）、`POST /import`（Excel 导入；`职务` 必填，`上级职务` 按名称匹配，`担任学生` 支持多人分隔）。
 
 #### [`routes/widgetSettings.js`](../../../student-backend/routes/widgetSettings.js)（`/api/widget-settings`） · 小组件设置路由
 `GET/PUT /`（整体覆盖写，前端必须整包 PUT）、`GET/PUT /apps`、`GET/PUT /class-info`。

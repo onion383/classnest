@@ -54,7 +54,10 @@
                 @mousedown.prevent="goToResult(r)"
                 @mouseenter="activeIndex = idx"
               >
-                <span class="w-5 text-center shrink-0 text-base">{{ r.emoji }}</span>
+                <span class="w-5 flex items-center justify-center shrink-0 text-base">
+                  <IconGlyph v-if="iconStyle === 'color' && r.icon" :name="r.icon" :size="16" :stroke-width="2" />
+                  <template v-else>{{ r.emoji }}</template>
+                </span>
                 <span class="flex-1 min-w-0 truncate">{{ r.label }}</span>
                 <span v-if="r.sub" class="shrink-0 max-w-[40%] truncate text-xs text-text-muted">{{ r.sub }}</span>
                 <span class="shrink-0 text-xs text-text-muted">{{ r.group }}</span>
@@ -71,11 +74,13 @@
 <script setup vapor>
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import axios from 'axios'
 import {
   PAGES, SETTINGS_SECTIONS, SETTINGS_ITEMS, matchKeywords, REMOTE_SOURCE, buildRemoteResults,
 } from '../../config/searchData.js'
 import { useSeq } from '../../composables/useSeq.js'
+import { useThemeStore } from '../../stores/theme'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import CustomScrollbar from './CustomScrollbar.vue'
 
@@ -84,6 +89,9 @@ const emit = defineEmits(['close'])
 
 const router = useRouter()
 const route = useRoute()
+
+// 图标样式：color 档搜索结果用语义图标（与侧栏一致），emoji 档保留原有表情
+const { iconStyle } = storeToRefs(useThemeStore())
 
 const inputEl = ref(null)
 const listEl = ref(null)
@@ -104,15 +112,15 @@ let remoteTimer = null
 const items = (() => {
   const out = []
   PAGES.forEach((p) => out.push({
-    id: 'page:' + p.to, kind: 'page', group: '页面', label: p.label, emoji: p.emoji,
+    id: 'page:' + p.to, kind: 'page', group: '页面', label: p.label, emoji: p.emoji, icon: p.icon,
     route: p.to, keywords: [p.py], sub: p.group,
   }))
   SETTINGS_SECTIONS.forEach((s) => out.push({
-    id: 'sec:' + s.key, kind: 'setting-section', group: '设置', label: s.label, emoji: '⚙️',
+    id: 'sec:' + s.key, kind: 'setting-section', group: '设置', label: s.label, emoji: '⚙️', icon: 'settings',
     route: '/settings', query: { focus: s.key }, keywords: [s.py], sub: '',
   }))
   SETTINGS_ITEMS.forEach((it) => out.push({
-    id: 'item:' + it.section + ':' + it.label, kind: 'setting-item', group: '设置', label: it.label, emoji: '🔧',
+    id: 'item:' + it.section + ':' + it.label, kind: 'setting-item', group: '设置', label: it.label, emoji: '🔧', icon: 'wrench',
     route: '/settings', query: { focus: it.section + '|' + it.label }, keywords: [it.py], sub: '',
   }))
   return out

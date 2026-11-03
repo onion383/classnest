@@ -53,7 +53,7 @@
 | [frontend/entry.md](./frontend/entry.md) | 5 个 HTML 入口、入口脚本关键动作、构建配置 |
 | [frontend/views.md](./frontend/views.md) | 15 个页面：路由、职责与 Tab、关键状态与数据流、调用的后端接口、依赖组件 |
 | [frontend/composables.md](./frontend/composables.md) | 26 个组合式函数（根目录 19 + `ai/` 7）：签名、返回字段、时序与副作用、调用方、注意事项 |
-| [frontend/misc.md](./frontend/misc.md) | stores / router / styles / utils（25 个）/ 指令 / 独立窗口 / 静态资源 |
+| [frontend/misc.md](./frontend/misc.md) | stores / router / styles / utils（26 个）/ 指令 / 独立窗口 / 静态资源 |
 | [frontend/components/README.md](./frontend/components/README.md) | 组件标准、全局注册、76 个组件索引 |
 
 组件子文档：
@@ -156,7 +156,7 @@ flowchart LR
 | 启动与可靠性 | 启动计时采集「后端就绪 + 首屏可见」；后端心跳与看门狗；界面就绪后后台暖机 | `topics/performance.md` |
 | 撤销/重做 | 写操作同步登记到 `/api/undo`，前端 `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` | `frontend/composables.md` |
 | AI | 模型只读表（`query`），写操作走 `propose_write` 生成提案，用户确认后由既有 CRUD 执行 | `topics/ai.md` |
-| 主题 | `data-theme` 驱动 CSS 变量，预设 `base` / `glass` / `glass2` + 自定义主题 | `frontend/README.md`、`frontend/misc.md` |
+| 主题 | `data-theme` 驱动 CSS 变量，预设 `base` / `glass` / `glass2` | `frontend/README.md`、`frontend/misc.md` |
 
 ### 3.常用的使用方法
 

@@ -65,8 +65,26 @@ export function matchKeywords(text, keywords, q, pinyinMatch) {
 // 由 SearchDialog 在输入时 debounce 拉取，回填 remoteResults 并入搜索结果。
 export const REMOTE_SOURCE = { key: 'remote', endpoint: '/api/search' }
 
-// 后端分组结果 → 搜索结果项（结构与本地项一致：{ id, kind, group, label, route, query, emoji }）。
+// 后端分组结果 → 搜索结果项（结构与本地项一致：{ id, kind, group, label, route, query, emoji, icon }）。
 // query 携带 focus，供目标页「按记录定位」使用。
+// icon 供「图标样式 = color」时渲染语义图标（见 IconGlyph 的 MAP）；emoji 档仍用后端表情。
+const REMOTE_ICONS = {
+  students: 'students',
+  leave_records: 'leave',
+  score_records: 'score',
+  fee_records: 'fee',
+  activities: 'activity',
+  countdowns: 'clock',
+  groups: 'group',
+  albums: 'album',
+  schedule: 'schedule',
+  master_schedule: 'schedule',
+  seat_layout: 'seat',
+  seat_template: 'seat',
+  duty_layout: 'duty',
+  duty_template: 'duty',
+}
+
 export function buildRemoteResults(groups) {
   const out = []
   for (const g of groups || []) {
@@ -78,6 +96,7 @@ export function buildRemoteResults(groups) {
         label: it.label || '',
         sub: it.sub || '',
         emoji: g.emoji || '🔎',
+        icon: REMOTE_ICONS[g.table] || 'search',
         route: it.route || g.route,
         query: it.focus != null ? { focus: String(it.focus) } : undefined,
       })

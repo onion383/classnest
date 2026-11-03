@@ -67,7 +67,7 @@ classnest/
 │   │   │   ├── DutyView.vue
 │   │   │   └── SeatView.vue
 │   │   ├── App.vue
-│   │   └── main.js  # 选择 base / glass / glass2 / 自定义主题
+│   │   └── main.js  # 选择 base / glass / glass2
 │   └── index.html  # 后端未就绪时先给稳定画面，不闪白
 └── testjs/
     └── tools/
@@ -131,7 +131,7 @@ App
 
 | 属性 / 类 | 谁写 | 作用 |
 | --- | --- | --- |
-| `data-theme`（主题标识） | [`main.js`](../../../student-frontend/src/main.js) 启动前写一次；[`stores/theme.js`](../../../student-frontend/src/stores/theme.js) 的 `applyTheme()`（应用主题函数）后续维护 | 选择 `base` / `glass` / `glass2` / 自定义主题 |
+| `data-theme`（主题标识） | [`main.js`](../../../student-frontend/src/main.js) 启动前写一次；[`stores/theme.js`](../../../student-frontend/src/stores/theme.js) 的 `applyTheme()`（应用主题函数）后续维护 | 选择 `base` / `glass` / `glass2`（未知 id 会被 `setTheme` 拒绝并回落 `glass`） |
 | `data-mode`（日/夜模式标识） | 同上，取值 `day` / `night` | 日/夜配色层，与主题正交 |
 | `data-page`（页面标识） | [`App.vue`](../../../student-frontend/src/App.vue) 的 `syncPageKey()`（同步页面标识函数） | 旧版「每页一个模块色」的入口；当前被 `theme-base-accent.css` 的 B 方案统一成深蓝 |
 | `data-topbar-color`（顶栏配色标识） | `applyTheme()`（应用主题函数） | 毛玻璃标题栏/侧边栏的「深蓝 / 白色调」两档 |
@@ -232,11 +232,11 @@ index.css（入口，始终加载）
 | 夜间底 | `#0b1220` | `#182238` | `#1b2036` |
 | 性能开销 | 最低 | 最高（大量 backdrop-filter） | 中（面板级 blur + 常驻漂移） |
 
-#### 3.5 主题选择与自定义
+#### 3.5 主题选择
 
 - [`ThemePickerDialog.vue`](../../../student-frontend/src/components/base/ThemePickerDialog.vue)（主题选择弹窗）：3 列主题卡，卡片内用 `PREVIEW`（预览配色表）画「侧栏 / 顶栏 / 内容块」缩略示意；点击立即 `setTheme()`（切换主题函数），无需保存；下方带「启用动画效果」开关。
-- 引导页 [`Setup.vue`](../../../student-frontend/src/subwindows/setup/Setup.vue) 与主题弹窗都读 `themeStore.allThemes`（全部主题列表）；设置页下拉 [`SettingsView.vue`](../../../student-frontend/src/views/SettingsView/SettingsView.vue) 则硬编码只列 3 个预设。
-- `stores/theme.js` 还提供 `createCustomTheme`（创建自定义主题）/ `updateCustomTheme`（更新自定义主题）/ `deleteCustomTheme`（删除自定义主题）/ `setCustomColor`（设置自定义颜色）/ `resetCustomColors`（重置自定义颜色），自定义主题存在 `app-custom-themes`（自定义主题本地存储键）、自定义颜色存在 `app-theme-custom`（自定义颜色本地存储键）（运行时写成 `--key` 形式的 CSS 变量）。**当前前端没有创建自定义主题的入口**，只有 localStorage 里已有数据时 `allThemes`（全部主题列表）才会把它们列出来。
+- 引导页 [`Setup.vue`](../../../student-frontend/src/subwindows/setup/Setup.vue)、主题弹窗与设置页下拉 [`SettingsView.vue`](../../../student-frontend/src/views/SettingsView/SettingsView.vue) 都读 `themeStore.allThemes`（主题列表），三处入口的候选集一致。
+- **自定义主题功能已移除**：旧版设置页的「新建自定义主题 / 颜色调整」入口与对应 store API（`createCustomTheme` 等）已删除；启动时会清掉遗留的 `app-custom-themes` / `app-theme-custom` 两个本地存储键，避免出现无样式可匹配的无效主题卡片。
 
 **实现位置**：`ThemePickerDialog.vue`（主题选择卡）、`SettingsView.vue`（外观设置）、`styles/theme-base.css` / `theme-glass.css` / `theme-glass2.css`（三套主题样式）。
 
@@ -245,7 +245,7 @@ index.css（入口，始终加载）
 #### 4.1 模式模型
 
 - 界面上的称呼是「日间 / 夜间」，实现只有一个开关：`html[data-mode="day"|"night"]`（根元素日/夜模式标识）。它**与主题正交**：同一套主题可以叠日间或夜间。
-- 支持夜间配色的主题：`base / glass / glass2`（`NIGHT_THEMES`，支持夜间的主题列表）。自定义主题不在列表里，侧边栏的日夜按钮会 `disabled`（禁用），title（悬停提示）为「当前主题暂不支持夜间模式」。
+- 支持夜间配色的主题：`base / glass / glass2`（`NIGHT_THEMES`，支持夜间的主题列表）。当前三套预设主题都支持夜间，日夜按钮始终可用；若以后新增不支持夜间的主题，按钮会 `disabled`（禁用），title（悬停提示）为「当前主题暂不支持夜间模式」。
 - 跟随系统：`followSystem`（跟随系统开关）读 `window.matchMedia('(prefers-color-scheme: dark)')`（读取系统深色偏好）；开启后系统深浅色变化会走完整的切换流程；手动切日/夜会自动关闭跟随，避免随后被系统偏好覆盖。Electron 主进程没有 `nativeTheme.themeSource`（原生主题源）干预，配色完全由渲染层决定。
 
 #### 4.2 夜间配色的设计原则
@@ -414,6 +414,7 @@ sequenceDiagram
 
 - `color`（彩色图标档）：侧边栏渲染 `IconGlyph`（图标组件），`tint="current"`（继承文字色）+ `glyph`（强制图形）+ `class="icon-color"`（彩色语义图标类），再用行内 `color: item.color`（该导航项颜色）覆盖；
 - `emoji`（表情档）：侧边栏直接渲染 `item.emoji`（该导航项表情）的 `<span class="nav-emoji">`（导航表情图标类，20px 宽、14px 字，保持与 16px SVG 视觉等宽）；
+- 搜索弹窗结果左侧图标同样跟随 `iconStyle`：`color` 档渲染 `IconGlyph`（页面项取自 `searchIndex.js` 的 `icon`，设置项用 `settings/wrench`，业务数据按表名映射），`emoji` 档保留原有表情；
 - 标题栏、窗口控制、工具型图标始终带 `glyph`（强制图形），所以 Emoji 档下仍是 SVG，不会变成表情；
 - 夜间对 `.icon-color`（彩色语义图标类）统一提亮（`brightness(1.22) saturate(1.10)`，即亮度 ×1.22、饱和度 ×1.10），`tint="current"`（继承文字色）的按钮图标不参与提亮；
 - `loading`（加载图标）的旋转动画与主题无关，始终可用。

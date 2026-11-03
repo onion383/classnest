@@ -37,6 +37,7 @@ classnest/
 │   │       ├── apiUrl.js  # apiUrl(path)、resourceUrl(path)：补后端地址并为图片/背景追加 …
 │   │       ├── authStorage.js  # token / 当前用户的唯一读写点（空值语义、坏 JSON 防御）
 │   │       ├── backendReady.js  # waitForBackendReady(timeoutMs=4000)（等待后端就绪，超时 …
+│   │       ├── changelog.js  # 解析仓库根 CHANGELOG.md 为更新历史条目
 │   │       ├── chartHit.js  # 图表命中算法（柱/横条/饼扇区/图例）
 │   │       ├── collator.js  # zhCollator、naturalCollator（复用 Intl.Collator）
 │   │       ├── csvCell.js  # CSV 单元格转义（逗号/引号/换行）
@@ -83,7 +84,7 @@ classnest/
 ### 1. 状态管理（`src/stores/`）
 
 #### [`theme.js`](../../../student-frontend/src/stores/theme.js) · 主题 store（唯一 Pinia store）
-- 内部：`PRESETS`（预设主题列表）为 `base`（彩色色块）/ `glass`（毛玻璃）/ `glass2`（新毛玻璃）（+ 用户自定义）；状态 `currentTheme`（当前主题）/ `customColors`（自定义颜色）/ `customThemes`（自定义主题）/ `backgroundImage`（背景图）/ `bgMaskOpacity`（背景遮罩不透明度）/ `glassOpacity`（玻璃层透明度）/ `iconStyle`（图标样式）/ `topbarColor`（顶栏配色）/ `animationsEnabled`（动画开关）。
+- 内部：`PRESETS`（预设主题列表）为 `base`（彩色色块）/ `glass`（毛玻璃）/ `glass2`（新毛玻璃）；状态 `currentTheme`（当前主题）/ `backgroundImage`（背景图）/ `bgMaskOpacity`（背景遮罩不透明度）/ `glassOpacity`（玻璃层透明度）/ `iconStyle`（图标样式）/ `topbarColor`（顶栏配色）/ `animationsEnabled`（动画开关）。
 - `applyTheme()`（应用主题函数）：写 `data-theme`（主题标识）、`data-topbar-color`（顶栏配色标识）、`no-animations`（关闭动画类）、CSS 变量与背景图，并 `theme-chrome`（主题窗口外观）IPC（进程间通信）通知主进程。
 - **调用方**：`App.vue`、`Sidebar.vue`、`IconGlyph.vue`、各入口 `main.js`、`SettingsView`。
 
@@ -110,13 +111,14 @@ classnest/
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，25 个）
+### 4. 工具（`src/utils/`，26 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |
 | [`apiUrl.js`](../../../student-frontend/src/utils/apiUrl.js) | `apiUrl(path)`、`resourceUrl(path)`：补后端地址并为图片/背景追加 token | 各视图的资源显示处 |
 | [`httpClient.js`](../../../student-frontend/src/utils/httpClient.js) | `setupApiClient({ baseURL, getToken })`、`backendBaseUrl()`：各窗口共用的 axios 装配（token、退避重试、安全通道） | `subwindows/setup`、`widget`、`desktop-widget` 的 `main.js` |
 | [`backendReady.js`](../../../student-frontend/src/utils/backendReady.js) | `waitForBackendReady(timeoutMs=4000)`（等待后端就绪，超时 4 秒）、`isBackendReady()`（是否已就绪） | `httpClient`、`main.js` |
+| [`changelog.js`](../../../student-frontend/src/utils/changelog.js) | `parseChangelog(markdown)`：把根目录 `CHANGELOG.md` 解析为 `{ version, date, notes }` 列表（按日期倒序、兼容 v 前缀与多种分隔符） | `AboutView`、`testjs/units/changelog.test.js` |
 | [`jwt.js`](../../../student-frontend/src/utils/jwt.js) | JWT 解码（base64url，不用 `atob`）与过期判断 | `router/index.js`、`authStorage` |
 | [`authStorage.js`](../../../student-frontend/src/utils/authStorage.js) | token / 当前用户的唯一读写点（空值语义、坏 JSON 防御） | 全局 |
 | [`dateTime.js`](../../../student-frontend/src/utils/dateTime.js) | `pad2 / formatDate / formatDateTime / formatDateTimeLocal` | 各弹窗、`AnimatedClock`、工具箱 `Timer` |

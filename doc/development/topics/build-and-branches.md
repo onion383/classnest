@@ -112,7 +112,7 @@ flowchart TD
 
 目标：**同一份源码同时被 3.5 与 3.6 编译**，默认走 3.5，按需切 3.6。
 
-- **依赖隔离**：[`student-frontend/vue36/package.json`](../../../student-frontend/vue36/package.json) 单独安装 `vue@3.6.0-rc.13`；主线 `node_modules` 里的 `vue` 保持 3.5，两份互不覆盖；由 `npm run setup:vue36` 安装。
+- **依赖隔离**：[`student-frontend/vue36/package.json`](../../../student-frontend/vue36/package.json) 单独安装 `vue@3.6.0-rc.14`；主线 `node_modules` 里的 `vue` 保持 3.5，两份互不覆盖；由 `npm run setup:vue36` 安装。
 - **开关只从环境变量进 Vite**：[`dev-vite.js`](../../../student-frontend/dev-vite.js) 把 `--vue36` 翻译成 `VUE_CHANNEL=36`、`--vdom` 翻译成 `VUE_VAPOR=0`（Vite 本身不认识这两个参数）；普通 dev 会显式清掉这两个变量，避免终端残留串味。
 - **运行时选择**（[`vite.config.js`](../../../student-frontend/vite.config.js)）：3.6 通道用官方 `dist/vue.runtime-with-vapor.esm-browser(.prod).js`（自包含、同时含 VDOM + Vapor helper），不用只有 830 字节的 `vue.runtime.esm-bundler.js`；纯 VDOM 对照通道换 `vue.runtime.esm-browser(.prod).js`。
 - **编译器**：3.6 通道取 `vue36/node_modules/@vue/compiler-sfc`；缺依赖时明确报错「请先执行 `npm run setup:vue36`」。

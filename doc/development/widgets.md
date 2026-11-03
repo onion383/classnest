@@ -88,7 +88,7 @@ classnest/
 
 - **宽 320、高度约屏幕 95%，无边框、`transparent:true`（逐像素透明，四角圆角靠页面 CSS 绘制）、不置顶、不可缩放。** 透明是必须的：置底模式的圆角不再用 `SetWindowRgn`，而是让页面把四角之外留空（详见下文「圆角改为页面自绘」）。底色 `backgroundColor:
 - **窗口跑在主进程里**：由 `main.widget.js` 的 `createDesktopWidgetWindow()` 创建/销毁（与工具箱同一套生命周期），`desktop-widget-enabled` 开关实时生效。
-- **从独立进程合并回主进程的原因（v0.8.x）**：早期窗口要 `SetParent` 挂进桌面层，必须隔离「Explorer 重启级联销毁子窗口 → Electron 原生崩溃」；置底改成「顶层窗口 + z 序」之后这个诱因消失，于是挪回主进程，省掉一个 Chromium browser/GPU 进程、整套 spawn/重建/启动即崩降级，以及 `widget-session.json` 快照交接（`main.desktop-widget-process.js`、`desktop-widget-host.js`、`main.widget-session.js` 已删除）。
+- **从独立进程合并回主进程的原因（v0.1.x）**：早期窗口要 `SetParent` 挂进桌面层，必须隔离「Explorer 重启级联销毁子窗口 → Electron 原生崩溃」；置底改成「顶层窗口 + z 序」之后这个诱因消失，于是挪回主进程，省掉一个 Chromium browser/GPU 进程、整套 spawn/重建/启动即崩降级，以及 `widget-session.json` 快照交接（`main.desktop-widget-process.js`、`desktop-widget-host.js`、`main.widget-session.js` 已删除）。
   - **代价**：browser 进程级原生崩溃不再隔离（与工具箱同等风险水平）；渲染进程崩溃仍然隔离，且窗口用 `webContents.on('render-process-gone')` 自动 `reload()` 兜底。
   - **登录态与主题的传递方式**：同进程、同 profile、同 origin（dev 都是 `127.0.0.1:5173`，打包都是 `app://local`），`localStorage` 本来就是同一份，组件直接读；主窗口改 token/主题时本窗口的 `storage` 事件实时同步，不再有快照与 10s 轮询。
 - **置底是唯一形态，没有开关**：设置页只保留「启用桌面小组件」。窗口创建即插层（`attach()`），失败时退回普通顶层窗口（非 Windows / koffi 缺失），只影响层级不影响可用性。`get-desktop-layer-state` 仍返回真实状态（渲染层只用于日志与拖动手柄样式），其中 `autoDisabled` / `faultStreak` 恒为 `false` / `0`（独立进程时代的字段，保留是为了不改变 IPC 形状）。

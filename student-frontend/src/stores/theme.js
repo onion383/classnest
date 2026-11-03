@@ -14,8 +14,9 @@ const FOLLOW_KEY = 'app-mode-follow-system'
 // base 的夜间规则已合并进 theme-base-accent.css（随 index.css 常驻），
 // 因此这里控制「按钮可用」，但 themeLoader 不需要再加载额外的夜间文件。
 const NIGHT_THEMES = ['base', 'glass', 'glass2']
-const CUSTOM_KEY = 'app-theme-custom'
-const CUSTOM_THEMES_KEY = 'app-custom-themes'
+// 旧版「自定义主题 / 颜色调整」的存储键：对应 UI 入口已删除，仅用于启动时清掉遗留数据。
+const LEGACY_CUSTOM_COLOR_KEY = 'app-theme-custom'
+const LEGACY_CUSTOM_THEMES_KEY = 'app-custom-themes'
 const BG_IMAGE_KEY = 'app-bg-image'
 const BG_MASK_KEY = 'app-bg-mask-opacity'
 const GLASS_KEY = 'app-glass-opacity'
@@ -36,10 +37,25 @@ const DEFAULT_GLASS_BG_NIGHT = import.meta.env.PROD
   : `${import.meta.env.BASE_URL}glass-bg-night.webp`
 
 const PRESETS = [
-  { id: 'base', name: '彩色色块主题', editable: false },
-  { id: 'glass', name: '毛玻璃主题', editable: true },
-  { id: 'glass2', name: '新毛玻璃主题', editable: true },
+  { id: 'base', name: '彩色色块主题' },
+  { id: 'glass', name: '毛玻璃主题' },
+  { id: 'glass2', name: '新毛玻璃主题' },
 ]
+// 主题 id 白名单：启动读本地设置、setTheme（含 AI 改设置）都据此校验，
+// 避免已移除主题（如旧的 win11 / minimal）在 data-theme 上留下一个无样式可匹配的 id。
+export const PRESET_IDS = PRESETS.map(p => p.id)
+
+// 清理旧版自定义主题遗留数据（入口已移除，见 doc/development/topics/design-and-interaction.md）。
+// 这些键不再被读取/应用，留着只会让主题选择器列出点不开的无效卡片。
+// 发现本地主题 id 已不在白名单时一并回落到默认毛玻璃，避免首帧套用已删除的样式。
+try {
+  localStorage.removeItem(LEGACY_CUSTOM_COLOR_KEY)
+  localStorage.removeItem(LEGACY_CUSTOM_THEMES_KEY)
+  const savedTheme = localStorage.getItem(THEME_KEY)
+  if (savedTheme && !PRESET_IDS.includes(savedTheme)) {
+    localStorage.setItem(THEME_KEY, 'glass')
+  }
+} catch (_) { /* 非浏览器环境（如静态审计脚本）没有 localStorage，忽略 */ }
 
 // 数值型设置的读取：**不能用 `parseFloat(x) || 默认值`**。
 // 不透明度滑块的 min 是 0，「完全透明」是合法取值，而 0 会被 `||` 当成"没读到"→ 重载后变回默认值。
@@ -48,31 +64,21 @@ const readNum = (key, fallback) => {
   return Number.isFinite(v) ? v : fallback
 }
 
-// JSON 型设置的读取：localStorage 可能被写坏（旧版本格式、外部工具、写入中断），
-// 而这里在 store 初始化时同步执行 —— 一旦抛错就是整个应用白屏、且用户无法自救。
-// 坏数据按「回到默认值」处理，并在控制台留痕。
-const readJson = (key, fallback) => {
-  const raw = localStorage.getItem(key)
-  if (!raw) return fallback
-  try {
-    return JSON.parse(raw)
-  } catch (_) {
-    console.warn(`[theme] 本地设置 ${key} 不是合法 JSON，已回退默认值`)
-    return fallback
-  }
-}
-
 export const useThemeStore = defineStore('theme', () => {
   // 持久化设置的读取集中在这里：既用于初始状态，也用于「别的窗口改了设置」时重新同步
   // （工具箱浮窗跟随主窗口的主题/日夜间切换，见 src/subwindows/widget/main.js）。
+  // 只接受白名单内的主题 id（旧的 win11 / minimal 已在重构中移除）
+  const readTheme = () => {
+    const saved = localStorage.getItem(THEME_KEY)
+    return PRESET_IDS.includes(saved) ? saved : 'glass'
+  }
+
   const readPersisted = () => ({
-    theme: localStorage.getItem(THEME_KEY) || 'glass',
+    theme: readTheme(),
     // 全局日/夜模式：'day' | 'night'（默认日间，保持现有观感）
     mode: localStorage.getItem(MODE_KEY) === 'night' ? 'night' : 'day',
     // 是否跟随系统配色（true 时 mode 由系统偏好决定，手动切换会自动关闭它）
     followSystem: localStorage.getItem(FOLLOW_KEY) === '1',
-    customColors: readJson(CUSTOM_KEY, {}),
-    customThemes: readJson(CUSTOM_THEMES_KEY, []),
     backgroundImage: localStorage.getItem(BG_IMAGE_KEY) || '',
     // 背景遮罩层不透明度（0~1，有自定义背景图时生效）
     bgMaskOpacity: readNum(BG_MASK_KEY, 0.6),
@@ -92,13 +98,10 @@ export const useThemeStore = defineStore('theme', () => {
   // 用户点选后立刻变化的目标模式：按钮/开关绑它，与页面落地解耦。
   // 这样点下去按钮当帧就翻，页面配色仍等样式就位后再落（见 commitMode）。
   const pendingMode = ref(persisted.mode)
-  const isNight = computed(() => mode.value === 'night')
   const isNightPending = computed(() => pendingMode.value === 'night')
   const followSystem = ref(persisted.followSystem)
   // 当前主题是否已实现夜间配色（决定切换按钮是否可用）
   const nightSupported = computed(() => NIGHT_THEMES.includes(currentTheme.value))
-  const customColors = ref(persisted.customColors)
-  const customThemes = ref(persisted.customThemes)
   const backgroundImage = ref(persisted.backgroundImage)
   const bgMaskOpacity = ref(persisted.bgMaskOpacity)
   const glassOpacity = ref(persisted.glassOpacity)
@@ -111,20 +114,9 @@ export const useThemeStore = defineStore('theme', () => {
   // 组件启动时置 true → 只借主题的配色，背景图与遮罩一律不画。
   const suppressBackgroundImage = ref(false)
 
-  // 可供选择的主题：预设 + 自定义。
-  // 主题选择器弹窗（ThemePickerDialog）与引导页（Setup）都用它。
-  const allThemes = computed(() => [
-    ...PRESETS,
-    ...customThemes.value.map(t => ({ ...t, editable: true })),
-  ])
-
-  // 当前主题的元信息：在完整列表里查；查不到（本地存着已移除的主题 id）时回落第一个预设。
-  const currentThemeMeta = computed(() => {
-    const all = [...PRESETS, ...customThemes.value.map(t => ({ ...t, editable: true }))]
-    return all.find(t => t.id === currentTheme.value) || PRESETS[0]
-  })
-
-  const isPreset = computed(() => PRESETS.some(p => p.id === currentTheme.value))
+  // 可供选择的主题：三套预设。
+  // 主题选择器弹窗（ThemePickerDialog）与引导页（Setup、设置页下拉）都用它。
+  const allThemes = computed(() => PRESETS)
 
   // 空闲期预热夜间样式：把「首次切日/夜」的样式编译成本挪到空闲期（详见 styles/themeLoader.js）。
   // 用 requestIdleCallback 等真正空闲再跑，避免与启动/交互抢主线程；
@@ -166,9 +158,6 @@ export const useThemeStore = defineStore('theme', () => {
     document.documentElement.dataset.topbarColor = topbarColor.value
     // 动画总开关：关闭时给根元素打 no-animations，配合全局 CSS 瞬时化所有动效
     syncNoAnimations()
-    Object.entries(customColors.value).forEach(([key, value]) => {
-      document.documentElement.style.setProperty(`--${key}`, value)
-    })
     // 应用背景图（使用单引号避免 base64 data URL 中的双引号冲突）
     // resourceUrl 会补完整后端地址并追加 ?token=，保证 file:// 打包版下背景图能通过鉴权加载。
     // 毛玻璃主题无自定义图时使用内置默认背景（前端静态资源，无需鉴权，直接引用）；
@@ -277,6 +266,12 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   const setTheme = (themeId) => {
+    // 挡住已移除/未知主题 id（旧 localStorage 数据、AI 改设置等旁路）：
+    // 否则 data-theme 会落到一个没有任何主题 CSS 匹配的状态。
+    if (!PRESET_IDS.includes(themeId)) {
+      console.warn('[theme] 忽略未知主题 id:', themeId)
+      return
+    }
     currentTheme.value = themeId
     localStorage.setItem(THEME_KEY, themeId)
     applyTheme()
@@ -290,8 +285,6 @@ export const useThemeStore = defineStore('theme', () => {
     mode.value = p.mode
     pendingMode.value = p.mode
     followSystem.value = p.followSystem
-    customColors.value = p.customColors
-    customThemes.value = p.customThemes
     backgroundImage.value = p.backgroundImage
     bgMaskOpacity.value = p.bgMaskOpacity
     glassOpacity.value = p.glassOpacity
@@ -299,43 +292,6 @@ export const useThemeStore = defineStore('theme', () => {
     topbarColor.value = p.topbarColor
     animationsEnabled.value = p.animationsEnabled
     applyTheme()
-  }
-
-  const setCustomColor = (key, value) => {
-    customColors.value[key] = value
-    localStorage.setItem(CUSTOM_KEY, JSON.stringify(customColors.value))
-    document.documentElement.style.setProperty(`--${key}`, value)
-  }
-
-  const resetCustomColors = () => {
-    customColors.value = {}
-    localStorage.removeItem(CUSTOM_KEY)
-    applyTheme()
-  }
-
-  const createCustomTheme = (name, colors) => {
-    const id = `custom_${Date.now()}`
-    const theme = { id, name, colors }
-    customThemes.value.push(theme)
-    localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customThemes.value))
-    return id
-  }
-
-  const deleteCustomTheme = (id) => {
-    customThemes.value = customThemes.value.filter(t => t.id !== id)
-    localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customThemes.value))
-    if (currentTheme.value === id) {
-      setTheme('glass')
-      resetCustomColors()
-    }
-  }
-
-  const updateCustomTheme = (id, updates) => {
-    const idx = customThemes.value.findIndex(t => t.id === id)
-    if (idx !== -1) {
-      customThemes.value[idx] = { ...customThemes.value[idx], ...updates }
-      localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customThemes.value))
-    }
   }
 
   const setBackgroundImage = (url) => {
@@ -430,12 +386,9 @@ export const useThemeStore = defineStore('theme', () => {
     currentTheme,
     mode,
     pendingMode,
-    isNight,
     isNightPending,
     nightSupported,
     followSystem,
-    customColors,
-    customThemes,
     backgroundImage,
     bgMaskOpacity,
     glassOpacity,
@@ -444,14 +397,7 @@ export const useThemeStore = defineStore('theme', () => {
     animationsEnabled,
     suppressBackgroundImage,
     allThemes,
-    currentThemeMeta,
-    isPreset,
     setTheme,
-    setCustomColor,
-    resetCustomColors,
-    createCustomTheme,
-    deleteCustomTheme,
-    updateCustomTheme,
     applyTheme,
     reloadFromStorage,
     setBackgroundImage,

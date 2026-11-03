@@ -74,7 +74,7 @@ student-frontend/
    ├─ stores/        theme.js
    ├─ router/        index.js
    ├─ styles/        11 个 CSS（主题、工具类、弹窗过渡、滚动条等）
-   ├─ utils/         25 个工具
+   ├─ utils/         26 个工具
    └─ wasm/          字体子集等 wasm 资源
 ```
 

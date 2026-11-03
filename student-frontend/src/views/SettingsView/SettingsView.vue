@@ -747,7 +747,7 @@ const ConfirmDialog = defineAsyncComponent(() => import('../../components/base/C
 const route = useRoute()
 const router = useRouter()
 const themeStore = useThemeStore()
-const { currentTheme, bgMaskOpacity, glassOpacity, iconStyle, topbarColor, animationsEnabled, pendingMode, nightSupported, followSystem } = storeToRefs(themeStore)
+const { currentTheme, allThemes, bgMaskOpacity, glassOpacity, iconStyle, topbarColor, animationsEnabled, pendingMode, nightSupported, followSystem } = storeToRefs(themeStore)
 
 // 模板 ref（搜索输入/弹窗、背景图 file input）
 const settingsSearchInput = ref(null)
@@ -921,12 +921,6 @@ const busyRestartBackend = ref(false)
 const busyRestartWidget = ref(false)
 const busyRestartAll = ref(false)
 const _perfTimer = ref(null)
-// 主题下拉的候选项（这份列表是独立硬编码的副本，不走 store 的 allThemes）。
-const presetThemes = ref([
-  { id: 'base', name: '彩色色块主题' },
-  { id: 'glass', name: '毛玻璃主题' },
-  { id: 'glass2', name: '新毛玻璃主题' },
-])
 
 // 非响应式实例状态（动画帧/定时器句柄与搜索闪动标记）挂在 ctx 上单源共享
 
@@ -973,8 +967,9 @@ const securityDialogMessage = computed(() => {
       return ''
   }
 })
+// 主题下拉与主题选择器共用 store 的 allThemes，避免两处列表漂移
 const themeOptions = computed(() => {
-  return presetThemes.value.map(t => ({ value: t.id, label: t.name }))
+  return allThemes.value.map(t => ({ value: t.id, label: t.name }))
 })
 // 玻璃系主题（旧毛玻璃 / 新毛玻璃）共用「背景图片 + 透明度」两组设置
 const isGlassTheme = computed(() => {
@@ -1088,7 +1083,7 @@ const ctx = {
   securityDialog, privacyPhrase, undoGroups, busyUndo, selectedThemeId, mergeNotifications,
   bgImageUrl, bgImageFileName, perfProcs, perfTopRatio, perfAlive, perfTotal, perfAvg, perfMax,
   perfFront, perfBackend, perfOther, perfStartupTotal, busyGc, busyRestartBackend, busyRestartWidget,
-  busyRestartAll, _perfTimer, presetThemes,
+  busyRestartAll, _perfTimer,
   // storeToRefs（也是 ref）
   currentTheme, bgMaskOpacity, glassOpacity, iconStyle, topbarColor, animationsEnabled, pendingMode,
   nightSupported, followSystem,

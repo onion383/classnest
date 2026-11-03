@@ -165,7 +165,7 @@ classnest/
 - **使用方**：`ClassroomView`、`ScheduleView`、`SeatView`、`DutyView`、`LeaveManagement`、`ScoreManagement`、`ActivitiesView`、`GroupManageView`。
 
 ### [ThemePickerDialog.vue](../../../../student-frontend/src/components/base/ThemePickerDialog.vue) · 主题选择
-- **定位**：设置页的主题预览与切换（base / glass / glass2 + 自定义），豁免遮罩脉冲。
+- **定位**：设置页的主题预览与切换（base / glass / glass2），豁免遮罩脉冲。
 - **对外接口**：`emits: close`；内部持有各主题预览色（`base/glass/glass2`）。
 - **使用方**：`SettingsView`（外观设置）。
 

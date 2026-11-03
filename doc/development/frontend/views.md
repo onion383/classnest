@@ -144,6 +144,7 @@ classnest/
 
 ### AboutView
 - 版本、图标、许可与赞助信息；无后端请求。
+- 更新历史不在组件里硬编码：通过 `?raw` 引入仓库根 `CHANGELOG.md`，由 `utils/changelog.js` 的 `parseChangelog` 解析后渲染。
 
 ### 两类表格的共同标准
 

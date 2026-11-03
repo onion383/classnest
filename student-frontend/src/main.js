@@ -10,7 +10,7 @@ import router from './router'
 // 主窗口与子窗口共用同一份，避免各窗口外观不一致。
 import './styles/index.css'
 import { loadThemeStyles } from './styles/themeLoader'
-import { useThemeStore } from './stores/theme'
+import { useThemeStore, PRESET_IDS } from './stores/theme'
 import { setupApiClient, backendBaseUrl } from './utils/httpClient'
 import { ensureMediaToken, clearMediaToken } from './utils/apiUrl'
 import { useNotification } from './composables/useNotification'
@@ -73,11 +73,13 @@ if (getToken()) ensureMediaToken()
 // 1. 立即设置主题 CSS 变量（不依赖 Pinia/Vue），防止 splash 到 Vue 渲染之间的闪烁
 const THEME_KEY = 'app-theme'
 const MODE_KEY = 'app-mode'
-const CUSTOM_KEY = 'app-theme-custom'
 const BG_IMAGE_KEY = 'app-bg-image'
 const GLASS_KEY = 'app-glass-opacity'
 const BG_MASK_KEY = 'app-bg-mask-opacity'
-const savedTheme = localStorage.getItem(THEME_KEY) || 'glass'
+// 只认预设主题 id：本地存着已移除的旧主题（win11 / minimal）时回落到默认毛玻璃，
+// 避免启动首帧写一个没有任何主题 CSS 能匹配的 data-theme。
+const storedTheme = localStorage.getItem(THEME_KEY)
+const savedTheme = PRESET_IDS.includes(storedTheme) ? storedTheme : 'glass'
 document.documentElement.dataset.theme = savedTheme
 // 全局日/夜模式：与主题同批在 Vue 初始化前落地，避免日→夜首帧闪烁
 const savedMode = localStorage.getItem(MODE_KEY) === 'night' ? 'night' : 'day'
@@ -85,13 +87,6 @@ document.documentElement.dataset.mode = savedMode
 // 按需加载当前主题/模式的样式：与其余启动逻辑并行开始；占位移除前会等它就绪（见 whenSplashReady），
 // 避免出现「入口样式已应用、主题样式还没到」时闪一下基础主题配色。
 const themeStylesReady = loadThemeStyles(savedTheme, savedMode)
-// 应用自定义颜色
-try {
-  const custom = JSON.parse(localStorage.getItem(CUSTOM_KEY) || '{}')
-  Object.entries(custom).forEach(([key, value]) => {
-    document.documentElement.style.setProperty(`--${key}`, value)
-  })
-} catch (_) {}
 // 应用透明度
 // 注意：这里不能用 `parseFloat(x) || 默认值` —— 滑块 min=0，0（完全透明）是合法值，
 // 却会被 `||` 当成"没设置"而回退成默认值。必须用 Number.isFinite 判断。

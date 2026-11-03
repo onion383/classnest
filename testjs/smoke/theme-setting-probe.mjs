@@ -44,27 +44,6 @@ for (const [label, raw, expected] of cases) {
 }
 console.log(`\n共 ${bad} 处旧写法会给出错误结果（全是「值为 0」这一类）`)
 
-// JSON 兜底：坏数据不能让 store 初始化抛错
-const OLD_JSON = (raw, dft) => JSON.parse(raw || dft)
-const NEW_JSON = (raw, dft) => {
-  if (!raw) return dft
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return dft
-  }
-}
-console.log('\nJSON 设置读取（theme store 初始化路径）')
-for (const raw of ['{"a":1}', 'not-json{{{', '']) {
-  let oldRes
-  try {
-    oldRes = JSON.stringify(OLD_JSON(raw, '{}'))
-  } catch (e) {
-    oldRes = `抛错: ${e.constructor.name}`
-  }
-  console.log(`  ${JSON.stringify(raw).padEnd(16)} 旧: ${String(oldRes).padEnd(28)} 新: ${JSON.stringify(NEW_JSON(raw, {}))}`)
-}
-
 // 旧/新差异是背景说明，真正的失败只看新写法是否符合预期
 if (fail) {
   console.log(`\n✗ ${fail} 项新写法不符合预期`)

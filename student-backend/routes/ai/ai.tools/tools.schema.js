@@ -118,9 +118,9 @@ const jsonWriteTool = {
 // ===== propose_frontend_setting：「前端外观/行为设置」的白名单与提案 =====
 // 这些设置存于前端 localStorage（主题/日夜模式/图标样式…），后端不落库、不校验真实状态，
 // 只做白名单校验并生成提案；用户确认后由前端经主题 store 立即应用（且可撤销）。
-// 刻意排除：背景图片（路径风险）、桌面悬浮小组件开关（耦合主进程）、自定义主题、账号/密钥等敏感项。
+// 刻意排除：背景图片（路径风险）、桌面悬浮小组件开关（耦合主进程）、账号/密钥等敏感项。
 const FRONT_SETTINGS = {
-  theme: { label: '主题', type: 'enum', values: ['base', 'glass', 'glass2', 'win11', 'minimal'] },
+  theme: { label: '主题', type: 'enum', values: ['base', 'glass', 'glass2'] },
   mode: { label: '日夜模式', type: 'enum', values: ['day', 'night'] },
   iconStyle: { label: '图标样式', type: 'enum', values: ['color', 'emoji'] },
   topbarColor: { label: '标题栏配色', type: 'enum', values: ['blue', 'light'] },
@@ -134,7 +134,7 @@ const frontSettingTool = {
   type: 'function',
   function: {
     name: 'propose_frontend_setting',
-    description: '对软件的外观/行为设置做修改提案：给出设置项 key 与新值。此调用不会真正改动，用户确认后由前端立即应用（可撤销）。可改项：theme（主题：base 彩色色块/glass 毛玻璃/glass2 新毛玻璃/win11/ minimal 极简）、mode（day 日间/night 夜间，仅 glass、glass2 支持夜间）、iconStyle（color 彩色图标/emoji）、topbarColor（blue 深蓝/light 白色调）、animations（true 开启动画/false 关闭）、bgMaskOpacity（背景遮罩不透明度 0~1）、glassOpacity（毛玻璃不透明度 0~1）、mergeNotifications（true 合并相同提示/false 每次单独展示）。背景图片、自定义主题、账号与密钥不在可改范围。',
+    description: '对软件的外观/行为设置做修改提案：给出设置项 key 与新值。此调用不会真正改动，用户确认后由前端立即应用（可撤销）。可改项：theme（主题：base 彩色色块/glass 毛玻璃/glass2 新毛玻璃）、mode（day 日间/night 夜间，三套主题均支持）、iconStyle（color 彩色图标/emoji）、topbarColor（blue 深蓝/light 白色调）、animations（true 开启动画/false 关闭）、bgMaskOpacity（背景遮罩不透明度 0~1）、glassOpacity（毛玻璃不透明度 0~1）、mergeNotifications（true 合并相同提示/false 每次单独展示）。背景图片、账号与密钥不在可改范围。',
     parameters: {
       type: 'object',
       properties: {

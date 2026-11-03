@@ -123,7 +123,7 @@
           <div class="px-6 pt-8 pb-4 text-center shrink-0">
             <img src="/logo.webp" alt="logo" class="w-16 h-16 mx-auto object-contain" />
             <div class="mt-4 flex items-center justify-center gap-2">
-              <span class="text-base font-semibold text-text">v{{ currentVersion || '0.8.0' }}</span>
+              <span class="text-base font-semibold text-text">v{{ currentVersion || '0.1.0' }}</span>
               <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold text-white bg-blue-500 leading-none">预览版</span>
               <button @click="checkUpdate" :disabled="updateBusy" class="px-3 py-1 rounded-full bg-primary/10 text-primary text-xs hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">检查更新</button>
             </div>
@@ -172,7 +172,7 @@
             <button @click="dialogDonate = false" class="dlg-close">&times;</button>
           </div>
           <div class="px-6 py-4 text-sm text-text-secondary text-center">
-            <p class="mb-4">本软件个人免费使用，如果你觉得好的话欢迎打赏我们</p>
+            <p class="mb-4">本软件开源免费，如果你觉得好的话欢迎打赏我们</p>
             <div class="grid grid-cols-2 gap-4">
               <div class="space-y-2">
                 <div class="text-text font-medium">微信</div>
@@ -200,6 +200,9 @@ import { SEND, INVOKE, RECEIVE } from '../electronChannels.js'
 import CustomScrollbar from '../components/base/CustomScrollbar.vue'
 // 协议全文直接引用仓库根 LICENSE.md，避免正文出现两份
 import licenseText from '../../../LICENSE.md?raw'
+// 更新历史同样只维护一份：仓库根 CHANGELOG.md，这里只负责解析
+import changelogSource from '../../../CHANGELOG.md?raw'
+import { parseChangelog } from '../utils/changelog.js'
 import '../styles/dialog-transition.css'
 
 // Electron 内用系统浏览器打开外链，非 Electron 环境让浏览器默认行为处理
@@ -250,18 +253,9 @@ const statusClass = computed(() => {
 // 检查/下载进行中：禁用「检查更新」按钮，避免重复触发
 const updateBusy = computed(() => ['checking', 'available', 'downloading'].includes(updateStatus.value))
 
-// 更新历史（手动维护，发版时在最上方追加一条）
-const changelog = [
-  {
-    version: '0.8.0',
-    date: '2026-10-10',
-    notes: [
-      '预览版',
-      '班级管理、班费、课程表、座位安排、请假考勤、班级相册等功能',
-      '桌面工具箱浮窗：计时器、点名器、截图、注释',
-    ],
-  },
-]
+// 更新历史：唯一来源是仓库根 CHANGELOG.md，发版时只改那一份文件。
+// 解析器按日期倒序输出，写文件时无需手动保证顺序。
+const changelog = parseChangelog(changelogSource)
 
 function applyUpdateState(s) {
   if (!s) return

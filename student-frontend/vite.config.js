@@ -297,8 +297,6 @@ export default defineConfig({
         // 故一并预热，避免首屏/切主题时现编译。仅 dev 生效，对正式版无影响。
         './src/styles/theme-glass.css',
         './src/styles/theme-glass2.css',
-        './src/styles/theme-minimal.css',
-        './src/styles/theme-win11.css',
         './src/styles/theme-night.css',
         // 首屏落地页（未登录→Login，已登录→Dashboard）：提前编译，避免跳转后才逐模块编译
         './src/views/Login.vue',

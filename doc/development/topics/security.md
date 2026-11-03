@@ -199,7 +199,7 @@ sequenceDiagram
 | 读 | `READ_TABLES` 白名单（学生/请假/班费/分数/活动/分组/班干部/课表/座位/值日/相册/撤销/设置等） | [`ai.constants.js`](../../../student-backend/routes/ai/ai.constants.js) |
 | 行式写 | `WRITE_TABLES` 仅 7 张：学生、班费、活动、倒计时、请假、分数、班干部；**必须走提案** | 同上 + [`executors.proposal.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.proposal.js) |
 | 整块 JSON 写 | `JSON_WRITE_TABLES`：课表/座位/值日各表与模板，只允许真实列、按整列替换 | 同上 |
-| 前端设置 | `propose_frontend_setting` 仅允许主题/日夜/图标/标题栏/动画/透明度/提示合并；**背景图、自定义主题、账号与密钥不在范围** | [`ai.llm.js`](../../../student-backend/routes/ai/ai.llm.js) |
+| 前端设置 | `propose_frontend_setting` 仅允许主题/日夜/图标/标题栏/动画/透明度/提示合并；**背景图、账号与密钥不在范围** | [`ai.llm.js`](../../../student-backend/routes/ai/ai.llm.js) |
 | 确认档位 | `approve`（默认，每次写入都要确认）/ `full`（切换时二次弹窗确认，提案自动执行）；仍记撤销 | [`views/AiAssistant.vue`](../../../student-frontend/src/views/AiAssistant.vue)、[`AiComposer.vue`](../../../student-frontend/src/components/ai/AiComposer/AiComposer.vue) |
 | 子代理 | 只读白名单 10 个工具（query / aggregate / resolve_student / search_all / run_checks / run_conflict_checks / score_weights / describe_table / teaching_week / get_time）；执行前按名单硬校验，`propose_*`、`save_memory`、`undo_change`、`ask_user` 全部拒绝 | [`ai.subagent-tools.js`](../../../student-backend/routes/ai/ai.subagent-tools.js)、[`tools.subagent.js`](../../../student-backend/routes/ai/ai.tools/tools.subagent.js) |
 | 数据隔离 | 记忆 `dataDir/ai-memory/<slug>.md`、技能 `ai-skills/<slug>/`（或 `AI_SKILLS_DIR`），按账号 slug 隔离 | [`dbManager.memory.js`](../../../student-backend/dbManager/dbManager.memory.js)、[`dbManager.skills.js`](../../../student-backend/dbManager/dbManager.skills.js) |

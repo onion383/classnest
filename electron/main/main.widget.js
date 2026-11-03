@@ -11,7 +11,7 @@
 //     desktop-widget-drag-* / desktop-widget-open-page / get-desktop-layer-state /
 //     widget-* / to-widget / to-main 等
 //
-// 桌面小组件为什么从独立进程合并回来（v0.8.x）：独立进程原本只为隔离「跨进程子窗口
+// 桌面小组件为什么从独立进程合并回来（v0.1.x）：独立进程原本只为隔离「跨进程子窗口
 // 被移动 → 原生崩溃」这一类问题，而置底实现改成顶层窗口 + z 序之后该诱因已消失；
 // 合并省掉一个 Chromium browser/GPU 进程与整套 spawn/重建/会话快照逻辑。
 // 代价：browser 进程级原生崩溃不再隔离（与工具箱同等风险水平）。渲染进程崩溃仍隔离，

@@ -18,8 +18,6 @@ const THEMES = {
   base: 'theme-base.css',
   glass: 'theme-glass.css',
   glass2: 'theme-glass2.css',
-  win11: 'theme-win11.css',
-  minimal: 'theme-minimal.css',
 };
 const ROLES = ['control', 'card', 'surface', 'table'];
 

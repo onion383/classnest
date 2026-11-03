@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div class="nt-container">
-      <TransitionGroup name="nt">
+      <TransitionGroup name="nt" @before-leave="onBeforeLeave">
         <div
           v-for="item in notifications"
           :key="item.id"
@@ -64,6 +64,19 @@ const titles = {
   error:   '操作失败',
   warning: '请注意',
   info:    '提示信息'
+}
+
+// 退出中的提示条要脱离 flex 布局（见 .nt-leave-active 的 position: absolute），
+// 后面的提示条才能用 TransitionGroup 的 FLIP 平滑补位。
+// 脱离前先钉住它原来的位置和宽度，否则绝对定位会按容器左上角重排，视觉上「跳」一下。
+function onBeforeLeave(el) {
+  if (!el) return
+  el.style.top = `${el.offsetTop}px`
+  // 贴住容器右缘而不是左缘：容器宽度取最宽的一条，最宽的那条退出时容器会变窄、
+  // 左缘向右移；钉 right 才能保证退出中的提示条原位不动。
+  el.style.left = 'auto'
+  el.style.right = '0'
+  el.style.width = `${el.offsetWidth}px`
 }
 
 function onHover(item) {
@@ -247,12 +260,14 @@ function onAction(item) {
   to   { width: 0%;   }
 }
 
-/* ========== 进出动画（保持原样：从右侧滑入/滑出）========== */
+/* ========== 进出动画（从右侧滑入/滑出）========== */
 .nt-enter-active {
-  transition: all 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .nt-leave-active {
-  transition: all 0.25s ease-in;
+  transition: opacity 0.25s ease-in,
+              transform 0.25s ease-in;
 }
 
 .nt-enter-from {
@@ -262,5 +277,20 @@ function onAction(item) {
 .nt-leave-to {
   opacity: 0;
   transform: translateX(60px) scale(0.92);
+}
+
+/* 退出中的提示条脱离 flex 布局，后面的提示条才能立刻开始补位；
+   位置/宽度由 onBeforeLeave 在脱离前钉住，避免起点跳动。
+   !important 必需：毛玻璃主题用 `:root:is([data-theme="glass"]) .nt-toast`
+   强制了 position: relative（特异性 0,3,0，且在组件样式之后加载），
+   不加会被覆盖成 relative，后续提示条就不会触发补位动画。 */
+.nt-leave-active {
+  position: absolute !important;
+  z-index: 1;
+}
+
+/* TransitionGroup 的 FLIP 位移：上一条退出后，下一条从原位置平滑补上来 */
+.nt-move {
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
 }
 </style>

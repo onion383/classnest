@@ -121,11 +121,13 @@
 <script setup vapor>
 import { getToken } from '../utils/authStorage.js'
 import { ref, reactive, computed, onMounted, watch, defineAsyncComponent } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { prefetch } from '../utils/dialogPrefetch.js'
 import axios from 'axios'
 import CadreTreeList from './CadreTreeList.vue'
 import CustomScrollbar from './base/CustomScrollbar.vue'
 import { useNotification } from '../composables/useNotification'
+import { applyRouteRowFocus } from '../composables/useRowFocus.js'
 
 // 导出弹窗懒加载：首次点开时才加载 ExportExcel 的代码块
 const loadExportExcel = () => import('./import-export/ExportExcel/ExportExcel.vue')
@@ -142,6 +144,27 @@ const allStudents = ref([])
 
 // 职务树滚动容器（自定义滚动条的目标）
 const treeScrollRef = ref(null)
+
+// 跨页定位：标题栏全局搜索点「班干部」结果 → /students?focus=cadre:<职务id>。
+// 父级 ClassroomView 只负责切到「班干部管理」页签、不消费 query —— 它若照常走
+// applyRouteRowFocus，成功后会 router.replace 把 focus 清掉，而本组件是 v-if 懒加载、
+// 切页签后才挂载，就永远收不到这个 focus 了。所以定位由这里自己做。
+const route = useRoute()
+const router = useRouter()
+const rowFocusHost = { route, router }
+function applyFocus() {
+  const key = String(route.query.focus || '')
+  if (!key.startsWith('cadre:')) return
+  applyRouteRowFocus(rowFocusHost, {
+    parse: (k) => {
+      const id = String(k).slice('cadre:'.length)
+      // 职务树是异步加载的：还没到就返回空值，交给 helper 的重试；数据到位后才清 query
+      if (!id || loading.value || !tree.value.length) return null
+      return id
+    },
+    container: () => treeScrollRef.value,
+  })
+}
 
 // 当前选中的职务行（选中后高亮蓝框，供工具栏「增加下级 / 修改」使用）
 const selectedId = ref(null)
@@ -249,7 +272,8 @@ async function fetchStudents() {
   } catch (e) { /* 学生列表不可用时不阻塞 */ }
 }
 
-onMounted(() => { loadTree(); fetchStudents() })
+onMounted(() => { loadTree(); fetchStudents(); applyFocus() })
+watch(() => route.query.focus, applyFocus)
 
 // ============ 职务新增 / 编辑 / 删除 ============
 const nodeDialogVisible = ref(false)

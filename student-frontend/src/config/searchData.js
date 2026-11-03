@@ -83,6 +83,13 @@ const REMOTE_ICONS = {
   seat_template: 'seat',
   duty_layout: 'duty',
   duty_template: 'duty',
+  // 后加的数据源（图标 key 必须存在于 IconGlyph 的 MAP，否则 color 档会渲染成空白）
+  semesters: 'calendar',
+  group_members: 'users',
+  album_photos: 'image',
+  duty_items: 'duty',
+  cadres: 'user',
+  cadre_members: 'users',
 }
 
 export function buildRemoteResults(groups) {

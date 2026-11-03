@@ -29,6 +29,8 @@ classnest/
         ├── pdf-leak-probe.mjs  # PDF 导出内存泄漏（看 V8 external，不看 rss）
         ├── refresh-warm-check.cjs  # 刷新/预热后的缓存命中
         ├── screenshot-bench.cjs  # 应用内截图性能基准
+        ├── search-bench.cjs  # 全局搜索接口耗时：灌 2 万条加扣分、3 万张照片的内存库，测端到端 p50/p90，并对照…
+        ├── search-sources-probe.cjs  # 全局搜索（GET /api/search）各数据源能否命中、排序/多词/focus 串是否正…
         ├── toplevel-bottom-probe.cjs  # 「顶层置底」最小原型（顶层窗口 + 透明圆角 + 拖动 + z 序自检，无业务代码）
         ├── vapor-audit.mjs  # 组件 Vapor 迁移审计
         ├── vapor-bench.mjs  # Vapor 通道基准
@@ -47,7 +49,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：过程探针层（`testjs/probe/`），29 个脚本（28 个探针 + 1 个样例），需要手动传参、耗时较长或拉起完整应用。
+- **定位**：过程探针层（`testjs/probe/`），30 个脚本（29 个探针 + 1 个样例），需要手动传参、耗时较长或拉起完整应用。
 - **公共逻辑**：多数自行启动 `Vite`（前端开发服务器）/ 带调试口的 `Electron`，或复用 `_sample-big.cjs`（大样张生成脚本）生成样张；输出是数据/报告，结论写到本页或 `doc/开发文档/`。
 - **局限**：**不是回归测试**，不能当判据、也不进冒烟；可信范围见 [testing/README.md](./README.md)。
 
@@ -96,6 +98,13 @@ classnest/
 | [`grid-row-drag-probe.cjs`](../../../testjs/probe/grid-row-drag-probe.cjs) | 网格行拖拽让位 |
 | [`inject-drag.ps1`](../../../testjs/probe/inject-drag.ps1) | `SetCursorPos` + `mouse_event` 合成一次真实左键拖动（配合其它探针） |
 
+### 接口与数据源
+
+| 脚本 | 用途 |
+| --- | --- |
+| [`search-sources-probe.cjs`](../../../testjs/probe/search-sources-probe.cjs) | 全局搜索（`GET /api/search`）各数据源能否命中、排序/多词/字段限定/`focus` 串是否正确；内存库 + `require.cache` 替换 `../db`，22 条断言，失败退出码 1。无需桌面、毫秒级 |
+| [`search-bench.cjs`](../../../testjs/probe/search-bench.cjs) | 全局搜索接口耗时：灌 2 万条加扣分、3 万张照片的内存库，测端到端 p50/p90，并对照旧实现「拉 1000 行 + 逐格拼音」的成本；`--runs=N` 控制轮次，不做门限判定 |
+
 ### Vapor
 
 | 脚本 | 用途 |
@@ -122,6 +131,7 @@ classnest/
 
 - **参数以脚本头部为准**：本页用途摘要来自脚本名与 `testjs/README.md`，运行前先读各脚本文件头注释，别照抄本页猜参数。
 - **不要进冒烟 / CI**：探针需要真实桌面、真实应用与较长耗时，只做一次性测量；判据类检查放 [smoke.md](./smoke.md)。
+  - 例外说明：`search-sources-probe.cjs` 不依赖桌面、跑得也快，但它的验证对象是一次真实路由调用，按 [units.md](./units.md) 的分层规则（该层不覆盖 HTTP 路由）仍归在探针层手动运行。
 - **桌面窗口类探针会动真实窗口**：`widget-bottom-regression.ps1`（置底回归探针）会合成真实拖动、`widget-shot.ps1`（组件截图探针）会把组件临时提到最前截图；运行前先收好正在使用的窗口，避免误操作。
 
 ---

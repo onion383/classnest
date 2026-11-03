@@ -235,9 +235,18 @@ const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
 const rowFocusHost = { route, router }
-const applyFocus = () => applyRouteRowFocus(rowFocusHost, {
-  parse: (key) => { activeTab.value = 'students'; return key }
-})
+// 班干部结果（focus=cadre:<职务id>）：这里只切页签，定位交给 CadreManage 自己做。
+// 不能在这里调 applyRouteRowFocus —— 它解析成功后会 router.replace 清掉 query，
+// 而 CadreManage 是 v-if 懒加载、切页签后才挂载，清早了它就永远收不到 focus。
+const applyFocus = () => {
+  if (String(route.query.focus || '').startsWith('cadre:')) {
+    activeTab.value = 'cadres'
+    return
+  }
+  applyRouteRowFocus(rowFocusHost, {
+    parse: (key) => { activeTab.value = 'students'; return key }
+  })
+}
 onMounted(applyFocus)
 onActivated(applyFocus)
 watch(() => route.query.focus, applyFocus)

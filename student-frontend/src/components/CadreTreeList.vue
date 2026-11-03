@@ -2,6 +2,7 @@
   <div>
     <!-- 职务行：母/子职务统一用蓝色标记，靠缩进区分层级 -->
     <div
+      :data-row-id="node.id"
       class="flex flex-wrap items-center gap-2 px-3 py-1.5 my-1.5 rounded-md text-text-inverse text-sm cursor-default transition-shadow duration-150"
       :class="[level === 0 ? 'row-root' : 'bg-primary', selectedId === node.id ? 'row-selected' : '']"
       @mousedown="onRowMouseDown"

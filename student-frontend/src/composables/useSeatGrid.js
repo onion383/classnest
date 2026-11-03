@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 import axios from 'axios'
-import { recordGridCellUndo, recordGridSnapshotUndo } from './useUndo.js'
+import { recordGridCellUndo, recordGridSnapshotUndo, newUndoBatchId, flushUndoStatus } from './useUndo.js'
 import { useNotification } from './useNotification.js'
 import { createSerialSaver } from '../utils/serialSaver.js'
 import { createRowReuseCache } from '../utils/rowReuse.js'
@@ -209,6 +209,9 @@ export function useSeatGrid(apiBase, options = {}) {
         if (pr[c] !== nr[c]) changed.push([r, c])
       }
     }
+    // 一次更新改动多格时共用一个批次标识：Ctrl+Z 一步退回整次改动，而不是按格数退。
+    // 只改一格不加批次，保持原来的单条增量行为。
+    const undoBatch = changed.length > 1 ? newUndoBatchId() : ''
     if (cellBase && changed.length) {
       // 串行提交每个格子，避免并发 PATCH 到达顺序乱序导致数据覆盖。
       // 撤销记录必须在**该格保存成功之后**再登记：原实现先登记后保存，
@@ -221,8 +224,10 @@ export function useSeatGrid(apiBase, options = {}) {
             await load()
             return
           }
-          if (undo) recordGridCellUndo(undo.key, undo.table, r, c, prev[r]?.[c] ?? null, next[r]?.[c] ?? null)
+          if (undo) recordGridCellUndo(undo.key, undo.table, r, c, prev[r]?.[c] ?? null, next[r]?.[c] ?? null, null, undoBatch)
         }
+        // 批次登记期间不逐条刷状态，全部登记完统一刷一次（见 flushUndoStatus）
+        if (undoBatch) flushUndoStatus()
       })()
     } else {
       const ok = await save()
@@ -231,7 +236,8 @@ export function useSeatGrid(apiBase, options = {}) {
         return
       }
       if (undo) {
-        for (const [r, c] of changed) recordGridCellUndo(undo.key, undo.table, r, c, prev[r]?.[c] ?? null, next[r]?.[c] ?? null)
+        for (const [r, c] of changed) recordGridCellUndo(undo.key, undo.table, r, c, prev[r]?.[c] ?? null, next[r]?.[c] ?? null, null, undoBatch)
+        if (undoBatch) flushUndoStatus()
       }
     }
   }

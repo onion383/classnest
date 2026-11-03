@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+# 临时验证构建的产物目录（`node dev-vite.js build --outDir .verify-build`），不入库
+.verify-build
 
 # Vue 3.6 预览通道（npm run dev:new）：依赖装在 vue36/ 里，与主线 node_modules 互不影响。
 # 版本由 vue36/package.json 精确锁定，安装产物、预构建缓存与锁文件都不入库。

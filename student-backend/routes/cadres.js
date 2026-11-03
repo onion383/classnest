@@ -14,7 +14,8 @@ function allCadres() {
 // 组装成树并附上担任学生
 function buildTree() {
   const all = allCadres();
-  const membersStmt = db.prepare('SELECT id, cadre_id, student_id, student_name FROM cadre_members WHERE cadre_id = ? ORDER BY sort_order, id');
+  // sort_order 一并返回：撤销「移除担任学生」要按整行恢复，缺了它恢复后成员会挤到最前面
+  const membersStmt = db.prepare('SELECT id, cadre_id, student_id, student_name, sort_order FROM cadre_members WHERE cadre_id = ? ORDER BY sort_order, id');
   const byId = new Map();
   all.forEach(c => byId.set(c.id, { ...c, children: [], members: membersStmt.all(c.id) }));
   const roots = [];
@@ -227,6 +228,9 @@ router.post('/import', (req, res) => {
       return { rowNo, title, parentName, maxCount, students };
     });
 
+    // 本次导入真正新建的行（同名职务/成员只复用不修改）——撤销导入按这份清单精确回滚
+    const created = { cadres: [], members: [] };
+
     const tx = db.transaction(() => {
       const findParent = db.prepare('SELECT id FROM cadres WHERE name = ? ORDER BY id LIMIT 2');
       const findNode = db.prepare('SELECT id, name, max_count FROM cadres WHERE name = ? AND parent_id = ? ORDER BY id LIMIT 1');
@@ -251,6 +255,7 @@ router.post('/import', (req, res) => {
           const sort = maxNodeSort.get().m + 1;
           const info = insertNode.run(item.title, parentId, item.maxCount || 1, sort);
           node = { id: info.lastInsertRowid, name: item.title, max_count: item.maxCount || 1 };
+          created.cadres.push({ id: node.id, name: node.name, parent_id: parentId, max_count: node.max_count, sort_order: sort });
         }
         for (const name of item.students) {
           if (findMember.get(node.id, name)) continue;
@@ -260,13 +265,20 @@ router.post('/import', (req, res) => {
           const sameName = findStudent.all(name);
           const studentId = sameName.length === 1 ? sameName[0].id : null;
           const sort = maxMemberSort.get(node.id).m + 1;
-          insertMember.run(node.id, studentId, name, sort);
+          const infoMember = insertMember.run(node.id, studentId, name, sort);
+          created.members.push({
+            id: infoMember.lastInsertRowid,
+            cadre_id: node.id,
+            student_id: studentId,
+            student_name: name,
+            sort_order: sort
+          });
         }
       }
     });
     tx();
 
-    res.json({ message: `成功导入 ${list.length} 行班干部数据`, tree: buildTree() });
+    res.json({ message: `成功导入 ${list.length} 行班干部数据`, tree: buildTree(), created });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

@@ -1,7 +1,7 @@
 // ===== 课程表：一般课表（模板）加载/保存、行列与单元格交互、设置、双向导入 =====
 // 纯代码搬运自 ScheduleView.vue 的 methods，未改写逻辑；经 ctx 闭包调用（script setup）。
 import axios from 'axios'
-import { recordGridCellUndo, recordGridSnapshotUndo } from '../../composables/useUndo.js'
+import { recordGridCellUndo, recordGridSnapshotUndo, newUndoBatchId, flushUndoStatus } from '../../composables/useUndo.js'
 import { createSerialSaver } from '../../utils/serialSaver.js'
 
 export function useScheduleMaster(ctx, { API_BASE }) {
@@ -71,7 +71,9 @@ export function useScheduleMaster(ctx, { API_BASE }) {
       return ok
     },
     // 对比前后网格，逐格写入撤销记录（课表存 {course} 对象，只需比对 course 文本）
+    // 一次网格更新改动多格时，这些记录共用一个批次标识：Ctrl+Z 一步退回整次更新。
     recordCellsDiff(table, prev, next) {
+      const diffs = []
       const maxR = Math.max(prev.length, next.length)
       for (let r = 0; r < maxR; r++) {
         const pr = prev[r] || [], nr = next[r] || []
@@ -81,10 +83,16 @@ export function useScheduleMaster(ctx, { API_BASE }) {
           const av = a && a.course !== undefined ? a.course : a
           const bv = b && b.course !== undefined ? b.course : b
           if (String(av ?? '') !== String(bv ?? '')) {
-            recordGridCellUndo('课程表', table, r, c, a ?? null, b ?? null)
+            diffs.push([r, c, a ?? null, b ?? null])
           }
         }
       }
+      const batch = diffs.length > 1 ? newUndoBatchId() : ''
+      for (const [r, c, a, b] of diffs) {
+        recordGridCellUndo('课程表', table, r, c, a, b, null, batch)
+      }
+      // 批次登记期间不逐条刷状态，全部登记完统一刷一次
+      if (batch) flushUndoStatus()
     },
     onMasterCellsUpdate(newRows) {
       const prev = ctx.masterCells.value.map(r => [...r]);

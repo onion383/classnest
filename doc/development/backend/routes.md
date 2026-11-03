@@ -243,17 +243,23 @@ flowchart TD
 
 | 方法 | 路径 | 处理要点 |
 | --- | --- | --- |
-| GET | `/` | 按 key 分组返回 undo / redo 栈（每 key 上限 50） |
+| GET | `/` | 按 key 分组返回 undo / redo 栈（每 key 上限 50）；每条记录带 `origin`，供设置页按步折叠 |
 | GET | `/table/:key/status` | 查询某 key 当前可撤销/可重做数量（标题栏按钮态） |
-| POST | `/` | 新增撤销记录（写 `undo_history`，使该 key 的 redo 侧失效） |
-| POST | `/table/:key/undo` | 快捷键路径：撤销该 key 最近一条 |
-| POST | `/table/:key/redo` | 快捷键路径：重做该 key 最近一条 |
+| POST | `/` | 新增撤销记录（写 `undo_history`，清空**全部**表的 redo 侧：批次可能跨表，只清本 key 会留下重做残尾） |
+| POST | `/table/:key/undo` | 快捷键路径：撤销该 key 最近一条；该条带 `origin` 时按批次整批回退（返回 `batch` 条数） |
+| POST | `/table/:key/redo` | 快捷键路径：重做该 key 最近一条；`origin` 批次按登记正序整批重做 |
+| POST | `/origin/:origin/undo` | 按批次整批撤销（设置页「一次改动」那一行的按钮） |
+| POST | `/origin/:origin/redo` | 按批次整批重做（正序） |
 | POST | `/:id/undo` | 撤销指定记录 |
 | POST | `/:id/redo` | 重做指定记录 |
 | DELETE | `/:id` | 删除单条记录 |
 | DELETE | `/` | 按 key 清空（`?key=all|key`） |
 
-执行器（[`undo.executors.js`](../../../student-backend/routes/undo/undo.executors.js)）按 `type` 注册 `validate/undo/redo/describe`：`cell_update`、`row_insert/update/delete`、`grid_cell`、`grid_snapshot`、`album_order`、`group_snapshot`、`photo_trash`、`album_delete/add`、`album_photo_move`。表名受 `ALLOWED_TABLES` 与 `GRID_SOURCES` 约束。
+执行器（[`undo.executors.js`](../../../student-backend/routes/undo/undo.executors.js)）按 `type` 注册 `validate/undo/redo/describe`：`cell_update`、`row_insert/update/delete`、`grid_cell`、`grid_snapshot`、`doc_update`、`album_order`、`group_snapshot`、`cadre_delete`、`cadre_order`、`cadre_import`、`photo_trash`、`album_delete/add`、`album_photo_move`。表名受 `ALLOWED_TABLES` 与 `GRID_SOURCES` 约束。
+
+班干部（`/api/cadres`）的写操作按三种执行器登记，key 统一为 `班干部`：新增/改名/名额走 `row_insert`/`row_update`（`cadres` 在 `ALLOWED_TABLES` 内），删除职务走 `cadre_delete`（级联删成员 + 下级上移必须整批回滚），拖拽职务/成员走 `cadre_order`（同一动作会改多行 `sort_order`，整批一条记录），Excel 导入走 `cadre_import`（只回滚本次新建的行，接口经 `created` 返回清单）。
+
+批次（`origin`）：一次用户动作登记多条记录时共用一个批次标识。`/table/:key/{undo,redo}` 按「最近一条的 origin」整批回退/重做（快捷键路径），`/origin/:origin/{undo,redo}` 按指定批次整批操作（设置页路径）；文案折叠成「一次改动（N 项）」，前端收到 `full_reload` 后整表重拉。无 `origin` 的记录仍是单条语义。批次可能跨表，因此 `pushRecord` 清的是全部 redo 侧，而不是本 key —— 否则在另一张表重做会只回一半。
 
 配套模块：[`undo.helpers.js`](../../../student-backend/routes/undo/undo.helpers.js)（记录构造/方向切换辅助）、[`undo.records.js`](../../../student-backend/routes/undo/undo.records.js)（`undo_history` 读写、裁剪与 redo 侧失效）。
 

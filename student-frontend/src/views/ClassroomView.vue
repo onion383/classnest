@@ -8,7 +8,7 @@
     <Tabs :tabs="tabsList" v-model="activeTab" class="mb-4" />
 
     <!-- 班干部管理 -->
-    <CadreManage v-if="activeTab === 'cadres'" />
+    <CadreManage v-if="activeTab === 'cadres'" ref="cadreRef" />
 
     <!-- 学生信息 -->
     <template v-else>
@@ -181,6 +181,8 @@ const tabsList = [
   { value: 'cadres', label: '班干部管理' }
 ]
 const activeTab = ref('students')
+// 班干部子组件的实例（撤销/重做后要让它重拉职务树）
+const cadreRef = ref(null)
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
@@ -309,10 +311,20 @@ const searchableFields = computed(() =>
 // 用「已选搜索列」判断而非关键字非空：清空关键字/恢复全表时同样保持级联，避免回退成水平滑动
 const searchActive = computed(() => !!searchField.value)
 
-// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y 撤销、重做本页学生表
-useUndoShortcut('students', {
-  onAfterUndo: (label, change) => { if (!applyUndoChange(change)) fetchRows(); notifySuccess(label ? `已撤销：${label}` : '已撤销') },
-  onAfterRedo: (label, change) => { if (!applyUndoChange(change)) fetchRows(); notifySuccess(label ? `已重做：${label}` : '已重做') }
+// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y：撤销、重做「当前 Tab」的数据。
+// key 必须跟着 Tab 走：班干部 Tab 用「班干部」，否则在这一页按 Ctrl+Z 会撤到学生表的记录上。
+// 两边的撤销记录各自独立分组，互不影响。
+function afterUndoRedo(action, label, change) {
+  if (activeTab.value === 'cadres') {
+    if (cadreRef.value) cadreRef.value.reload()
+  } else if (!applyUndoChange(change)) {
+    fetchRows()
+  }
+  notifySuccess(label ? `已${action}：${label}` : `已${action}`)
+}
+useUndoShortcut(() => (activeTab.value === 'cadres' ? '班干部' : 'students'), {
+  onAfterUndo: (label, change) => afterUndoRedo('撤销', label, change),
+  onAfterRedo: (label, change) => afterUndoRedo('重做', label, change)
 })
 
 async function refreshStudents() {

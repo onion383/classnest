@@ -3,10 +3,35 @@
 import { getCurrentUser, setCurrentUser, clearAuth } from '../../utils/authStorage.js'
 import { reportError } from '../../utils/reportError.js'
 import axios from 'axios'
-import { listUndo, undoById, redoById, clearUndo } from '../../api/undo'
+import { listUndo, undoById, redoById, undoBatch, redoBatch, clearUndo } from '../../api/undo'
 import { pad2 } from '../../utils/dateTime.js'
 import { invalidateSemesterStart } from '../../utils/semesterStart.js'
 import { clearMediaToken } from '../../utils/apiUrl'
+
+// 把同一次动作的多条记录折成一行：同 origin、同方向的连续记录算「一次改动（N 项）」，
+// 无 origin 的单条记录仍是一行。这样设置页与 Ctrl+Z 的口径一致：一次动作 = 一步。
+function foldUndoEntries(records) {
+  const entries = []
+  for (const rec of records || []) {
+    const last = entries[entries.length - 1]
+    if (rec.origin && last && last.origin === rec.origin && last.dir === rec.dir) {
+      last.ids.push(rec.id)
+      last.count += 1
+      continue
+    }
+    entries.push({
+      key: rec.origin ? `o-${rec.origin}-${rec.dir}` : `r-${rec.id}`,
+      origin: rec.origin || '',
+      ids: [rec.id],
+      ts: rec.ts,
+      dir: rec.dir,
+      label: rec.label,
+      count: 1
+    })
+  }
+  // 多条时统一文案：逐格 label 拼起来太长，只给条数
+  return entries.map(e => (e.count > 1 ? { ...e, label: `一次改动（${e.count} 项）` } : e))
+}
 
 export function useSettingsData(ctx) {
   return {
@@ -148,14 +173,17 @@ export function useSettingsData(ctx) {
     async loadUndo() {
       try {
         const { data } = await listUndo()
-        ctx.undoGroups.value = data.groups || []
+        ctx.undoGroups.value = (data.groups || []).map(g => ({ ...g, entries: foldUndoEntries(g.records) }))
       } catch { }
     },
-    async undoOne(id) {
-      if (ctx.busyUndo.value) return
+    // 设置页的撤销/重做按钮：批次走 /origin/:origin/*（整批），单条走 /:id/*
+    async undoEntry(entry) {
+      if (ctx.busyUndo.value || !entry) return
       ctx.busyUndo.value = true
       try {
-        const { data } = await undoById(id)
+        const { data } = entry.origin
+          ? await undoBatch(entry.origin)
+          : await undoById(entry.ids[0])
         if (data.ok) ctx.showAlert(data.label ? `已撤销：${data.label}` : '已成功撤销')
       } catch (err) {
         ctx.showAlert(err.response?.data?.error || '撤销失败，可能目标数据已被删除')
@@ -164,11 +192,13 @@ export function useSettingsData(ctx) {
         await ctx.loadUndo()
       }
     },
-    async redoOne(id) {
-      if (ctx.busyUndo.value) return
+    async redoEntry(entry) {
+      if (ctx.busyUndo.value || !entry) return
       ctx.busyUndo.value = true
       try {
-        const { data } = await redoById(id)
+        const { data } = entry.origin
+          ? await redoBatch(entry.origin)
+          : await redoById(entry.ids[0])
         if (data.ok) ctx.showAlert(data.label ? `已重做：${data.label}` : '已成功重做')
       } catch (err) {
         ctx.showAlert(err.response?.data?.error || '重做失败')
@@ -192,8 +222,9 @@ export function useSettingsData(ctx) {
     groupLabel(key) {
       return ctx._undoKeyLabels.value[key] || key
     },
+    // 口径是「步」而不是「条」：一次动作（批次）只算一步，与 Ctrl+Z 一致
     undoableCount(group) {
-      return (group.records || []).filter(r => r.dir === 1).length
+      return (group.entries || []).filter(e => e.dir === 1).length
     },
     fmtTs(ts) {
       if (!ts) return ''

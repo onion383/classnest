@@ -128,6 +128,8 @@ import CadreTreeList from './CadreTreeList.vue'
 import CustomScrollbar from './base/CustomScrollbar.vue'
 import { useNotification } from '../composables/useNotification'
 import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { pushUndo } from '../api/undo'
+import { refreshUndoStatus } from '../composables/useUndo.js'
 
 // 导出弹窗懒加载：首次点开时才加载 ExportExcel 的代码块
 const loadExportExcel = () => import('./import-export/ExportExcel/ExportExcel.vue')
@@ -176,6 +178,82 @@ const api = (options = {}) => {
     ...options
   }
   return axios({ baseURL: API_BASE, method: 'get', ...opts })
+}
+
+// ============ 撤销登记 ============
+// key 与 ClassroomView 的 Ctrl+Z 上下文保持一致：班干部 Tab 激活时父页面把上下文切到「班干部」，
+// 学生 Tab 下切回 'students'（见 ClassroomView 的 useUndoShortcut 动态 key）。
+const UNDO_KEY = '班干部'
+// 登记一条撤销记录；失败不影响主流程（与 useUndo.js 既有做法一致）
+function recordUndo(type, label, payload) {
+  try {
+    return pushUndo({ key: UNDO_KEY, type, label, payload })
+      .then(() => refreshUndoStatus(true))
+      .catch(() => {})
+  } catch {
+    return Promise.resolve()
+  }
+}
+// 职务行 / 担任学生行：只取真实列，树节点多带的 children/members 由后端按表结构过滤
+function cadreRow(n) {
+  return {
+    id: n.id,
+    name: n.name,
+    parent_id: n.parent_id == null ? 0 : n.parent_id,
+    max_count: n.max_count,
+    sort_order: n.sort_order
+  }
+}
+function memberRow(m) {
+  return {
+    id: m.id,
+    cadre_id: m.cadre_id,
+    student_id: m.student_id == null ? null : m.student_id,
+    student_name: m.student_name,
+    sort_order: m.sort_order == null ? 0 : m.sort_order
+  }
+}
+// 拖拽排序的前后态：职务记「归属 + 排序」，成员记「所属职务 + 排序」
+function cadreState(list) {
+  const rows = []
+  const walk = (nodes) => {
+    for (const n of nodes || []) {
+      rows.push({ id: n.id, parent_id: n.parent_id == null ? 0 : n.parent_id, sort_order: n.sort_order })
+      walk(n.children)
+    }
+  }
+  walk(list)
+  return rows
+}
+function memberState(list) {
+  const rows = []
+  const walk = (nodes) => {
+    for (const n of nodes || []) {
+      for (const m of n.members || []) {
+        rows.push({ id: m.id, cadre_id: m.cadre_id, sort_order: m.sort_order == null ? 0 : m.sort_order })
+      }
+      walk(n.children)
+    }
+  }
+  walk(list)
+  return rows
+}
+function findMemberName(list, id) {
+  for (const n of list || []) {
+    const hit = (n.members || []).find(m => m.id === id)
+    if (hit) return hit.student_name
+    const deeper = findMemberName(n.children, id)
+    if (deeper) return deeper
+  }
+  return ''
+}
+// 拖拽结束后对比前后态：没实际变化（拖回原处）不留撤销记录
+function recordMoveUndo(before, res, label) {
+  const treeAfter = (res.data && res.data.tree) || []
+  const after = { cadres: cadreState(treeAfter), members: memberState(treeAfter) }
+  if (JSON.stringify(before.cadres) === JSON.stringify(after.cadres)
+    && JSON.stringify(before.members) === JSON.stringify(after.members)) return
+  recordUndo('cadre_order', label, { before, after })
 }
 
 async function loadTree() {
@@ -254,6 +332,14 @@ async function onImportData({ fields, rows }) {
   try {
     const res = await api({ url: '/cadres/import', method: 'post', data: { fields, rows } })
     tree.value = (res.data && res.data.tree) || []
+    // 只回滚本次真正新建的职务/成员；导入前已有的数据不受影响
+    const created = res.data && res.data.created
+    if (created && (created.cadres.length || created.members.length)) {
+      recordUndo('cadre_import', `导入班干部：${created.cadres.length} 个职务、${created.members.length} 名担任学生`, {
+        cadres: created.cadres,
+        members: created.members
+      })
+    }
     success((res.data && res.data.message) || '导入成功')
   } catch (e) {
     error((e.response && e.response.data && e.response.data.error) || e.message)
@@ -321,7 +407,10 @@ async function onAddStudentInline({ nodeId, student }) {
     return info(`「${node.name}」人数已达上限 ${node.max_count} 人`)
   }
   try {
-    await api({ url: `/cadres/${nodeId}/members`, method: 'post', data: { student_id: student.id, student_name: student.姓名 } })
+    const res = await api({ url: `/cadres/${nodeId}/members`, method: 'post', data: { student_id: student.id, student_name: student.姓名 } })
+    const nodeAfter = findNode((res.data && res.data.tree) || [], nodeId)
+    const added = nodeAfter && (nodeAfter.members || []).find(m => m.id === Number(res.data && res.data.id))
+    if (added) recordUndo('row_insert', `添加担任学生：${added.student_name}`, { table: 'cadre_members', row: memberRow(added) })
     success('已添加担任学生')
     await loadTree()
   } catch (e) {
@@ -335,10 +424,22 @@ async function submitNode() {
   const maxCount = Math.max(1, Math.min(99, Number(nodeForm.max_count) || 1))
   try {
     if (editTarget.value) {
+      const oldRow = cadreRow(editTarget.value)
       await api({ url: `/cadres/${editTarget.value.id}`, method: 'put', data: { name, max_count: maxCount } })
+      // 名称/名额都没改时不登记：打开「修改」又直接确定，不该在撤销栈里留一条空记录
+      if (oldRow.name !== name || oldRow.max_count !== maxCount) {
+        recordUndo('row_update', `修改职务：${name}`, {
+          table: 'cadres',
+          rowId: oldRow.id,
+          oldRow,
+          newRow: { ...oldRow, name, max_count: maxCount }
+        })
+      }
       success('已保存')
     } else {
-      await api({ url: '/cadres', method: 'post', data: { name, max_count: maxCount, parent_id: parentTarget.value ? parentTarget.value.id : 0 } })
+      const res = await api({ url: '/cadres', method: 'post', data: { name, max_count: maxCount, parent_id: parentTarget.value ? parentTarget.value.id : 0 } })
+      const created = findNode((res.data && res.data.tree) || [], Number(res.data && res.data.id))
+      if (created) recordUndo('row_insert', `添加职务：${created.name}`, { table: 'cadres', row: cadreRow(created) })
       success('已添加')
     }
     nodeDialogVisible.value = false
@@ -360,8 +461,17 @@ function onRemove(node) {
 async function doConfirmDelete() {
   const p = pendingDelete.value
   if (!p) return
+  const node = findNode(tree.value, p.id)
+  // 删之前先拍下「被删职务 + 其担任学生 + 直接下级」：后端删除是三件事一起做的
+  // （删成员、下级上移到 node.parent_id、删职务行），撤销必须整批回滚。
+  const snapshot = node && {
+    node: cadreRow(node),
+    members: (node.members || []).map(memberRow),
+    children: (node.children || []).map(c => ({ id: c.id, parent_id: c.parent_id }))
+  }
   try {
     await api({ url: `/cadres/${p.id}`, method: 'delete' })
+    if (snapshot) recordUndo('cadre_delete', `删除职务：${snapshot.node.name}`, snapshot)
     success('已删除')
     confirmMsg.value = null
     pendingDelete.value = null
@@ -373,8 +483,10 @@ async function doConfirmDelete() {
 
 // ============ 担任学生 ============
 async function onRemoveMember(node, m) {
+  const row = memberRow(m)
   try {
     await api({ url: `/cadres/members/${m.id}`, method: 'delete' })
+    recordUndo('row_delete', `移除担任学生：${row.student_name}`, { table: 'cadre_members', row })
     success('已移除担任学生')
     await loadTree()
   } catch (e) {
@@ -438,7 +550,10 @@ async function moveCadre(id, target) {
   } else {
     return
   }
-  await api({ url: `/cadres/${id}/move`, method: 'post', data: { parent_id: parentId, index } })
+  const movedNode = findNode(tree.value, id)
+  const before = { cadres: cadreState(tree.value), members: memberState(tree.value) }
+  const res = await api({ url: `/cadres/${id}/move`, method: 'post', data: { parent_id: parentId, index } })
+  recordMoveUndo(before, res, `调整职务：${(movedNode && movedNode.name) || `#${id}`}`)
   success('已保存职务调整')
   await loadTree()
 }
@@ -452,9 +567,15 @@ async function moveMember(id, target) {
     const idx = arr.indexOf(target.memberId)
     index = idx < 0 ? arr.length : idx
   }
-  await api({ url: `/cadres/members/${id}/move`, method: 'post', data: { cadre_id: cadreId, index } })
+  const memberName = findMemberName(tree.value, id)
+  const before = { cadres: cadreState(tree.value), members: memberState(tree.value) }
+  const res = await api({ url: `/cadres/members/${id}/move`, method: 'post', data: { cadre_id: cadreId, index } })
+  recordMoveUndo(before, res, `调整担任学生：${memberName || `#${id}`}`)
   success('已保存学生调整')
   await loadTree()
 }
+
+// 供 ClassroomView 在撤销/重做后刷新职务树（Ctrl+Z 的页面上下文由父页面持有）
+defineExpose({ reload: loadTree })
 </script>
 

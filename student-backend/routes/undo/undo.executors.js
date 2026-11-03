@@ -30,6 +30,22 @@ function renameRefsIfStudent(table, fromRow, toRow) {
   renameStudentRefs(a, b)
 }
 
+// 按前后态回写职务/成员的归属与排序：只更新已存在的行，不插入、不删除。
+// 某个 id 后来被删掉时 UPDATE 影响 0 行，直接跳过，不会把无关数据写回来。
+function applyCadreState(state) {
+  const tx = db.transaction(() => {
+    const updCadre = db.prepare('UPDATE cadres SET parent_id = ?, sort_order = ? WHERE id = ?')
+    for (const r of (state && state.cadres) || []) {
+      updCadre.run(r.parent_id == null ? 0 : r.parent_id, r.sort_order == null ? 0 : r.sort_order, r.id)
+    }
+    const updMember = db.prepare('UPDATE cadre_members SET cadre_id = ?, sort_order = ? WHERE id = ?')
+    for (const r of (state && state.members) || []) {
+      updMember.run(r.cadre_id, r.sort_order == null ? 0 : r.sort_order, r.id)
+    }
+  })
+  tx()
+}
+
 // 「整块 JSON 列」表：数据以整块 JSON 存于单列（座位 seats / 权重 weights / 课表 cells…），
 // 撤销时按「整块列值」整体还原。表名固定，杜绝注入。
 const DOC_TABLES = ['schedule', 'master_schedule', 'seat_layout', 'seat_template', 'seat_weight', 'duty_settings', 'duty_layout', 'duty_template', 'duty_weight', 'widget_settings']
@@ -241,6 +257,94 @@ const executors = {
     change(p, mode) {
       return { type: 'group_snapshot', dimId: p.dimId, snapshot: mode === 'undo' ? p.oldValue : p.newValue }
     }
+  },
+
+  // 删除职务（级联）：payload { node, members, children }
+  //   node     = 被删职务的整行（cadres）
+  //   members  = 该职务当时的担任学生整行（cadre_members，含 sort_order）
+  //   children = 直接下级 [{ id, parent_id }]，parent_id 为删除前的上级
+  // 后端删职务是三件事：删成员、下级上移到 node.parent_id、删职务行。
+  // 撤销必须三件事一起回滚 —— 分开记会让用户按三次 Ctrl+Z 才回到原状。
+  cadre_delete: {
+    validate({ node, members }) {
+      if (!node || !Number.isInteger(node.id)) return '参数不完整'
+      if (!Array.isArray(members)) return '参数不完整'
+      return null
+    },
+    undo({ node, members, children }) {
+      db.transaction(() => {
+        insertRow('cadres', node)
+        for (const m of members || []) insertRow('cadre_members', m)
+        const restoreParent = db.prepare('UPDATE cadres SET parent_id = ? WHERE id = ?')
+        for (const c of children || []) restoreParent.run(node.id, c.id)
+      })()
+    },
+    redo({ node, children }) {
+      db.transaction(() => {
+        db.prepare('DELETE FROM cadre_members WHERE cadre_id = ?').run(node.id)
+        const moveUp = db.prepare('UPDATE cadres SET parent_id = ? WHERE id = ?')
+        for (const c of children || []) moveUp.run(node.parent_id || 0, c.id)
+        db.prepare('DELETE FROM cadres WHERE id = ?').run(node.id)
+      })()
+    },
+    describe(p, mode) {
+      const name = (p.node && p.node.name) || `#${p.node && p.node.id}`
+      const n = (p.members || []).length
+      return mode === 'undo' ? `恢复职务：${name}（含 ${n} 名担任学生）` : `删除职务：${name}（含 ${n} 名担任学生）`
+    },
+    change() { return { type: 'full_reload' } }
+  },
+
+  // 职务 / 担任学生拖拽排序：payload { before, after, label }
+  //   before/after = { cadres: [{ id, parent_id, sort_order }], members: [{ id, cadre_id, sort_order }] }
+  // 一次拖拽会改动同一父级下多个兄弟的 sort_order（成员还会改 cadre_id），
+  // 逐行 row_update 会把一步操作拆成好几条撤销记录，故按「受影响行的前后态」整批记一条。
+  cadre_order: {
+    validate({ before, after }) {
+      if (!before || !after) return '参数不完整'
+      if (!Array.isArray(before.cadres) || !Array.isArray(before.members)) return '参数不完整'
+      if (!Array.isArray(after.cadres) || !Array.isArray(after.members)) return '参数不完整'
+      return null
+    },
+    undo({ before }) { applyCadreState(before) },
+    redo({ after }) { applyCadreState(after) },
+    describe(p, mode) {
+      if (p.label) return p.label
+      return mode === 'undo' ? '恢复职务排序' : '调整职务排序'
+    },
+    change() { return { type: 'full_reload' } }
+  },
+
+  // Excel 批量导入职务：payload { cadres, members }，均为本次导入真正新建的行
+  // （同名职务/已有成员只复用、不修改，因此不需要快照，也不会动到导入前的数据）。
+  // undo = 删掉本次新建的行；redo = 按原 id 重建。
+  cadre_import: {
+    validate({ cadres, members }) {
+      if (!Array.isArray(cadres) || !Array.isArray(members)) return '参数不完整'
+      return null
+    },
+    undo({ cadres, members }) {
+      db.transaction(() => {
+        const delMember = db.prepare('DELETE FROM cadre_members WHERE id = ?')
+        for (const m of members || []) delMember.run(m.id)
+        // 反向删：下级先删，避免父行先消失后下级短暂悬空
+        const delCadre = db.prepare('DELETE FROM cadres WHERE id = ?')
+        for (const c of [...(cadres || [])].reverse()) delCadre.run(c.id)
+      })()
+    },
+    redo({ cadres, members }) {
+      db.transaction(() => {
+        // 正向重建：父职务先插，成员后插
+        for (const c of cadres || []) insertRow('cadres', c)
+        for (const m of members || []) insertRow('cadre_members', m)
+      })()
+    },
+    describe(p, mode) {
+      const c = (p.cadres || []).length
+      const m = (p.members || []).length
+      return mode === 'undo' ? `撤销导入：${c} 个职务、${m} 名担任学生` : `重新导入：${c} 个职务、${m} 名担任学生`
+    },
+    change() { return { type: 'full_reload' } }
   },
 
   // 删除照片（移入应用内回收站）：payload { photo }。undo=从回收站搬回+还原索引；redo=再次移入回收站+删索引。

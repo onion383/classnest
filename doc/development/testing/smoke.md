@@ -16,6 +16,7 @@ classnest/
         ├── api-routes-test.cjs  # 临时 DATA_DIR + 真实路由挂最小 Express，不需要完整后端
         ├── api-smoke.cjs  # 内置最小 Express，不需要真实后端
         ├── auth-smoke.js  # 默认自起隔离后端；AUTH_SMOKE_EXTERNAL=1 时连接 PORT / 3000…
+        ├── cadre-undo-test.cjs  # 临时 DATA_DIR + 真实路由挂最小 Express，不需要完整后端
         ├── collator-equiv-probe.js  # 无
         ├── font-subset-verify.mjs  # 需 pdf-subset-verify 产物
         ├── pdf-subset-verify.mjs  # 先生成子集
@@ -23,6 +24,7 @@ classnest/
         ├── secure-channel-retry.js  # 需 Vite 开发服务器（dev-probes/ 页面，经 tools/electron-p…
         ├── theme-setting-probe.mjs  # 无
         ├── thumbs-cache-test.cjs  # 无
+        ├── undo-batch-test.cjs  # 临时 DATA_DIR + 真实撤销路由，不需要完整后端
         └── unzip-safe-test.cjs  # 无
 ```
 <!-- doc-tree:end -->
@@ -65,6 +67,7 @@ classnest/
 | [`api-smoke.cjs`](../../../testjs/smoke/api-smoke.cjs) | 内置最小 Express，不需要真实后端 | 请求体解析：JSON / 表单 / gzip / 尾部垃圾字节 / 超限拦截 |
 | [`api-routes-test.cjs`](../../../testjs/smoke/api-routes-test.cjs) | 临时 `DATA_DIR` + 真实路由挂最小 Express，不需要完整后端 | 畸形 Range、值日落盘结构、AI 密钥复用、快照后列缓存失效、SSE 尾帧、虚拟相册撤销 |
 | [`auth-smoke.js`](../../../testjs/smoke/auth-smoke.js) | 默认自起隔离后端；`AUTH_SMOKE_EXTERNAL=1` 时连接 `PORT` / `3000` 的明文后端 | 注册 → 确认 → 登录 → 改密 → 改名；隐私模式口令包裹/恢复词校验 |
+| [`undo-batch-test.cjs`](../../../testjs/smoke/undo-batch-test.cjs) | 临时 `DATA_DIR` + 真实撤销路由，不需要完整后端 | 批次撤销：同 `origin` 一次退完/一次回完、跨表批次、无 `origin` 仍是单条、新动作清空全部 redo、按 `origin` 整批（设置页路径） |
 | [`collator-equiv-probe.js`](../../../testjs/smoke/collator-equiv-probe.js) | 无 | 后端 `Intl.Collator` 与前端排序一致性 |
 | [`unzip-safe-test.cjs`](../../../testjs/smoke/unzip-safe-test.cjs) | 无 | 安全解压：符号链接/路径穿越/绝对路径/反斜杠全部拦截 |
 | [`pptx-guard-test.cjs`](../../../testjs/smoke/pptx-guard-test.cjs) | 无 | PPTX 导入守卫 |

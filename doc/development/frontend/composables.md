@@ -142,8 +142,9 @@ classnest/
 - **调用方**：`router/index.js`（进首页前）、`DashboardView`。
 
 #### [`useUndo.js`](../../../student-frontend/src/composables/useUndo.js) · 撤销/重做
-- **导出**：`warnUndoFailed(label)`、`cellText(v)`，以及 `recordCellUndo / recordGridCellUndo / recordGridSnapshotUndo / recordRowInsert / recordRowDelete / recordRowUpdate / useUndoShortcut`。
+- **导出**：`warnUndoFailed(label)`、`cellText(v)`、`newUndoBatchId()`、`flushUndoStatus()`，以及 `recordCellUndo / recordGridCellUndo / recordGridSnapshotUndo / recordRowInsert / recordRowDelete / recordRowUpdate / useUndoShortcut`。
 - 内部：记录持久化到 `/api/undo`；快捷键 `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`；`onActivated/onDeactivated` 维护 KeepAlive 下当前页。
+- **批次**：一次动作登记多条时（一次改动多格）由 `newUndoBatchId()` 生成同一个 `origin` 传入 `recordGridCellUndo` 的第 8 个参数，后端按 `origin` 整批回退/重做；只改一处不要加批次，保持单条增量语义。带 `origin` 的记录**不逐条刷状态**（否则一次粘贴上百格就是上百次 `/status`），由调用方在循环结束后调 `flushUndoStatus()` 统一刷一次。
 - **调用方**：`useSeatGrid`、`useTableCRUD`、`DutyView`、`AlbumView`、`GroupManageView`、`ActivitiesView` 等。
 
 #### [`useNotification.js`](../../../student-frontend/src/composables/useNotification.js) · 全局通知

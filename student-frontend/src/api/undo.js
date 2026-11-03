@@ -11,6 +11,16 @@ export function pushUndo(body) {
   return axios.post('/api/undo', body)
 }
 
+// 按批次整批撤销/重做（origin 为一次动作的批次标识）。
+// 与 undoById 的区别：批次里可能有多条记录，一次调用全部回退。
+export function undoBatch(origin) {
+  return axios.post(`/api/undo/origin/${encodeURIComponent(origin)}/undo`)
+}
+
+export function redoBatch(origin) {
+  return axios.post(`/api/undo/origin/${encodeURIComponent(origin)}/redo`)
+}
+
 // 拉取全部撤销记录（设置页「撤销记录」列表，按表分组返回）
 export function listUndo() {
   return axios.get('/api/undo')

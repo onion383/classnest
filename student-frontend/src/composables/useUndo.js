@@ -34,15 +34,33 @@ export function cellText(v) {
   return v
 }
 
+// ==================== 批次标识 ====================
+// 一次用户动作可能登记多条记录（拖一次座位改动多格、课表一次更新多个格）。
+// 这些记录共用同一个 origin，后端 Ctrl+Z 时按 origin 整批回退 —— 一次动作一步退完。
+// 无 origin 的记录保持旧的「单条」语义，不受影响。
+export function newUndoBatchId() {
+  return `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+// 批次登记结束后统一刷一次可用态。
+// 批次内每条登记都 force 刷新会发 N 次 /status（一次粘贴上百格就是上百次请求），
+// 所以 recordGridCellUndo 在带批次时跳过刷新，改由调用方在循环结束后调这里。
+export function flushUndoStatus() {
+  refreshUndoStatus(true)
+}
+
 // ==================== 记录一条网格单格编辑撤销 ====================
 // table 必须是后端 GRID_SOURCES 中的表名，row/col 为格子坐标（从 0 开始）。
 // label：可选，传入则优先后端反馈展示（用于值日等需要自定义文案的场景）
-export function recordGridCellUndo(key, table, row, col, oldVal, newVal, label) {
+// origin：可选，同一次动作的多条记录传同一个批次标识（见 newUndoBatchId）
+export function recordGridCellUndo(key, table, row, col, oldVal, newVal, label, origin) {
   const payload = { table, row, col, oldValue: oldVal, newValue: newVal }
   if (label) payload.label = label
   const text = label || `格子(${row + 1},${col + 1})：「${cellText(oldVal)}」→「${cellText(newVal)}」`
   try {
-    pushUndo({ key, type: 'grid_cell', label: text, payload }).then(() => refreshUndoStatus(true)).catch(() => {})
+    pushUndo({ key, type: 'grid_cell', label: text, payload, origin: origin || '' })
+      .then(() => { if (!origin) refreshUndoStatus(true) })
+      .catch(() => {})
   } catch {
     /* 撤销记录失败不影响主流程 */
   }

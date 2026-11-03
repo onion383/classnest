@@ -265,23 +265,24 @@
               <span class="text-xs text-text-muted">{{ undoableCount(group) }} 步可撤销</span>
             </div>
             <ul class="divide-y divide-border max-h-72 overflow-auto">
-              <li v-for="rec in group.records" :key="rec.id"
+              <!-- 一「行」= 一步动作：同一次改动登记的多条在这里折成一行，与 Ctrl+Z 口径一致 -->
+              <li v-for="ent in group.entries" :key="ent.key"
                   class="flex items-center justify-between gap-3 px-4 py-2 hover:bg-surface-hover transition-theme">
                 <div class="flex items-center gap-2 min-w-0">
-                  <span class="text-xs text-text-muted flex-shrink-0">{{ fmtTs(rec.ts) }}</span>
-                  <span class="text-sm text-text truncate">{{ rec.label }}</span>
-                  <span v-if="rec.dir === 0" class="text-[11px] text-info flex-shrink-0">已撤销</span>
+                  <span class="text-xs text-text-muted flex-shrink-0">{{ fmtTs(ent.ts) }}</span>
+                  <span class="text-sm text-text truncate">{{ ent.label }}</span>
+                  <span v-if="ent.dir === 0" class="text-[11px] text-info flex-shrink-0">已撤销</span>
                 </div>
                 <div class="flex-shrink-0">
                   <button
-                    v-if="rec.dir === 1"
-                    @click="undoOne(rec.id)"
+                    v-if="ent.dir === 1"
+                    @click="undoEntry(ent)"
                     class="bg-warning hover:bg-warning-hover text-text-inverse text-xs px-3 py-1 rounded transition-theme disabled:opacity-40"
                     :disabled="busyUndo"
                   >撤销</button>
                   <button
                     v-else
-                    @click="redoOne(rec.id)"
+                    @click="redoEntry(ent)"
                     class="bg-info hover:bg-info-hover text-text-inverse text-xs px-3 py-1 rounded transition-theme disabled:opacity-40"
                     :disabled="busyUndo"
                   >重做</button>
@@ -1114,8 +1115,8 @@ const {
   onMergeNotificationsChange, onSecurityLevelChange, onSelectMode, onSelectSemester,
   onSettingsSearchBlur, onSettingsSearchFocus, onThemeSelect, onToolboxChange, onTopbarColorChange,
   onUsbAutoOpenChange, openAddSemester, openDeleteAccount, openDir, openModal, openRenameSemester,
-  recycleAll, redoOne, requestDeleteSemester, restartAll, restartBackend, restartFrontend,
-  restartWidget, saveSemesterName, saveSemesterSettings, selectFolder, undoableCount, undoOne,
+  recycleAll, redoEntry, requestDeleteSemester, restartAll, restartBackend, restartFrontend,
+  restartWidget, saveSemesterName, saveSemesterSettings, selectFolder, undoableCount, undoEntry,
 } = ctx
 
 // 懒加载弹窗保活：首次打开后保持挂载，关闭只降 visible，保留退出动画

@@ -21,8 +21,10 @@ function getRecord(id) {
 // origin：来源标记。空=老师手动编辑；非空=AI 助手一次更改的批次标识（同批次整批回退）
 function pushRecord(key, type, label, payload, origin) {
   const ts = new Date().toISOString()
-  // 新增动作使该 key 的 redo 侧失效
-  db.prepare('DELETE FROM undo_history WHERE key = ? AND dir = 0').run(key)
+  // 新增动作使**全部** redo 侧失效，而不是只清本 key：
+  // 批次可能跨 key（AI 一次改多张表），只清本 key 会留下「另一半还能重做」的残尾 ——
+  // 用户去另一张表按重做，数据就变成半新半旧。时间线分叉后所有重做都该失效。
+  db.prepare('DELETE FROM undo_history WHERE dir = 0').run()
   const info = db.prepare(
     'INSERT INTO undo_history (key, type, label, payload, dir, origin, ts) VALUES (?, ?, ?, ?, 1, ?, ?)'
   ).run(key, type, label, JSON.stringify(payload), origin || '', ts)
@@ -78,6 +80,19 @@ async function undoOriginBatch(origin) {
   const labels = []
   for (const r of rows) {
     const res = await flip(r.id, 1, 0, 'undo')
+    if (res.error) return { ok: false, error: res.error, count: labels.length, labels }
+    if (res.label) labels.push(res.label)
+  }
+  return { ok: true, count: labels.length, labels }
+}
+
+// 重做某一批次的全部记录（origin 相同、当前在 redo 侧）。
+// 顺序与 undoOriginBatch 相反：撤销是逆序退（后做的先退），重做必须正序上（先做的先回）。
+async function redoOriginBatch(origin) {
+  const rows = db.prepare('SELECT id FROM undo_history WHERE dir = 0 AND origin = ? ORDER BY id ASC').all(origin)
+  const labels = []
+  for (const r of rows) {
+    const res = await flip(r.id, 0, 1, 'redo')
     if (res.error) return { ok: false, error: res.error, count: labels.length, labels }
     if (res.label) labels.push(res.label)
   }
@@ -148,6 +163,7 @@ module.exports = {
   pushRecord,
   flip,
   undoOriginBatch,
+  redoOriginBatch,
   undoAiChange,
   listAiChanges,
   undoAiChanges,

@@ -127,7 +127,7 @@
               <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold text-white bg-blue-500 leading-none">预览版</span>
               <button @click="checkUpdate" :disabled="updateBusy" class="px-3 py-1 rounded-full bg-primary/10 text-primary text-xs hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">检查更新</button>
             </div>
-            <div class="mt-3 text-xs text-text-muted">可自由使用、修改与分发（含商业用途）；分发时保留版权声明与许可声明即可</div>
+            <div class="mt-3 text-xs text-text-muted">开源许可：MIT</div>
             <div class="mt-1 text-xs text-text-muted">Copyright &copy; 无聊的小洋葱 2026</div>
 
             <!-- 更新状态与下载进度 -->
@@ -198,6 +198,8 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { SEND, INVOKE, RECEIVE } from '../electronChannels.js'
 import CustomScrollbar from '../components/base/CustomScrollbar.vue'
+// 协议全文直接引用仓库根 LICENSE.md，避免正文出现两份
+import licenseText from '../../../LICENSE.md?raw'
 import '../styles/dialog-transition.css'
 
 // Electron 内用系统浏览器打开外链，非 Electron 环境让浏览器默认行为处理
@@ -313,29 +315,6 @@ watch(dialogVersion, (open) => {
     checkUpdate()
   }
 })
-
-// 协议全文
-const licenseText = `MIT License
-
-Copyright (c) 2026 无聊的小洋葱
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.`
 
 const libGroups = [
   {

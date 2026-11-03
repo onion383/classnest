@@ -29,7 +29,10 @@
 ;     （应用内对应环境变量 OS_WARN_FORCE=1）。
 ;   - 相对路径均以本 .iss 文件所在目录（electron\inno）为基准：..\ 即 electron 目录，..\.. 即工程根目录；
 ;   - 图像（wizard-large.bmp / wizard-small.bmp）已刻意不含发布者署名文字；
-;   - 用户协议全文沿用 electron\installer-assets\license.txt（含 UTF-8 BOM）。
+;   - 用户协议全文沿用 electron\installer-assets\license.txt（含 UTF-8 BOM）；
+;   - 简体中文安装界面译文随仓库分发（ChineseSimplified.isl，Inno 6.5.0+ 译文，
+;     来源与维护者见文件头）。官方 Inno 安装包**不自带**中文，故不能再用
+;     compiler:Languages\... 依赖本机语言包（CI 上会直接编译失败）。
 ; =============================================================================
 
 ; ---- 版本号：需与 package.json 的 version 保持一致 -------------------------
@@ -101,8 +104,8 @@ RestartApplications=yes
 SetupMutex=classnest-setup
 
 [Languages]
-; Inno 6/7 自带简体中文语言文件
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; 用仓库内的译文（相对本 .iss 所在目录），不依赖 Inno 安装目录的 Languages 语言包
+Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务:"; Flags: checkedonce

@@ -1,0 +1,291 @@
+# =========================================================================
+# CI/CD 流水线：测试 → 打包 → 存草稿（不发布）
+#
+# 三段串行，前一段失败即中断后续：
+#   1) test     —— 版本号一致性 + ESLint + 快测（units/behavior）+ 构建前端 + 冒烟
+#   2) package  —— electron-builder（--dir）+ Inno Setup 出安装包，上传 Actions 产物
+#   3) draft    —— 把安装包、免安装 ZIP、源码 ZIP 挂到 GitHub Draft Release（draft=true，不对外发布）
+#
+# 触发：
+#   · push 到 main / PR → 跑测试；只有非 PR 才继续打包与草稿（PR 省 CI 时长）
+#   · workflow_dispatch → 手动全量跑一遍（同样只存草稿，不会发布）
+#
+# 说明：
+#   · 只支持 Windows：electron-builder 目标是 dir，安装包由 Inno Setup 编译。
+#   · 原生模块（koffi / better-sqlite3-multiple-ciphers / sharp）使用 N-API 预编译产物，
+#     electron-builder.json 里 npmRebuild:false，因此 CI 不需要 electron-rebuild。
+#   · 应用内更新读 GitHub releases/latest，草稿不会成为 latest，用户侧不会收到更新。
+# =========================================================================
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支的重复触发取消上一次，避免旧提交占着 Windows 机器
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 默认只读；草稿发布任务单独申请 contents: write
+permissions:
+  contents: read
+
+env:
+  # 与 package.json 的 engines（>=22.12.0）对齐
+  NODE_VERSION: '24'
+  # 安装器编译器版本：Chocolatey/winget 目前只有 6.x，故在 CI 里装官方 7.x 安装包
+  INNO_SETUP_VERSION: '7.1.1'
+
+jobs:
+  # ---------------------------------------------------------------- 1. 测试
+  test:
+    name: 测试
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            student-frontend/package-lock.json
+            student-backend/package-lock.json
+
+      - name: 安装依赖（主包；postinstall 会安装 student-backend 依赖）
+        run: npm ci
+
+      - name: 安装依赖（前端）
+        working-directory: student-frontend
+        run: npm ci
+
+      - name: 版本号一致性（package.json ↔ Inno setup.iss）
+        shell: pwsh
+        run: |
+          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $match = Select-String -Path electron/inno/setup.iss -Pattern '#define MyAppVersion "([^"]+)"' | Select-Object -First 1
+          if (-not $match) { throw 'electron/inno/setup.iss 中未找到 MyAppVersion 定义' }
+          $iss = $match.Matches[0].Groups[1].Value
+          if ($iss -ne $pkg) { throw "版本号不一致：package.json=$pkg，setup.iss=$iss（发版前需同步）" }
+          if (-not (Test-Path 'electron/inno/ChineseSimplified.isl')) { throw '缺少 electron/inno/ChineseSimplified.isl（安装界面简体中文译文）' }
+          Write-Host "版本号一致：$pkg"
+
+      - name: ESLint 检查
+        run: npm run lint
+
+      - name: 错误边界检查
+        run: npm run check:boundaries
+
+      - name: 快测（单元 + 行为）
+        run: npm test
+
+      - name: 构建前端（冒烟用例依赖 dist 产物）
+        run: npm run build
+
+      - name: 冒烟测试
+        run: npm run smoke
+
+  # ---------------------------------------------------------------- 2. 打包
+  package:
+    name: 打包
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            student-frontend/package-lock.json
+            student-backend/package-lock.json
+
+      # electron-builder 每次都要取 Electron 压缩包（配置里走 npmmirror），缓存能省数分钟
+      - name: 缓存 Electron 二进制
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      - name: 安装依赖（主包；postinstall 会安装 student-backend 依赖）
+        run: npm ci
+
+      - name: 安装依赖（前端）
+        working-directory: student-frontend
+        run: npm ci
+
+      - name: 安装 Inno Setup 7 并定位 ISCC
+        shell: pwsh
+        run: |
+          $ver = $env:INNO_SETUP_VERSION
+          # 官方发布页 https://jrsoftware.org/isdl.php 的资产命名：tag=is-7_1_1，文件=innosetup-7.1.1-x64.exe
+          $tag = 'is-' + ($ver -replace '\.', '_')
+          $url = "https://github.com/jrsoftware/issrc/releases/download/$tag/innosetup-$ver-x64.exe"
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-$ver-x64.exe"
+          Write-Host "下载 Inno Setup $ver：$url"
+          Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+          $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Inno Setup 安装失败，退出码 $($proc.ExitCode)" }
+
+          # 只认 7.x：优先标准安装目录，找不到再扫描 Program Files 下的 Inno Setup 7 目录
+          $iscc = @(
+            'C:\Program Files\Inno Setup 7\ISCC.exe',
+            'C:\Program Files (x86)\Inno Setup 7\ISCC.exe'
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            $iscc = Get-ChildItem 'C:\Program Files','C:\Program Files (x86)' -Directory -Filter 'Inno Setup 7' -ErrorAction SilentlyContinue |
+              ForEach-Object { Join-Path $_.FullName 'ISCC.exe' } |
+              Where-Object { Test-Path $_ } |
+              Select-Object -First 1
+          }
+          if (-not $iscc) { throw '未找到 Inno Setup 7 的 ISCC.exe' }
+          "INNO_SETUP_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "ISCC：$iscc"
+
+      # 不用 npm run electron:build：那条脚本没法只给 electron-builder 传 --publish never
+      - name: 打包（前端 → electron-builder --dir → Inno Setup）
+        run: |
+          npm run build
+          # 显式关闭 electron-builder 在 CI 下的隐式发布（本流水线只出安装包，不发布）
+          npx electron-builder --dir --publish never
+          npm run build:win:inno
+
+      - name: 校验安装包并生成 SHA-256
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release -Filter '*-Setup-*.exe' -File | Select-Object -First 1
+          if (-not $exe) { throw '未生成安装包（release/*-Setup-*.exe）' }
+          $hash = (Get-FileHash -Path $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($exe.Name)" | Out-File -FilePath "$($exe.FullName).sha256" -Encoding utf8
+          Write-Host ("安装包：{0}（{1} MB）" -f $exe.FullName, [math]::Round($exe.Length / 1MB, 1))
+
+      # 免安装版：直接把 electron-builder 的 win-unpacked 打成 zip（解压即用，无需安装）
+      - name: 制作免安装版（ZIP）并生成 SHA-256
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $src = 'release/win-unpacked'
+          if (-not (Test-Path $src)) { throw "未找到解包目录 $src（electron-builder --dir 未成功？）" }
+          # 归档根目录用应用名，解压后直接得到「班集/班集.exe」
+          $stageRoot = Join-Path $env:RUNNER_TEMP 'portable'
+          $stage = Join-Path $stageRoot '班集'
+          Remove-Item $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item -Path (Join-Path $src '*') -Destination $stage -Recurse -Force
+          $zip = "release/班集-免安装-$version-win-x64.zip"
+          Remove-Item $zip -Force -ErrorAction SilentlyContinue
+          # 优先 7-Zip（runner 预装，快且压缩率高），没有则退回系统自带的 Compress-Archive
+          $sevenZip = @('C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe') |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($sevenZip) {
+            & $sevenZip a -tzip $zip $stageRoot -mx=5 -mmt=on | Out-Null
+          } else {
+            Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
+          }
+          if (-not (Test-Path $zip)) { throw '免安装包生成失败' }
+          $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $(Split-Path $zip -Leaf)" | Out-File -FilePath "$zip.sha256" -Encoding utf8
+          Write-Host ("免安装包：{0}（{1} MB）" -f $zip, [math]::Round((Get-Item $zip).Length / 1MB, 1))
+
+      # 源码包：git archive 只打包被 Git 跟踪的文件，天然排除 node_modules / .env / 构建产物
+      - name: 打包源码（ZIP）并生成 SHA-256
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $zip = "release/班集-源码-$version.zip"
+          Remove-Item $zip -Force -ErrorAction SilentlyContinue
+          git archive --format=zip "--prefix=classnest-$version/" -o $zip HEAD
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zip)) { throw '源码包生成失败' }
+          $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $(Split-Path $zip -Leaf)" | Out-File -FilePath "$zip.sha256" -Encoding utf8
+          Write-Host ("源码包：{0}（{1} MB）" -f $zip, [math]::Round((Get-Item $zip).Length / 1MB, 1))
+
+      - name: 上传发布产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: classnest-release-assets
+          path: |
+            release/*-Setup-*.exe
+            release/*-Setup-*.exe.sha256
+            release/*-免安装-*.zip
+            release/*-免安装-*.zip.sha256
+            release/*-源码-*.zip
+            release/*-源码-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  # ------------------------------------------------------------ 3. 存草稿
+  draft:
+    name: 存草稿（Draft Release，不发布）
+    needs: package
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码（读取版本号）
+        uses: actions/checkout@v4
+
+      - name: 下载发布产物（安装包 / 免安装版 / 源码）
+        uses: actions/download-artifact@v4
+        with:
+          name: classnest-release-assets
+          path: artifacts
+
+      # 只创建/更新草稿：已存在的正式发布不碰，避免「流水线自动发布」
+      - name: 创建或更新草稿发布
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          echo "版本：${VERSION}，标签：${TAG}"
+          ls -lh artifacts
+
+          # 空字符串 = 该标签还没有任何发布
+          EXISTS=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "")
+          if [ -z "$EXISTS" ]; then
+            gh release create "$TAG" \
+              artifacts/*.exe \
+              artifacts/*.zip \
+              artifacts/*.sha256 \
+              --draft \
+              --title "班集 v${VERSION}（草稿）" \
+              --target "${GITHUB_SHA}" \
+              --notes "自动构建的草稿版本，**尚未发布**（draft），不会推送给用户。
+
+          - 版本：v${VERSION}
+          - 提交：${GITHUB_SHA}
+          - 流水线：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - 资产：安装包（Setup.exe）、免安装版（ZIP）、源码（ZIP），各附 SHA-256
+          - 已通过：版本号一致性、ESLint、单元 + 行为快测、冒烟测试
+
+          人工核对安装包与更新说明后，再在 GitHub 上手动发布。"
+            echo "已创建草稿：$TAG"
+          elif [ "$EXISTS" = "true" ]; then
+            echo "草稿 $TAG 已存在，覆盖更新资产"
+            gh release upload "$TAG" artifacts/*.exe artifacts/*.zip artifacts/*.sha256 --clobber
+          else
+            echo "::warning::$TAG 已存在且已正式发布，按「不自动发布」原则跳过资产更新"
+          fi

@@ -2,19 +2,32 @@
 // 模块级单例：整个应用共用一份，避免重复 import 与重复 addHook。
 let _marked = null
 let _purify = null
+// 在途加载 Promise：首屏多处同时调 ensureMarkdown() 时只真正 import 一次，
+// 否则并发会各自 import + 各自 addHook（hook 重复注册，审查 v4 · B10-13）。
+let _loading = null
 
 export async function ensureMarkdown() {
   if (_marked) return
-  const [markedModule, purifyModule] = await Promise.all([
-    import('marked'),
-    import('dompurify'),
-  ])
-  _marked = markedModule.marked
-  _purify = purifyModule.default
-  _marked.setOptions({ gfm: true, breaks: true })
-  _purify.addHook('afterSanitizeAttributes', (node) => {
-    if (node.tagName === 'A') node.setAttribute('target', '_blank')
-  })
+  if (_loading) return _loading
+  _loading = (async () => {
+    const [markedModule, purifyModule] = await Promise.all([
+      import('marked'),
+      import('dompurify'),
+    ])
+    _marked = markedModule.marked
+    _purify = purifyModule.default
+    _marked.setOptions({ gfm: true, breaks: true })
+    _purify.addHook('afterSanitizeAttributes', (node) => {
+      if (node.tagName === 'A') node.setAttribute('target', '_blank')
+    })
+  })()
+  try {
+    await _loading
+  } catch (err) {
+    // 加载失败允许下次重试，不能把失败 Promise 永久缓存
+    _loading = null
+    throw err
+  }
 }
 
 // markdown 库是否已就绪（供「重算全部 HTML」等场景判断，避免在未加载时解析报错）

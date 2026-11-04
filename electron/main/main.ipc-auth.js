@@ -71,7 +71,11 @@ function registerWindowRole(win, role) {
   try {
     win.webContents[ROLE_KEY] = role
     return true
-  } catch (_) {
+  } catch (err) {
+    // 挂不上角色 = 该窗口的所有 IPC 都会被 fail-closed 拒绝。静默返回 false 会让
+    // 「界面所有按钮都没反应」变成一个无从排查的哑故障，至少留下一条日志
+    // （审查 v5 · V5-052）。
+    console.error('[ipc-auth] 窗口角色登记失败，该窗口的 IPC 将全部被拒绝：', role, err)
     return false
   }
 }

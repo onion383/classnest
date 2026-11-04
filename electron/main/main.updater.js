@@ -297,8 +297,15 @@ function registerUpdateIpc(send) {
   //   所以：重算哈希，与下载时记下的凭据比对；对不上就拒绝安装（宁可让用户重新下载）。
   //   路径也要确认仍位于 update-cache 目录内 —— downloadedInstallerPath 只由下载流程写入，
   //   这里再兜一次，防止将来有人把别处的路径塞进来。
+  // 安装互斥：双击「立即安装」时第二次点击会落在「上百 MB 哈希重算」窗口里，
+  // 没有这把锁就会 spawn 两个安装器（审查 v5 · V5-027）。
+  let installBusy = false
   ipcMain.on('update-install', async () => {
     if (!app.isPackaged) return
+    if (installBusy) return
+    installBusy = true
+    let launched = false
+    try {
     if (!downloadedInstallerPath || !fs.existsSync(downloadedInstallerPath)) {
       setUpdateState({ status: 'error', error: '安装包尚未下载完成' })
       return
@@ -344,10 +351,15 @@ function registerUpdateIpc(send) {
       })
       child.unref()
       // 置退出标志（跳过「关闭确认/托盘存活」逻辑）并退出，释放单实例锁供安装器替换文件
+      launched = true
       app.isQuitting = true
       setTimeout(() => app.quit(), 500)
     } catch (err) {
       setUpdateState({ status: 'error', error: friendlyUpdateError(err) })
+    }
+    } finally {
+      // 成功启动安装器后保持锁住：进程虽有 500ms 后才退出，但这段窗口仍可能被再次点击
+      if (!launched) installBusy = false
     }
   })
 }

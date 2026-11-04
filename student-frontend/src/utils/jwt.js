@@ -15,6 +15,9 @@
 // 不还原会得到乱码（exp 仍可读，但解析出的对象不可靠）。
 // =========================================================================
 
+// 解码器是纯函数对象、无状态：模块级复用一份即可（原先每次解码都 new 一个）
+const UTF8_DECODER = new TextDecoder('utf-8')
+
 // 解码失败返回 null（调用方自行决定「失败算过期还是交给后端兜底」）
 export function decodeJwtPayload(token) {
   try {
@@ -25,7 +28,7 @@ export function decodeJwtPayload(token) {
     const binary = atob(padded)
     const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
     // TextDecoder 在浏览器、Electron 渲染层与 Node 测试环境都可用
-    return JSON.parse(new TextDecoder('utf-8').decode(bytes))
+    return JSON.parse(UTF8_DECODER.decode(bytes))
   } catch (_) {
     return null
   }

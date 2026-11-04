@@ -48,6 +48,13 @@ require.cache.electron = {
 
 const contract = require(path.join(ROOT, 'electron/main/main.ipc-contract.js'))
 
+// 别把 monkey-patch 留给同进程的后续用例：Node 的 require 缓存与解析钩子是进程级的，
+// 不恢复会让「同一文件里后跑的用例」看到被替换过的 electron（审查 v5 · V5-036）。
+test.after(() => {
+  Module._resolveFilename = origResolve
+  delete require.cache.electron
+})
+
 // =========================================================================
 // B01-06：失败与取消必须可区分（契约层的三态）
 // =========================================================================

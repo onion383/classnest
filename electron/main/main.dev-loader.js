@@ -97,7 +97,10 @@ function pollViteAndNavigate(win, retries = 100, slow = false) {
     startupTimer.mark('Vite 就绪，开始跳转')
     backend.setBootStatus('开发服务器已就绪，正在加载界面…')
     if (win && !win.isDestroyed()) {
-      win.loadURL('http://127.0.0.1:5173/')
+      // 必须接 catch：loadURL 失败会 reject，不接就是 unhandled rejection（仅开发模式）
+      win.loadURL('http://127.0.0.1:5173/').catch((err) => {
+        console.error('[Electron] 开发界面加载失败:', err && err.message)
+      })
       // INP 测量时不开 DevTools：停靠的 DevTools 会改变内容区尺寸并叠加额外 CDP 开销，
       // 干扰布局与交互耗时，导致测量失真。
       if (!process.env.INP_DEBUG) win.webContents.openDevTools()

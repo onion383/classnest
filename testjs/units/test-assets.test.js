@@ -38,7 +38,9 @@ const CASES = [
   {
     id: 'B13-03 页面探针用轮询而非固定死等 5 秒',
     file: 'testjs/tools/electron-page-probe.cjs',
-    must: ['deadline', 'if (text) break'],
+    // 判据从「#out 文本非空即退出」升级为「页面自报 READ_DONE 才退出」：
+    // 断言页的 #out 带占位文本，只判非空会读到半截结果。
+    must: ['deadline', 'executeJavaScript(READ_DONE)', 'setTimeout(r, 100)'],
     forbid: ['setTimeout(r, 5000)'],
   },
   {

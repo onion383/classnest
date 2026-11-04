@@ -69,6 +69,9 @@ export function createDisposables() {
 
   /** 一次性定时器。返回取消函数。 */
   function timeout(fn, ms) {
+    // 作用域已释放：不能再排期，否则会留下一个操作已卸载状态的孤儿定时器（审查 v5 · V5-006）。
+    // add() 在 disposed 时只会「当场执行清理」，挡不住后面这行 setTimeout。
+    if (disposed) return () => {}
     let timer = null
     const cancel = add(() => { if (timer) { clearTimeout(timer); timer = null } })
     timer = setTimeout(() => { timer = null; cancel(); fn() }, ms)
@@ -86,6 +89,8 @@ export function createDisposables() {
     const cancelTimer = () => { if (timer) { clearTimeout(timer); timer = null } }
     add(cancelTimer)
     const schedule = (fn, ms) => {
+      // 作用域已释放：直接丢弃这次排期（同 timeout，避免孤儿定时器）
+      if (disposed) return
       cancelTimer()
       timer = setTimeout(() => { timer = null; fn() }, ms)
     }
@@ -97,6 +102,7 @@ export function createDisposables() {
 
   /** 周期定时器。返回取消函数。 */
   function interval(fn, ms) {
+    if (disposed) return () => {}
     const id = setInterval(fn, ms)
     return add(() => clearInterval(id))
   }

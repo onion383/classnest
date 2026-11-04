@@ -46,6 +46,16 @@ function makeFaultyDb(conn, state) {
               if (p === 'run') {
                 return (...args) => {
                   state.writes += 1
+                  // 按 SQL 匹配注入：用例关心的是「哪张表的写入失败」，不是「第几次写」。
+                  // 后者会在业务新增一次写操作时整体偏移，把故障注入到错误的步骤上，
+                  // 让一个仍然存在的 bug 变成假绿（审查 v5 · V5-034）。
+                  if (state.failMatch && state.failMatch.test(sql)) {
+                    state.matchWrites = (state.matchWrites || 0) + 1
+                    if (state.failAtMatch > 0 && state.matchWrites === state.failAtMatch) {
+                      throw new Error('注入故障：匹配 ' + state.failMatch + ' 的第 ' + state.matchWrites + ' 次写入失败')
+                    }
+                  }
+                  // 兼容旧写法：绝对写入序号的注入（仅保留给未改造的用例）
                   if (state.failAt > 0 && state.writes === state.failAt) {
                     throw new Error('注入故障：第 ' + state.writes + ' 次写入失败')
                   }
@@ -124,8 +134,9 @@ test('值日保存失败时不能留下孤儿临时学生（校验阶段建档�
   const conn = freshDb()
   seedDutySettings(conn, { 扫地: { 1: 1 } }, { 1: '周一' })
   active.conn = conn
-  // 第 1 次写 = 建临时学生（校验阶段）；第 2 次写 = 值日表落库 → 在这里失败
-  active.state = { writes: 0, failAt: 2 }
+  // 建临时学生（students 表）成功后，让「值日表落库」这一步失败 —— 按 SQL 锁定注入点，
+  // 不依赖「第 2 次写」这种会被新增写操作改掉的序号
+  active.state = { writes: 0, failMatch: /duty_slots/i, failAtMatch: 1 }
 
   const r = await callApi(
     [['/api/duty', dutyRouter]],
@@ -194,8 +205,8 @@ test('photo_trash 的 undo：文件搬回与索引插入必须同生共死（不
   fs.copyFileSync(originalPath, trashSrc)
   fs.unlinkSync(originalPath)
 
-  // 让「索引插入」这一步失败：注入第 1 次写失败
-  active.state = { writes: 0, failAt: 1 }
+  // 让「索引插入」这一步失败：按 SQL 锁定 album_photos 的写入（不依赖绝对序号）
+  active.state = { writes: 0, failMatch: /album_photos/i, failAtMatch: 1 }
   await assert.rejects(
     () => ex.undo({ photo }),
     '索引插入失败时应抛错'

@@ -137,7 +137,7 @@ const groupedRows = computed(() => {
       const vb = b[0] ? b[0][field] : '';
       const na = Number(va);
       const nb = Number(vb);
-      const bothNum = va !== '' && vb !== '' && Number.isFinite(na) && Number.isFinite(nb);
+      const bothNum = va != null && vb != null && va !== '' && vb !== '' && Number.isFinite(na) && Number.isFinite(nb);
       const r = bothNum ? na - nb : collator.compare(String(va ?? ''), String(vb ?? ''));
       if (r) return r * dir;
     }

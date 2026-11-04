@@ -269,7 +269,12 @@ function scrollByStep(direction) {
 function onWheel(e) {
   const el = props.target
   if (!el) return
-  el.scrollTop += e.deltaY
+  // deltaMode 必须换算：1=行、2=页（Firefox 与部分鼠标/触控板驱动会用它）。
+  // 直接 += deltaY 时一次滚轮只动 1~3px，表现为「滚不动」（审查 v4 · B08-10）。
+  const unit = e.deltaMode === 1
+    ? 16
+    : (e.deltaMode === 2 ? (el.clientHeight || 100) : 1)
+  el.scrollTop += e.deltaY * unit
 }
 
 function onThumbPointerDown(e) {

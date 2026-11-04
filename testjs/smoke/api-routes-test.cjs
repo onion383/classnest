@@ -176,16 +176,8 @@ let server = null
 let mock = null
 // 关服务不能直接 await server.close()：它要等所有连接自然断开，
 // 而这个脚本自己发过 keep-alive 请求，句柄可能一直挂着 —— 收尾就永远回不来。
-// 先 closeAllConnections()（Node 18.2+）再带超时兜底。
-function closeServer(s, timeoutMs = 2000) {
-  if (!s) return Promise.resolve()
-  return new Promise((resolve) => {
-    const done = () => resolve()
-    const t = setTimeout(done, timeoutMs)
-    try { s.closeAllConnections?.() } catch (_) { /* 老版本没有该方法 */ }
-    s.close(() => { clearTimeout(t); done() })
-  })
-}
+// 统一用 tools/closeServer.cjs（与其它探针共用一份，避免各自漂移）。
+const { closeServer } = require('../tools/closeServer.cjs')
 
 async function cleanup() {
   await Promise.all([closeServer(server), closeServer(mock)])

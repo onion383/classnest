@@ -15,7 +15,7 @@
 //   · 批量请求要防抖：滚动时可见区变化频繁，节流后再发。
 //   · 同一批 id 重复请求要合并（用 inflight 标记）。
 // =========================================================================
-import { ref, onBeforeUnmount, watch } from 'vue'
+import { ref, onBeforeUnmount, onScopeDispose, getCurrentScope, watch } from 'vue'
 import { fetchThumbBatch } from '../utils/albumMedia'
 
 // 可视区变化后多久发一次批量请求（毫秒）
@@ -104,10 +104,13 @@ export function useThumbBatch(getVisibleIds, options = {}) {
       want.push(id)
     }
     if (!want.length) return
+    // 先把整批 id 全部标成 inflight，再开始逐 chunk 请求。
+    // 只在循环内逐 chunk 标记的话，第二个并发 run()（定时重试/滚动触发）在第一个 chunk
+    // 还没返回时看不到后面 chunk 的 id，会把同一批图重复请求一遍（审查 v5 · V5-018）。
+    want.forEach(id => inflight.add(id))
 
     for (let i = 0; i < want.length; i += CHUNK) {
       const chunk = want.slice(i, i + CHUNK)
-      chunk.forEach(id => inflight.add(id))
       try {
         const map = await fetchThumbBatch(chunk)
         if (destroyed) return
@@ -196,11 +199,17 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     return ids.length ? `${ids.length}:${ids[0]}:${ids[ids.length - 1]}` : ''
   }, () => schedule())
 
-  onBeforeUnmount(() => {
+  // 清理钩子两个作用域都挂：组件内走 onBeforeUnmount；在组件外被（测试/工具）调用时
+  // onBeforeUnmount 注册不了，会留下 watch 与定时器继续排期（审查 v5 · V5-015）。
+  // cleanup 幂等，两个钩子在组件里同时触发也没有副作用。
+  function cleanup() {
+    if (destroyed) return
     destroyed = true
     if (timer) { clearTimeout(timer); timer = 0 }
     revokeAll()
-  })
+  }
+  onBeforeUnmount(cleanup)
+  if (getCurrentScope()) onScopeDispose(cleanup)
 
   return {
     // 取某张照片的缩略图地址，三态返回（调用方按 undefined / '' / blob 分别处理）：

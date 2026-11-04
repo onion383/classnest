@@ -176,6 +176,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useNotification } from '../composables/useNotification.js'
 import { INVOKE } from '../electronChannels.js'
 import { hitBand, hitRow, hitPieSlice, hitLegendRow } from '../utils/chartHit.js'
+import { classifySaveResult } from '../utils/saveResult.js'
 
 defineOptions({ name: 'AiChart' })
 const props = defineProps({
@@ -741,11 +742,16 @@ async function saveImage() {
     startAnim()
   }
 }
-// 弹系统保存对话框，用户确认后才写入
+// 弹系统保存对话框，用户确认后才写入。
+// 三态判定必须与 utils/saveFile.js 同一口径：写盘失败（outcome='fail'）不能被
+// 当成「已保存」静默放行；用户取消（canceled）才安静退出（审查 v5 · V5-002）。
 async function saveBlob(defaultName, blob) {
   const data = await blob.arrayBuffer()
   const result = await window.electron.invoke(INVOKE.SAVE_FILE, { defaultName, data })
-  if (!result || result.canceled) throw new Error('已取消')
+  const kind = classifySaveResult(result)
+  if (kind === 'ok') return
+  if (kind === 'canceled') throw new Error('已取消')
+  throw new Error((result && result.error) || '保存文件失败')
 }
 </script>
 

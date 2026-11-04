@@ -50,6 +50,9 @@ export function createRowFocusHost(route, router) {
   })
   // 内部登记一个「可取消的清理动作」。宿主不是本函数造的（旧写法）时安全降级。
   host._register = (cancel) => { if (typeof cancel === 'function') cancels.add(cancel) }
+  // 组件外（非 setup 作用域）调用时没有自动释放者：给调用方一个显式入口，
+  // 否则重试链与滚动监听会一直挂到进程结束（审查 v5 · V5-042）。
+  host.dispose = () => d.dispose()
   return host
 }
 

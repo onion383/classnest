@@ -235,8 +235,13 @@ for (const s of suite) {
   checks.push({ name: 'npm 脚本已写入 README', ok: missingScripts.length === 0, detail: `共 ${Object.keys(pkg.scripts).length} 个，缺 ${missingScripts.length}` })
   for (const s of missingScripts) problems.push(`README 缺 npm 脚本：${s}`)
 
-  const envKeys = fs.readFileSync(path.join(ROOT, '.env'), 'utf8')
-    .split(/\r?\n/).filter((l) => /^\s*[A-Z_]+\s*=/.test(l)).map((l) => l.split('=')[0].trim())
+  // .env 可能不存在（干净 clone / CI）：缺失时按「没有环境变量需要说明」处理，
+  // 不能让整个文档校验在这里崩掉、后面的检查全不跑（审查 v4 · B13-09）
+  let envKeys = []
+  try {
+    envKeys = fs.readFileSync(path.join(ROOT, '.env'), 'utf8')
+      .split(/\r?\n/).filter((l) => /^\s*[A-Z_]+\s*=/.test(l)).map((l) => l.split('=')[0].trim())
+  } catch (_) { envKeys = [] }
   const undocumentedEnv = envKeys.filter((k) => !rootReadme.includes(k))
   checks.push({ name: '.env 变量已说明', ok: undocumentedEnv.length === 0, detail: `.env ${envKeys.length} 个，README 未提及 ${undocumentedEnv.length}` })
   for (const k of undocumentedEnv) problems.push(`README 未说明 .env 变量：${k}`)

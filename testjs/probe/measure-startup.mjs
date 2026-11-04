@@ -197,12 +197,14 @@ function launchAndCollect({ cmd, args, cwd, env, until, label, runIndex }) {
     let raw = ''
     let settled = false
     let graceTimer = null
+    let timeoutTimer = null
     const hardTimer = setTimeout(() => finish('duration'), opt.duration)
 
     const finish = (reason) => {
       if (settled) return
       settled = true
       clearTimeout(hardTimer)
+      clearTimeout(timeoutTimer)
       if (graceTimer) clearTimeout(graceTimer)
       killTree(child.pid)
       try { writeFileSync(path.join(LOG_DIR, `run${runIndex}.log`), raw, 'utf8') } catch (_) {}
@@ -220,7 +222,8 @@ function launchAndCollect({ cmd, args, cwd, env, until, label, runIndex }) {
     child.stdout.on('data', onChunk)
     child.stderr.on('data', onChunk)
     child.on('exit', (code) => finish('exit:' + code))
-    setTimeout(() => finish('timeout'), opt.timeout)
+    // 总超时定时器要留句柄：否则正常结束后它还会挂着，把脚本退出拖到 opt.timeout
+    timeoutTimer = setTimeout(() => finish('timeout'), opt.timeout)
 
     if (label) process.stdout.write(`${label} ... `)
   })

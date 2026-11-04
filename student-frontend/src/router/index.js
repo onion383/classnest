@@ -1,4 +1,4 @@
-import { getToken, clearToken } from '../utils/authStorage.js'
+import { getToken, clearAuth } from '../utils/authStorage.js'
 import { createRouter, createWebHistory, createWebHashHistory } from 'vue-router'
 import axios from 'axios'
 import { ensureDashboardData } from '../composables/useDashboardData'
@@ -44,8 +44,10 @@ function isTokenExpired(token) {
 router.beforeEach(async (to, from) => {
   const stored = getToken()
   if (stored && isTokenExpired(stored)) {
-    // 残留的过期 token 直接在路由阶段清除，避免先渲染内部页、再被 401 踢回登录页的闪烁
-    clearToken()
+    // 残留的过期 token 直接在路由阶段清除，避免先渲染内部页、再被 401 踢回登录页的闪烁。
+    // 用 clearAuth 而不是只清 token：currentUser 与用户级缓存（开学日/仪表盘快照）
+    // 会一起清掉，否则下一个登录的人可能看到上一个人的数据（审查 v4 · B11-13）。
+    clearAuth()
     return to.path === '/login' ? true : '/login'
   }
   if (!stored) {

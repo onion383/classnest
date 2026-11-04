@@ -41,8 +41,6 @@ function resolve(vars, expr, depth = 0) {
   expr = expr.trim();
   const direct = expr.match(/^(-?[\d.]+)px$/);
   if (direct) return parseFloat(direct[1]);
-  const zero = expr.match(/^(-?[\d.]+)px$/);
-  if (zero) return parseFloat(zero[1]);
   const ref = expr.match(/^var\(--radius-([a-z0-9-]+)\)$/);
   if (ref) {
     const v = vars[ref[1]];

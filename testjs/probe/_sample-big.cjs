@@ -27,8 +27,14 @@ const H = 3024
 
 async function ensureSampleImages() {
   fs.mkdirSync(TMP, { recursive: true })
-  const needBig = !fs.existsSync(BIG)
-  const needThumb = !fs.existsSync(THUMB)
+  // 只判「文件存在」不够：上次生成中途失败会留下 0 字节/截断文件，
+  // 直接复用会让后续探针在「解码大图」这一步莫名其妙地失败（审查 v4 · B14-24）。
+  const sizeOk = (p, minBytes) => {
+    try { return fs.statSync(p).size >= minBytes } catch (_) { return false }
+  }
+  const needBig = !sizeOk(BIG, 1024 * 1024)   // 预期 3~4MB
+  // BIG 重建时缩略图必须跟着重建（thumb 是从 big 生成的）
+  const needThumb = needBig || !sizeOk(THUMB, 10 * 1024)
   // 已存在时既不生成 raw（36MB buffer）也不 require sharp，省掉几秒启动时间
   if (needBig || needThumb) {
     const sharp = require(path.join(BACKEND, 'node_modules', 'sharp'))

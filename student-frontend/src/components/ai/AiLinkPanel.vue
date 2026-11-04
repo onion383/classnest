@@ -25,7 +25,7 @@
         ref="wv"
         class="link-webview absolute inset-0"
         partition="ai-link-preview"
-        :src="url || 'about:blank'"
+        :src="safeUrl"
       />
       <div v-if="loading" class="absolute inset-0 flex items-center justify-center text-sm text-text-muted pointer-events-none">加载中…</div>
       <div v-if="failed" class="absolute inset-x-0 top-0 text-center text-xs text-danger py-1.5 bg-surface/80">网页加载失败，可能不允许内嵌，可点右上角「在浏览器打开」</div>
@@ -34,7 +34,7 @@
 </template>
 
 <script setup vapor>
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 
 defineOptions({ name: 'AiLinkPanel' })
 
@@ -46,6 +46,19 @@ defineEmits(['close', 'open-external'])
 const pageTitle = ref('')
 const loading = ref(false)
 const failed = ref(false)
+// webview 的 src 必须过滤协议：链接由 AI 生成，若不限制 scheme，
+// `file://` / `javascript:` 之类的地址会让内嵌网页读到本地文件或执行脚本
+// （审查 v4 · B09-11）。只放行 http/https，其余一律退到空白页。
+const safeUrl = computed(() => {
+  const u = String(props.url || '').trim()
+  if (!u) return 'about:blank'
+  try {
+    const parsed = new URL(u)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? u : 'about:blank'
+  } catch (_) {
+    return 'about:blank'
+  }
+})
 // 模板 ref：webview 元素由 Vue 创建/销毁，这里只拿引用挂事件监听
 const wv = ref(null)
 

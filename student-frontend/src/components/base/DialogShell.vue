@@ -22,6 +22,7 @@
 <script setup vapor>
 import '../../styles/dialog-transition.css'
 import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { pushDialog, removeDialog, isTopDialog } from '../../utils/dialogStack.js'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -38,21 +39,21 @@ const emit = defineEmits(['overlay'])
 //
 // 为什么要维护一个栈：设置类弹窗里还会再开确认框（两层 DialogShell 同时可见），
 // 不做层次判断的话一次 Esc 会把两层一起关掉。只有最上层响应。
-const openStack = []
+// 栈必须**跨实例共享**，所以放在 utils/dialogStack.js 的模块作用域，
+// 不能写在 setup 里（每个实例一份，等于没有层级判断 —— 审查 v5 · V5-003）。
 const self = {}
 watch(
   () => props.visible,
   (v) => {
-    const i = openStack.indexOf(self)
-    if (v && i < 0) openStack.push(self)
-    else if (!v && i >= 0) openStack.splice(i, 1)
+    if (v) pushDialog(self)
+    else removeDialog(self)
   },
   { immediate: true },
 )
 
 function onKeydown(e) {
   if (!props.visible || e.key !== 'Escape') return
-  if (openStack[openStack.length - 1] !== self) return
+  if (!isTopDialog(self)) return
   // 内层自己处理过 Esc（下拉展开、过滤框）就别再关弹窗
   if (e.defaultPrevented) return
   e.preventDefault()
@@ -62,7 +63,6 @@ function onKeydown(e) {
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
-  const i = openStack.indexOf(self)
-  if (i >= 0) openStack.splice(i, 1)
+  removeDialog(self)
 })
 </script>

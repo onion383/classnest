@@ -39,7 +39,12 @@ const {
 // 监听器缓存：channel -> (原始callback -> wrapper)
 // 作用：on 注册时保存「用户 callback」与「实际注册到 ipcRenderer 的 wrapper」的映射，
 // off 时据此取出真正的 wrapper 才能 removeListener，避免因引用不同而无法解绑（内存泄漏）。
+//
+// on 与 once 必须各自一张表：共用同一张表时，同一个 callback 先 on 再 once
+// 会取到并摘掉前一个 wrapper、再覆盖映射 —— 持续订阅被静默改成一次性订阅
+// （审查 v5 · V5-050）。
 const listenerMap = new Map()
+const onceMap = new Map()
 
 // 渲染进程全局标记：主进程通过 additionalArguments 传入 --secure-channel。
 // 前端只在置位后才对业务 JSON API 启用加密传输（见 composables/secureAxios.js）。
@@ -68,17 +73,20 @@ contextBridge.exposeInMainWorld('electron', {
     return wrapper
   },
 
-  // 取消监听。只接受 on() 返回的 wrapper（上层把 on 的返回值存下来当订阅句柄）。
+  // 取消监听。只接受 on()/once() 返回的 wrapper（上层把返回值存下来当订阅句柄）。
   off: (channel, wrapper) => {
     if (!validReceiveChannels.includes(channel)) return
-    const m = listenerMap.get(channel)
-    if (!m) return
-    for (const [orig, w] of m) {
-      if (w === wrapper) {
-        ipcRenderer.removeListener(channel, w)
-        m.delete(orig)
-        if (m.size === 0) listenerMap.delete(channel)
-        return
+    // 两张表都要查：on 与 once 各自独立登记（V5-050）
+    for (const table of [listenerMap, onceMap]) {
+      const m = table.get(channel)
+      if (!m) continue
+      for (const [orig, w] of m) {
+        if (w === wrapper) {
+          ipcRenderer.removeListener(channel, w)
+          m.delete(orig)
+          if (m.size === 0) table.delete(channel)
+          return
+        }
       }
     }
   },
@@ -90,13 +98,14 @@ contextBridge.exposeInMainWorld('electron', {
   //   那个 wrapper **不进 listenerMap** → off() 根本找不到它 → 事件不触发时
   //   （通道永不来的场景）监听常驻渲染进程，且上层拿不到句柄、无法解绑。
   //
-  // 现在：wrapper 登记进 listenerMap（与 on 同构），并返回句柄供上层 off；
+  // 现在：wrapper 登记进 onceMap（与 on 同构、互不覆盖），并返回句柄供上层 off；
   // 事件真的触发时，ipcRenderer.once 会自动摘掉监听，此时同步把登记也清掉，
   // 避免映射表里留下指向已死监听的条目。
   once: (channel, callback) => {
     if (!validReceiveChannels.includes(channel) || typeof callback !== 'function') return null
-    if (!listenerMap.has(channel)) listenerMap.set(channel, new Map())
-    const m = listenerMap.get(channel)
+    // once 用独立的 onceMap：与 on 的登记互不覆盖（V5-050）。
+    if (!onceMap.has(channel)) onceMap.set(channel, new Map())
+    const m = onceMap.get(channel)
     // 同一 callback 重复 once() 时先摘掉旧 wrapper：
     // 否则 ipcRenderer.once 会累积两个监听 → 回调触发两次，
     // 且旧的 wrapper 已不在映射表里 → 永远 off 不掉（与 on() 的同一类问题）。
@@ -109,7 +118,7 @@ contextBridge.exposeInMainWorld('electron', {
       try {
         ipcRenderer.removeListener(channel, wrapper)
         m.delete(callback)
-        if (m.size === 0) listenerMap.delete(channel)
+        if (m.size === 0) onceMap.delete(channel)
       } catch (_) { /* 已结束 */ }
       callback(...args)
     }

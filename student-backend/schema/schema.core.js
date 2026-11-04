@@ -58,6 +58,10 @@ function migrateCore(conn) {
     ['家长联系电话', '文字'], ['学生联系电话', '文字'], ['备注', '文字'],
   ];
   STUDENT_COLUMNS.forEach(([c, t], i) => initMeta.run('students', c, t, i + 1));
+  // 收据列在 table_meta 里登记为「文字」：它对外展示/导入导出的单位仍是一条记录，
+  // 不是可编辑的结构化字段；但 services/sanitize.js 对该列有专门的 JSON 数组/路径清洗规则
+  // （kind='json'/shape='array'/each='path'）。两者不是矛盾：data_type 决定表格列的编辑类型，
+  // 清洗规则决定落库前的字段形态（审查 v5 · V5-037）。
   const FEE_COLUMNS = [
     ['收支编码', '文字'], ['收支类型', '文字'],
     ['收支金额', '小数'],

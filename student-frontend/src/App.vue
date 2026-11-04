@@ -613,17 +613,13 @@ async function applyToolboxPreference() {
 }
 
 // ---- 关闭选择弹窗（复用现有弹窗动画，替代主进程原生菜单） ----
-// 工具箱右键「关闭工具箱」：先读完整设置、再整体写回。
-// 后端 PUT /api/widget-settings 是整体覆盖，只传 toolboxEnabled 会把两个保存路径清空。
+// 工具箱右键「关闭工具箱」。
+// 后端 PUT /api/widget-settings 已是**补丁式**（只更新传入的字段），所以这里直接传
+// toolboxEnabled 即可。原先「先 GET 完整设置再整体写回」的写法是旧契约的遗留：
+// 多一次请求，且中途设置被别人改动时会被这份旧快照覆盖（审查 v5 · V5-016）。
 async function persistToolboxDisabled() {
   try {
-    const res = await axios.get('/api/widget-settings')
-    const d = (res.data && res.data.data) || {}
-    await axios.put('/api/widget-settings', {
-      toolboxEnabled: false,
-      noteSavePath: d.noteSavePath || '',
-      screenshotSavePath: d.screenshotSavePath || '',
-    })
+    await axios.put('/api/widget-settings', { toolboxEnabled: false })
     // 通知浮窗按最新设置刷新（此时它已被主进程隐藏，这里只是同步状态）
     window.electron?.send(SEND.TO_WIDGET, { type: 'settings-changed' })
     useNotification().success('工具箱已关闭，可在「设置 → 工具箱设置」重新启用')

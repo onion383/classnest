@@ -4,11 +4,15 @@
     ref="menuEl"
     class="context-menu-popup fixed bg-surface border border-border shadow-md z-[9999] min-w-[120px] py-1 pointer-events-auto"
     :style="menuStyle"
+    role="menu"
+    @contextmenu.prevent
   >
     <div
       v-for="item in items"
       :key="item.label"
       class="px-4 py-2 cursor-pointer hover:bg-surface-hover text-sm text-text transition-theme"
+      role="menuitem"
+      tabindex="-1"
       @click="item.action"
     >
       {{ item.label }}

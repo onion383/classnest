@@ -69,7 +69,12 @@ watch(() => props.visible, (v) => {
 
 const roleText = computed(() => (user.value.role === 'teacher' ? '班主任' : '科任老师'))
 
+// 防重入：确认框连点两下会发两次 logout、两次 clearAuth + 两次 router.push。
+// 第二次请求带着已清掉的 token 必 401，还会把「登出成功」的提示盖成失败（审查 v4 · B08-11）。
+let loggingOut = false
 function doLogout() {
+  if (loggingOut) return
+  loggingOut = true
   // 通知后端吊销本次会话（原 token 立即失效），再清本地登录态
   axios.post(AUTH_API.logout).catch(() => {})
   clearAuth()

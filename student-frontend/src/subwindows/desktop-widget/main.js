@@ -1,5 +1,6 @@
 import { getToken as loadStoredToken, TOKEN_KEY, AUTH_CHANGED_EVENT } from '../../utils/authStorage.js'
 import { resetUserScopedCaches } from '../../utils/userScopedCache.js'
+import { decodeJwtPayload } from '../../utils/jwt.js'
 import { createApp } from 'vue'
 // 桌面组件里也用到带 <script setup vapor> 的组件（AnimatedClock 时钟），
 // 3.6 通道下同样需要 interop 插件；3.5 通道下该模块是 null（见 vite.config.js）。
@@ -38,6 +39,13 @@ function getToken() {
   return tokenPromise
 }
 
+// 登录身份：同一会话的滑动续期只改 token 字符串，sid / userId / dbSlug 不变。
+// 解析失败（空 token、损坏 JWT）返回空身份，视为「未登录/已登出」。
+function authIdentity(token) {
+  const p = decodeJwtPayload(token)
+  return p ? `${p.userId || ''}|${p.dbSlug || ''}|${p.sid || ''}` : ''
+}
+
 // 共用 axios 装配：登录态、网络错误退避重试、安全通道加密。
 // 打包版加载自 app://local/desktop-widget.html，相对路径会被解析到该协议而拿不到后端，
 // 故与其它窗口一样补全后端地址；开发模式仍走 Vite 代理的相对路径。
@@ -71,10 +79,22 @@ function bootstrap() {
   // 露出下面自绘的渐变层（否则 body 的 #f0f4f8 底色会盖住它）。
   document.documentElement.classList.add('system-acrylic')
 
-  // 同一 profile 下，主窗口改主题/日夜间/token 都会在本窗口触发 storage 事件
+  // 同一 profile 下，主窗口改主题/日夜间/token 都会在本窗口触发 storage 事件。
+  // ⚠️ token 的**滑动续期**也会写 TOKEN_KEY（后端下发的 X-Renewed-Token），
+  //    storage 事件本身分不清「续期」和「换号」。只看 key 就 reset 会把挂件
+  //    整窗的业务数据清空重拉 —— 换号才该清（审查 v5 · V5-044）。
+  //    用 userId|dbSlug|sid 判断身份是否真的变了。
+  let authIdentitySnapshot = authIdentity(loadStoredToken())
   window.addEventListener('storage', (e) => {
     if (!e.key) return
     if (e.key === TOKEN_KEY) {
+      const nextIdentity = authIdentity(e.newValue)
+      if (nextIdentity === authIdentitySnapshot) {
+        // 同一会话只换了 token 字符串（续期）：让下次请求重读即可，不要广播登出
+        tokenPromise = null
+        return
+      }
+      authIdentitySnapshot = nextIdentity
       tokenPromise = null
       // 本窗口的用户级缓存（信道会话等）也要作废：登出只清了主窗口那份注册表，
       // 这里得自己清一次，否则换号后本窗口还拿着旧用户的信道会话。

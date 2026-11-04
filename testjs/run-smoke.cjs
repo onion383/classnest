@@ -159,7 +159,8 @@ function runOne(file) {
     }
     results.push(r)
     const tag = r.code === 0 ? 'PASS' : 'FAIL'
-    console.log(`── ${tag}  ${f}  (${r.ms}ms)${r.err ? `  ${r.err}` : ''}`)
+    // runOne 的返回值没有 err 字段（原写法是死引用，永远不显示）
+    console.log(`── ${tag}  ${f}  (${r.ms}ms)`)
     if (r.code !== 0 && opt.bail) break
   }
 

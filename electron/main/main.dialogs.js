@@ -445,6 +445,11 @@ function registerDialogsIpc(opts = {}) {
     regionSession = null
     if (!st) return
     clearRegionWatchdog(st)
+    // 正常结束也要摘掉 closed 监听，避免每次截图累积一个一次性的窗口监听
+    if (st.onWindowClosed) {
+      try { st.window.removeListener('closed', st.onWindowClosed) } catch (_) { /* 已销毁 */ }
+      st.onWindowClosed = null
+    }
     const win = st.window
     if (win && !win.isDestroyed()) {
       // 先透明，再改回原尺寸/层级，最后恢复不透明：遮住尺寸变化过程
@@ -484,15 +489,25 @@ function registerDialogsIpc(opts = {}) {
       timer: null,
     }
     regionSession = st
+    // 看门狗从会话建立起就 arm，而不是等 region-show：
+    // 「截图已返回、渲染层还没调 show」这段同样是渲染层可能崩溃的窗口，
+    // 没有兜底时会话永久挂起，之后每次截图都撞「已有截屏进行中」（审查 v5 · V5-026）。
+    // show 时会重新 arm（重排计时），正常流程不受影响。
+    armRegionWatchdog(st)
     // 窗口关闭兜底：主窗口都没了，会话必须立刻清掉（否则 regionSession 指向死窗口，
     // 后续截图会撞上「窗口已销毁」的会话，还得先还原一次才能继续）
+    // 处理函数存在会话上，正常结束时由 restoreAfterRegion 摘掉 ——
+    // 原先每次截图都 once('closed') 且正常路径不移除，监听器会随使用次数线性累积
+    // （审查 v5 · V5-028）。
+    const onWindowClosed = () => {
+      if (regionSession === st) {
+        clearRegionWatchdog(st)
+        regionSession = null
+      }
+    }
+    st.onWindowClosed = onWindowClosed
     try {
-      mainWindow.once('closed', () => {
-        if (regionSession === st) {
-          clearRegionWatchdog(st)
-          regionSession = null
-        }
-      })
+      mainWindow.once('closed', onWindowClosed)
     } catch (_) { /* 忽略 */ }
 
     try {
@@ -539,7 +554,7 @@ function registerDialogsIpc(opts = {}) {
     setWinOpacity(st.window, 1)
     st.window.show()
     st.window.focus()
-    // 从此刻起窗口才是「卡死态」，看门狗这时才 armed（之前卡住也没那么致命）
+    // 重新计时：从「窗口真正进入卡死态」起算整段窗口
     armRegionWatchdog(st)
     return contract.ok()
   }))

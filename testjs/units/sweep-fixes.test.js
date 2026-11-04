@@ -35,6 +35,37 @@ process.env.DATA_DIR = process.env.DATA_DIR || TMP
 
 const readSrc = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
+// 按方括号配对从源码里取出 `key: [ ... ]` 的内容（感知字符串与转义）。
+// 不用 `[^\]]*` 正则：数组项里含 `]` 时会在那里提前截断，后续项漏检（审查 v5 · V5-035）。
+function extractBracketArrays(src, key) {
+  const out = []
+  const re = new RegExp(key + '\\s*:\\s*\\[', 'g')
+  let m
+  while ((m = re.exec(src))) {
+    const start = m.index + m[0].length
+    let depth = 1
+    let i = start
+    let quote = ''
+    while (i < src.length && depth > 0) {
+      const ch = src[i]
+      if (quote) {
+        if (ch === '\\') i += 1
+        else if (ch === quote) quote = ''
+      } else if (ch === "'" || ch === '"' || ch === '`') {
+        quote = ch
+      } else if (ch === '[') {
+        depth += 1
+      } else if (ch === ']') {
+        depth -= 1
+      }
+      i += 1
+    }
+    out.push(src.slice(start, i - 1))
+    re.lastIndex = i
+  }
+  return out
+}
+
 /**
  * 去掉注释再匹配。
  * ⚠️ 静态判据凡是「不该出现 X」都**必须**先去注释 ——
@@ -280,9 +311,11 @@ test('[行为] 探针本身能抓到「未登记的同类命中」（反向验�
   //   · 白名单里的项必须真的存在于源码（否则是僵尸条目 → 探针会一直报失败）
   //   · 已修完的项应该被删掉（这由探针自己的「白名单项已失效」检查负责）
   // 断言「全空」是错的：还有真实未修的条目时（如测试资产族的死等点）白名单本就该非空。
-  const knownBlocks = probeSrc.match(/known:\s*\[([^\]]*)\]/g) || []
+  // 解析 known 数组时必须按方括号配对计数，不能用 `[^\]]*`：数组项里若出现 `]`
+  // （正则/路径片段），正则会在那里提前截断，后面的白名单项就此漏检（审查 v5 · V5-035）。
+  const knownBlocks = extractBracketArrays(probeSrc, 'known')
   for (const b of knownBlocks) {
-    const items = b.replace(/known:\s*\[|\]/g, '').trim()
+    const items = b.trim()
     if (items) {
       // 非空时：每一项都必须是「真实存在的路径」或「路径 :: 片段」形式
       for (const item of items.split(',').map((s) => s.trim()).filter(Boolean)) {

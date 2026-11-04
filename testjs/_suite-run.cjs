@@ -43,14 +43,23 @@ function parseCounts(tap) {
 // 可用环境变量 TEST_FILE_TIMEOUT_MS 覆盖（冒烟/行为测试若确有慢文件可调大）。
 const FILE_TIMEOUT_MS = Number(process.env.TEST_FILE_TIMEOUT_MS) || 120000
 
-// Windows 下 node --test 会再 fork 一个跑用例的子进程，只 kill 父进程会留下孤儿。
+// Windows 下 node --test 会再 fork 一个跑用例的子进程，只 kill 父进程会留下孤儿；
+// POSIX 下同理，worker 是另行 fork 出来的（审查 v5 · V5-013）。
+// 子进程在 POSIX 上用 detached 自成进程组，超时清理时整组杀。
 function killTree(child) {
-  if (!child.pid || child.exitCode !== null) return
+  if (!child || !child.pid) return
+  // 被信号杀死时 exitCode 仍是 null，必须同时看 signalCode
+  if (child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
     spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-  } else {
-    child.kill('SIGKILL')
+    return
   }
+  try {
+    // 不是组 leader 时只会 ESRCH，安全退回单杀
+    process.kill(-child.pid, 'SIGKILL')
+    return
+  } catch (_) { /* 没有独立进程组 */ }
+  try { child.kill('SIGKILL') } catch (_) { /* 已退出 */ }
 }
 
 function runOne(full) {
@@ -61,6 +70,8 @@ function runOne(full) {
     const child = spawn(process.execPath, ['--test', '--test-reporter=tap', full], {
       cwd: path.join(__dirname, '..'),
       stdio: ['ignore', 'pipe', 'pipe'],
+      // POSIX：自成进程组，超时后 kill(-pid) 能带走 node --test 的 worker 子进程
+      detached: process.platform !== 'win32',
     })
     let out = ''
     let timedOut = false

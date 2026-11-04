@@ -18,6 +18,10 @@ const NIGHT_THEMES = ['base', 'glass', 'glass2']
 const LEGACY_CUSTOM_COLOR_KEY = 'app-theme-custom'
 const LEGACY_CUSTOM_THEMES_KEY = 'app-custom-themes'
 const BG_IMAGE_KEY = 'app-bg-image'
+
+// CSS `url('...')` 用单引号包裹：URL 自身若含单引号/反斜杠必须转义，
+// 否则整条声明从第一个引号处断开，背景图直接不生效（审查 v4 · B11-14）。
+const cssUrlEscape = (u) => String(u).replace(/['\\]/g, '\\$&')
 const BG_MASK_KEY = 'app-bg-mask-opacity'
 const GLASS_KEY = 'app-glass-opacity'
 const ICON_STYLE_KEY = 'app-icon-style'
@@ -174,13 +178,13 @@ export const useThemeStore = defineStore('theme', () => {
       : backgroundImage.value || (currentTheme.value === 'glass' ? defaultGlassBg : '')
     if (bg) {
       const bgUrl = isCustomBg ? resourceUrl(bg) : bg
-      document.documentElement.style.setProperty('--bg-image', `url('${bgUrl}')`)
+      document.documentElement.style.setProperty('--bg-image', `url('${cssUrlEscape(bgUrl)}')`)
       document.documentElement.classList.add('has-bg-image')
       // 旧版本升级上来的账号可能还没有媒体凭据：补一份后把背景图重设一次，
       // 否则这张带鉴权的自定义背景会一直 401（图不会自行重试）。
       if (isCustomBg && !localStorage.getItem('mediaToken')) {
         ensureMediaToken().then((t) => {
-          if (t) document.documentElement.style.setProperty('--bg-image', `url('${resourceUrl(bg)}')`)
+          if (t) document.documentElement.style.setProperty('--bg-image', `url('${cssUrlEscape(resourceUrl(bg))}')`)
         }).catch((e) => {
           // 补发媒体凭据失败 → 背景图会一直 401。这里不抛：主题本身已经应用完了，
           // 抛出去只会变成 unhandled rejection（用户看不到任何提示）。

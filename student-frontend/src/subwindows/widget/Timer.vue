@@ -127,6 +127,9 @@ const showArrows = computed(() => mode.value === 'countdown' && !running.value)
 
 function switchMode(newMode) {
   if (running.value) pause()
+  // 切模式必须清掉上一条提示：否则倒计时归零的「时间到」会一直红着，
+  // 切到正计时后用户以为时间还没到（审查 v5 · V5-022）。
+  hint.value = ''
   mode.value = newMode
   if (newMode === 'countup') {
     totalSeconds.value = 0

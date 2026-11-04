@@ -4,7 +4,7 @@
 // 覆盖 2026-11-04 批 19 的修法：
 //   B11-02  写请求重发守卫的默认值放行（子窗口未传守卫 → 写请求重发 6 次 → 重复落库）
 //   B11-03  字体 URL 裸路径无 content hash（内容变而文件名不变 → 缓存旧字体）
-//   B11-04  明文模式把登录 JWT 拼进图片 URL 查询串
+//   B11-04  明文模式把登录 JWT 拼进图片 URL 查询串（v5 起改为受限媒体凭据，两种模式统一）
 //   B11-05  serialSaver 无 quiet-period（连打 10 字仍 2 次整表 PUT）
 //   B11-06  tableSearch 每次全表 toLowerCase（无缓存）
 //   B08-06  LeaveTimeline 每击键重建 haystack + 线性 find nodeTypes
@@ -49,10 +49,11 @@ const STATIC_CASES = [
   },
   {
     id: 'B11-04 明文模式不拼 JWT 进 URL',
-    desc: 'resourceUrl 在明文模式（safe() 为 false）必须直接返回 URL，不带 token 参数',
+    desc: '图片 URL 只能用受限媒体凭据（scope=media）；明文模式也不得把登录 JWT 拼进查询串（v5·V5-005 起两种模式统一走媒体凭据）',
     files: ['student-frontend/src/utils/apiUrl.js'],
     forbid: null,
-    mustHave: /if\s*\(!safe\(\)\)\s*return url/,
+    mustHave: /localStorage\.getItem\(MEDIA_KEY\)/,
+    mustHave2: /token=\$\{encodeURIComponent\(token\)\}/,
   },
   {
     id: 'B11-03 字体走带 hash 的资源地址',

@@ -21,9 +21,14 @@ router.post('/', (req, res) => {
     const body = req.body || {};
   const data = cleanUp(body, EDITABLE, 'activities');
   data.created_at = now();
-  data.position = maxPosition('activities') + 1;
-  const result = buildInsert('activities', data);
-  renumber('activities');
+  // position 的「取最大值 + 插入 + 重排」必须在同一个事务里：并发两个 POST 时
+  // 两个请求都读到同一个 max，会写出重复 position（审查 v4 · B02-12）。
+  const result = db.transaction(() => {
+    data.position = maxPosition('activities') + 1;
+    const r = buildInsert('activities', data);
+    renumber('activities');
+    return r;
+  })();
   res.json({ id: result.lastInsertRowid, message: '添加活动成功' });
 });
 

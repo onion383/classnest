@@ -220,7 +220,9 @@ function applyMutant(m) {
 }
 
 function runTests() {
-  const r = spawnSync(process.execPath, ['--test', TEST], {
+  // 必须显式指定 TAP：Node 22+ 的默认 reporter 随版本/终端而变（可能是 spec/ℹ 形态），
+  // 用 `^not ok` 判断失败就会恒为 false、工具永远 exit 1（审查 v5 · V5-031）。
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', TEST], {
     cwd: ROOT,
     encoding: 'utf8',
     env: { ...process.env },

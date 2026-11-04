@@ -2,7 +2,7 @@
 // 为什么不用 lucide 组件：它是 VDOM 组件，每个图标实例都是一个 interop 边界，
 // 内联成普通 SVG 元素后，图标层不再依赖任何组件运行时。
 //
-// 用法：node testjs/tmp/gen-icon-shapes.mjs [--write]
+// 用法：node testjs/tools/gen-icon-shapes.mjs [--write]
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'

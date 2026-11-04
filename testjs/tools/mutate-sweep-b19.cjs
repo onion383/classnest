@@ -167,7 +167,8 @@ function applyMutant(m) {
 }
 
 function runTests() {
-  const r = spawnSync(process.execPath, ['--test', TEST], {
+  // 同 mutate-sweep：判据依赖 `^not ok`，必须强制 TAP reporter（审查 v5 · V5-031）
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', TEST], {
     cwd: ROOT, encoding: 'utf8', env: { ...process.env },
   })
   const out = (r.stdout || '') + (r.stderr || '')

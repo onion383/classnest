@@ -84,6 +84,7 @@ function hasExited(child) {
 function killTree(child, force = false) {
   if (!child || child.pid === undefined) return
   if (hasExited(child)) return
+  const signal = force ? 'SIGKILL' : 'SIGTERM'
   if (process.platform === 'win32') {
     // Windows 没有进程组信号，taskkill /T 是唯一可靠的「连同子孙一起杀」
     const r = spawnSync('taskkill', ['/pid', String(child.pid), '/T', ...(force ? ['/F'] : [])], {
@@ -91,8 +92,15 @@ function killTree(child, force = false) {
       windowsHide: true,
     })
     if (r.status === 0) return
+  } else {
+    // POSIX：后端 spawn 时已 detached（自成进程组），整组杀才能带走解压/缩略图/ffmpeg 孙进程。
+    // 若不是组 leader 只会 ESRCH，安全退回单杀（审查 v5 · V5-011）。
+    try {
+      process.kill(-child.pid, signal)
+      return
+    } catch (_) { /* 不是独立进程组 */ }
   }
-  try { child.kill(force ? 'SIGKILL' : 'SIGTERM') } catch (_) { /* 已退出 */ }
+  try { child.kill(signal) } catch (_) { /* 已退出 */ }
 }
 
 // 等子进程真正退出，再删数据目录（重试逻辑见 _tmpdir.cjs）。
@@ -116,7 +124,14 @@ async function startIsolatedBackend(opts = {}) {
     delete env.DW_SECURE_MASTER
   }
 
-  const child = spawn(process.execPath, [APP_ENTRY], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  // POSIX 上 detached 让后端自成进程组，stop() 才能整组杀掉它 fork 出来的孙进程
+  // （Windows 用 taskkill /T，且 detached 会另开控制台，故只在 POSIX 开）。
+  const child = spawn(process.execPath, [APP_ENTRY], {
+    cwd: ROOT,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+  })
   let log = ''
   const collect = (d) => {
     log += d

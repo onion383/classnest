@@ -179,9 +179,12 @@ export function useRowSortDrag({ items, dragIdx, overIdx, attr, rowClass = '', o
     if (ghost) { ghost.remove(); ghost = null }
     lastEv = null
     if (rows) {
-      setTransition(rows, 'none')
+      // clear() 会把 rows 置 null：必须先把元素数组留住，否则恢复 transition 的那行
+      // 拿到 null 直接 return，行上会残留 transition:none（审查 v5 · V5-019）。
+      const els = rows
+      setTransition(els, 'none')
       clear()
-      setTransition(rows, '')
+      setTransition(els, '')
     }
     dragIdx.value = null
     if (overIdx) overIdx.value = null

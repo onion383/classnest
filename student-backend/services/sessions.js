@@ -15,11 +15,14 @@ const FILE = () => path.join(dbManager.dataDir, '.sessions.json');
 // revoke 只在「主动登出」时删一个 sid，其余 sid 会永久留在 .sessions.json 里 ——
 // 每登录一次涨一条，文件单调增长。
 //
-// TTL 取 35 天（比 JWT 的 30 天略宽）：滑动续期的活跃会话每次请求都会把 JWT 续到
-// 新的 30 天，但**名单里那条记录的 at 不会跟着更新**（名单不是 token 续期机制的一部分）。
-// 所以 TTL 必须大于 30 天，否则一个持续活跃的会话会被误清 —— 用户正在用却被登出。
-// 35 天意味着「最后一次见到这个 sid 超过 35 天」才清理，实际上只有真正弃用的会话会走这条路。
+// TTL 取 35 天（比 JWT 的 30 天略宽）。**前提是 at 必须是「最后一次活动时间」**：
+// 每次校验会话时刷新（见 has 里的 touch），否则它只是登录时间，一个持续使用 35 天的
+// 会话会在下一次 prune 时被当成弃用会话清掉（审查 v5 · V5-009）。
 const SESSION_TTL_MS = 35 * 24 * 60 * 60 * 1000;
+
+// 活动时间落盘节流：每个请求都写 .sessions.json 太贵，只在超过 1 小时没刷新时写一次。
+// 对 35 天 TTL 来说，1 小时的精度完全够用（最多多留 1 小时误杀窗口）。
+const TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 
 // 名单容量上限：正常用户同时只有 1~2 个会话（多窗口/多设备）。
 // 给到 200 是极宽松的余量；超出后按「最久没见到」淘汰最老的那些。
@@ -88,9 +91,25 @@ function create(userId) {
 }
 
 // 校验会话是否仍在名单里（每次请求走内存缓存，无文件 IO）
+// 命中即表示「这个会话刚刚还在用」→ 刷新 at（节流落盘）。
+// at 不刷新的话 prune 会把持续活跃的会话当成弃用会话清掉，与 JWT 滑动续期直接矛盾。
 function has(sid) {
   if (!sid) return false;
-  return Object.prototype.hasOwnProperty.call(load(), sid);
+  const list = load();
+  if (!Object.prototype.hasOwnProperty.call(list, sid)) return false;
+
+  const rec = list[sid];
+  const prevAt = rec && typeof rec.at === 'number' ? rec.at : 0;
+  const now = Date.now();
+  if (now - prevAt > TOUCH_INTERVAL_MS) {
+    // 兼容旧的/损坏的 rec：保留 userId，at 统一写成数字
+    list[sid] = {
+      userId: rec && rec.userId != null ? rec.userId : null,
+      at: now,
+    };
+    save();
+  }
+  return true;
 }
 
 // 主动退出：吊销该会话，原 token 立即失效
@@ -113,4 +132,9 @@ module.exports = {
     return true;
   },
   __test_size: () => Object.keys(load()).length,
+  __test_get: (sid) => {
+    const list = load();
+    const rec = list[sid];
+    return rec ? { ...rec } : null;
+  },
 };

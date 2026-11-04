@@ -21,13 +21,26 @@
 
 const resetters = new Set()
 
+// 登录代次：每次登出/换号 +1。
+// 只清缓存不够：已经发出去、还在路上的请求回来时仍会把上一个账号的数据写回缓存
+// （审查 v5 · V5-004）。各缓存在发起请求时记下当前代次，响应写回前比对；
+// 代次变了就丢弃结果并按新用户重拉。
+let generation = 0
+
 // 登记一个「换用户必须清掉」的清理函数。重复登记同一个函数无副作用（Set 去重）。
 export function registerUserScopedReset(fn) {
   if (typeof fn === 'function') resetters.add(fn)
 }
 
+// 当前登录代次。请求发起时取值，响应回来时再取一次比对。
+export function userScopedGeneration() {
+  return generation
+}
+
 // 登出/换号/切库时调用：任何清理函数抛错都不能影响登出本身
 export function resetUserScopedCaches() {
+  // 先递增，再清理：这样在途请求的响应无论如何都排在「旧代次」上
+  generation += 1
   for (const fn of resetters) {
     try { fn() } catch (e) { console.warn('[cache] 清理用户级缓存失败：', e) }
   }

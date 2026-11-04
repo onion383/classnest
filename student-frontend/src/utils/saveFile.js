@@ -17,22 +17,11 @@
 //   用户点了取消 → 不打扰；保存失败了 → 必须告诉他。
 import { INVOKE } from '../electronChannels.js'
 import { sanitizeFileName } from './fileName.js'
+import { classifySaveResult } from './saveResult.js'
 
-// 判定主进程返回的结果属于哪一种结局。
-// 兼容两种形状：
-//   1) 新契约：{ outcome: 'ok'|'fail'|'canceled', success, canceled, error }
-//   2) 旧形状：{ canceled: true }（取消）/ { success: false, error }（失败）
-function classify(res) {
-  if (!res || typeof res !== 'object') return 'fail'
-  if (res.outcome === 'ok') return 'ok'
-  if (res.outcome === 'fail') return 'fail'
-  if (res.outcome === 'canceled') return 'canceled'
-  // 旧形状兜底
-  if (res.canceled === true) return 'canceled'
-  if (res.success === false) return 'fail'
-  if (res.filePath) return 'ok'
-  return 'fail'
-}
+// 判定逻辑抽在 saveResult.js（纯函数）：AiChart / RecoveryKeyDialog 等直连
+// save-file 的消费点也复用同一口径，避免各写一份「只判 canceled」的副本。
+const classify = classifySaveResult
 
 export async function saveBlobWithDialog(defaultName, blob) {
   // 文件名来自用户输入 / AI 生成，落盘前统一清洗（非法字符 / 末尾点空格 / 超长）
@@ -41,6 +30,9 @@ export async function saveBlobWithDialog(defaultName, blob) {
   const result = await window.electron.invoke(INVOKE.SAVE_FILE, { defaultName: safeName, data: arrayBuffer })
   const kind = classify(result)
   if (kind === 'ok') {
+    // 新契约的 outcome='ok' 必须真的带回 filePath：否则「保存成功」是一句空话，
+    // 后续打开文件/提示都会落在不存在的路径上（审查 v5 · V5-043）。
+    if (!result.filePath) throw new Error((result && result.error) || '保存文件失败（未返回文件路径）')
     // 保存成功后用系统默认应用打开文件
     window.electron.invoke(INVOKE.OPEN_FILE, { filePath: result.filePath }).catch(() => {})
     return result.filePath

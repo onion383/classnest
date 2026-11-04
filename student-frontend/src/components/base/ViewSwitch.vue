@@ -9,14 +9,16 @@
       :style="thumbStyle"
     ></button>
     <button
-      v-for="opt in options"
+      v-for="(opt, i) in options"
       :key="opt.value"
       type="button"
       role="tab"
       class="view-switch-btn"
       :class="{ on: modelValue === opt.value }"
       :aria-selected="modelValue === opt.value"
+      :tabindex="modelValue === opt.value ? 0 : -1"
       @click="$emit('update:modelValue', opt.value)"
+      @keydown="onKeydown($event, i)"
     >
       <!-- 图标走 IconGlyph 而不是 <component :is>：lucide 组件是 VDOM 组件，
            放在 vapor 组件里就是一个 interop 边界，而这里只是画个 15px 的图形。
@@ -38,10 +40,29 @@ const props = defineProps({
   // 选中色块所套用的类，默认与工具栏彩色按钮一致（暖色主色），命中同一批主题按钮规则
   thumbClass: { type: String, default: 'bg-primary text-text-inverse' }
 })
-defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue'])
 
 const root = ref(null)
 const thumbStyle = ref({})
+
+// roving tabindex：整组只有一个 tab 可被 Tab 聚焦（选中项），组内用方向键移动。
+// 否则键盘用户要按 N 次 Tab 才能跳过这组（审查 v4 · B08-12）。
+function onKeydown(e, idx) {
+  const len = props.options.length
+  if (!len) return
+  let next = null
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % len
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + len) % len
+  else if (e.key === 'Home') next = 0
+  else if (e.key === 'End') next = len - 1
+  if (next == null) return
+  e.preventDefault()
+  emit('update:modelValue', props.options[next].value)
+  nextTick(() => {
+    const btns = root.value && root.value.querySelectorAll('.view-switch-btn')
+    if (btns && btns[next]) btns[next].focus()
+  })
+}
 
 // 按当前选项按钮的实测位置/尺寸定位内嵌色块。
 // 轨道带内边距时该公式同样成立：绝对定位包含块为轨道 padding box，

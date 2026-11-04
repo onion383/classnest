@@ -1,9 +1,14 @@
 import { reactive } from 'vue'
+import { registerUserScopedReset } from '../utils/userScopedCache.js'
 
 let uid = 0
 
 // 全局共享的通知列表（所有调用者共享同一实例）
 const notifications = reactive([])
+
+// 登出/换号必须清空：通知里可能带着上一个账号的操作结果（如「已删除张三的加分」），
+// 留给下一个登录的人不仅误导，还可能泄露上一个账号的信息（审查 v4 · C05-03）。
+registerUserScopedReset(() => { notifications.splice(0) })
 
 export function useNotification() {
   /**

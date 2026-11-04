@@ -60,8 +60,9 @@ function renameUsernameWithCompensation({ registry, slug, newName, fallbackOldNa
       // 只有当 registry 现在仍是**我们刚写的**新名时才回滚：
       // 若期间已被别人改成别的名字，说明有并发改名，此时回滚会覆盖掉它。
       if (current && current.username === newName) {
-        registry.rename(slug, oldName);
-        compensated = true;
+        // 必须看返回值：registry.rename 返回受影响行数（0 = 没改到），
+        // 失败时不能报「已补偿」，否则调用方以为两边已恢复一致（审查 v5 · V5-024）。
+        compensated = Number(registry.rename(slug, oldName)) > 0;
       }
     } catch (_) {
       // 回滚本身也失败：registry 与 users 已经对不上，只能靠人工/下次改名修正。

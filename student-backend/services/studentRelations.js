@@ -58,13 +58,13 @@ function readDutyCells() {
 function studentRelations(student) {
   const id = student.id;
   const name = student['姓名'];
-  const leave = db.prepare('SELECT COUNT(*) AS c FROM leave_records WHERE student_id = ? OR (student_id IS NULL AND 姓名 = ?)').get(id, name).c;
-  const score = db.prepare('SELECT COUNT(*) AS c FROM score_records WHERE student_id = ? OR (student_id IS NULL AND 姓名 = ?)').get(id, name).c;
+  const leave = db.prepare('SELECT COUNT(*) AS c FROM leave_records WHERE student_id = ? OR (student_id IS NULL AND TRIM(姓名) = TRIM(?))').get(id, name).c;
+  const score = db.prepare('SELECT COUNT(*) AS c FROM score_records WHERE student_id = ? OR (student_id IS NULL AND TRIM(姓名) = TRIM(?))').get(id, name).c;
   // 小组只存姓名（没有 student_id），班干部两者都有：
   // 这两处原先既不在统计里、也不在清理里，删完学生后小组和班干部里会留着已删除的人，
   // 而删除确认框也不提 —— 用户没有任何机会知道。
-  const group = db.prepare('SELECT COUNT(*) AS c FROM group_members WHERE member_name = ?').get(name).c;
-  const cadre = db.prepare('SELECT COUNT(*) AS c FROM cadre_members WHERE student_id = ? OR student_name = ?').get(id, name).c;
+  const group = db.prepare('SELECT COUNT(*) AS c FROM group_members WHERE TRIM(member_name) = TRIM(?)').get(name).c;
+  const cadre = db.prepare('SELECT COUNT(*) AS c FROM cadre_members WHERE student_id = ? OR TRIM(student_name) = TRIM(?)').get(id, name).c;
 
   const refs = collectSeatRefs(readSeats());
   const seat = refs.ids.filter((v) => v === id).length + refs.names.filter((v) => v === name).length;
@@ -118,18 +118,18 @@ function purgeStudentRelations(student, opts = {}) {
   const out = { leave: 0, score: 0, seat: 0, duty: 0, group: 0, cadre: 0, leaveRows: [], scoreRows: [] };
 
   if (opts.leave) {
-    out.leaveRows = db.prepare('SELECT * FROM leave_records WHERE student_id = ? OR (student_id IS NULL AND 姓名 = ?)').all(id, name);
-    out.leave = db.prepare('DELETE FROM leave_records WHERE student_id = ? OR (student_id IS NULL AND 姓名 = ?)').run(id, name).changes;
+    out.leaveRows = db.prepare('SELECT * FROM leave_records WHERE student_id = ? OR (student_id IS NULL AND TRIM(姓名) = TRIM(?))').all(id, name);
+    out.leave = db.prepare('DELETE FROM leave_records WHERE student_id = ? OR (student_id IS NULL AND TRIM(姓名) = TRIM(?))').run(id, name).changes;
   }
   if (opts.score) {
-    out.scoreRows = db.prepare('SELECT * FROM score_records WHERE student_id = ? OR (student_id IS NULL AND 姓名 = ?)').all(id, name);
-    out.score = db.prepare('DELETE FROM score_records WHERE student_id = ? OR (student_id IS NULL AND 姓名 = ?)').run(id, name).changes;
+    out.scoreRows = db.prepare('SELECT * FROM score_records WHERE student_id = ? OR (student_id IS NULL AND TRIM(姓名) = TRIM(?))').all(id, name);
+    out.score = db.prepare('DELETE FROM score_records WHERE student_id = ? OR (student_id IS NULL AND TRIM(姓名) = TRIM(?))').run(id, name).changes;
   }
   if (opts.seat) out.seat = purgeSeatRelation(student);
   if (opts.duty) out.duty = purgeDutyRelation(student);
   // 小组/班干部只是「名单」，不像请假/加分那样需要回传整行做撤销，计数即可
-  if (opts.group) out.group = db.prepare('DELETE FROM group_members WHERE member_name = ?').run(name).changes;
-  if (opts.cadre) out.cadre = db.prepare('DELETE FROM cadre_members WHERE student_id = ? OR student_name = ?').run(id, name).changes;
+  if (opts.group) out.group = db.prepare('DELETE FROM group_members WHERE TRIM(member_name) = TRIM(?)').run(name).changes;
+  if (opts.cadre) out.cadre = db.prepare('DELETE FROM cadre_members WHERE student_id = ? OR TRIM(student_name) = TRIM(?)').run(id, name).changes;
 
   return out;
 }

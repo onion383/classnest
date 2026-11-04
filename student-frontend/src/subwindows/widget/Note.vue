@@ -632,6 +632,9 @@ onMounted(async () => {
 onUnmounted(() => {
   // 先置位：异步链每一步 await 之后都要先看它，避免卸载后继续写 ref / emit / 动 DOM
   disposed = true
+  // 截屏隐藏途中被卸载（切页/关窗）时，document 上会残留 visibility:hidden，
+  // 下次打开浮窗整块内容都看不见。这里补一次恢复兜底（restoreAfterCapture 幂等）。
+  restoreAfterCapture()
   // 拖拽监听器、ResizeObserver、收尾定时器由资源表统一释放
 })
 </script>

@@ -64,10 +64,9 @@ function createBudget(limits = {}) {
       subagentCalls += 1;
       return subagentCalls;
     },
-    // 单个任务内还能不能再跑一轮
-    allowRound() {
-      return !this.exceeded();
-    },
+    // 注：原先还有一个 allowRound()，名字像「按轮数放行」，实现却只查 token、
+    // 且全仓无调用方 —— 会让后来人误以为轮数已受控（审查 v5 · V5-047）。
+    // 轮数上限由 tools.subagent.js 的 maxRounds 循环控制（limits().maxSubagentRounds）。
     total() { return totalTokens; },
     subagentCalls() { return subagentCalls; },
     bySource() { return { ...bySource }; },

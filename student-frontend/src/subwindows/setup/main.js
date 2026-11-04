@@ -27,6 +27,9 @@ const stylesReady = Promise.all(
 
 // 解析首屏画面：低版本提示优先（主进程 launch-plan），否则欢迎页。
 // 支持 URL ?screen=warning|welcome|wizard 直接预览——浏览器打开 setup.html 也能看指定画面。
+// 结果同步存到 lastLaunch：挂载链失败时兜底重建应用也要用**真实**的首屏，
+// 不能硬编码 welcome —— 否则低版本警告会被吞掉，用户被当成正常首次启动（审查 v5 · V5-045）。
+let lastLaunch = { screen: 'welcome', plan: { warn: false, setup: true } }
 async function resolveLaunch() {
   let plan = { warn: false, setup: true }
   let forced = ''
@@ -36,9 +39,11 @@ async function resolveLaunch() {
     if (p) plan = p
   } catch (_) {}
   if (forced === 'warning' || forced === 'welcome' || forced === 'wizard') {
-    return { screen: forced, plan }
+    lastLaunch = { screen: forced, plan }
+    return lastLaunch
   }
-  return { screen: plan.warn ? 'warning' : 'welcome', plan }
+  lastLaunch = { screen: plan.warn ? 'warning' : 'welcome', plan }
+  return lastLaunch
 }
 
 // 先解析画面、再等样式，二者就绪后才挂载：避免先渲染欢迎页再跳到提示页的闪动。
@@ -58,7 +63,8 @@ Promise.all([stylesReady, resolveLaunch()]).then(async ([, launch]) => {
   app.mount('#setup-app')
 }).catch((err) => {
   console.error('[setup] 初始化失败，按基础主题继续挂载', err)
-  const app = createApp(Setup, { initialScreen: 'welcome', plan: { warn: false } })
+  // 用 resolveLaunch 已解析出的真实首屏与 launch-plan（低版本警告不能因为样式加载失败被吞掉）
+  const app = createApp(Setup, { initialScreen: lastLaunch.screen, plan: lastLaunch.plan })
   const pinia = createPinia()
   app.use(pinia)
   useThemeStore(pinia).applyTheme()

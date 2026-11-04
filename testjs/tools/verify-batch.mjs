@@ -158,9 +158,17 @@ for (const r of results) {
 }
 
 const failed = results.filter((r) => r.status === 'fail')
+const hardFailed = failed.filter((f) => !f.optional)
 console.log('')
 if (failed.length) {
-  console.error(`失败 ${failed.length} 项：${failed.map((f) => f.title).join('、')}`)
+  // optional 环节（冒烟/构建）失败只提示、不算整体失败：它们依赖 Vite/5173 等环境，
+  // 在 CI 或未启动前端时失败属于环境错配，不该让「代码检查全过」变红
+  // （审查 v5 · V5-032：optional 字段原先没人读，写了等于没写）。
+  const soft = failed.filter((f) => f.optional)
+  if (soft.length) console.log(`可选环节失败 ${soft.length} 项（不影响结果）：${soft.map((f) => f.title).join('、')}`)
+}
+if (hardFailed.length) {
+  console.error(`失败 ${hardFailed.length} 项：${hardFailed.map((f) => f.title).join('、')}`)
   process.exit(1)
 }
 console.log('全部通过')

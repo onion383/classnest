@@ -516,7 +516,9 @@ router.patch('/:id', async (req, res) => {
     const cleanName = cleanText(name);
     const cleanFolder = cleanText(folder);
     if (!cleanName) return res.status(400).json({ error: '相册名称不能为空' });
-    if (!cleanFolder) return res.status(400).json({ error: '文件夹路径不能为空' });
+    // 只有文件夹相册才要求路径非空：虚拟相册的 folder_path 按设计就是空串
+    // （创建时写 ''，见下方 createVirtualAlbum / merge），无条件校验会让它的重命名 100% 400。
+    if (album.kind === 'folder' && !cleanFolder) return res.status(400).json({ error: '文件夹路径不能为空' });
     db.prepare('UPDATE albums SET name = ?, folder_path = ?, updated_at = ? WHERE id = ?').run(cleanName, cleanFolder, now(), albumId);
     res.json({ message: '相册已更新' });
   } catch (err) {

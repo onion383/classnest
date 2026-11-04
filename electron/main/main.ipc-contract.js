@@ -39,19 +39,21 @@ const OUTCOME = {
 
 // 成功。payload 可选（部分通道成功时不需要返回数据）。
 // 形状：{ outcome: 'ok', success: true, ...payload }
+// payload 先展开、判别字段后写：调用方传入的 outcome/success 不能覆盖掉判别字段
+// （否则一个带 outcome 的业务数据就能把「成功」伪装成任意状态，审查 v5 · V5-051）。
 function ok(payload) {
-  return { outcome: OUTCOME.OK, success: true, ...(payload || {}) }
+  return { ...(payload || {}), outcome: OUTCOME.OK, success: true }
 }
 
 // 失败。error 是给人看的原因（必须是字符串，不能是 Error 对象 —— 要跨 IPC 序列化）。
 // 形状：{ outcome: 'fail', success: false, canceled: false, error: '原因' }
 function fail(error, extra) {
   return {
+    ...(extra || {}),
     outcome: OUTCOME.FAIL,
     success: false,
     canceled: false,
     error: toMessage(error),
-    ...(extra || {}),
   }
 }
 

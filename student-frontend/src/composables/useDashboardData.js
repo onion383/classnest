@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { registerUserScopedReset } from '../utils/userScopedCache.js'
+import { registerUserScopedReset, userScopedGeneration } from '../utils/userScopedCache.js'
 
 // ===========================================================================
 // 首屏数据预取：Dashboard 首页所需的 9 份数据，改由后端聚合接口 /api/dashboard
@@ -36,11 +36,26 @@ function fetchAll() {
   // 失败**不能**伪装成「空数据」：早先这里写的是 `.catch(() => normalize(null))`，
   // 于是后端一旦不可达，首页就显示「全班 0 人、0 条记录」，老师第一反应是数据丢了。
   // 现在让失败如实冒泡（dataCache 不会被写入，下次进首页会重新拉），由调用方显示错误态。
-  const req = axios.get('/api/dashboard').then((res) => normalize(res && res.data))
+  //
+  // 代次守卫：请求发出时记下登录代次，回来时若已经换号（登出/登录别人），
+  // 这份数据属于上一个账号，**不写缓存、不返回给界面**，改为按新用户重拉
+  // （审查 v5 · V5-004：原先 reset 只置 null，在途 Promise 回来仍写回 dataCache）。
+  const gen = userScopedGeneration()
+  const req = axios.get('/api/dashboard').then((res) => {
+    if (gen !== userScopedGeneration()) {
+      if (pending === req) pending = null
+      dataCache = null
+      // 直接走 fetchAll 而不是 ensureDashboardData：后者会复用旧 pending，
+      // 旧 pending 正是本次要作废的请求，会绕回这里形成递归。
+      return fetchAll()
+    }
+    return normalize(res && res.data)
+  })
   pending = req
   // 成功/失败都要清掉 pending；用 then 的双回调而不是 .finally()，
   // 否则 finally 返回的新 Promise 在失败时没人接，会变成 unhandledrejection。
-  req.then(() => { pending = null }, () => { pending = null })
+  // 只在仍是自己时才清：换号后新请求可能已经接管 pending，别把新引用抹掉。
+  req.then(() => { if (pending === req) pending = null }, () => { if (pending === req) pending = null })
   return req
 }
 

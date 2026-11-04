@@ -145,6 +145,7 @@ import { useThemeStore } from '../../stores/theme'
 import { AUTH_CHANGED_EVENT } from '../../utils/authStorage.js'
 import { useDisposables } from '../../utils/disposables.js'
 import { leavesOn } from '../../utils/leaveState.js'
+import { createLatest } from '../../utils/latestOnly.js'
 
 // 资源登记表：窗口级事件监听、深浅色监听、周期/一次性定时器全部登记在这里，
 // 组件卸载时统一释放（原先调试监听器写成匿名函数，结构上就不可能被移除）。
@@ -472,8 +473,11 @@ function showHint(text) {
 }
 
 async function loadApps() {
+  // 与 loadAll 用**各自独立**的守卫：两者是不同请求，共用一个会让彼此互相作废。
+  const token = loadAppsGuard.begin()
   try {
     const res = await axios.get('/api/widget-settings/apps')
+    if (!loadAppsGuard.isCurrent(token)) return false
     const list = res.data?.data
     if (!Array.isArray(list)) return false
     apps.value = list.slice(0, MAX_APPS)
@@ -489,6 +493,8 @@ async function loadApps() {
     }
     return true
   } catch (err) {
+    // 换号后旧请求的失败不该写「未登录」等状态
+    if (!loadAppsGuard.isCurrent(token)) return false
     // 401 = 没有可用登录凭据（主窗口未登录 / 登录态被清）：此时再怎么重试也不会成功，
     // 但登录后组件会自动恢复（主应用每 10 秒把登录态快照交接过来）。
     // 提示必须写清楚「未登录」，否则用户看到的是永远转圈的「正在加载常用软件…」，
@@ -1022,9 +1028,15 @@ function saveApps(attempt = 0) {
 // 上一轮是否还在飞。后端卡住时 axios 没有超时，Promise.all 可能长时间不返回，
 // 5 分钟一轮的定时器若照常发，请求会一层层叠加（每层 5 个接口）。
 let loadingAll = false
+// 两类请求各自一个「只认最后一次」守卫；换号时在 resetBusinessState 里统一作废。
+const loadAllGuard = createLatest()
+const loadAppsGuard = createLatest()
 async function loadAll() {
   if (loadingAll) return
   loadingAll = true
+  // 代次守卫：换号时 resetBusinessState 会 invalidate 掉所有在途请求，
+  // 旧响应回来后不能再写回 ref（否则挂件残留上一用户的课表/值日 —— 审查 v5 · V5-007）。
+  const token = loadAllGuard.begin()
   try {
     const [scheduleRes, dutyRes, countdownsRes, leavesRes, studentsRes] = await Promise.all([
       axios.get('/api/schedule').catch(() => ({ data: { cells: [], settings: {} } })),
@@ -1033,6 +1045,7 @@ async function loadAll() {
       axios.get('/api/leaves').catch(() => ({ data: { data: [] } })),
       axios.get('/api/students').catch(() => ({ data: { data: [] } })),
     ])
+    if (!loadAllGuard.isCurrent(token)) return
     // 响应校验：只接受 { cells, settings } 形态。网络层偶发会把未解密的 { d } 信封
     // （或 Vite 代理的 HTML）当成 200 正常响应返回，直接赋值会让 settings.sections /
     // settings.items 抛错、整块白板——此时保留上一次的数据（默认值是空课表）。
@@ -1049,7 +1062,8 @@ async function loadAll() {
   } catch (_) {
     // 静默失败，保留旧数据
   } finally {
-    loadingAll = false
+    // 只让最新一轮收尾：旧请求结束时不能把新请求的 loadingAll 提前放开
+    if (loadAllGuard.isCurrent(token)) loadingAll = false
   }
 }
 
@@ -1057,6 +1071,11 @@ async function loadAll() {
 // 原来这里只清了 token 缓存，屏上的课表/值日/倒计时/请假/学生/常用软件
 // 仍是上一个用户的，最长要等 5 分钟后的轮询才刷新 → 旧数据外露。
 function resetBusinessState() {
+  // 先作废旧用户的在途请求，再让下一轮可以立即发起：
+  // 只清 ref 不够 —— 旧请求 resolve 后会把上一用户的数据写回来（V5-007）。
+  loadAllGuard.invalidate()
+  loadAppsGuard.invalidate()
+  loadingAll = false
   schedule.value = { cells: [], settings: { periods: [], days: ['周一', '周二', '周三', '周四', '周五'] } }
   duty.value = { cells: {}, settings: { days: ['周一', '周二', '周三', '周四', '周五'], items: [] } }
   countdowns.value = []

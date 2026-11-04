@@ -107,6 +107,8 @@ function captureGDI(w, h, opts = {}) {
   let hdcScreen = null
   let hdcMem = null
   let hbm = null
+  // koffi.alloc 分配的是原生内存，不 free 就每次抓帧漏一份（审查 v4 · B13-13）
+  let slot = null
   let hOld = null
   let bitbltOk = 0
   let linesCopied = 0
@@ -208,7 +210,7 @@ function captureGDIDib(w, h, readBack) {
     t0 = nowMs()
     hdcMem = f.CreateCompatibleDC(hdcScreen)
     // void** 出参：先分配一个指针槽，调用后从槽里读回指针
-    const slot = koffi.alloc(koffi.pointer('void'), 1)
+    slot = koffi.alloc(koffi.pointer('void'), 1)
     hbm = f.CreateDIBSection(hdcScreen, bmi, DIB_RGB_COLORS, slot, null, 0)
     if (!hbm) throw new Error('CreateDIBSection 失败')
     bitsPtr = koffi.decode(slot, 'void *', 1)[0]
@@ -231,6 +233,8 @@ function captureGDIDib(w, h, readBack) {
     if (hbm) f.DeleteObject(hbm)
     if (hdcMem) f.DeleteDC(hdcMem)
     if (hdcScreen) f.ReleaseDC(null, hdcScreen)
+    // 出参槽的原生内存必须释放（alloc 与 free 配对）
+    if (slot) { try { koffi.free(slot) } catch (_) { /* 已释放 */ } slot = null }
     t.cleanup = nowMs() - t0
   }
 

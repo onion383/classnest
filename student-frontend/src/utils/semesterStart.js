@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { registerUserScopedReset } from './userScopedCache.js'
+import { registerUserScopedReset, userScopedGeneration } from './userScopedCache.js'
 
 // 学期开始日期（/api/schedule/settings 里的 semester_start）。
 //
@@ -14,13 +14,22 @@ let inflight = null
 export async function getSemesterStart() {
   if (cached !== null) return cached
   if (!inflight) {
-    inflight = axios.get('/api/schedule/settings')
+    // 代次守卫：请求发出时记下登录代次，回来时若已换号，这份开学日属于上一个库，
+    // 不能写 cached / 不能返回给界面，改为按新用户重拉（审查 v5 · V5-004）。
+    const gen = userScopedGeneration()
+    const req = axios.get('/api/schedule/settings')
       .then((r) => {
+        if (gen !== userScopedGeneration()) {
+          if (inflight === req) inflight = null
+          cached = null
+          return getSemesterStart()
+        }
         const v = (r.data && r.data.semester_start) || ''
         cached = v
         return v
       })
-      .finally(() => { inflight = null })
+      .finally(() => { if (inflight === req) inflight = null })
+    inflight = req
   }
   return inflight
 }

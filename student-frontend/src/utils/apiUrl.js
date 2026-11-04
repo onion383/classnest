@@ -103,7 +103,9 @@ export function refreshMediaToken() {
   if (mediaRefresh) return mediaRefresh
   mediaRefresh = (async () => {
     const token = getToken()
-    if (!token || !safe()) return null
+    // 明文模式同样需要刷新：图片请求不再依赖跨站 Cookie（见 resourceUrl 注释），
+    // 媒体凭据过期后若不续，背景图/相册图会一直 401（审查 v5 · V5-005）。
+    if (!token) return null
     try {
       const headers = {}
       await applyAuthHeader(headers, token, { forceToken: false })
@@ -133,23 +135,22 @@ export async function ensureMediaToken() {
 }
 
 // 资源 URL：<img> / CSS url() 等请求无法携带 Authorization 头，且打包版页面为 file:// 协议，
-// 跨源也不会自动带上 Lax Cookie，故把凭据追加为查询参数。
+// 跨源请求**不会**自动带上 SameSite=Lax 的 httpOnly Cookie，故必须把凭据追加为查询参数。
 // data:/blob: 无需鉴权，直接返回。
 //
-// ⚠️ 明文模式（safe() 为 false）**不再把登录 JWT 拼进 URL**：
+// 一律使用受限媒体凭据（scope=media），**任何模式都不拼登录 JWT**：
 //   查询参数会出现在浏览器历史、服务器访问日志、Referer 头里 —— 完整登录态凭据
-//   泄露出去等于把会话交出去（对比：受限媒体凭据只能读静态资源，权限小得多）。
-//   明文模式下后端本来就能从 Cookie 取到凭据（见后端 middleware/auth.js 的 plainToken：
-//   Authorization → Cookie → 查询参数），而登录时已经种了 httpOnly Cookie
-//   （后端 routes/auth.js 的 setAuthCookie），同源请求会自动带上 —— 不需要拼 URL。
-//   安全模式下 Cookie 不参与鉴权（见后端 resolveAuth），那才必须带受限媒体凭据。
+//   泄露出去等于把会话交出去；媒体凭据只能读静态资源（后端 authStatic / 媒体路径
+//   allowMedia=true），权限小得多。
+//
+// 早先明文模式曾「只靠 Cookie」：开发模式下同源确实能工作，但生产打包版是 file:// →
+// http://localhost:3000 的跨站请求，Lax Cookie 不随 <img> 发送，背景图/相册图全 401
+// （审查 v5 · V5-005）。现在两种模式统一走媒体凭据；没有凭据时才退回裸 URL（Cookie 兜底）。
 export function resourceUrl(path) {
   if (!path) return ''
   if (path.startsWith('data:') || path.startsWith('blob:')) return path
   const url = apiUrl(path)
   if (!url) return ''
-  // 明文模式：靠 httpOnly Cookie（同源自动带），不暴露凭据
-  if (!safe()) return url
   const token = localStorage.getItem(MEDIA_KEY)
   if (!token) return url
   const sep = url.includes('?') ? '&' : '?'

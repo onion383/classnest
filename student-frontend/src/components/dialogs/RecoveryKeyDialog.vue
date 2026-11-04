@@ -32,6 +32,7 @@ import { ref, watch } from 'vue'
 import { INVOKE } from '../../electronChannels.js'
 import { useNotification } from '../../composables/useNotification.js'
 import { reportError } from '../../utils/reportError.js'
+import { classifySaveResult } from '../../utils/saveResult.js'
 
 defineOptions({ name: 'RecoveryKeyDialog' })
 
@@ -66,11 +67,13 @@ async function downloadTxt() {
   const content = `班集 - 恢复密钥\n账号：${props.username}\n\n请妥善保存以下恢复词，忘记密码时可用来找回：\n\n${props.phrase}\n`
   const fileName = `恢复密钥-${props.username || 'account'}.txt`
   try {
-    // 走 Electron 原生保存对话框，写盘成功才返回成功；用户取消则保持锁定
+    // 走 Electron 原生保存对话框，写盘成功才返回成功；用户取消则保持锁定。
+    // 三态判定与 utils/saveFile.js 共用：写盘失败（fail）必须报错，不能被当成取消。
     const res = await window.electron.invoke(INVOKE.SAVE_FILE, { defaultName: fileName, data: content })
-    if (res && res.canceled) return
-    if (res && res.error) {
-      reportError(new Error(res.error), { action: '保存恢复密钥' })
+    const kind = classifySaveResult(res)
+    if (kind === 'canceled') return
+    if (kind === 'fail') {
+      reportError(new Error((res && res.error) || '保存文件失败'), { action: '保存恢复密钥' })
       return
     }
     downloaded.value = true

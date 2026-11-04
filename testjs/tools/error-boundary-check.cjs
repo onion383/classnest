@@ -7,7 +7,7 @@
 //   2) 统计 catch / console.error 数量，给评审一个可对比的基线。
 //
 // 默认只报告（exit 0）；加 --strict 时，存在未标注的静默捕获就 exit 1。
-// 不扫描 node_modules / release / dist / .vite。
+// 不扫描 node_modules / release / release36 / release4 / dist / .vite / .git（见 SKIP_DIRS）。
 // =========================================================================
 const fs = require('node:fs')
 const path = require('node:path')

@@ -10,8 +10,11 @@
 //
 // 做法：
 //   · Windows：taskkill /pid <pid> /T /F（/T = 连树一起杀，/F = 强制）
-//   · POSIX：进程组 kill（spawn 时用 detached:true 建独立进程组，
-//     然后 kill(-pid) 杀整组）。若没 detached，退化成 kill 单进程。
+//   · POSIX：先按进程组杀（kill(-pid)）。前提是 spawn 时传了 detached:true，
+//     子进程才会自成进程组；没传时 kill(-pid) 只会 ESRCH（找不到这个组），
+//     不会误伤别的进程，所以可以无条件先试，失败再退回单杀。
+//     ※ 旧实现要求 caller 调 markDetached() 才走组杀，但全仓没有一个调用方，
+//       导致 POSIX 上「杀树」从未真正生效（审查 v5 · V5-010）。
 //
 // 用法：const { killTree } = require('./killTree.cjs'); killTree(child)
 // =========================================================================
@@ -24,28 +27,22 @@ const { spawn } = require('node:child_process')
  */
 function killTree(child, opts = {}) {
   if (!child || !child.pid) return
+  // 已被信号杀死时 exitCode 仍是 null，必须同时看 signalCode
+  if (child.exitCode !== null || child.signalCode !== null) return
+  const signal = opts.force === false ? 'SIGTERM' : 'SIGKILL'
   try {
     if (process.platform === 'win32') {
       // /T = tree（连后代一起），/F = force
       spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
       return
     }
-    // POSIX：detached 的子进程自成进程组，kill(-pid) 杀整组
-    if (child.spawnargs && child.__detachedForKill) {
-      try { process.kill(-child.pid, opts.force === false ? 'SIGTERM' : 'SIGKILL') } catch (_) { /* 组已退出 */ }
+    // POSIX：整个进程组一起杀。不是组 leader 时只会 ESRCH，不会误伤别的进程组
+    try {
+      process.kill(-child.pid, signal)
       return
-    }
-    try { child.kill(opts.force === false ? 'SIGTERM' : 'SIGKILL') } catch (_) { /* 已退出 */ }
+    } catch (_) { /* 没有以该 pid 为组号的进程组（spawn 未 detached）→ 退回单杀 */ }
+    try { child.kill(signal) } catch (_) { /* 已退出 */ }
   } catch (_) { /* 清理路径不抛 */ }
 }
 
-/**
- * 让 child 之后能被 killTree 整组杀（POSIX 专用）。
- * 必须在 spawn 时传 detached:true，本函数只做标记。
- */
-function markDetached(child) {
-  if (child) child.__detachedForKill = true
-  return child
-}
-
-module.exports = { killTree, markDetached }
+module.exports = { killTree }

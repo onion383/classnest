@@ -58,7 +58,40 @@ function restoreBundle({ slug, username, data, dbKey, encrypted = true }) {
   // 旧连接的 -wal 之后仍可能被重放到新库上，两份数据交错（审查 v4 · B05-03）。
   // 恢复属维护窗口操作，强制关（force）——此时不应有人在写。
   evictConn(slug, { force: true });
-  fs.writeFileSync(filePath, Buffer.from(data, 'base64'));
+
+  // 先写临时文件并校验完整性，**通过后才覆盖现有库**：
+  // 备份包可能上传到一半/损坏，直接覆盖会把「能用的旧库」也一起毁掉，
+  // 而且损坏的库一旦登记就能通过登录校验，故障延后且更难排查（审查 v4 · B05-13）。
+  const tmpPath = filePath + '.restore-tmp';
+  const bytes = Buffer.from(data, 'base64');
+  fs.writeFileSync(tmpPath, bytes);
+  try {
+    const Database = getDatabase();
+    let conn = null;
+    try {
+      conn = new Database(tmpPath);
+      if (encrypted && dbKey) conn.pragma(`key = '${sqlKey(dbKey)}'`);
+      let first;
+      try {
+        const r = conn.pragma('integrity_check');
+        first = Array.isArray(r)
+          ? (r[0] && (r[0].integrity_check || Object.values(r[0])[0]))
+          : r;
+      } catch (_) {
+        // 非 SQLite 文件/截断包会在 pragma 阶段直接抛 SQLITE_NOTADB，
+        // 统一成可读错误，避免把底层错误原样丢给用户
+        throw new Error('备份文件完整性校验未通过（不是有效的数据库文件）');
+      }
+      if (String(first).toLowerCase() !== 'ok') {
+        throw new Error('备份文件完整性校验未通过（文件可能损坏或不是有效的数据库）');
+      }
+    } finally {
+      if (conn) { try { conn.close(); } catch (_) { /* 已关闭 */ } }
+    }
+    fs.copyFileSync(tmpPath, filePath);
+  } finally {
+    try { fs.rmSync(tmpPath, { force: true }); } catch (_) { /* 忽略 */ }
+  }
   // 覆盖 .db 后必须清掉同名的 -wal/-shm 残留，否则旧库的日志会被 New 库重放导致损坏
   for (const suffix of ['-wal', '-shm']) {
     try { fs.rmSync(filePath + suffix, { force: true }); } catch (_) { /* 忽略 */ }

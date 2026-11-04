@@ -85,3 +85,41 @@ test('userScopedCache：业务流程上真的挂上了登出链', async () => {
     assert.ok(/registerUserScopedReset\(/.test(src), `${f} 没有登记用户级缓存清理`)
   }
 })
+
+test('V5-004：换号代次守卫接在两个缓存模块上', async () => {
+  const fs = require('node:fs')
+  const read = (f) => fs.readFileSync(path.join(__dirname, '../../student-frontend/src', f), 'utf8')
+
+  const cache = read('utils/userScopedCache.js')
+  assert.ok(/generation \+= 1/.test(cache), 'reset 必须先递增代次')
+  assert.ok(/export function userScopedGeneration/.test(cache), '必须对外暴露当前代次')
+
+  // dashboard：发起时取代次、响应后比对、旧响应丢弃并重拉；pending 只在仍是自己时清理
+  const dash = read('composables/useDashboardData.js')
+  assert.ok(/const gen = userScopedGeneration\(\)/.test(dash), '发请求前必须取代次')
+  assert.ok(/if \(gen !== userScopedGeneration\(\)\)/.test(dash), '响应写缓存前必须比对代次')
+  assert.ok(/if \(pending === req\) pending = null/.test(dash), '旧请求收尾不能把新请求的 pending 抹掉')
+
+  // semesterStart：同理
+  const sem = read('utils/semesterStart.js')
+  assert.ok(/const gen = userScopedGeneration\(\)/.test(sem))
+  assert.ok(/if \(gen !== userScopedGeneration\(\)\)/.test(sem))
+  assert.ok(/if \(inflight === req\) inflight = null/.test(sem))
+})
+
+test('V5-007：桌面挂件两类加载都挂上「只认最后一次」守卫', async () => {
+  const fs = require('node:fs')
+  const src = fs.readFileSync(path.join(__dirname, '../../student-frontend/src/subwindows/desktop-widget/DesktopWidget.vue'), 'utf8')
+  assert.ok(/import \{ createLatest \}/.test(src), '必须复用 latestOnly 守卫')
+  // 两类请求各自一个实例：共用一个会让负载较轻的那类把另一类作废
+  assert.ok(/loadAllGuard = createLatest\(\)/.test(src))
+  assert.ok(/loadAppsGuard = createLatest\(\)/.test(src))
+  // loadAll：await 后、写 ref 前判断；finally 只让最新一轮收尾
+  assert.ok(/if \(!loadAllGuard\.isCurrent\(token\)\) return/.test(src))
+  assert.ok(/if \(loadAllGuard\.isCurrent\(token\)\) loadingAll = false/.test(src))
+  // loadApps：成功与失败两条路径都要判断（旧请求的 401 不能写「未登录」）
+  assert.ok(/if \(!loadAppsGuard\.isCurrent\(token\)\) return false/.test(src))
+  // 换号时必须作废在途请求，并放开 loadingAll 让新请求立刻发出
+  assert.ok(/loadAllGuard\.invalidate\(\)[\s\S]{0,200}loadingAll = false/.test(src))
+  assert.ok(/loadAppsGuard\.invalidate\(\)/.test(src))
+})

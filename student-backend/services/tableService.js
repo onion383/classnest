@@ -165,6 +165,9 @@ function addColumn(tableName, columnName, dataType, after) {
 
   const physicalExists = db.prepare(`PRAGMA table_info("${tableName}")`).all()
     .some((c) => c.name === columnName);
+  // 物理列已在（deleteColumn 保留的隐形列）时只补登记、不 ALTER —— 这样「删掉字段再用
+  // 同名列加回」能找回旧数据。这里**不校验类型是否一致**：加回同名即视为「找回」的意图，
+  // 类型不符时以已有物理列为准（审查 v5 · V5-049 按此设计决策回退）。
   if (!physicalExists) {
     db.prepare(`ALTER TABLE ${tableName} ADD COLUMN "${columnName}" ${sqlType}`).run();
   }
@@ -260,10 +263,19 @@ function importRows(tableName, fields, rows) {
   // 建列（DDL）+ 插行 + 重排收进同一个事务：SQLite 的 DDL 可回滚，
   // 插入阶段失败不会留下刚加的空列与 table_meta 登记。原实现建列在事务外，脏数据会留半套空列。
   const insertMany = db.transaction((dataRows) => {
+    // 物理列清单要和 table_meta 分开看（deleteColumn 保留隐形列）。
+    const physicalCols = new Set(
+      db.prepare(`PRAGMA table_info("${tableName}")`).all().map(c => c.name)
+    );
     for (const f of fields) {
       assertValidColumn(f);
       if (!existingFields.includes(f)) {
-        db.prepare(`ALTER TABLE ${tableName} ADD COLUMN "${f}" TEXT`).run();
+        // deleteColumn 只删登记、保留物理列（隐形列）：只查 table_meta 就 ALTER，
+        // 重新导入同名列会抛 duplicate column name 并让整次导入回滚（审查 v5 · V5-048）。
+        if (!physicalCols.has(f)) {
+          db.prepare(`ALTER TABLE ${tableName} ADD COLUMN "${f}" TEXT`).run();
+          physicalCols.add(f);
+        }
         const maxSort = db.prepare(`SELECT MAX(sort_order) AS max FROM table_meta WHERE table_name = ?`).get(tableName).max || 0;
         db.prepare(`INSERT INTO table_meta (table_name, column_name, data_type, sort_order) VALUES (?, ?, '文字', ?)`)
           .run(tableName, f, maxSort + 1);

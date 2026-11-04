@@ -15,6 +15,7 @@ const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
 const load = (rel) => import(pathToFileURL(path.join(__dirname, '../../student-frontend/src/utils', rel)).href)
+const { loadVue } = require('./_vue-loader.cjs')
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -144,8 +145,9 @@ test('disposables：useDisposables 在 Vue 作用域外也能用（退化成普�
 })
 
 test('disposables：useDisposables 在真实 Vue 作用域里会自动随作用域释放', async () => {
-  // 用 Vue 的 effectScope 模拟组件作用域：scope.stop() 即组件卸载
-  const { effectScope } = await import(pathToFileURL(path.join(__dirname, '../../student-frontend/node_modules/vue/index.mjs')).href)
+  // 用 Vue 的 effectScope 模拟组件作用域：scope.stop() 即组件卸载。
+  // 入口按 package.json exports 解析（不硬编码 index.mjs，也与源码共用同一模块实例）。
+  const { effectScope } = await loadVue()
   const { useDisposables } = await load('disposables.js')
   const scope = effectScope()
   let d = null
@@ -157,4 +159,22 @@ test('disposables：useDisposables 在真实 Vue 作用域里会自动随作用�
   scope.stop()
   await wait(30)
   assert.equal(fired, 0, '作用域停止后定时器不该再触发（这是底座存在的意义）')
+})
+
+test('V5-006：dispose 之后 timeout / defer / interval 都不再排期', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  d.dispose()
+
+  let timeoutFired = 0
+  let deferFired = 0
+  let intervalFired = 0
+  d.timeout(() => { timeoutFired++ }, 5)
+  d.defer()(() => { deferFired++ }, 5)
+  d.interval(() => { intervalFired++ }, 5)
+
+  await wait(40)
+  assert.equal(timeoutFired, 0, '已释放的作用域不能再排一次性定时器（否则操作已卸载状态）')
+  assert.equal(deferFired, 0, 'defer 的排期同样要挡掉')
+  assert.equal(intervalFired, 0, '周期定时器也不能在释放后继续跑')
 })

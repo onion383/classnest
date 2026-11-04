@@ -22,6 +22,7 @@ const FRONT = path.join(ROOT, 'student-frontend')
 const VITE_ENTRY = path.join(FRONT, 'node_modules', 'vite', 'dist', 'node', 'index.js')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const { loadVue } = require('./_vue-loader.cjs')
 
 async function waitFor(fn, timeout = 4000, step = 25) {
   const t0 = Date.now()
@@ -96,20 +97,29 @@ test('缩略图批量：失败与「服务端没有」必须可区分，且失�
 
   await t.test('组合式：首批失败不写任何状态，网络恢复后自己拿到', async () => {
     const visible = [11, 12]
-    const batch = useThumbBatch(() => visible)
-    globalThis.fetch = async () => { throw new Error('offline') }
-    batch.refresh()
-    await sleep(250)
-    // 关键断言：失败时既不写 ''（否则 src 定死单张 URL）、也不写 miss（否则永久跳过）
-    assert.equal(batch.thumbUrlFor(11), undefined,
-      '失败被写进了缓存状态 —— 这批 id 会在整场会话里永久退出批量预取')
+    // 组件外调用 composable 必须包在 effectScope 里：否则它内部的 watch 没有所属作用域，
+    // 测试结束后仍会随 visible 变化继续排期（审查 v5 · V5-015）。
+    const { effectScope } = await loadVue()
+    const scope = effectScope()
+    let batch = null
+    scope.run(() => { batch = useThumbBatch(() => visible) })
+    try {
+      globalThis.fetch = async () => { throw new Error('offline') }
+      batch.refresh()
+      await sleep(250)
+      // 关键断言：失败时既不写 ''（否则 src 定死单张 URL）、也不写 miss（否则永久跳过）
+      assert.equal(batch.thumbUrlFor(11), undefined,
+        '失败被写进了缓存状态 —— 这批 id 会在整场会话里永久退出批量预取')
 
-    globalThis.fetch = async () => batchResponse([{ id: 11, size: 24 }, { id: 12, size: 24 }])
-    const u = await waitFor(() => {
-      const v = batch.thumbUrlFor(11)
-      return typeof v === 'string' && v.startsWith('blob:') ? v : null
-    })
-    assert.ok(u.startsWith('blob:'), '网络恢复后应自动重试并拿到 blob')
-    batch.clear()
+      globalThis.fetch = async () => batchResponse([{ id: 11, size: 24 }, { id: 12, size: 24 }])
+      const u = await waitFor(() => {
+        const v = batch.thumbUrlFor(11)
+        return typeof v === 'string' && v.startsWith('blob:') ? v : null
+      })
+      assert.ok(u.startsWith('blob:'), '网络恢复后应自动重试并拿到 blob')
+    } finally {
+      batch.clear()
+      scope.stop()
+    }
   })
 })

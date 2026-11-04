@@ -22,6 +22,16 @@ export function isMarkdownReady() {
   return !!(_marked && _purify)
 }
 
+/**
+ * 把一段 markdown 渲染成可直接 v-html 的 HTML（已 sanitize）。
+ * 应用内第二处渲染 markdown 的地方（收据里的 .md 附件）也走这里 ——
+ * 别再自己 import 一次 marked，否则 sanitize 配置会分叉。
+ */
+export async function renderMarkdown(text) {
+  await ensureMarkdown()
+  return _purify.sanitize(_marked.parse(String(text || '')))
+}
+
 // 回复里的 ```record 代码块：AI 只指认「表名 + id」，由 AiRecordTable 去后端取完整数据渲染
 export function parseRecordSpec(raw) {
   try {

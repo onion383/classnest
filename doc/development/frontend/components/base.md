@@ -23,6 +23,7 @@ classnest/
         │       ├── EmptySnapshot.vue  # 空态占位
         │       ├── IconGlyph.vue  # 统一图标
         │       ├── LeaveTimeline.vue  # 通用时间轴
+        │       ├── MediaViewer.vue  # 媒体查看器（图片/视频灯箱）
         │       ├── NotificationToast.vue  # 全局通知
         │       ├── SearchBar.vue  # 搜索面板
         │       ├── SearchDialog.vue  # 全局搜索弹窗
@@ -48,7 +49,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：基础通用件（`components/base/`），21 个组件覆盖弹窗外壳、表单控件、通知、图标、时间轴与空态。
+- **定位**：基础通用件（`components/base/`），22 个组件覆盖弹窗外壳、表单控件、通知、图标、时间轴与空态。
 - **公共逻辑**：对外接口遵守 [components/README.md](./README.md) 的「通用对外接口标准」；弹窗统一用 `DialogShell`（弹窗外壳组件），图标统一用 `IconGlyph`（统一图标组件），通知统一走 `useNotification()`（全局通知组合式函数）。
 - **局限**：本页只补充组件特有接口，通用 props / emits 的含义见 README，不重复；主题实现见 [misc.md](../misc.md)。
 

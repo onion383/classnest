@@ -50,6 +50,7 @@
     "screenshot-region-end",
     "note-save",
     "open-file",
+    "open-upload-file",
     "open-folder",
     "get-session-widget-visible",
     "get-desktop-layer-state",

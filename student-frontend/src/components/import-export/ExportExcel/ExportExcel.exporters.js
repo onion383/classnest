@@ -13,6 +13,12 @@ import { toRaw } from 'vue'
 const SECTION_NAMES = { morning: '上午', noon: '中午', afternoon: '下午', evening: '傍晚', night: '晚上' };
 
 export function useExportFormats(ctx) {
+  // 写盘出口。默认走系统保存对话框（原有行为不变）；
+  // 调用方在 ctx 上注入 saveFile 时改走注入实现 —— 设置页「数据管理」就是用它把
+  // 每张表的内容收进 zip，而不是每张表弹一次保存对话框。格式构建逻辑完全共用，
+  // 所以这里只是换出口，不复制第二份导出实现。
+  const saveFile = (name, blob) => (typeof ctx.saveFile === 'function' ? ctx.saveFile(name, blob) : saveBlobWithDialog(name, blob));
+
   return {
 
     getSectionName(key) {
@@ -91,30 +97,30 @@ export function useExportFormats(ctx) {
       const rows = ctx.groupFlatRows(idxList);
       const csv = '\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      return await saveBlobWithDialog(`${filename}.csv`, blob);
+      return await saveFile(`${filename}.csv`, blob);
     },
     async exportGroupHTML(idxList, filename) {
       const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${ctx.escapeHtml(filename)}</title></head><body>${ctx.groupTableHTML(idxList, filename)}</body></html>`;
       const blob = new Blob([html], { type: 'text/html' });
-      return await saveBlobWithDialog(`${filename}.html`, blob);
+      return await saveFile(`${filename}.html`, blob);
     },
     async exportGroupMD(idxList, filename) {
       const rows = ctx.groupFlatRows(idxList);
       const md = ctx.buildMarkdown(rows[0], rows.slice(1), filename);
       const blob = new Blob([md], { type: 'text/markdown;charset=utf-8;' });
-      return await saveBlobWithDialog(`${filename}.md`, blob);
+      return await saveFile(`${filename}.md`, blob);
     },
     async exportGroupTXT(idxList, filename) {
       const rows = ctx.groupFlatRows(idxList);
       const txt = ctx.buildTxt(rows[0], rows.slice(1));
       const blob = new Blob([txt], { type: 'text/plain;charset=utf-8;' });
-      return await saveBlobWithDialog(`${filename}.txt`, blob);
+      return await saveFile(`${filename}.txt`, blob);
     },
     async exportGroupJSON(idxList, filename) {
       const rows = ctx.groupFlatRows(idxList);
       const json = ctx.buildJson(rows[0], rows.slice(1));
       const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
-      return await saveBlobWithDialog(`${filename}.json`, blob);
+      return await saveFile(`${filename}.json`, blob);
     },
     async exportGroupImage(idxList, filename) {
       const { default: html2canvas } = await import('html2canvas');
@@ -130,7 +136,7 @@ export function useExportFormats(ctx) {
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
         if (!blob) return false;
         ctx.reportProgress(90)
-        return await saveBlobWithDialog(`${filename}.png`, blob);
+        return await saveFile(`${filename}.png`, blob);
       } finally { document.body.removeChild(tempDiv); }
     },
     async exportGroupPDF(idxList, filename) {
@@ -165,7 +171,7 @@ export function useExportFormats(ctx) {
         // 不能 doc.save()：它会直接触发下载，既绕过系统保存对话框，也绕过
         // 文件名清洗（所有格式都必须走 saveBlobWithDialog，这里曾经漏过）。
         ctx.reportProgress(90)
-        return await saveBlobWithDialog(`${filename}.pdf`, doc.output('blob'));
+        return await saveFile(`${filename}.pdf`, doc.output('blob'));
       } finally { document.body.removeChild(tempDiv); }
     },
     async exportGroupXLSX(idxList, filename) {
@@ -226,7 +232,7 @@ export function useExportFormats(ctx) {
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       ctx.reportProgress(90)
-      return await saveBlobWithDialog(`${filename}.xlsx`, blob);
+      return await saveFile(`${filename}.xlsx`, blob);
     },
 
     // ==================== XLSX ====================
@@ -413,7 +419,7 @@ export function useExportFormats(ctx) {
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       ctx.reportProgress(90)
-      return await saveBlobWithDialog(`${filename}.xlsx`, blob);
+      return await saveFile(`${filename}.xlsx`, blob);
     },
 
     // ==================== HTML ====================
@@ -748,7 +754,7 @@ export function useExportFormats(ctx) {
       html += `<script>${script}</script></body></html>`;
       ctx.reportProgress(90)
       const blob = new Blob([html], { type: 'text/html' });
-      return await saveBlobWithDialog(`${filename}.html`, blob);
+      return await saveFile(`${filename}.html`, blob);
     },
 
     // ==================== CSV ====================
@@ -777,7 +783,7 @@ export function useExportFormats(ctx) {
         csv += line + '\n';
       });
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      return await saveBlobWithDialog(`${filename}.csv`, blob);
+      return await saveFile(`${filename}.csv`, blob);
     },
 
     // ==================== Markdown ====================
@@ -840,7 +846,7 @@ export function useExportFormats(ctx) {
       const { headers, bodyRows } = ctx.buildTableArrays(rows, fields);
       const md = ctx.buildMarkdown(headers, bodyRows, filename);
       const blob = new Blob([md], { type: 'text/markdown;charset=utf-8;' });
-      return await saveBlobWithDialog(`${filename}.md`, blob);
+      return await saveFile(`${filename}.md`, blob);
     },
 
     // ==================== 纯文本 (TXT) ====================
@@ -853,7 +859,7 @@ export function useExportFormats(ctx) {
       const { headers, bodyRows } = ctx.buildTableArrays(rows, fields);
       const txt = ctx.buildTxt(headers, bodyRows);
       const blob = new Blob([txt], { type: 'text/plain;charset=utf-8;' });
-      return await saveBlobWithDialog(`${filename}.txt`, blob);
+      return await saveFile(`${filename}.txt`, blob);
     },
 
     // ==================== JSON ====================
@@ -870,7 +876,7 @@ export function useExportFormats(ctx) {
       const { headers, bodyRows } = ctx.buildTableArrays(rows, fields);
       const json = ctx.buildJson(headers, bodyRows);
       const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
-      return await saveBlobWithDialog(`${filename}.json`, blob);
+      return await saveFile(`${filename}.json`, blob);
     },
 
     // ==================== 图片 ====================
@@ -883,7 +889,7 @@ export function useExportFormats(ctx) {
           const canvas = await html2canvas(el, { scale: 2 });
           ctx.reportProgress(60)
           const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-          if (blob) { ctx.reportProgress(90); return await saveBlobWithDialog(`${filename}.png`, blob); }
+          if (blob) { ctx.reportProgress(90); return await saveFile(`${filename}.png`, blob); }
         } catch (e) {
           // 截图失败（canvas 污染、元素不可渲染等）：退回下面的离屏渲染再试一次
           console.warn('[export] 表格截图失败，退回离屏渲染：', e);
@@ -906,7 +912,7 @@ export function useExportFormats(ctx) {
       }
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
       ctx.reportProgress(90)
-      return await saveBlobWithDialog(`${filename}.png`, blob);
+      return await saveFile(`${filename}.png`, blob);
     },
 
     escapeHtml(str) {
@@ -1178,7 +1184,7 @@ export function useExportFormats(ctx) {
 
       const blob = doc.output('blob');
       ctx.reportProgress(90)
-      return await saveBlobWithDialog(`${filename}.pdf`, blob);
+      return await saveFile(`${filename}.pdf`, blob);
     }
   };
 }

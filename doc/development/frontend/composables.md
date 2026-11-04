@@ -24,6 +24,7 @@ classnest/
         │   ├── tableDragFx.js  # 拖拽让位算法
         │   ├── useAlbumScan.js  # 扫描轮询
         │   ├── useAlbumTaskResume.js  # 断点续扫
+        │   ├── useCardHeightAnimation.js  # 卡片高度过渡（内容增减时播动画）
         │   ├── useDashboardData.js  # 首页聚合
         │   ├── useElasticScroll.js  # 橡皮筋滚动
         │   ├── useNotification.js  # 全局通知
@@ -41,7 +42,7 @@ classnest/
 ```
 <!-- doc-tree:end -->
 
-25 个文件：根目录 18 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
+26 个文件：根目录 19 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
 
 ---
 
@@ -161,6 +162,13 @@ classnest/
 
 #### [`useElasticScroll.js`](../../../student-frontend/src/composables/useElasticScroll.js) · 橡皮筋滚动
 - **导出**：`bindElastic`、`startElasticScroll`；**当前停用**（`main.js` 中调用被注释），保留备查。
+
+#### [`useCardHeightAnimation.js`](../../../student-frontend/src/composables/useCardHeightAnimation.js) · 卡片高度过渡
+- **签名**：`useCardHeightAnimation(elRef, options)`；`options = { duration = 260, easing = 'cubic-bezier(0.4, 0, 0.2, 1)' }`（时长 / 缓动）。
+- **返回**：无（只挂副作用）。
+- **内部时序**：`ResizeObserver` 观察卡片元素 → 回调里用 `lastHeight` 当起点、`offsetHeight` 当终点 → 先把 `style.height` 钉回起点（WAAPI 起始帧要到下一次渲染步骤才生效，不钉会先闪一下新高度）→ `el.animate` 播 `height` → 结束后交还 `auto` 并恢复观察。动画期间 `unobserve` + `overflow: hidden`（前者避免每帧回调，后者防止变矮时旧内容溢出）。
+- **调用方**：`ExportExcel`（导出选项弹窗）。
+- **注意事项**：用 `ResizeObserver` 而不是让调用方 `watch` 状态，是因为弹窗的高度变化常来自**插槽内容**（勾选开关多出两个输入框），组件内部看不到那些状态。改这里必须跑 `testjs/probe/card-height-anim-probe.cjs`；用 `show: false` 的隐藏窗口测会得到「动画瞬间到终点」的假结论（合成器不跑）。登录页 `Login.vue` 另有一份**状态驱动**的高度动画（`watch` + WAAPI），两者触发源不同，暂未合并。
 
 ### AI 组合式（`composables/ai/`）
 

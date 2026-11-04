@@ -147,6 +147,9 @@
   "open-file": [
     "main"
   ],
+  "open-upload-file": [
+    "main"
+  ],
   "open-folder": [
     "main",
     "migration",

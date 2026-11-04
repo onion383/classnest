@@ -39,6 +39,7 @@ classnest/
                 ├── NewComerConfirm.vue  # 新成员参与确认
                 ├── OverdueLeaveDialog.vue  # 逾期未销假
                 ├── RecoveryKeyDialog.vue  # 恢复词展示与抄写确认
+                ├── ReceiptDialog.vue  # 收据管理（上传/预览/下载/删除）
                 ├── SeatBackfillDialog.vue  # 座位回填
                 ├── SeatRecordSettingsDialog.vue  # 座位记录设置
                 ├── SeatSettingsDialog.vue  # 座位设置
@@ -49,13 +50,13 @@ classnest/
 
 通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口标准」；本节只补充组件特有接口。
 
-30 个弹窗。统一标准：`DialogShell`（弹窗外壳）+ `visible`（显隐属性）控制（少数由 `v-if`（条件渲染）挂载，无 `visible`）+ 异步加载（页面用 `v-preload`（悬停预取指令）预取）。
+31 个弹窗。统一标准：`DialogShell`（弹窗外壳）+ `visible`（显隐属性）控制（少数由 `v-if`（条件渲染）挂载，无 `visible`）+ 异步加载（页面用 `v-preload`（悬停预取指令）预取）。
 
 ---
 
 ## 综合概述
 
-- **定位**：业务弹窗层（`components/dialogs/`），30 个弹窗按记录类、设置与编排类、相册类分组。
+- **定位**：业务弹窗层（`components/dialogs/`），31 个弹窗按记录类、设置与编排类、相册类分组。
 - **公共逻辑**：统一用 `DialogShell`（弹窗外壳组件）+ `visible`（显隐属性）控制显隐（少数由 `v-if`（条件渲染指令）挂载），页面用 `v-preload`（悬停预取指令）预取 `chunk`（代码分包）；通用 `props` / `emits`（组件属性 / 事件）见 README。
 - **局限**：不展开每个弹窗的字段校验规则（在各自小节），也不展开页面如何调用（见 [views.md](../views.md)）。
 

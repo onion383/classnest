@@ -107,6 +107,16 @@ const fmtOptions = (fmtSrc.match(/\{ value: '([a-z]+)', label:/g) || []).map((s)
 // format → 落盘扩展名（image 走 PNG，其余同名）
 const FORMAT_TO_EXT = { image: '.png', html: '.html', pdf: '.pdf' }
 
+// ---- 6) 收据能上传的类型（收据「另存」也是 save-file 通道的出口）----
+// 收据另存时的文件名来自文件本身，扩展名是动态的，扫不出字面量；
+// 但「能传什么类型」有一份真实定义在后端 uploadSignatures.js 的 KINDS 里，
+// 能传上去就必须能另存下来 —— 否则用户传了 jpg 却存不出来。
+const uploadSrc = read('student-backend/services/uploadSignatures.js')
+const receiptExts = new Set(
+  [...uploadSrc.matchAll(/exts:\s*\[([^\]]*)\]/g)]
+    .flatMap((x) => (x[1].match(/'([^']+)'/g) || []).map((e) => '.' + e.replace(/'/g, '').toLowerCase()))
+)
+
 // ================= 判据 =================
 
 // 判据 1：主进程白名单 ⊇ 前端实际用到的扩展名
@@ -151,10 +161,19 @@ const knownExts = new Set([
   ...frontendExts,
   ...backendFormats.map((f) => '.' + f.toLowerCase()),
   ...fmtOptions.map((o) => FORMAT_TO_EXT[o] || ('.' + o)),
+  ...receiptExts,
 ])
 for (const ext of allowedExts) {
   assert(knownExts.has(ext),
     `主进程白名单里的 ${ext} 没有任何出口在用 —— 白名单比实际能力宽，多余的扩展名等于多开一个写盘口子`)
+}
+
+// 判据 7：收据能上传的类型必须都能另存（两条都走 save-file 通道）
+//         收据「另存/下载」用的文件名来自文件本身，扩展名动态；
+//         白名单里没有它 = 用户传了却存不出来，报「不支持保存为该文件类型」。
+for (const ext of receiptExts) {
+  assert(allowedExts.has(ext),
+    `收据支持上传 ${ext}，但主进程 ALLOWED_SAVE_EXTS 里没有 —— 收据「另存」这一步必然被拒`)
 }
 
 // ---- 输出 ----

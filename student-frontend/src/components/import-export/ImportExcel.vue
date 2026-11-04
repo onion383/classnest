@@ -404,19 +404,3 @@ function resetState() {
 
 watch(() => props.visible, (val) => { if (!val) resetState(); });
 </script>
-
-<style>
-  /* 文件拖放区：点击/拖入均可，毛玻璃边框 */
-  .dropzone {
-    background-color: rgba(255, 255, 255, 0.65);
-    border-color: rgba(0, 0, 0, 0.12);
-    transition: border-color 0.15s, background-color 0.15s;
-  }
-  .dropzone:hover {
-    border-color: rgba(59, 130, 246, 0.6);
-  }
-  .dropzone-active {
-    background-color: rgba(59, 130, 246, 0.12);
-    border-color: rgba(59, 130, 246, 0.7);
-  }
-</style>

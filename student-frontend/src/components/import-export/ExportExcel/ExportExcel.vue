@@ -3,7 +3,7 @@
   <Teleport to="body">
   <Transition name="dialog">
   <div v-if="effectiveVisible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]">
-    <div class="bg-surface p-5 rounded-lg min-w-[400px] max-w-xl shadow-card border border-border dialog-card">
+    <div ref="cardRef" class="bg-surface p-5 rounded-lg min-w-[400px] max-w-xl shadow-card border border-border dialog-card">
       <h3 class="text-lg font-bold mb-3">{{ title }}</h3>
 
       <!-- 调用方自定义选项（如相册索引导出的「选择相册 / 索引分组 / 顺序」），插在选列区块之前 -->
@@ -41,6 +41,10 @@
         </div>
       </template>
 
+      <!-- 导出行之后的附加选项（如「同时导出收据文件」）：放在这里而不是最前面，
+           避免功能开关挡在「选列 / 选行」之前，打乱先选数据再选附加项的顺序 -->
+      <slot name="afterRowOptions" />
+
       <div class="mb-4">
         <p class="font-semibold mb-2">导出格式：</p>
         <AppSelect v-model="exportFormat" class="w-full" :options="formatOptions" no-scroll />
@@ -69,6 +73,7 @@ import AppSelect from '../../base/AppSelect.vue'
 import { useNotification } from '../../../composables/useNotification';
 import { useExportFormats } from './ExportExcel.exporters.js';
 import { localDateStr } from '../../../utils/dateTime.js';
+import { useCardHeightAnimation } from '../../../composables/useCardHeightAnimation.js';
 import '../../../styles/dialog-transition.css'
 
 defineOptions({ name: 'ExportExcel' })
@@ -89,9 +94,20 @@ const props = defineProps({
   // 隐藏「选择要导出的列 / 导出行」区块：数据不是表格行、列固定时使用（如相册索引）
   hideFieldPicker: Boolean,
   // 外部强制禁用「导出」按钮（如数据还在异步加载，避免导出空表）
-  disableExport: Boolean
+  disableExport: Boolean,
+  // 接管导出动作：传入后点「导出」不落单个文件，而是调用它并把格式/文件名交过去
+  // （设置页「数据管理」用它把多张表打成一个 zip，弹窗本身仍是这个组件）
+  customExport: { type: Function, default: null },
+  // 允许 0 行也导出（只出表头）。数据管理要备份「空表」这个状态，页面里的表格不需要
+  allowEmpty: Boolean
 })
 const emit = defineEmits(['export-start', 'export-finish', 'export-error', 'update:isVisible'])
+
+// 卡片高度过渡：调用方插槽里的选项会让弹窗变高变矮（勾选 zip 密码多出两个输入框、
+// 「请至少选择一张表」错误行出现/消失…），这些状态组件内部看不到，
+// 所以交给 ResizeObserver 跟元素自身高度 —— 见 composables/useCardHeightAnimation.js
+const cardRef = ref(null)
+useCardHeightAnimation(cardRef)
 
 const FORMAT_LABELS = {
   csv: '表格 (.csv)',
@@ -218,6 +234,33 @@ function close() {
 function cancel() { close(); }
 async function doExport() {
   if (exporting.value) return
+
+  // ---------- 调用方接管导出 ----------
+  // 设置页「数据管理」走这里：格式与文件名仍由本弹窗收集，只是产出的是 zip 而不是单文件。
+  if (typeof props.customExport === 'function') {
+    exporting.value = true
+    exportProgress.value = 10
+    try {
+      await props.customExport({
+        format: exportFormat.value,
+        filename: filename.value,
+        reportProgress,
+      })
+      reportProgress(100)
+      emit('export-finish');
+      close();
+    } catch (err) {
+      // 失败保留弹窗，便于改完选项重试（与下方各格式的失败处理一致）
+      console.error('导出失败:', err);
+      notifyError(err && err.message ? err.message : '导出失败，请重试')
+      emit('export-error', err);
+    } finally {
+      exporting.value = false
+      exportProgress.value = 0
+    }
+    return
+  }
+
   // ---------- 分组导出模式 ----------
   if (isGroupMode.value) {
     if (selectedGroups.value.length === 0) { notifyInfo('请至少选择一个小组'); return; }
@@ -264,7 +307,7 @@ async function doExport() {
   if (!props.hideFieldPicker && rowMode.value === 'selected') {
     exportRows = exportRows.filter(r => props.selectedRowKeys.includes(r.id) || props.selectedRowKeys.includes(r._rowKey));
   }
-  if (!exportRows.length) { notifyInfo('没有数据可以导出'); close(); return; }
+  if (!exportRows.length && !props.allowEmpty) { notifyInfo('没有数据可以导出'); close(); return; }
 
   const selectedFields = props.hideFieldPicker
     ? props.fields

@@ -43,18 +43,25 @@ app.whenReady().then(async () => {
   //   死等 = 每次都白等满 5 秒（页面 0.2 秒就跑完了也照等），
   //   而且页面若在 5 秒内没写完（慢机器 / 慢断言），读到的就是半截结果 —— flaky。
   //   轮询：写完立刻走；到上限还没写才算超时（保留原有的超时兜底语义）。
+  // ⚠️ 判据不能是「#out 非空」：断言页的 <pre id="out"> 带占位文本（如 "running…"），
+  //   页面一加载它就非空 → 首次轮询立刻早退，读到的永远是占位文本
+  //   （secure-channel-retry 因此长期报「没拿到断言结果」，而它其实从加进来就没通过过）。
+  //   也**不能**用「文本变了就走」：断言页通常每做完一条就刷新 #out，那样只会拿到半截。
+  //   → 只认页面显式声明的完成信号 window.__probeDone = true（断言页最后一行设）。
+  //   新写断言页请照做；忘了设也能跑，只是每次白等满 5 秒后按失败处理。
   const READ_OUT = "document.getElementById('out') ? document.getElementById('out').textContent : ''"
+  const READ_DONE = 'window.__probeDone === true'
   let text = ''
   const deadline = Date.now() + 5000
   for (;;) {
     try {
       text = await win.webContents.executeJavaScript(READ_OUT)
+      if (await win.webContents.executeJavaScript(READ_DONE)) break // 页面已完成
     } catch (e) {
       console.log('PROBE_EVAL_FAIL ' + (e && e.message))
       break
     }
-    if (text) break // 页面已写入结果 → 早退出
-    if (Date.now() >= deadline) break // 到上限仍未写 → 读到的就是空串
+    if (Date.now() >= deadline) break // 到上限仍未完成 → 读到的就是半截（外层按失败处理）
     await new Promise((r) => setTimeout(r, 100))
   }
   console.log('---PAGE---')

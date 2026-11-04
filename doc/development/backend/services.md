@@ -186,6 +186,10 @@ classnest/
 | [`utils/sql.js`](../../../student-backend/utils/sql.js) | SQL 辅助 | `now`、`isDateStr`、`cleanUp`、`maxPosition`、`buildInsert`、`buildUpdate` |
 | [`utils/slugScopes.js`](../../../student-backend/utils/slugScopes.js) | 按库（slug）隔离的进程内状态：各库 `album_photos.id` 独立自增，裸 id 键 / 全局攒批会串库。状态自己登记，登出统一失效 | `safeSlug`、`createSlugBuckets`、`createSlugBatch`、`clearAllForSlug` |
 | [`utils/securityLevel.js`](../../../student-backend/utils/securityLevel.js) | 账号安全等级判定（`plain` / `nopass` / `password` / `privacy`）。**口径单源**：设置页判档与「本机信息恢复」分流都走这里，各写一份会分叉成「显示免密、登录却要密码」。明文库判定排在密码判定之前（明文档不该有密码哈希） | `resolveSecurityLevel` |
+| [`utils/semester.js`](../../../student-backend/utils/semester.js) | 学期推荐值（按当前月份推学期名与起止日期）。**两个调用方共用这一份**：设置页「增加学期」与课表路由、首次引导页（引导时库还没打开，走 routes 的实现会直接撞上未打开的 db）。抄两份会导致「设置页推荐的学期和引导页不一样」 | `autoSemester` |
+| [`services/zipWriter.js`](../../../student-backend/services/zipWriter.js) | 多文件 ZIP 打包（CRC32 + deflate），可选 ZipCrypto 传统加密。**刻意不用 AES**：Windows 资源管理器只认传统加密，AES 必须装 7-Zip，普通用户会看到「文件已损坏」；代价是只能防随手打开，不能当强加密宣传。无第三方依赖（后端原有依赖里没有 zip 写库） | `buildZip`、`crc32` |
+| [`services/uploadSignatures.js`](../../../student-backend/services/uploadSignatures.js) | 收据上传的类型判定：扩展名白名单（图片 20MB / PDF 30MB / ooxml 30MB / ole 30MB / 视频 200MB / 纯文本 md 5MB）+ 真实字节魔数。**md 没有魔数**，判据改成「前 512 字节没有 NUL 字节、且非空」（二进制改后缀开头几乎必然带 0x00；512 而不是 16，是因为 16 字节太短，二进制可能还没出现 NUL）。**Windows 上 docx/xlsx 的 mimetype 不可靠**，multer 只按扩展名初筛，真正判断走魔数。另含 `decodeFileName`：busboy 按 latin1 解析 multipart 文件名，中文名会变成乱码，这里按 latin1→字节→utf8 转回来（转换出 `�` 说明原字节不是 UTF-8，返回原串防二次破坏） | `KINDS`、`EXT_TO_KIND`、`ALLOWED_EXT_RE`、`sniff`、`checkUpload`、`decodeFileName` |
+| [`services/receiptTrash.js`](../../../student-backend/services/receiptTrash.js) | 收据文件移进 `dataDir/receipt-trash/`。收据扩到视频后，删除只改数据库数组会让 uploads 悄悄涨到几个 G。**安全边界：一律 `path.basename` 再拼回 uploads**，`../`、绝对路径、反斜杠穿越都出不去 —— 这个函数能搬动磁盘文件，边界写错就是「把机器上任意文件挪走」的入口 | `moveReceiptsToTrash` |
 
 ---
 

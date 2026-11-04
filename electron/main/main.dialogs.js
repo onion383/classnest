@@ -38,12 +38,31 @@ const MAX_WRITE_BYTES = 50 * 1024 * 1024
 const MAX_RESTORE_BYTES = 64 * 1024 * 1024
 // 一键截屏的 JPEG 质量：90 在界面截图上肉眼几乎无差，编码耗时只有 PNG 的 1/10 左右
 const JPEG_QUALITY = 90
-// save-file 只服务导出类文件；扩展名由用户可在对话框里改，因此最终路径还要再校验一次。
-// 白名单与「前端/后端实际能产出的格式」严格对账（见 testjs/probe/export-format-probe.cjs）：
+// save-file 只服务导出类文件；扩展名由用户可在对话框里改，因此最终路径还要再校验一次。// 白名单与「前端/后端实际能产出的格式」严格对账（见 testjs/probe/export-format-probe.cjs）：
 // 少一个 → 那个格式导出必然被拒；多一个 → 白给一个写盘口子。
 // 注：原先含 '.htm'，但没有任何出口产出该扩展名（.html 已覆盖），属于多开的口子，已去掉。
+// '.zip' 供设置页「数据管理」的多表打包导出（student-backend/routes/dataExport.js 生成、
+// 前端走同一个 saveBlobWithDialog 落盘）。加之前这条链路一定在写盘那一步被拒，
+// 用户只看到「不支持保存为该文件类型」——白名单漏登记的典型症状。
+//
+// 收据「另存」也走这条通道，而它的文件名来自文件本身（扩展名动态），
+// 所以白名单必须覆盖「能上传的每一种收据类型」—— 与后端 uploadSignatures.js 的 KINDS 对齐。
+// 漏一个的表现是：文件传得上来，却存不出去（同样报「不支持保存为该文件类型」）。
+// 这里全是文档 / 图片 / 视频，不含任何可执行类型；能不能用系统程序打开是另一条通道
+// （open-upload-file）的黑名单在管，两条通道互不影响。
 const ALLOWED_SAVE_EXTS = new Set([
-  '.html', '.xlsx', '.csv', '.md', '.txt', '.json', '.png', '.pdf',
+  '.html', '.xlsx', '.csv', '.md', '.txt', '.json', '.png', '.pdf', '.zip',
+  '.jpg', '.jpeg', '.gif', '.webp', '.bmp',
+  '.doc', '.docx', '.xls', '.ppt', '.pptx',
+  '.mp4', '.webm',
+])
+
+// open-upload-file 的黑名单：收据里的 Office/PDF 要用系统程序打开，但绝不能让这条
+// 通道变成「启动任意程序」的口子。用黑名单而不是白名单，是为了以后新收据格式
+// （比如 heic）不用同步改两处就能打开；而这些可执行类型上传时本来就被魔数拦掉了。
+const BLOCKED_OPEN_EXTS = new Set([
+  '.exe', '.bat', '.cmd', '.com', '.msi', '.ps1', '.vbs', '.vbe', '.js', '.jse',
+  '.wsf', '.scr', '.cpl', '.dll', '.lnk', '.hta', '.reg', '.jar', '.pif',
 ])
 
 // 上次访问的目录（跨各对话框共享）
@@ -263,6 +282,33 @@ function registerDialogsIpc(opts = {}) {
       // shell.openPath 用「返回错误字符串」表示失败（非 reject）：空串 = 成功
       if (error) return contract.fail(error)
       // error: null 保持旧形状（原先成功时也是 { success: true, error: null }）
+      return contract.ok({ error: null })
+    } catch (err) {
+      return contract.fail(err)
+    }
+  }))
+
+  // 打开上传目录里的文件（收据里的 PDF / Office / 视频）：用系统默认程序。
+  //
+  // 为什么不复用 open-file：那条通道只认「本进程通过 save-file 写过的路径」，
+  // 目的是防止渲染层被注入后把任意 exe 交给 shell.openPath。收据是上传时直接写进
+  // uploads 的，不在那个名单里，所以需要一条范围同样小的旁路：
+  //   · 只认 uploads 根目录下的文件名（basename 压平，穿越不出去）
+  //   · 挡掉可执行扩展名（见 BLOCKED_OPEN_EXTS）
+  ipcMain.handle('open-upload-file', contract.safe(async (event, { relPath } = {}) => {
+    const root = path.resolve(path.join(resolveDataDir(), 'uploads'))
+    const name = path.basename(String(relPath || ''))
+    if (!name || name === '.' || name === '..') return contract.fail('缺少文件路径')
+    const abs = path.join(root, name)
+    if (!abs.startsWith(root + path.sep)) return contract.fail('路径不在上传目录内')
+    if (!fs.existsSync(abs)) return contract.fail('文件不存在')
+    if (BLOCKED_OPEN_EXTS.has(path.extname(abs).toLowerCase())) {
+      return contract.fail('不支持用系统程序打开该文件类型')
+    }
+    try {
+      const error = await shell.openPath(abs)
+      // shell.openPath 用「返回错误字符串」表示失败：空串 = 成功
+      if (error) return contract.fail(error)
       return contract.ok({ error: null })
     } catch (err) {
       return contract.fail(err)

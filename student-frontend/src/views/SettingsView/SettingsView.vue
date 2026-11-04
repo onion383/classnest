@@ -642,6 +642,12 @@
       </div>
     </div>
 
+    <!-- ========== 数据管理 ========== -->
+    <div class="mb-6">
+      <h2 id="settings-section-data" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="database" :size="20" /> 数据管理</h2>
+      <DataExportPanel />
+    </div>
+
     <!-- ========== 危险操作 ========== -->
     <div class="mb-6">
       <h2 id="settings-section-danger" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="trash" :size="20" /> 危险操作</h2>
@@ -755,6 +761,7 @@ import CustomScrollbar from '../../components/base/CustomScrollbar.vue'
 import AppSelect from '../../components/base/AppSelect.vue'
 import AppSwitch from '../../components/base/AppSwitch.vue'
 import ViewSwitch from '../../components/base/ViewSwitch.vue'
+import DataExportPanel from '../../components/data-manage/DataExportPanel.vue'
 import { useThemeStore } from '../../stores/theme'
 import { storeToRefs } from 'pinia'
 import { resourceUrl } from '../../utils/apiUrl'
@@ -805,6 +812,7 @@ const settingsSections = ref([
   { key: 'perf',     label: '性能',           py: 'xn' },
   { key: 'savepath', label: '保存路径设置',   py: 'bcljsz' },
   { key: 'datadir',  label: '数据目录设置',   py: 'sjmlsz' },
+  { key: 'data',     label: '数据管理',       py: 'sjgl' },
   { key: 'danger',   label: '危险操作',       py: 'wxcz' },
 ])
 // 分区内的具体设置项：命中后滚动到该设置行（py 为标签拼音首字母）
@@ -832,6 +840,9 @@ const settingsItems = ref([
   { label: '相册缩略图缓存',           section: 'datadir',  py: 'xcsltch' },
   { label: '技能文件目录',             section: 'datadir',  py: 'jnwjml' },
   { label: '安全等级',                 section: 'account',  py: 'aqdj' },
+  { label: '数据导出',                 section: 'data',     py: 'sjdc' },
+  { label: '导出格式',                 section: 'data',     py: 'dcgs' },
+  { label: 'zip 密码',                 section: 'data',     py: 'zipmm' },
 ])
 // 图标样式选项：彩色图标 / Emoji
 const iconStyleOptions = [

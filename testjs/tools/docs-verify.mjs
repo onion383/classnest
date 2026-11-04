@@ -213,8 +213,8 @@ for (const s of suite) {
   const count = (dir, filter) => walk(dir, filter).length
   const expectations = [
     { name: '组件数 76', file: path.join(DOC_DIR, 'development/frontend/components/README.md'), actual: count(path.join(ROOT, 'student-frontend/src/components'), (p) => p.endsWith('.vue')), re: /76 个/ },
-    { name: '组合式 25', file: path.join(DOC_DIR, 'development/frontend/composables.md'), actual: count(path.join(ROOT, 'student-frontend/src/composables'), (p) => p.endsWith('.js')), re: /25 个/ },
-    { name: 'utils 33', file: path.join(DOC_DIR, 'development/frontend/misc.md'), actual: count(path.join(ROOT, 'student-frontend/src/utils'), (p) => p.endsWith('.js')), re: /33 个/ },
+    { name: '组合式 26', file: path.join(DOC_DIR, 'development/frontend/composables.md'), actual: count(path.join(ROOT, 'student-frontend/src/composables'), (p) => p.endsWith('.js')), re: /26 个/ },
+    { name: 'utils 34', file: path.join(DOC_DIR, 'development/frontend/misc.md'), actual: count(path.join(ROOT, 'student-frontend/src/utils'), (p) => p.endsWith('.js')), re: /34 个/ },
     { name: '主进程 main.*.js 23', file: path.join(DOC_DIR, 'development/main-process/README.md'), actual: count(path.join(ROOT, 'electron/main'), (p) => /main\.[A-Za-z-]+\.js$/.test(p)), re: /23 个/ },
     { name: '后端依赖 12', file: path.join(DOC_DIR, 'development/dependencies/README.md'), actual: Object.keys(JSON.parse(read(path.join(ROOT, 'student-backend/package.json'))).dependencies).length, re: /12 个/ },
     { name: '页面 15', file: path.join(DOC_DIR, 'development/frontend/views.md'), actual: (read(path.join(ROOT, 'student-frontend/src/router/index.js')).match(/path:\s*'/g) || []).length - 2, re: /15 个页面/ }

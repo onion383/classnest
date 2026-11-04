@@ -381,18 +381,35 @@ function assertIntElements(arr, name) {
   });
 }
 
-// 路径数组元素校验（班费多收据）：每个元素按**单列路径同一套规则**清洗。
-// 空元素直接剔除（前端传 [''] 等价于没有收据），非文本元素报错。
+// 收据数组元素校验：每个元素按**单列路径同一套规则**清洗。
+// 两种形状都要认：
+//   · 旧数据是纯路径文本（['/uploads/a.jpg']）
+//   · 新结构带原始文件名与大小（{ path, name, size, kind }）—— 列表要显示「运动会发票.pdf」，
+//     而磁盘上的文件名是「时间戳-随机.pdf」，只有存下原名才认得出来
+// 空元素直接剔除（前端传 [''] 等价于没有收据）。
 // 返回清洗后的新数组：调用方用它序列化落库，不能原地改传入值。
 function sanitizePathElements(arr, name) {
   const out = [];
   arr.forEach((el, i) => {
     if (el == null || el === '') return;
-    if (typeof el !== 'string') {
-      throw new Error(`字段「${name}」第 ${i + 1} 个路径应为文本，收到：${JSON.stringify(el)}`);
+    if (typeof el === 'string') {
+      const p = cleanPath(el, name);
+      if (p) out.push(p);
+      return;
     }
-    const p = cleanPath(el, name);
-    if (p) out.push(p);
+    if (typeof el === 'object' && !Array.isArray(el) && typeof el.path === 'string') {
+      const p = cleanPath(el.path, name);
+      if (!p) return;
+      out.push({
+        path: p,
+        // name / kind 只用于展示，不参与路径解析；截断防超长文本撑爆列表
+        name: typeof el.name === 'string' ? el.name.slice(0, 255) : '',
+        size: Number.isFinite(Number(el.size)) ? Math.max(0, Math.floor(Number(el.size))) : 0,
+        kind: typeof el.kind === 'string' ? el.kind.slice(0, 16) : '',
+      });
+      return;
+    }
+    throw new Error(`字段「${name}」第 ${i + 1} 个收据应为路径文本或 {path,name,size,kind}，收到：${JSON.stringify(el)}`);
   });
   return out;
 }

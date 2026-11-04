@@ -147,8 +147,19 @@ test('sanitizeField：年龄只接受整数，空值归一为 null', () => {
   assert.throws(() => s.sanitizeField(999, 'students', '年龄'), /不能大于/)
 })
 
-test('students：is_provisional 列 + 临时同名唯一索引', () => {
-  const conn = fresh()
+// 收据字段两种形状都要认：老数据是路径字符串数组，新结构带原始文件名/大小/类型。
+// 只认字符串会让「点确定」直接报「第 1 个路径应为文本」——收据一条也存不进去。
+test('sanitizeField：收据接受路径文本与 {path,name,size,kind} 两种形状', () => {
+  const obj = [{ path: '/uploads/a.jpg', name: '运动会发票.jpg', size: 1024, kind: 'image' }]
+  assert.deepEqual(s.sanitizeField(obj, 'fee_records', '收据'), obj)
+  assert.deepEqual(s.sanitizeField(['/uploads/b.jpg'], 'fee_records', '收据'), ['/uploads/b.jpg'])
+  // 空值剔除；非法对象与穿越路径仍要报错（放宽形状 ≠ 放宽安全性）
+  assert.deepEqual(s.sanitizeField(['', null], 'fee_records', '收据'), [])
+  assert.throws(() => s.sanitizeField([{ foo: 1 }], 'fee_records', '收据'), /应为路径文本/)
+  assert.throws(() => s.sanitizeField([{ path: '/uploads/../x.txt' }], 'fee_records', '收据'), /不能包含/)
+})
+
+test('students：is_provisional 列 + 临时同名唯一索引', () => {  const conn = fresh()
   const cols = conn.prepare('PRAGMA table_info(students)').all().map((c) => c.name)
   assert.ok(cols.includes('is_provisional'), '缺少 is_provisional 列')
 

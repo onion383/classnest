@@ -85,58 +85,13 @@
       @close="hideContextMenu"
     />
 
-    <!-- 收据管理弹窗 -->
-    <Teleport to="body">
-    <div v-if="receiptDialog.visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001] pointer-events-auto" @click.self="closeReceiptDialog">
-      <div class="bg-surface p-5 rounded-lg min-w-[400px] max-w-xl">
-        <h3 class="text-lg font-bold mb-3">管理收据</h3>
-        <div class="flex flex-wrap gap-2 mb-4">
-          <div v-for="(img, idx) in receiptDialog.images" :key="idx" class="relative group w-20 h-20 border rounded overflow-hidden">
-            <img
-              :src="getFullUrl(img)"
-              @click="previewImage(img)"
-              class="w-full h-full object-cover cursor-pointer"
-              loading="lazy"
-              @error="$event.target.style.display='none'; $event.target.nextElementSibling.style.display='flex'"
-            />
-            <div class="w-full h-full items-center justify-center bg-border text-text-muted text-xs" style="display:none;">
-              加载失败
-            </div>
-            <button
-              @click.stop="removeReceiptImage(idx)"
-              class="absolute top-0 right-0 bg-danger text-text-inverse text-xs rounded-bl px-1 opacity-0 group-hover:opacity-100 transition"
-            >×</button>
-          </div>
-          <div v-if="receiptDialog.images.length === 0" class="text-text-muted text-sm">暂无收据图片</div>
-        </div>
-        <div class="flex items-center gap-2 mb-4">
-          <input
-            type="file"
-            multiple
-            accept="image/*"
-            @change="handleReceiptFilesUpload"
-            class="text-sm"
-          />
-          <span class="text-sm text-text-muted">可多选图片</span>
-        </div>
-        <div class="text-right">
-          <button @click="saveReceiptImages" class="bg-info text-text-inverse border-none px-4 py-1.5 rounded mr-2 cursor-pointer">确定</button>
-          <button @click="closeReceiptDialog" class="bg-surface-hover border-none px-4 py-1.5 rounded cursor-pointer">取消</button>
-        </div>
-      </div>
-    </div>
-    </Teleport>
-
-    <!-- 全屏图片预览 -->
-    <Teleport to="body">
-    <div
-      v-if="previewImageUrl"
-      class="fixed inset-0 bg-black/80 z-[10002] flex items-center justify-center cursor-pointer"
-      @click="previewImageUrl = null"
-    >
-      <img :src="getFullUrl(previewImageUrl)" class="max-w-[90vw] max-h-[90vh] object-contain" />
-    </div>
-    </Teleport>
+    <!-- 收据管理弹窗：上传 / 列表 / 预览 / 下载 / 删除，逻辑在独立组件里 -->
+    <ReceiptDialog
+      v-model:visible="receiptDialog.visible"
+      :receipts="receiptDialog.items"
+      :api-base="API_BASE"
+      @change="onReceiptChange"
+    />
 
     <DynamicTable
       ref="dynamicTable"
@@ -179,13 +134,23 @@
       v-if="exportMounted"
       :is-visible="exportDialogVisible"
       @update:is-visible="exportDialogVisible = $event"
-      :rows="feeRecords"
+      :rows="feeExportRows"
       :fields="visibleFields"
       :selectedRowKeys="selectedRowKeys"
       :tableElement="tableElement"
+      :custom-export="customExport"
       defaultFilename="班费记录"
       @export-finish="onExportFinish"
-    />
+    >
+      <template #afterRowOptions>
+        <div class="mb-4">
+          <AppSwitch v-model="exportWithReceipts">同时导出收据文件</AppSwitch>
+          <p class="text-xs text-text-muted mt-1">
+            开启后打包成 zip：收支表一个文件，收据按「收据文件/收支编码/原文件名」分目录存放
+          </p>
+        </div>
+      </template>
+    </ExportExcel>
     <ImportExcel
       v-if="importMounted"
       :visible="importDialogVisible"
@@ -225,12 +190,17 @@ import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } fr
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import SearchBar from '../components/base/SearchBar.vue'
+import AppSwitch from '../components/base/AppSwitch.vue'
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import { useTableCRUD } from '../composables/useTableCRUD.js'
 import { useUndoShortcut, recordRowDelete } from '../composables/useUndo.js'
 import { undoById } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
-import { resourceUrl } from '../utils/apiUrl'
+import { useExportFormats } from '../components/import-export/ExportExcel/ExportExcel.exporters.js'
+import { saveBlobWithDialog } from '../utils/saveFile.js'
+import { blobToBase64 } from '../utils/base64.js'
+import { localDateStr } from '../utils/dateTime.js'
+import '../styles/dialog-transition.css'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
@@ -305,7 +275,7 @@ const {
   importDialogVisible, dedupeDialogVisible,
   displayRows, displayIndexes, visibleFields, allBusinessFields,
   searchNoResult,
-  fetchRows, applyUndoChange, showAlert, showConfirm, onDialogConfirm, onDialogCancel,
+  fetchRows, applyUndoChange, showAlert, onDialogConfirm, onDialogCancel,
   startEditCell, saveCell,
   addNewRowAtBottom, cancelNewRow, saveNewRow,
   moveRow,
@@ -520,67 +490,150 @@ function onExportFinish() {
 // 导出班费记录：无数据时直接提示，不弹导出选项弹窗
 function openExport() {
   if (feeRecords.value.length === 0) return useNotification().info('暂无班费记录可导出')
+  // 每次打开都从「不带收据」开始：上一次勾没勾不该影响这一次
+  exportWithReceipts.value = false
   exportDialogVisible.value = true
 }
 
 // ==================== 收据管理 ====================
+// 收据弹窗内容变多（上传/列表/预览/下载/删除），抽成独立组件并懒加载
+const ReceiptDialog = defineAsyncComponent(() => import('../components/dialogs/ReceiptDialog.vue'))
+
 const receiptDialog = ref({
   visible: false,
   row: null,
   isNew: false,
-  images: []
+  items: [],
 })
-const previewImageUrl = ref(null)
+
+// 收据在库里是 JSON 数组文本。历史数据是纯路径数组（["/uploads/a.jpg"]），
+// 现在多了原始文件名和大小 → 对象数组。读取时两种都要认，否则老记录会读成空。
+function normalizeReceipts(raw) {
+  let list
+  try { list = JSON.parse(raw || '[]') } catch { return [] }
+  if (!Array.isArray(list)) return []
+  return list
+    .map((it) => {
+      if (typeof it === 'string') {
+        return { path: it, name: it.split('/').pop() || '收据', size: 0 }
+      }
+      if (!it || !it.path) return null
+      return {
+        path: it.path,
+        name: it.name || String(it.path).split('/').pop() || '收据',
+        size: Number(it.size) || 0,
+      }
+    })
+    .filter(Boolean)
+}
+
+// 收据在库里是 JSON 数组文本（["/uploads/a.jpg", ...]）。
+// 表格里走缩略图 / 「N 张」渲染，但导出拿到的是原始记录 —— 不转就会在
+// Excel 单元格里出现一坨带引号方括号的裸 JSON。导出统一转成「a.jpg、b.jpg」。
+function receiptText(raw) {
+  if (!raw) return ''
+  let list
+  try { list = JSON.parse(raw) } catch { return String(raw) }
+  if (!Array.isArray(list)) return ''
+  return list
+    .map((it) => (typeof it === 'string' ? it.split('/').pop() : (it && it.name) || ''))
+    .filter(Boolean)
+    .join('、')
+}
+const feeExportRows = computed(() =>
+  feeRecords.value.map((r) => ({ ...r, 收据: receiptText(r['收据']) }))
+)
 
 function handleManageReceipt({ row, isNew }) {
-  let images = []
-  try { images = JSON.parse(row['收据'] || '[]') } catch { images = [] }
-  receiptDialog.value = { visible: true, row, isNew, images: [...images] }
+  receiptDialog.value = { visible: true, row, isNew, items: normalizeReceipts(row['收据']) }
 }
 
-function closeReceiptDialog() {
-  receiptDialog.value.visible = false
-}
-
-function removeReceiptImage(index) {
-  showConfirm('确定删除该图片吗？', () => {
-    receiptDialog.value.images.splice(index, 1)
-  })
-}
-
-async function handleReceiptFilesUpload(event) {
-  const files = event.target.files
-  if (!files.length) return
-  const formData = new FormData()
-  for (let i = 0; i < files.length; i++) formData.append('receipts', files[i])
-  try {
-    const res = await axios.post(`${API_BASE}/fee-records/upload-receipt`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
-    receiptDialog.value.images.push(...res.data.urls)
-  } catch (err) { showAlert('图片上传失败') }
-}
-
-async function saveReceiptImages() {
-  const imagesJson = JSON.stringify(receiptDialog.value.images)
-  if (receiptDialog.value.isNew && newRow.value) {
-    newRow.value['收据'] = imagesJson
-    closeReceiptDialog()
+// 弹窗里每加/删一个文件就调这里 —— 拖进来就落库，不再等点「确定」。
+// 文件在上传接口里已经写进 uploads 了，如果不立刻写这条关联，就会出现
+// 「磁盘有文件、数据库没记录」，用户以为存上了其实刷新就没了。
+// 新增行（还没入库）只能先记在 newRow 上，等整行保存时一起提交。
+async function onReceiptChange({ items, removed }) {
+  const d = receiptDialog.value
+  const json = items.length ? JSON.stringify(items) : ''
+  // 本地同步，保证弹窗与父级状态一致（弹窗内部已改，这里只是回写）
+  receiptDialog.value.items = items
+  if (d.isNew && newRow.value) {
+    newRow.value['收据'] = json
     return
   }
-  if (!receiptDialog.value.row) return
+  if (!d.row) return
   try {
-    await axios.put(`${API_BASE}/fee-records/${receiptDialog.value.row.id}`, { '收据': imagesJson })
-    receiptDialog.value.row['收据'] = imagesJson
-    closeReceiptDialog()
-  } catch (err) { showAlert('保存收据失败') }
+    await axios.put(`${API_BASE}/fee-records/${d.row.id}`, { '收据': json })
+    d.row['收据'] = json
+    // 写库成功后再动磁盘：反过来的话一旦保存失败就变成「文件没了、记录还在」
+    if (removed.length) {
+      try {
+        await axios.post(`${API_BASE}/fee-records/receipt-trash`, { paths: removed })
+      } catch (_) {
+        // 文件没移走只是磁盘残留，不影响数据正确性
+      }
+    }
+  } catch (err) {
+    notifyError(err.response?.data?.error || '保存收据失败')
+  }
 }
 
-function getFullUrl(img) {
-  if (!img) return ''
-  // 收据存储路径为 /uploads/xxx；resourceUrl 会补完整后端地址（file:// 打包版）并追加 ?token= 通过鉴权。
-  return resourceUrl(img)
-}
+// ==================== 导出（可选带上收据文件）====================
+const exportWithReceipts = ref(false)
 
-function previewImage(img) {
-  previewImageUrl.value = img
+// 勾选「同时导出收据文件」时才接管导出：主文件 + 收据按编码分目录打成 zip。
+// 不勾选返回 null → ExportExcel 走原来的单文件保存，行为完全不变。
+const customExport = computed(() => (exportWithReceipts.value ? runExportWithReceipts : null))
+
+async function runExportWithReceipts({ format, filename, reportProgress }) {
+  const BUILDERS = {
+    xlsx: (c, r, f, n) => c.exportXLSX(r, f, n),
+    csv: (c, r, f, n) => c.exportCSV(r, f, n),
+    html: (c, r, f, n) => c.exportHTMLTable(r, f, n),
+    md: (c, r, f, n) => c.exportMD(r, f, n),
+    txt: (c, r, f, n) => c.exportTXT(r, f, n),
+    json: (c, r, f, n) => c.exportJSON(r, f, n),
+  }
+  const build = BUILDERS[format]
+  if (!build) throw new Error('不支持的导出格式')
+
+  // 主文件仍用 ExportExcel 那套格式实现，只是把写盘出口换成收集器
+  const collected = []
+  const ctx = {
+    reportProgress() {},
+    notifySuccess() {},
+    notifyError() {},
+    notifyInfo() {},
+    saveFile: async (name, blob) => { collected.push({ name, blob }); return name },
+  }
+  Object.assign(ctx, useExportFormats(ctx))
+
+  await build(ctx, feeExportRows.value, visibleFields.value, filename)
+  reportProgress(60)
+
+  const entries = []
+  for (const f of collected) entries.push({ name: f.name, data: await blobToBase64(f.blob) })
+
+  // 收据按「收支编码」分组，后端按 收据文件/编码/原名 打进 zip
+  const groups = []
+  for (const r of feeRecords.value) {
+    const list = normalizeReceipts(r['收据'])
+    if (!list.length) continue
+    groups.push({
+      code: String(r['收支编码'] || ''),
+      items: list.map((f) => ({ path: f.path, name: f.name })),
+    })
+  }
+
+  const res = await axios.post(
+    '/api/data/zip',
+    { entries, receiptGroups: groups, filename },
+    { responseType: 'blob' }
+  )
+  reportProgress(90)
+  const base = String(filename || '班费记录').trim()
+  const saved = await saveBlobWithDialog(`${base}_${localDateStr()}.zip`, res.data)
+  // 空串 = 用户在保存对话框点了取消，不提示
+  if (saved) notifySuccess(`已导出，含 ${groups.length} 条记录的收据文件`)
 }
 </script>

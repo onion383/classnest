@@ -21,6 +21,8 @@ select {
 @import "tailwindcss";
 @import "./theme-base.css";
 @import "./utilities.css";
+/* 媒体查看器（图片/视频灯箱）：相册页与收据弹窗共用，样式单源 */
+@import "./media-viewer.css";
 /* 彩色色块主题的 B 方案（深蓝 + 琥珀）覆盖层：放在基础层之后，
    主窗口与桌面小组件 / 引导页等子窗口都从这里拿到同一套外观。 */
 @import "./theme-base-accent.css";

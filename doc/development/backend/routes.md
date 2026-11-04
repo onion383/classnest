@@ -296,7 +296,21 @@ flowchart TD
 | [`executors.query.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.query.js) | 查询、聚合、找人（姓名 / 拼音）与跨表检索 |
 | [`executors.snapshot.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.snapshot.js) | 整库快照（`snapshot_create`（创建）/ `snapshot_list`（列表）/ `snapshot_restore`（恢复）） |
 
-### 9. 标准
+### 9. 数据导出（[`routes/dataExport.js`](../../../student-backend/routes/dataExport.js)，`/api/data`）
+
+设置页「数据管理」的数据源与打包出口。只读业务表 + 内存打包，不写库。
+
+- `GET /tables` —— 表清单与行数（19 张业务表），前端据此渲染列表。每条带 `py`（表名拼音首字母，供搜索框用：输入 `xs` 能命中「学生名单」），**它必须跟 `label` 一起维护**，探针按「表名里的中/英文字数」核对长度。
+- `POST /sources { keys }` —— 取指定表的数据，返回 `{ fields, rows }`，形状与 `ExportExcel` 组件完全一致（前端因此能直接复用那套导出实现，不必重写格式逻辑）。
+- `POST /zip { entries: [{ name, data(base64) }], password, filename, receiptGroups?, includeReceipts? }` —— 把若干文件打成一个 zip 返回字节流（可选 ZipCrypto 加密）。前端用现有 `save-file` 通道落盘，所以**不需要新增 IPC 通道**。
+  - 收据文件有两条来源，二选一：`receiptGroups: [{ code, items: [{ path, name }] }]` 由**调用方分好组**（班费页用，导的是「我现在看到的数据」，含未保存行）；`includeReceipts: true` 由**后端按库里的 `fee_records` 自己分**（数据管理用，它手里只有表格化文本，没有收据原始路径）。
+  - 两者最终都落成 `收据文件/{收支编码}/{原文件名}`，编码为空落「未编号」；文件只在 uploads 根目录取（`basename` 压平），单个读失败只跳过它。
+
+结构化列在服务端就展开成人读文本：座位是二维网格（讲台行 + 走廊列）、值日 `cells` 是 `{项目:{星期:[人名]}}`、
+快照 `payload` 是对象。`readable()` 负责转成「键: 值」并按列翻成中文键名 ——
+`GET /sources` 的输出里不允许出现裸 JSON 或英文键名（`testjs/probe/data-export-probe.cjs` 逐格扫描把关）。
+
+### 10. 标准
 
 - 所有写接口都要登记撤销（表格走 `useTableCRUD` 的 `/api/undo`，网格走 `recordGridSnapshotUndo`，相册/分组的撤销由路由自己写）。
 - 新增接口必须同时更新 [frontend/views.md](../frontend/views.md) 的接口列与本文档。

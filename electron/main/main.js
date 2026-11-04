@@ -599,12 +599,15 @@ app.whenReady().then(() => {
     // 全新安装（本机无任何账号库）先弹首次引导向导，完成后再进入主界面；
     // 非首启维持原路径——主窗口立即创建，不增加任何串行等待。
     // 引导页出现时机（优先级从高到低）：
-    //   FORCE_SETUP=1 → 一定进（打包版也能强制预览）；FORCE_SETUP=0 → 一定不进（开发模式的逃逸开关）。
-    //   开发模式（isDev）→ 默认**每次都进**：引导流程要反复改、反复看，不该每次靠手敲环境变量。
-    //   打包版 → 只在「本机全新安装」（firstRunAtStartup，即数据目录无 index.db）时进。
+    //   FORCE_SETUP=1 → 一定进（打包版也能强制预览）；FORCE_SETUP=0 → 一定不进。
+    //   devEntersSetup → 开发模式下的「常进」开关，**默认关**（见下方常量）。
+    //   其余情况开发模式与打包版同一口径：只在「本机全新安装」（firstRunAtStartup，即数据目录
+    //   无 index.db，或上次引导没走完留下了 setup-incomplete 标记）时进。
+    //   为什么默认关：开发机上每启动一次就多一个账号库、还要重走 6 步；连着调引导时把
+    //   devEntersSetup 改成 true 最省事，只想临时进一次就用 FORCE_SETUP=1。
     const forceSetup = process.env.FORCE_SETUP === '1'
     const skipSetup = process.env.FORCE_SETUP === '0'
-    const devEntersSetup = isDev
+    const devEntersSetup = false
 
     // 进入正式启动：建窗（启动窗口或主窗口）→ 起后端 → 内存采样。
     // 「启动窗口」= 引导窗口；它同时承担低版本系统提示（plan.warn 为首屏提示画面）。

@@ -116,7 +116,7 @@ classnest/
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，33 个）
+### 4. 工具（`src/utils/`，34 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |
@@ -131,6 +131,7 @@ classnest/
 | [`dateTime.js`](../../../student-frontend/src/utils/dateTime.js) | `pad2 / formatDate / formatDateTime / formatDateTimeLocal` | 各弹窗、`AnimatedClock`、工具箱 `Timer` |
 | [`collator.js`](../../../student-frontend/src/utils/collator.js) | `zhCollator`、`naturalCollator`（复用 `Intl.Collator`） | 表格排序、文件名自然排序 |
 | [`saveFile.js`](../../../student-frontend/src/utils/saveFile.js) | 保存对话框与写文件（经主进程 `save-file`） | 导出组件 |
+| [`base64.js`](../../../student-frontend/src/utils/base64.js) | Uint8Array/Blob → base64（分块拼接，避免大文件参数展开爆栈） | 数据管理导出、班费导出 |
 | [`renameOutcome.js`](../../../student-frontend/src/utils/renameOutcome.js) | `readRenameOutcome(res)`：把后端改名响应的 `renamed.skipped` 翻译成可展示提示。学生改名时后端会一并级联「只存姓名」的关联表，旧名有同名学生时跳过级联（宁可不同步也不能改错人）；此前前端**完全不看这个字段** → 用户以为改名全部生效，实际值日表/座位表还挂着旧名，历史值日指数从此归不到他名下，且界面不报错 | `useTableCRUD` 的单格保存 |
 | [`fileName.js`](../../../student-frontend/src/utils/fileName.js) | 文件名校验/清洗、默认名生成 | 导出组件 |
 | [`csvCell.js`](../../../student-frontend/src/utils/csvCell.js) | CSV 单元格转义（逗号/引号/换行） | CSV 导出 |

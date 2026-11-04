@@ -15,28 +15,9 @@ const cors = require('cors');
 const { auth, authStatic } = require('./middleware/auth');
 const { createDynamicTableRouter } = require('./routes/dynamicTable');
 
-// 图片魔数签名校验：mimetype/扩展名可被伪造，只有文件真实字节的「魔数」才可信。
-// jpg/png/gif/bmp/webp 各自的开头字节签名；命中任一即视为真实图片。
-const IMAGE_SIGNATURES = [
-  [0xff, 0xd8, 0xff],                                        // jpeg
-  [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],         // png
-  [0x47, 0x49, 0x46, 0x38],                                  // gif ('GIF8')
-  [0x42, 0x4d],                                              // bmp ('BM')
-  [0x52, 0x49, 0x46, 0x46],                                  // webp ('RIFF...WEBP')
-];
-function hasImageSignature(filePath) {
-  let buf;
-  try {
-    const fd = fs.openSync(filePath, 'r');
-    buf = Buffer.alloc(16);
-    fs.readSync(fd, buf, 0, 16, 0);
-    fs.closeSync(fd);
-  } catch (_) { return false; }
-  for (const sig of IMAGE_SIGNATURES) {
-    if (buf.length >= sig.length && sig.every((b, i) => buf[i] === b)) return true;
-  }
-  return false;
-}
+// 上传文件的类型校验（扩展名白名单 + 真实字节魔数）已统一到
+// services/uploadSignatures.js —— 收据不再只收图片，签名表跟着扩展了，
+// 不再在这里留第二份只有图片签名的副本。
 
 const { db } = require('./db');
 const dbManager = require('./dbManager/dbManager');
@@ -258,50 +239,82 @@ function startServer(port) {
       () => { app.use('/api/activities', auth(['teacher']), require('./routes/activities')); },
       () => { app.use('/api/countdowns', auth(['teacher']), require('./routes/countdowns')); },
       () => { app.use('/api/cadres', auth(['teacher']), require('./routes/cadres')); },
+      // 数据管理：设置页的「表清单 / 取表数据 / 打 zip」，只读业务表，无写路径
+      () => { app.use('/api/data', auth(['teacher']), require('./routes/dataExport')); },
       () => { app.use('/api/ai', auth(['teacher']), require('./routes/ai/ai')); },
       // 首屏聚合接口：把首页 9 个接口合并为 1 次请求（依赖上面各路由已注册，故放最后）
       () => { app.use('/api/dashboard', auth(['teacher']), require('./routes/dashboard')); },
       // fee-records 含 multer（文件上传处理），一起延迟加载
       () => {
         const multer = require('multer');
-        const ALLOWED_EXT = /\.(jpg|jpeg|png|gif|webp|bmp)$/i;
-        const ALLOWED_MIME = /^image\/(jpeg|png|gif|webp|bmp)$/;
+        const { ALLOWED_EXT_RE, checkUpload, KINDS, decodeFileName } = require('./services/uploadSignatures');
+        const { moveReceiptsToTrash } = require('./services/receiptTrash');
+        // multer 的 limits 只能设一个总上限，按「最大的一类」给；分类上限在 handler 里判
+        const MAX_UPLOAD_BYTES = Math.max(...Object.values(KINDS).map((k) => k.maxBytes));
         const storage = multer.diskStorage({
           destination: (req, file, cb) => cb(null, dbManager.uploadsDir),
           filename: (req, file, cb) => {
-            const ext = (path.extname(file.originalname) || '.jpg').toLowerCase();
+            const ext = (path.extname(file.originalname) || '.bin').toLowerCase();
             const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
             cb(null, uniqueSuffix + ext);
           }
         });
         const upload = multer({
           storage,
-          limits: { fileSize: 10 * 1024 * 1024 }, // 单文件 10MB
+          limits: { fileSize: MAX_UPLOAD_BYTES },
           fileFilter: (req, file, cb) => {
-            const ok = ALLOWED_MIME.test(file.mimetype) && ALLOWED_EXT.test(file.originalname);
-            // 必须传第二个参数 includeFile（true=接受），否则 multer 视作拒绝并丢弃文件
-            cb(ok ? null : new Error('仅支持图片文件（jpg/png/gif/webp/bmp），且大小不超过 10MB'), ok);
+            // 只按扩展名初筛：Windows 上 mimetype 对 docx/xlsx 常常不可靠，
+            // 真正的类型判断在 handler 里用魔数做（见 services/uploadSignatures.js）
+            const ok = ALLOWED_EXT_RE.test(file.originalname || '');
+            cb(ok ? null : new Error('不支持的文件类型'), ok);
           }
         });
         app.use('/api/fee-records', auth(['teacher']), createDynamicTableRouter('fee_records', {
           minCount: 1,
           fieldTypeOverrides: { '收支金额': '小数', '收支时间': '日期' },
           extraRoutes: (router) => {
-            router.post('/upload-receipt', upload.array('receipts', 10), (req, res) => {
+            router.post('/upload-receipt', upload.array('receipts', 20), (req, res) => {
               if (!req.files || req.files.length === 0) {
                 return res.status(400).json({ error: '没有上传文件' });
               }
-              // 魔数校验：逐个读取真实字节，伪装成图片的非图片文件一律清理并拒绝
-              const bad = req.files.filter(f => !hasImageSignature(f.path));
-              if (bad.length > 0) {
-                bad.forEach(f => { try { fs.unlinkSync(f.path); } catch (_) {} });
-                return res.status(400).json({ error: '文件内容不是有效图片' });
+              // 逐个校验扩展名 + 真实字节。任一个不合格就整批回滚 —— 部分成功会让
+              // 前端拿到半份结果，用户还得自己比对哪几个传上去了。
+              const files = [];
+              const errors = [];
+              for (const f of req.files) {
+                // multer 给的 originalname 是 latin1 解码的，中文名会乱码，先转回 UTF-8
+                const originalName = decodeFileName(f.originalname);
+                const check = checkUpload(f.path, originalName, f.size);
+                if (!check.ok) { errors.push(check.error); continue; }
+                files.push({
+                  // 收据字段存的是新结构（对象数组），旧数据可能是纯字符串数组，
+                  // 前端读取时统一归一化（见 FeeManagement.vue 的 normalizeReceipts）
+                  path: `/uploads/${f.filename}`,
+                  name: originalName || f.filename,
+                  size: f.size,
+                  kind: check.kind,
+                });
               }
-              const urls = req.files.map(f => `/uploads/${f.filename}`);
-              res.json({ urls });
+              if (errors.length > 0) {
+                req.files.forEach(f => { try { fs.unlinkSync(f.path); } catch (_) { /* 已被清理 */ } });
+                return res.status(400).json({ error: errors.join('；') });
+              }
+              res.json({ files });
             }, (err, req, res, next) => {
               // 处理文件类型/大小被 multer 拒绝的情况（fileFilter/limits）
-              res.status(400).json({ error: err && err.message ? err.message : '图片上传失败' });
+              res.status(400).json({ error: err && err.message ? err.message : '文件上传失败' });
+            });
+
+            // 收据文件移进回收站：只在「保存」时调用（前端点取消不该删磁盘文件）。
+            // 收据从图片扩到视频后，删除只改数组会让 uploads 悄悄涨到几个 G。
+            router.post('/receipt-trash', (req, res) => {
+              const list = Array.isArray(req.body && req.body.paths) ? req.body.paths : [];
+              const moved = moveReceiptsToTrash(
+                list,
+                dbManager.uploadsDir,
+                path.join(dbManager.dataDir, 'receipt-trash')
+              );
+              res.json({ moved });
             });
           }
         }));

@@ -11,7 +11,8 @@
       @keydown.enter.prevent="open ? commit(hoverIdx) : openMenu()"
       @keydown.escape="open = false"
     >
-      <span class="av-select__value" :class="{ 'av-select__value--placeholder': !resolved || resolved.value == null }">
+      <!-- title：触发器宽度不够时文案仍会被省略号截断，悬停可看全文 -->
+      <span class="av-select__value" :class="{ 'av-select__value--placeholder': !resolved || resolved.value == null }" :title="display">
         {{ display }}
       </span>
       <span class="av-select__arrow" aria-hidden="true"><IconGlyph name="chevronDown" tint="current" glyph :size="14" :stroke-width="1.8" /></span>

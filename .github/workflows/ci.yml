@@ -10,6 +10,16 @@
 #   · push 到 main / PR → 跑测试；只有非 PR 才继续打包与草稿（PR 省 CI 时长）
 #   · workflow_dispatch → 手动全量跑一遍（同样只存草稿，不会发布）
 #
+# 打包总开关（2026-11-05 起默认关闭）：
+#   · 仓库变量 PACKAGING_ENABLED —— 唯一开关，只有值等于 true 才跑 package / draft。
+#   · 未设置该变量 = 关闭（当前状态）：push 只跑测试，打包与草稿两个 job 直接 skipped。
+#   · 需要出安装包时再开（二选一）：
+#       GitHub → Settings → Secrets and variables → Actions → Variables → New repository variable
+#       名称 PACKAGING_ENABLED，值 true
+#       或命令行：gh variable set PACKAGING_ENABLED --body true
+#     用完想再关：把该变量删掉（删掉即回到关闭，别填 false 也算关闭，但删掉更干净）
+#   · 测试段（test）不受影响，任何时候都会跑。
+#
 # 说明：
 #   · 只支持 Windows：electron-builder 目标是 dir，安装包由 Inno Setup 编译。
 #   · 原生模块（koffi / better-sqlite3-multiple-ciphers / sharp）使用 N-API 预编译产物，
@@ -97,7 +107,8 @@ jobs:
   package:
     name: 打包
     needs: test
-    if: github.event_name != 'pull_request'
+    # 除了 PR 不出包，还要仓库变量 PACKAGING_ENABLED=true 才出包（默认未设 = 关闭）
+    if: github.event_name != 'pull_request' && vars.PACKAGING_ENABLED == 'true'
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -236,7 +247,8 @@ jobs:
   draft:
     name: 存草稿（Draft Release，不发布）
     needs: package
-    if: github.event_name != 'pull_request'
+    # 与 package 同一个开关：打包关了这里也就没有产物可挂，显式写一遍而不是依赖 needs 隐式跳过
+    if: github.event_name != 'pull_request' && vars.PACKAGING_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

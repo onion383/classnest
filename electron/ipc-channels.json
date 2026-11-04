@@ -41,6 +41,7 @@
   ],
   "invoke": [
     "select-folder",
+    "select-db-file",
     "save-background-image",
     "save-file",
     "screenshot-capture",

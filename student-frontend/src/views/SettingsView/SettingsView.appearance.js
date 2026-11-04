@@ -235,7 +235,7 @@ export function useSettingsAppearance(ctx) {
     // 下拉切换安全等级：先弹确认框（按需收集当前密码 / 新密码），确认后再真正切换
     onSecurityLevelChange(target) {
       if (!target || target === ctx.securityLevel.value) return
-      ctx.securityDialog.value = { open: true, target, password: '', newPassword: '', error: '' }
+      ctx.securityDialog.value = { open: true, target, password: '', newPassword: '', confirmPassword: '', error: '' }
     },
     closeSecurityDialog() {
       if (ctx.busySecurityLevel.value) return
@@ -250,6 +250,19 @@ export function useSettingsAppearance(ctx) {
       if (ctx.securityNeedsNew.value && String(d.newPassword).length < 6) {
         d.error = '新密码长度至少 6 位'
         return
+      }
+      // 二次确认：首次设密码打错一个字就进不去自己刚设的墙。普通密码还能在原机走本机信息
+      // 恢复，超级隐私只有恢复词，所以提示语按目标等级分开（见 SettingsView 的 securityNewPwdHint）。
+      // 两次输入不一致就提交，等于给用户凭空造一次找回。
+      if (ctx.securityNeedsNew.value) {
+        if (!d.confirmPassword) {
+          d.error = '请再次输入新密码'
+          return
+        }
+        if (d.newPassword !== d.confirmPassword) {
+          d.error = '两次输入的新密码不一致'
+          return
+        }
       }
       ctx.busySecurityLevel.value = true
       d.error = ''
@@ -267,6 +280,7 @@ export function useSettingsAppearance(ctx) {
         d.open = false
         d.password = ''
         d.newPassword = ''
+        d.confirmPassword = ''
         ctx.notifySuccess('安全等级已更新')
       } catch (err) {
         d.error = err.response?.data?.error || '切换失败'
@@ -284,26 +298,11 @@ export function useSettingsAppearance(ctx) {
       ctx.privacyPhrase.value = ''
       ctx.syncPrivacyPhraseGuard(false)
     },
-    async copyPrivacyPhrase() {
-      try {
-        if (window.electron?.invoke) {
-          // 主进程写剪贴板并定时清空：避免恢复词长期留在系统剪贴板
-          const ok = await window.electron.invoke(INVOKE.COPY_SENSITIVE_TEXT, {
-            text: ctx.privacyPhrase.value,
-            ttlMs: 60000,
-          })
-          if (!ok) throw new Error('copy failed')
-        } else {
-          await navigator.clipboard.writeText(ctx.privacyPhrase.value)
-        }
-        ctx.showAlert(
-          window.electron?.invoke
-            ? '恢复词已复制，60 秒后会自动清空剪贴板'
-            : '恢复词已复制，请妥善离线保存'
-        )
-      } catch (_) {
-        ctx.showAlert('复制失败，请手动抄写')
-      }
+    // 切换已生效、恢复词只返回这一次：关掉弹窗前再确认一遍，避免手快点掉后永久丢失
+    onPrivacyPhraseSaved() {
+      ctx.showConfirm('确认已把恢复词保存到安全位置？关闭后无法再次查看。', () => {
+        ctx.clearPrivacyPhrase()
+      }, '确认已保存')
     },
     async pickDir() {
       try {

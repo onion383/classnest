@@ -108,7 +108,7 @@ classnest/
 
 ### SettingsView（目录）
 - 组成：[`SettingsView.vue`](../../../student-frontend/src/views/SettingsView/SettingsView.vue) + [`SettingsView.appearance.js`](../../../student-frontend/src/views/SettingsView/SettingsView.appearance.js) / [`SettingsView.data.js`](../../../student-frontend/src/views/SettingsView/SettingsView.data.js) / [`SettingsView.search.js`](../../../student-frontend/src/views/SettingsView/SettingsView.search.js)。
-- 职责：账号信息、撤销记录、主题（`ThemePickerDialog`）、工具箱与桌面组件开关、保存路径、数据目录、性能面板、数据库加密/导出、数据管理弹窗。
+- 职责：账号信息与安全等级（切到超级隐私时复用 `RecoveryKeyDialog` 展示恢复词；明文 / 无密码两档不显示密码框与「修改密码」）、撤销记录、主题（`ThemePickerDialog`）、工具箱与桌面组件开关、保存路径、数据目录、性能面板、数据库加密/导出、数据管理弹窗。
 
 ### ScheduleView（目录）
 - 组成：[`ScheduleView.vue`](../../../student-frontend/src/views/ScheduleView/ScheduleView.vue) + [`ScheduleView.common.js`](../../../student-frontend/src/views/ScheduleView/ScheduleView.common.js) / [`ScheduleView.master.js`](../../../student-frontend/src/views/ScheduleView/ScheduleView.master.js) / [`ScheduleView.active.js`](../../../student-frontend/src/views/ScheduleView/ScheduleView.active.js) / [`ScheduleView.history.js`](../../../student-frontend/src/views/ScheduleView/ScheduleView.history.js)。

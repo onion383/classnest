@@ -116,7 +116,7 @@ classnest/
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，30 个）
+### 4. 工具（`src/utils/`，33 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |
@@ -127,6 +127,7 @@ classnest/
 | [`changelog.js`](../../../student-frontend/src/utils/changelog.js) | `parseChangelog(markdown)`：把根目录 `CHANGELOG.md` 解析为 `{ version, date, notes }` 列表（按日期倒序、兼容 v 前缀与多种分隔符） | `AboutView`、`testjs/units/changelog.test.js` |
 | [`jwt.js`](../../../student-frontend/src/utils/jwt.js) | JWT 解码（base64url，不用 `atob`）与过期判断 | `router/index.js`、`authStorage` |
 | [`authStorage.js`](../../../student-frontend/src/utils/authStorage.js) | token / 当前用户的唯一读写点（空值语义、坏 JSON 防御） | 全局 |
+| [`localRecover.js`](../../../student-frontend/src/utils/localRecover.js) | 本机信息恢复的请求层：`fetchLocalAccounts`（列出非隐私库账号）、`recoverFromLocalDb`（拼 `<slug>.db` 并落 token）、`submitRecoveredPassword`（换发常规 token）。登录页与「设置 → 修改密码 → 忘记密码」**共用一份**，避免两边对 `mustChangePassword` 的处理分叉成「一边卡在设密码、一边拿 recover 态调业务接口被 401」 | `Login`、`LocalRecoverDialog` |
 | [`dateTime.js`](../../../student-frontend/src/utils/dateTime.js) | `pad2 / formatDate / formatDateTime / formatDateTimeLocal` | 各弹窗、`AnimatedClock`、工具箱 `Timer` |
 | [`collator.js`](../../../student-frontend/src/utils/collator.js) | `zhCollator`、`naturalCollator`（复用 `Intl.Collator`） | 表格排序、文件名自然排序 |
 | [`saveFile.js`](../../../student-frontend/src/utils/saveFile.js) | 保存对话框与写文件（经主进程 `save-file`） | 导出组件 |

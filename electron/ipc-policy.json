@@ -120,6 +120,9 @@
     "main",
     "setup"
   ],
+  "select-db-file": [
+    "main"
+  ],
   "save-background-image": [
     "main"
   ],

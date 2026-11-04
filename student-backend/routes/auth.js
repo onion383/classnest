@@ -18,6 +18,7 @@ const { normalizeUsername, usernameError } = require('../services/usernameRules'
 // 未确认的草稿不会占用账号，TTL 后自动失效；容量与淘汰策略见 services/pendingRegs.js。
 const pendingRegs = require('../services/pendingRegs');
 const dbManager = require('../dbManager/dbManager');
+const { resolveSecurityLevel } = require('../utils/securityLevel');
 const slugScopes = require('../utils/slugScopes');
 const albumThumbs = require('../albumThumbs');
 
@@ -97,27 +98,50 @@ router.post('/db-login', (req, res) => {
   }
 });
 
-// 「本机信息恢复」：忘记密码时选中本机 .db 文件，凭本机登记表 + 主密钥直接签发登录态，
-// 但 token 带 recover 标记，只能先改密码（见 PUT /account/password）。
-// 超级隐私库没有主密钥包裹，本接口不适用（会抛错，引导改用恢复词）。
+// 「本机信息恢复」：忘记密码时选中本机 .db 文件，凭本机登记表 + 主密钥直接签发登录态。
+// 是否「强制改密」按安全等级分流，不能一刀切：
+//   · password —— 忘了密码，本机文件是身份凭证，签 recover token；该 token 只允许改密
+//     （见 middleware/auth.js 的 RECOVER_ALLOWED），改完换发常规 token。
+//   · plain / nopass —— 本来就没有登录密码。本机文件即凭证，直接签发常规 token 进系统。
+//     对这两档强制设密码换不到任何额外安全性（能解库的人本来就能再走一次本机恢复），
+//     却会制造状态分裂：nopass 会被静默升级成 password（等级判定看 users.password 有没有值），
+//     plain 则会被写进注册和切换等级都明令禁止的 password 哈希 —— 设置页仍显示「明文」，
+//     登录却开始要密码。
+//   · privacy —— 没有主密钥包裹，resolveByDbFile 直接抛错，引导改用恢复词，走不到这里。
 router.post('/db-recover', (req, res) => {
   const file = req.body && typeof req.body.file === 'string' ? req.body.file.split(/[\\/]/).pop() : '';
   if (!file) return res.status(400).json({ error: '缺少数据库文件' });
+  // 已登录场景（设置页「修改密码 → 忘记密码」）会带上当前账号名：库里不止一个账号时，
+  // 只凭文件名会恢复成库里第一个账号。传了就必须对得上，宁可直接报错也不能签错号。
+  const wantedUsername = req.body && typeof req.body.username === 'string' ? req.body.username.trim() : '';
   try {
     const r = dbManager.resolveByDbFile(file);
     const resolved = dbManager.resolveByUsername(r.username);
     if (!resolved) return res.status(400).json({ error: '数据库内没有可用账号' });
-    const user = resolved.conn.prepare('SELECT id, username, role FROM users WHERE username = ?').get(r.username);
+    const user = resolved.conn.prepare('SELECT id, username, role, db_slug, password FROM users WHERE username = ?').get(r.username);
     if (!user) return res.status(400).json({ error: '数据库内没有可用账号' });
+    if (wantedUsername && user.username !== wantedUsername) {
+      return res.status(400).json({ error: '该数据库中没有这个账号' });
+    }
+    const dbSlug = user.db_slug || r.slug;
+    const securityLevel = resolveSecurityLevel(resolved.conn, {
+      dbSlug, username: user.username, userId: user.id,
+    });
+    // 只有「本来就有登录密码」的档位需要先改密；其余直接是完整登录态
+    const mustChangePassword = securityLevel === 'password';
     const { token, mediaToken } = issueSession(req, {
-      userId: user.id, username: user.username, role: user.role, dbSlug: r.slug,
-    }, { recover: true });
+      userId: user.id, username: user.username, role: user.role, dbSlug,
+    }, mustChangePassword ? { recover: true } : {});
     setAuthCookie(res, token);
     res.json({
-      mustChangePassword: true,
+      securityLevel,
+      mustChangePassword,
       token,
       mediaToken,
-      user: { id: user.id, username: user.username, role: user.role, dbSlug: r.slug, hasPassword: true },
+      user: {
+        id: user.id, username: user.username, role: user.role, dbSlug,
+        hasPassword: !!user.password,
+      },
     });
   } catch (err) {
     res.status(400).json({ error: err.message });

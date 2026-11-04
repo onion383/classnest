@@ -33,10 +33,12 @@ classnest/
                 ├── DutyRecordSettingsDialog.vue  # 值日记录设置
                 ├── DutySettingsDialog.vue  # 值日设置
                 ├── DutyWeightAlgorithmDialog.vue  # 值日权重算法
+                ├── LocalRecoverDialog.vue  # 已登录时忘记密码（本机恢复）
                 ├── MoveAlbumDialog.vue  # 移动照片到相册
                 ├── NewAlbumDialog.vue  # 新建相册
                 ├── NewComerConfirm.vue  # 新成员参与确认
                 ├── OverdueLeaveDialog.vue  # 逾期未销假
+                ├── RecoveryKeyDialog.vue  # 恢复词展示与抄写确认
                 ├── SeatBackfillDialog.vue  # 座位回填
                 ├── SeatRecordSettingsDialog.vue  # 座位记录设置
                 ├── SeatSettingsDialog.vue  # 座位设置
@@ -47,13 +49,13 @@ classnest/
 
 通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口标准」；本节只补充组件特有接口。
 
-28 个弹窗。统一标准：`DialogShell`（弹窗外壳）+ `visible`（显隐属性）控制（少数由 `v-if`（条件渲染）挂载，无 `visible`）+ 异步加载（页面用 `v-preload`（悬停预取指令）预取）。
+30 个弹窗。统一标准：`DialogShell`（弹窗外壳）+ `visible`（显隐属性）控制（少数由 `v-if`（条件渲染）挂载，无 `visible`）+ 异步加载（页面用 `v-preload`（悬停预取指令）预取）。
 
 ---
 
 ## 综合概述
 
-- **定位**：业务弹窗层（`components/dialogs/`），28 个弹窗按记录类、设置与编排类、相册类分组。
+- **定位**：业务弹窗层（`components/dialogs/`），30 个弹窗按记录类、设置与编排类、相册类分组。
 - **公共逻辑**：统一用 `DialogShell`（弹窗外壳组件）+ `visible`（显隐属性）控制显隐（少数由 `v-if`（条件渲染指令）挂载），页面用 `v-preload`（悬停预取指令）预取 `chunk`（代码分包）；通用 `props` / `emits`（组件属性 / 事件）见 README。
 - **局限**：不展开每个弹窗的字段校验规则（在各自小节），也不展开页面如何调用（见 [views.md](../views.md)）。
 
@@ -164,6 +166,16 @@ classnest/
 #### [NewComerConfirm.vue](../../../../student-frontend/src/components/dialogs/NewComerConfirm.vue) · 新成员参与确认
 - **对外接口**：`props`（组件属性）：`names`（新成员姓名）/ `action`（操作名称，默认「排表」）；`emits`（组件事件）：`participate`（参与）/ `not`（不参与）。
 - **使用方**：`SmartArrangementDialog`、`SmartGroupDialog`。
+
+#### [RecoveryKeyDialog.vue](../../../../student-frontend/src/components/dialogs/RecoveryKeyDialog.vue) · 恢复词展示与抄写确认
+- **对外接口**：`props`（组件属性）：`visible`（显隐）/ `phrase`（12 个恢复词）/ `username`（写进 txt 的账号）/ `title` / `description` / `confirmText` / `cancelText`（空串则不显示取消按钮）；`emits`（组件事件）：`confirm`（已下载且抄写正确）/ `cancel`（取消）。
+- **内部实现**：展示 12 词 → `下载文本`（`INVOKE.SAVE_FILE`，写盘成功才解锁确认）→ 核对抄写的前 3 词（兼容空格分词 / 带序号 / 连写三种输入）→ 放行；`复制` 走 `INVOKE.COPY_SENSITIVE_TEXT`（写剪贴板并 60 秒后清空）。`visible` 或 `phrase` 变化时重置内部状态，避免上一份的「已下载」串到下一份。
+- **使用方**：`Login`（注册超级隐私）、`SettingsView`（切换安全等级 → 超级隐私）。两处共用同一个组件，是为了让「恢复词只此一份」这套强制约束只有一处实现。
+
+#### [LocalRecoverDialog.vue](../../../../student-frontend/src/components/dialogs/LocalRecoverDialog.vue) · 已登录时忘记密码（本机恢复）
+- **对外接口**：`props`（组件属性）：`visible`（显隐）/ `slug`（当前账号库标识，拼成 `<slug>.db`）/ `username`（当前账号名，后端据此确认恢复的是同一账号）；`emits`（组件事件）：`done`（新密码已生效）/ `close`（取消或关闭）。
+- **内部实现**：打开即用当前账号的库文件调 `POST /api/db-recover`，**不列账号列表**（已登录，账号已知）；成功后进「设置新密码」阶段，调 `PUT /api/account/password` 换发常规 token。请求层在 `utils/localRecover.js`，与登录页共用；`watch(visible)` 带 `immediate`（`defineAsyncComponent` 首次挂载时 `visible` 已是 `true`）。
+- **使用方**：`SettingsView`（修改密码弹窗 → 忘记密码？）。超级隐私档没有主密钥包裹，本机恢复不适用，入口处直接提示改用恢复词，不打开本弹窗。
 
 ### 相册类
 

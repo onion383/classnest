@@ -116,7 +116,7 @@ flowchart TD
 | GET | `/media-token` | 签发/回填静态资源用的短时媒体 token（`<img>` / CSS `url()` 无法带头部） |
 | POST | `/logout` | 清 Cookie 并失效当前会话 |
 | POST | `/db-login` | 选择账号库并校验（隐私模式下走口令包裹） |
-| POST | `/db-recover` | 用恢复词解库（登录页恢复路径） |
+| POST | `/db-recover` | 凭本机登记库 + 主密钥恢复登录；`password` 档只发 recover 态（仅授权改密），`plain` / `nopass` 直接发常规 token |
 | POST | `/login` | bcrypt 异步比对 → 签发 7 天 JWT → 写 httpOnly Cookie |
 | POST | `/register` | 生成恢复密钥草稿（12 字），返回前 3 词供确认 |
 | POST | `/register/confirm` | 确认恢复词后创建账号与加密库 |
@@ -140,7 +140,7 @@ flowchart TD
 | POST | `/restore` | 从备份包恢复 |
 | GET / POST | `/db-encryption` | 查询/切换加密状态；POST 用 NDJSON 流逐步上报进度 |
 | POST | `/restore-offline` | 离线恢复（登录页使用） |
-| PUT | `/username` / `/password` | 改名（同步学生档案引用）/ 改密 |
+| PUT | `/username` / `/password` | 改名（同步学生档案引用）/ 改密。`plain` / `nopass` 档 `users.password` 为空：改名**不校验密码**，改密即「设首个密码」；前端在这两档隐藏密码框与「修改密码」按钮，设密码只能走 `/security-level` |
 | GET / POST | `/security-level` | 读取/切换账号安全等级（`plain` / `nopass` / `password` / `privacy`） |
 | GET | `/privacy` | 查询超级隐私状态 |
 | POST | `/privacy/enable` / `/privacy/disable` | 开启（需密码 + 恢复词）/ 关闭超级隐私 |

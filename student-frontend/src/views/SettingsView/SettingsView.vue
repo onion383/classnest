@@ -62,7 +62,8 @@
           </div>
           <div class="flex gap-3">
             <button @click="openModal('username')" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme">修改用户名</button>
-            <button @click="openModal('password')" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme">修改密码</button>
+            <!-- 明文 / 无密码两档没有登录密码，也就没有「修改密码」可改：设密码请走「安全等级」 -->
+            <button v-if="hasLoginPassword" @click="openModal('password')" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme">修改密码</button>
             <button @click="openModal('export')" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded transition-theme" :disabled="busyExport">导出数据库</button>
             <button @click="confirmLogout" class="bg-danger hover:bg-danger-hover text-text-inverse px-4 py-2 rounded transition-theme">退出登录</button>
           </div>
@@ -83,19 +84,30 @@
             <span class="text-xs text-text-muted">{{ securityLevelHint }}</span>
           </div>
           <p class="text-xs text-text-muted mt-2 ml-44">明文不加密；无密码仅免登录但仍加密；普通密码用密码登录；超级隐私模式需密码或恢复词才能解锁库密钥。</p>
-
-          <!-- 恢复词：仅超级隐私模式开启时返回一次 -->
-          <div v-if="privacyPhrase" class="ml-44 mt-3 border border-warning bg-bg p-3 rounded-lg">
-            <p class="text-sm font-medium text-text mb-2">恢复词（仅显示这一次，请抄写并离线保存）</p>
-            <p class="text-sm tracking-wide text-text-secondary select-all">{{ privacyPhrase }}</p>
-            <div class="flex gap-2 mt-3">
-              <button @click="copyPrivacyPhrase" class="bg-surface-hover px-3 py-1.5 rounded text-sm">复制</button>
-              <button @click="clearPrivacyPhrase" class="bg-surface-hover px-3 py-1.5 rounded text-sm">我已抄写</button>
-            </div>
-          </div>
         </div>
       </div>
     </div>
+
+    <!-- 切换为超级隐私后的恢复词：与注册共用同一个弹窗，同样强制下载 + 抄写前 3 词 -->
+    <RecoveryKeyDialog
+      v-if="recoveryMounted"
+      :visible="!!privacyPhrase"
+      :phrase="privacyPhrase"
+      :username="user.username"
+      title="保存恢复词"
+      description="已切换为超级隐私模式。恢复词是忘记密码时的唯一凭证，只显示这一次；请先下载到本地，再抄写前 3 个词完成确认。"
+      confirm-text="我已抄写并保存"
+      @confirm="onPrivacyPhraseSaved"
+    />
+
+    <!-- 修改密码 → 忘记密码：已登录，账号已知 —— 不列账号，直接用本机库验证当前账号 -->
+    <LocalRecoverDialog
+      :visible="localRecoverVisible"
+      :slug="(user && user.dbSlug) || ''"
+      :username="(user && user.username) || ''"
+      @done="onLocalRecoverDone"
+      @close="localRecoverVisible = false"
+    />
 
     <!-- 内嵌弹窗：切换安全等级 -->
     <Teleport to="body">
@@ -106,6 +118,11 @@
           <p class="text-sm text-text-secondary mb-4">{{ securityDialogMessage }}</p>
           <input v-if="securityNeedsCurrent" v-model="securityDialog.password" type="password" placeholder="当前登录密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" />
           <input v-if="securityNeedsNew" v-model="securityDialog.newPassword" type="password" placeholder="新登录密码（至少 6 位）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" />
+          <!-- 二次确认：首次设密码打错一个字就进不去自己刚设的墙。普通密码还能在原机走本机信息恢复，
+               超级隐私只有恢复词，所以提示语按目标等级分开（见 securityNewPwdHint） -->
+          <input v-if="securityNeedsNew" v-model="securityDialog.confirmPassword" type="password" placeholder="再次输入新登录密码" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-1 rounded" />
+          <!-- 同样不在输入过程提示「一致 / 不一致」，只保留按目标等级区分的说明 -->
+          <p v-if="securityNeedsNew" class="text-xs text-text-muted mb-3">{{ securityNewPwdHint }}</p>
           <p v-if="securityDialog.error" class="text-sm text-danger mb-3">{{ securityDialog.error }}</p>
           <div class="flex justify-end gap-2">
             <button @click="closeSecurityDialog" class="bg-surface-hover text-text px-4 py-2 rounded border border-border transition-theme">取消</button>
@@ -646,7 +663,8 @@
         <div class="dialog-card bg-surface rounded-lg p-6 w-96 border border-border shadow-lg">
             <h3 class="text-lg font-bold text-text mb-4">修改用户名</h3>
             <input v-model="newUsername" placeholder="新用户名" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changeUsername" />
-            <input v-model="usernamePassword" type="password" placeholder="当前密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changeUsername" />
+            <!-- 明文 / 无密码两档没有登录密码可校验，这两档下不出现密码框（后端对空 password 本就直接放行） -->
+            <input v-if="hasLoginPassword" v-model="usernamePassword" type="password" placeholder="当前密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changeUsername" />
             <p v-if="usernameError" class="text-sm text-danger mb-3">{{ usernameError }}</p>
             <div class="flex justify-end gap-2">
               <button @click="closeModal" :disabled="busyUsername" class="bg-surface-hover text-text px-4 py-2 rounded border border-border transition-theme disabled:opacity-50">取消</button>
@@ -665,17 +683,21 @@
             <h3 class="text-lg font-bold text-text mb-4">修改密码</h3>
             <input v-model="oldPassword" type="password" placeholder="原密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changePassword" />
             <input v-model="newPassword" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changePassword" />
-            <!-- 二次确认：密码改错没有退路（恢复词只存在于「超级隐私」等级），必须挡住手误 -->
+            <!-- 二次确认：打错一个字就要走找回流程，挡的是手误；提示语按当前等级分开
+                 （普通密码可在原机本机信息恢复，超级隐私只有恢复词，见 changePwdHint） -->
             <input v-model="confirmPassword" type="password" placeholder="再次输入新密码" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-1 rounded" @keydown.enter="changePassword" />
-            <!-- 一致性提示：边输边给反馈，不用等提交才报错 -->
-            <p v-if="confirmPassword && newPassword !== confirmPassword" class="text-xs text-warning mb-3">两次输入不一致</p>
-            <p v-else-if="confirmPassword && newPassword && confirmPassword === newPassword" class="text-xs text-success mb-3">两次输入一致</p>
-            <p v-else class="text-xs text-text-muted mb-3">改完请记牢，普通密码账户没有恢复途径。</p>
+            <!-- 输入过程不实时提示「一致 / 不一致」：边打字边跳色的提示太吵，只在提交时校验 -->
+            <p class="text-xs text-text-muted mb-3">{{ changePwdHint }}</p>
             <!-- 服务端错误就地显示：用 alert 会把用户弹出的输入内容一起清掉，得从头再填一遍 -->
             <p v-if="pwdError" class="text-sm text-danger mb-3">{{ pwdError }}</p>
-            <div class="flex justify-end gap-2">
-              <button @click="closeModal" :disabled="busyPwd" class="bg-surface-hover text-text px-4 py-2 rounded border border-border transition-theme disabled:opacity-50">取消</button>
-              <button @click="changePassword" :disabled="busyPwd" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50">{{ busyPwd ? '提交中…' : '确认修改' }}</button>
+            <div class="flex items-center justify-between gap-2">
+              <!-- 忘记密码：已登录但记不住原密码时的退路。入口只在有登录密码的档位出现
+                   （与「修改密码」按钮同条件），点了不列账号，直接验证当前账号的本机库 -->
+              <button type="button" @click="openLocalRecover" class="text-xs text-text-muted underline hover:text-text transition-theme">忘记密码？</button>
+              <div class="flex gap-2">
+                <button @click="closeModal" :disabled="busyPwd" class="bg-surface-hover text-text px-4 py-2 rounded border border-border transition-theme disabled:opacity-50">取消</button>
+                <button @click="changePassword" :disabled="busyPwd" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50">{{ busyPwd ? '提交中…' : '确认修改' }}</button>
+              </div>
             </div>
         </div>
       </div>
@@ -741,9 +763,14 @@ import { useSettingsSearch } from './SettingsView.search.js'
 import { useSettingsData } from './SettingsView.data.js'
 import { useSettingsAppearance } from './SettingsView.appearance.js'
 import { RECEIVE } from '../../electronChannels.js'
+import { useNotification } from '../../composables/useNotification.js'
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
 const ConfirmDialog = defineAsyncComponent(() => import('../../components/base/ConfirmDialog.vue'))
+// 恢复词弹窗：注册与「切到超级隐私」共用，同样按 chunk 懒加载（只有切等级时才会用到）
+const RecoveryKeyDialog = defineAsyncComponent(() => import('../../components/dialogs/RecoveryKeyDialog.vue'))
+// 忘记密码弹窗：只有点「修改密码 → 忘记密码？」时才需要，同样懒加载
+const LocalRecoverDialog = defineAsyncComponent(() => import('../../components/dialogs/LocalRecoverDialog.vue'))
 
 const route = useRoute()
 const router = useRouter()
@@ -828,7 +855,8 @@ const usernamePassword = ref('')
 const oldPassword = ref('')
 const newPassword = ref('')
 // 修改密码的三件配套：二次确认输入、弹窗内联错误、提交中锁。
-// 密码改错没有退路（恢复词只有「超级隐私」等级才有），这三样缺一都会让手误变成锁死。
+// 打错一个字就得走找回流程（普通密码靠本机信息恢复、超级隐私只能靠恢复词），
+// 这三样缺一都会让手误变成一次不必要的找回。
 const confirmPassword = ref('')
 const pwdError = ref('')
 const busyPwd = ref(false)
@@ -888,8 +916,11 @@ const busySkillsDir = ref(false)
 const securityLevel = ref('')
 const securityLevelLoading = ref(true)
 const busySecurityLevel = ref(false)
-const securityDialog = ref({ open: false, target: '', password: '', newPassword: '', error: '' })
+const securityDialog = ref({ open: false, target: '', password: '', newPassword: '', confirmPassword: '', error: '' })
 const privacyPhrase = ref('')
+// 恢复词弹窗按需挂载：没切过超级隐私就不加载它的 chunk；一旦挂载则保留（关闭走 visible，留住退场动画）
+const recoveryMounted = ref(false)
+watch(() => privacyPhrase.value, (v) => { if (v) recoveryMounted.value = true })
 // 撤销记录
 const undoGroups = ref([])
 // 撤销记录列表滚动容器（自定义滚动条的目标）
@@ -947,6 +978,14 @@ const securityLevelHint = computed(() => {
 const dbEncrypted = computed(() => {
   return securityLevel.value !== 'plain'
 })
+// 当前等级是否需要登录密码：明文 / 无密码两档在切换时后端会把 users.password 置空
+// （见 account.js 的 security-level 分支），因此没有「当前密码」可比对，也没有「修改密码」
+// 这个动作可做（设密码的唯一入口是切换安全等级）。
+// securityLevel 加载完成前是 ''，此时按「有密码」处理，避免界面先闪一下无密码态。
+const hasLoginPassword = computed(() => {
+  const lv = securityLevel.value
+  return lv !== 'plain' && lv !== 'nopass'
+})
 const securityNeedsCurrent = computed(() => {
   return securityLevel.value === 'password' || securityLevel.value === 'privacy'
 })
@@ -968,6 +1007,20 @@ const securityDialogMessage = computed(() => {
       return ''
   }
 })
+// 忘记密码的退路随等级不同，两档不能共用一句提示：
+// 普通密码库由本机主密钥包裹，可在原机走「忘记密码 → 使用本机信息恢复」（auth.js 的 db-recover，
+// 要求原机 + 原 Windows 用户 + 库文件仍在）；超级隐私库没有主密钥包裹，本机恢复不适用，
+// 唯一退路是恢复词。把这两档说成一样，会让用户误以为超级隐私也有本机退路。
+const securityNewPwdHint = computed(() => (
+  securityDialog.value.target === 'privacy'
+    ? '恢复词只显示一次，务必先下载保存；密码与恢复词同时丢失将无法恢复数据。'
+    : '请记牢：忘记密码可在原机走「忘记密码 → 使用本机信息恢复」；换机后无法找回。'
+))
+const changePwdHint = computed(() => (
+  securityLevel.value === 'privacy'
+    ? '改完请记牢：超级隐私模式忘记密码只能用恢复词找回。'
+    : '忘记密码可以点击下面的按钮尝试恢复。'
+))
 // 主题下拉与主题选择器共用 store 的 allThemes，避免两处列表漂移
 const themeOptions = computed(() => {
   return allThemes.value.map(t => ({ value: t.id, label: t.name }))
@@ -1089,7 +1142,7 @@ const ctx = {
   currentTheme, bgMaskOpacity, glassOpacity, iconStyle, topbarColor, animationsEnabled, pendingMode,
   nightSupported, followSystem,
   // computed（ref）
-  user, securityLevelOptions, securityLevelHint, dbEncrypted, securityNeedsCurrent, securityNeedsNew,
+  user, securityLevelOptions, securityLevelHint, dbEncrypted, hasLoginPassword, securityNeedsCurrent, securityNeedsNew,
   securityDialogMessage, themeOptions, isGlassTheme, settingsSearchResults, semesterOptions, activeSemester,
   deleteSemesterMessage, semesterWeeks, semesterDateError, semesterDatesDirty, bgImagePreviewUrl,
   hasUndoRecords, _undoKeyLabels, perfAllAlive, perfRows, perfMaxKB,
@@ -1107,17 +1160,34 @@ Object.assign(ctx, useSettingsSearch(ctx), useSettingsData(ctx), useSettingsAppe
 // ===== 模板顶层绑定：由逻辑模块提供、模板用到的方法 =====
 const {
   barPct, changeDataDir, changePassword, changeSkillsDir, changeThumbsDir, changeUsername,
-  clearBgImage, clearPrivacyPhrase, clearUndo, closeModal, closeSecurityDialog,
+  clearBgImage, clearUndo, closeModal, closeSecurityDialog,
   confirmAddSemester, confirmDeleteSemester, confirmLogout, confirmSearchActive, confirmSecurityLevel,
-  copyPrivacyPhrase, exportDb, fmtMem, fmtTs, goToSettingsSection, groupLabel, moveSearchActive,
+  exportDb, fmtMem, fmtTs, goToSettingsSection, groupLabel, moveSearchActive,
   onAnimationsChange, onBgImageFileChange, onBgMaskOpacityChange, onDesktopWidgetChange,
   onDialogCancel, onDialogConfirm, onFollowSystemChange, onGlassOpacityChange, onIconStyleChange,
-  onMergeNotificationsChange, onSecurityLevelChange, onSelectMode, onSelectSemester,
+  onMergeNotificationsChange, onPrivacyPhraseSaved, onSecurityLevelChange, onSelectMode, onSelectSemester,
   onSettingsSearchBlur, onSettingsSearchFocus, onThemeSelect, onToolboxChange, onTopbarColorChange,
   onUsbAutoOpenChange, openAddSemester, openDeleteAccount, openDir, openModal, openRenameSemester,
   recycleAll, redoEntry, requestDeleteSemester, restartAll, restartBackend, restartFrontend,
   restartWidget, saveSemesterName, saveSemesterSettings, selectFolder, undoableCount, undoEntry,
 } = ctx
+
+// 「修改密码 → 忘记密码？」：已登录且账号已知，所以不列账号列表，直接拿当前账号的库文件验证。
+// 验证通过后设新密码（后端换发常规 token），具体流程在 LocalRecoverDialog 里。
+const localRecoverVisible = ref(false)
+function openLocalRecover() {
+  // 超级隐私库没有主密钥包裹，本机恢复走不通 —— 别开一个注定失败的弹窗，直接说清唯一退路
+  if (securityLevel.value === 'privacy') {
+    useNotification().warning('超级隐私模式没有本机恢复通道：忘记密码只能用 12 词恢复词在登录页重置。')
+    return
+  }
+  localRecoverVisible.value = true
+}
+function onLocalRecoverDone() {
+  localRecoverVisible.value = false
+  closeModal()   // 底下的修改密码弹窗还留着上一次填的旧密码，一起关掉，避免误提交
+  useNotification().success('密码已重设，下次登录请使用新密码')
+}
 
 // 懒加载弹窗保活：首次打开后保持挂载，关闭只降 visible，保留退出动画
 watch(() => dialog.value.visible, (n) => { if (n) dialogMounted.value = true })

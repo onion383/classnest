@@ -283,12 +283,15 @@ export function useSettingsData(ctx) {
       const name = String(ctx.newUsername.value || '').trim()
       if (!name) { ctx.usernameError.value = '请输入新用户名'; return }
       if (name === ctx.user.value.username) { ctx.usernameError.value = '新用户名和当前用户名相同'; return }
-      if (!ctx.usernamePassword.value) { ctx.usernameError.value = '请输入当前密码'; return }
+      // 明文 / 无密码两档没有登录密码（切等级时后端已把 users.password 置空），
+      // 后端 PUT /username 对免密账号本就跳过校验，前端不能在这里无条件拦住。
+      if (ctx.hasLoginPassword.value && !ctx.usernamePassword.value) { ctx.usernameError.value = '请输入当前密码'; return }
       ctx.busyUsername.value = true
       try {
         const res = await axios.put('/api/account/username', {
           newUsername: name,
-          password: ctx.usernamePassword.value,
+          // 无密码等级下密码框不出现，传空串即可（后端见 password 为空直接跳过校验）
+          password: ctx.hasLoginPassword.value ? ctx.usernamePassword.value : '',
         })
         const currentUser = getCurrentUser() || {}
         currentUser.username = name

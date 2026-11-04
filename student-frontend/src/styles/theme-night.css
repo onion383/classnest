@@ -388,11 +388,17 @@
   border-color: #60a5fa !important;
 }
 :root[data-mode="night"][data-theme="glass"] .login-glow {
+  /* 只有外圈：描边 + 两层蓝光 + 落影。内侧 4 条 1px 高光见下一条规则。 */
   box-shadow:
     0 0 0 1px var(--alpha-white-12),
     0 0 30px rgba(96, 165, 250, 0.10),
     0 0 60px rgba(96, 165, 250, 0.06),
-    0 4px 20px var(--alpha-black-40),
+    0 4px 20px var(--alpha-black-40);
+}
+/* 内侧 4 条 1px 高光画在内层卡片上（外层是卡片外壳，inset 会被卡片半透明底盖掉）。
+   与 theme-glass.css 白天那份是同一组位置，只是数值换成夜间档，两处要一起改。 */
+:root[data-mode="night"][data-theme="glass"] .login-glow > .login-card {
+  box-shadow:
     inset 0 1px 0 var(--alpha-white-16),
     inset 1px 0 0 var(--alpha-white-08),
     inset 0 -1px 0 var(--alpha-white-04),

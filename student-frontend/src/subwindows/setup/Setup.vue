@@ -118,7 +118,7 @@
               <div v-if="subKey === 'info'" class="pane">
                 <div class="f-row">
                   <label class="f-label">安全等级</label>
-                  <AppSelect v-model="account.securityLevel" :options="securityLevels" class="flex-1 min-w-0" />
+                  <AppSelect v-model="account.securityLevel" :options="securityLevels" placeholder="请选择模式" class="flex-1 min-w-0" />
                 </div>
                 <div class="f-row">
                   <label class="f-label">用户名</label>
@@ -381,9 +381,11 @@ const account = ref({
   username: '',
   password: '',
   confirm: '',
-  securityLevel: 'password', // plain=明文 | nopass=加密免密 | password=加密+密码 | privacy=超级隐私
+  // plain=明文 | nopass=加密免密 | password=加密+密码 | privacy=超级隐私
+  // 默认留空（下拉显示「请选择模式」）：与登录页注册保持一致，安全等级必须由用户自己选一次
+  securityLevel: '',
 })
-// 安全等级风险说明弹窗（超级隐私模式的「取消」回退到普通密码）
+// 安全等级风险说明弹窗（超级隐私模式的「取消」退回未选择状态）
 const levelTipVisible = ref(false)
 const levelTipType = ref('password')
 const levelTipSuppress = ref(false)
@@ -467,13 +469,11 @@ watch(() => account.value.securityLevel, (v) => {
   recovery.value.draftId = ''
   recovery.value.copyWords = ''
   recovery.value.saved = false
-  // 取消隐私模式后回退到普通密码是程序化赋值，不再弹一次普通密码说明
+  // 取消隐私模式后回退到未选择是程序化赋值，不再弹一次普通密码说明
   if (!levelTipSuppress.value) tipSecurityLevel(v)
 })
-// 首次进入账户设置步骤时，先对默认等级（普通密码模式）做一次说明
-watch(current, (v) => {
-  if (v === 'account') tipSecurityLevel(account.value.securityLevel)
-})
+// 进入账户设置步骤不再主动弹说明：默认没有预选等级，说明只在用户自己选到
+// 「普通密码 / 超级隐私」时由上面的 watch 弹一次（与登录页注册口径一致）
 // 子步骤数量变化（密码清空 → 恢复密钥子步骤消失）时收敛下标
 watch(subSteps, () => {
   if (sub.value > subSteps.value.length - 1) sub.value = subSteps.value.length - 1
@@ -485,11 +485,11 @@ function tipSecurityLevel(v) {
   levelTipType.value = v
   levelTipVisible.value = true
 }
-// 超级隐私模式的「取消」：回退到默认的普通密码模式，且不再连锁弹出普通密码说明
+// 超级隐私模式的「取消」：退回未选择状态（下拉重新显示「请选择模式」），且不再连锁弹出说明
 function onLevelTipCancel() {
   levelTipVisible.value = false
   levelTipSuppress.value = true
-  account.value.securityLevel = 'password'
+  account.value.securityLevel = ''
   nextTick(() => { levelTipSuppress.value = false })
 }
 // ---------- 主题 ----------
@@ -614,7 +614,8 @@ async function nextAccount() {
   return confirmRegister()
 }
 function validateAccountInfo() {
-  const { username, password, confirm } = account.value
+  const { username, password, confirm, securityLevel } = account.value
+  if (!securityLevel) return '请先选择安全模式'
   if (!username || username.length < 2 || username.length > 30) return '用户名需在 2-30 个字符之间'
   if (canSetPassword.value) {
     if (!password) return '请设置登录密码'

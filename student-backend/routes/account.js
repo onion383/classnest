@@ -7,6 +7,7 @@ let _jwt = null;
 const useJwt = () => (_jwt || (_jwt = require('jsonwebtoken')));
 const { db } = require('../db');
 const dbManager = require('../dbManager/dbManager');
+const { resolveSecurityLevel } = require('../utils/securityLevel');
 // bcryptjs 只在改用户名/改密码/删除账号等「用户操作」里用到，不需要在后端就绪前加载：
 // 改为首次调用时才 require，避免把它的冷加载成本压在启动关键路径上（行为完全不变）。
 // 惰性加载逻辑已下沉到 services/bcryptAsync.js，本文件只引用它的异步接口。
@@ -382,12 +383,12 @@ router.delete('/', auth(), (req, res) => {
 });
 
 // 当前账号的安全等级：plain 明文 / nopass 免密加密 / password 普通密码 / privacy 超级隐私
+// 判定口径在 utils/securityLevel.js 单源维护 —— 本机恢复（routes/auth.js）也用同一份，
+// 两处各写一遍会分叉成「设置页显示免密、登录却要密码」这类矛盾。
 function currentSecurityLevel(req) {
-  const rec = dbManager.registryFindBySlug(req.user.dbSlug);
-  if (rec && rec.encrypted === 0) return 'plain';
-  if (dbManager.isProtected(req.user.username)) return 'privacy';
-  const u = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.userId);
-  return u && u.password ? 'password' : 'nopass';
+  return resolveSecurityLevel(db, {
+    dbSlug: req.user.dbSlug, username: req.user.username, userId: req.user.userId,
+  });
 }
 
 router.get('/security-level', auth(), (req, res) => {

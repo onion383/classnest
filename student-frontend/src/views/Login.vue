@@ -1,142 +1,158 @@
 <template>
   <div class="flex justify-center items-center h-screen login-bg">
-    <!-- 登录表单 -->
-    <form v-if="mode === 'login'" @submit.prevent="login" class="bg-surface p-8 rounded-3xl shadow-card w-80 login-glow">
-      <h2 class="text-xl font-bold mb-4">班集登录</h2>
-      <p v-if="loginError" class="text-danger text-[15px] font-medium mb-2">{{ loginError }}</p>
-      <input v-model="username" placeholder="账号" autocomplete="off" class="border border-border p-2 w-full mb-2 rounded-xl" />
-      <input v-model="password" type="password" placeholder="密码（留空则无密码登录）" autocomplete="new-password" class="border border-border p-2 w-full mb-4 rounded-xl" />
-      <div class="flex gap-2">
-        <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 flex-1 rounded-xl disabled:opacity-50">
-          {{ busy ? '登录中…' : '登录' }}
-        </button>
-        <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 flex-1 rounded-xl disabled:opacity-50" @click="switchMode('register')">
-          注册
-        </button>
-      </div>
-      <button type="button" :disabled="busy" class="mt-2 bg-surface-hover px-4 py-2 rounded-xl w-full disabled:opacity-50" @click="openDbPicker">
-        从数据库登录
-      </button>
-      <input ref="dbFileInput" type="file" accept=".db,.json" class="hidden" @change="onPickDbFile" />
-      <p class="text-center mt-3">
-        <a class="cursor-pointer underline text-xs text-text-muted" @click="switchMode('recover')">忘记密码？</a>
-      </p>
-    </form>
-
-    <!-- 从备份恢复（新电脑 / 换机：只需备份包 + 密码或助记词） -->
-    <form v-else-if="mode === 'restore'" @submit.prevent="restore" class="bg-surface p-8 rounded-3xl shadow-card w-80 login-glow">
-      <h2 class="text-xl font-bold mb-1">从备份恢复</h2>
-      <p class="text-xs text-text-muted mb-4">
-        <a class="cursor-pointer underline" @click="switchMode('login')">返回登录</a>
-      </p>
-      <input v-if="restoreFile" :value="restoreBundle?.username || ''" readonly placeholder="账号" autocomplete="off" class="border p-2 w-full mb-2 rounded-xl" />
-      <input v-model="password" type="password" placeholder="密码（与导出时一致）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
-      <input v-model="recoverPhrase" placeholder="或助记词（12字）" autocomplete="off" class="border p-2 w-full mb-4 rounded-xl" />
-      <button type="submit" :disabled="busy" @mouseenter="prefetch(loadConfirmDialog)" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
-        {{ busy ? '恢复中…' : '解包并恢复' }}
-      </button>
-    </form>
-
-    <!-- 注册：单页（安全等级 + 账号 + 密码） -->
-    <form v-else-if="mode === 'register'" @submit.prevent="register" class="bg-surface p-8 rounded-3xl shadow-card w-80 login-glow">
-      <h2 class="text-xl font-bold mb-1">注册账号</h2>
-      <p class="text-xs text-text-muted mb-4">
-        <a class="cursor-pointer underline" @click="switchMode('login')">已有账号，去登录</a>
-      </p>
-      <AppSelect v-model="securityLevel" :options="securityLevelOptions" class="w-full mb-2" />
-      <input v-model="username" placeholder="账号" class="border border-border p-2 w-full mb-2 rounded-xl" autocomplete="off" />
-      <template v-if="registerNeedsPassword">
-        <input v-model="password" type="password" placeholder="密码（至少 6 位）" autocomplete="new-password" class="border border-border p-2 w-full mb-2 rounded-xl" />
-        <input v-model="confirm" type="password" placeholder="确认密码" autocomplete="new-password" class="border border-border p-2 w-full mb-4 rounded-xl" />
-      </template>
-      <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
-        {{ busy ? '创建中…' : '注册' }}
-      </button>
-    </form>
-
-    <!-- 注册：恢复密钥 + 抄写前 3 词 -->
-    <form v-else-if="mode === 'recovery'" class="bg-surface p-8 rounded-3xl shadow-card w-80 login-glow">
-      <h2 class="text-xl font-bold mb-1">保存恢复密钥</h2>
-      <p class="text-xs text-text-muted mb-4">
-        <a class="cursor-pointer underline" @click="switchMode('register')">返回</a>
-      </p>
-      <p class="text-xs text-text-muted mb-2">这是超级隐私模式的恢复词，也是忘记密码时的唯一凭证。请点击「下载文本」保存到安全的地方，然后抄写前 3 个词完成注册。</p>
-      <div v-if="recoveryPhrase" class="p-3 rounded-xl mb-3 font-mono text-sm leading-6" style="background: rgba(255,255,255,var(--glass-opacity,0.4)); backdrop-filter: blur(10px) saturate(1.1);">{{ recoveryPhrase }}</div>
-      <div class="flex gap-2 mb-3">
-        <button type="button" @click="downloadTxt" class="bg-info text-text-inverse px-3 py-2 rounded-xl text-sm flex-1">下载文本</button>
-        <button type="button" @click="copyRecovery" class="bg-info text-text-inverse px-3 py-2 rounded-xl text-sm flex-1">复制</button>
-      </div>
-      <input v-model="copyWords" placeholder="抄写前 3 个词（可带序号、可不带空格）" class="border p-2 w-full mb-2 rounded-xl" autocomplete="off" />
-      <p v-if="copyError" class="text-xs text-danger mb-2">{{ copyError }}</p>
-      <button type="button" @mouseenter="prefetch(loadConfirmDialog)" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full" @click="finishRecovery">确认并完成注册</button>
-    </form>
-
-    <!-- 忘记密码：统一入口（恢复词恢复 / 本机信息恢复） -->
-    <form v-else-if="mode === 'recover'" @submit.prevent="onRecoverSubmit" class="bg-surface p-8 rounded-3xl shadow-card w-80 login-glow">
-      <h2 class="text-xl font-bold mb-1">找回密码</h2>
-      <p v-if="recoverStep !== 'setpass'" class="text-xs text-text-muted mb-4">
-        <a class="cursor-pointer underline" @click="recoverBack">{{ recoverStep === 'menu' ? '返回登录' : '上一步' }}</a>
-      </p>
-      <p v-else class="mb-4"></p>
-
-      <!-- 步骤 1：选择验证方式 -->
-      <template v-if="recoverStep === 'menu'">
-        <p class="text-xs text-text-muted mb-3">验明身份后即可设置新密码。</p>
-        <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 rounded-xl w-full mb-2 disabled:opacity-50" @click="recoverStep = 'phrase'">
-          使用恢复词恢复
-        </button>
-        <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 rounded-xl w-full disabled:opacity-50" @click="openLocalRecover">
-          使用本机信息恢复
-        </button>
-      </template>
-
-      <!-- 步骤 2a：恢复词恢复 -->
-      <template v-else-if="recoverStep === 'phrase'">
-        <p class="text-xs text-text-muted mb-2">不用记账号，系统会按恢复词在本机定位对应的账号。</p>
-        <input v-model="recoverPhrase" placeholder="12 个恢复词" autocomplete="off" class="border p-2 w-full mb-2 rounded-xl" />
-        <input v-model="password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
-        <input v-model="confirm" type="password" placeholder="确认新密码" autocomplete="new-password" class="border p-2 w-full mb-4 rounded-xl" />
-        <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
-          {{ busy ? '重置中…' : '重置密码' }}
-        </button>
-      </template>
-
-      <!-- 步骤 2b：本机信息恢复（点选本机已登记账号） -->
-      <template v-else-if="recoverStep === 'local'">
-        <p class="text-xs text-text-muted mb-2">选择一个本机账号。超级隐私模式的账号没有主密钥包裹，只能用恢复词恢复。</p>
-        <p class="text-[11px] text-text-muted mb-2">提醒：同一 Windows 账号下，本机恢复等同于共用钥匙；重要账号请使用超级隐私模式。</p>
-        <div v-if="recoverAccounts.length" class="mb-2 max-h-44 overflow-auto rounded-xl border border-border">
-          <button
-            v-for="a in recoverAccounts"
-            :key="a.slug"
-            type="button"
-            class="w-full text-left px-3 py-2 text-sm border-b border-border"
-            :class="recoverSlug === a.slug ? 'bg-surface-hover' : ''"
-            @click="recoverSlug = a.slug"
-          >
-            <span class="font-medium">{{ a.username }}</span>
-            <span class="block text-[11px] text-text-muted">{{ a.slug }}.db</span>
+    <!-- 卡片外壳（尺寸过渡的落点）：
+         · 宽度挂在这一层 —— 各形态内容互换，元素一旦被替换就接不上旧宽度，改内容自身的宽只会瞬跳；
+         · 玻璃描边 / 外发光 login-glow 也在这一层：内层卡片要 overflow:hidden 给高度过渡做裁剪，
+           留在里面会把 inset:-2px 的描边一起剪掉；rounded-3xl 也必须在这层（::before 圆角是 inherit）；
+         · 抄写密钥（mode==='recovery'）时**不卸载**：表单留在弹窗背后（见 cardMode），宽度收回 20rem。
+           整块消失会让背景里的卡片硬切一下；收回宽度是连续变化，返回时也能平滑长回去。 -->
+    <div class="login-card-sizer login-glow rounded-3xl" :style="{ width: cardWidth }">
+      <!-- 常驻卡片盒：背景 / 圆角 / 阴影 + 高度过渡的裁剪层；四种形态只在内部互换，盒子本身始终存在。
+           一个 form 承载所有形态（提交按 mode 分派），Enter 键行为与拆成四个 form 时一致。
+           抄写密钥期间整块 inert：弹窗在前面，背后的表单既不该被点到，也不该被 Tab 键走进去。 -->
+      <form
+        ref="cardRef"
+        class="login-card bg-surface p-8 rounded-3xl shadow-card w-full"
+        :inert="mode === 'recovery'"
+        :aria-hidden="mode === 'recovery' ? 'true' : null"
+        @submit.prevent="onPageSubmit"
+      >
+        <!-- 登录表单 -->
+        <template v-if="cardMode === 'login'">
+          <h2 class="text-xl font-bold mb-4">班集登录</h2>
+          <p v-if="loginError" class="text-danger text-[15px] font-medium mb-2">{{ loginError }}</p>
+          <input v-model="username" placeholder="账号" autocomplete="off" class="border border-border p-2 w-full mb-2 rounded-xl" />
+          <input v-model="password" type="password" placeholder="密码（留空则无密码登录）" autocomplete="new-password" class="border border-border p-2 w-full mb-4 rounded-xl" />
+          <div class="flex gap-2">
+            <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 flex-1 rounded-xl disabled:opacity-50">
+              {{ busy ? '登录中…' : '登录' }}
+            </button>
+            <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 flex-1 rounded-xl disabled:opacity-50" @click="switchMode('register')">
+              注册
+            </button>
+          </div>
+          <button type="button" :disabled="busy" class="mt-2 bg-surface-hover px-4 py-2 rounded-xl w-full disabled:opacity-50" @click="openDbPicker">
+            从数据库登录
           </button>
-        </div>
-        <p v-else class="text-xs text-text-muted mb-2">
-          {{ recoverLoading ? '正在读取本机账号…' : '本机没有可恢复的账号，请改用恢复词或从备份恢复。' }}
-        </p>
-        <button type="submit" :disabled="busy || !recoverSlug" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
-          {{ busy ? '恢复中…' : '恢复' }}
-        </button>
-      </template>
+          <p class="text-center mt-3">
+            <a class="cursor-pointer underline text-xs text-text-muted" @click="switchMode('recover')">忘记密码？</a>
+          </p>
+        </template>
 
-      <!-- 步骤 3：本机恢复成功后强制设置新密码 -->
-      <template v-else-if="recoverStep === 'setpass'">
-        <p class="text-xs text-text-muted mb-2">已通过本机数据库验证身份，请设置新密码后进入系统。</p>
-        <input :value="recoveredAccount" readonly placeholder="账号" class="border p-2 w-full mb-2 rounded-xl" />
-        <input v-model="password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
-        <input v-model="confirm" type="password" placeholder="确认新密码" autocomplete="new-password" class="border p-2 w-full mb-4 rounded-xl" />
-        <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
-          {{ busy ? '保存中…' : '设置新密码' }}
-        </button>
-      </template>
-    </form>
+        <!-- 从备份恢复（新电脑 / 换机：只需备份包 + 密码或助记词） -->
+        <template v-else-if="cardMode === 'restore'">
+          <h2 class="text-xl font-bold mb-1">从备份恢复</h2>
+          <p class="text-xs text-text-muted mb-4">
+            <a class="cursor-pointer underline" @click="switchMode('login')">返回登录</a>
+          </p>
+          <input v-if="restoreFile" :value="restoreBundle?.username || ''" readonly placeholder="账号" autocomplete="off" class="border p-2 w-full mb-2 rounded-xl" />
+          <input v-model="password" type="password" placeholder="密码（与导出时一致）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
+          <input v-model="recoverPhrase" placeholder="或助记词（12字）" autocomplete="off" class="border p-2 w-full mb-4 rounded-xl" />
+          <button type="submit" :disabled="busy" @mouseenter="prefetch(loadConfirmDialog)" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
+            {{ busy ? '恢复中…' : '解包并恢复' }}
+          </button>
+        </template>
+
+        <!-- 注册：单页（安全等级 + 账号 + 密码） -->
+        <template v-else-if="cardMode === 'register'">
+          <h2 class="text-xl font-bold mb-1">注册账号</h2>
+          <p class="text-xs text-text-muted mb-4">
+            <a class="cursor-pointer underline" @click="switchMode('login')">已有账号，去登录</a>
+          </p>
+          <AppSelect v-model="securityLevel" :options="securityLevelOptions" placeholder="请选择模式" class="w-full mb-2" />
+          <input v-model="username" placeholder="账号" class="border border-border p-2 w-full mb-2 rounded-xl" autocomplete="off" />
+          <template v-if="registerNeedsPassword">
+            <input v-model="password" type="password" placeholder="密码（至少 6 位）" autocomplete="new-password" class="border border-border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="confirm" type="password" placeholder="确认密码" autocomplete="new-password" class="border border-border p-2 w-full mb-4 rounded-xl" />
+          </template>
+          <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
+            {{ busy ? '创建中…' : '注册' }}
+          </button>
+        </template>
+
+        <!-- 注册：恢复密钥由共用弹窗展示（与「切换安全等级 → 超级隐私」同一套交互） -->
+
+        <!-- 忘记密码：统一入口（恢复词恢复 / 本机信息恢复） -->
+        <template v-else-if="cardMode === 'recover'">
+          <h2 class="text-xl font-bold mb-1">找回密码</h2>
+          <p v-if="recoverStep !== 'setpass'" class="text-xs text-text-muted mb-4">
+            <a class="cursor-pointer underline" @click="recoverBack">{{ recoverStep === 'menu' ? '返回登录' : '上一步' }}</a>
+          </p>
+          <p v-else class="mb-4"></p>
+
+          <!-- 步骤 1：选择验证方式 -->
+          <template v-if="recoverStep === 'menu'">
+            <p class="text-xs text-text-muted mb-3">验明身份后即可设置新密码。</p>
+            <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 rounded-xl w-full mb-2 disabled:opacity-50" @click="recoverStep = 'phrase'">
+              使用恢复词恢复
+            </button>
+            <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 rounded-xl w-full disabled:opacity-50" @click="openLocalRecover">
+              使用本机信息恢复
+            </button>
+          </template>
+
+          <!-- 步骤 2a：恢复词恢复 -->
+          <template v-else-if="recoverStep === 'phrase'">
+            <p class="text-xs text-text-muted mb-2">不用记账号，系统会按恢复词在本机定位对应的账号。</p>
+            <input v-model="recoverPhrase" placeholder="12 个恢复词" autocomplete="off" class="border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="confirm" type="password" placeholder="确认新密码" autocomplete="new-password" class="border p-2 w-full mb-4 rounded-xl" />
+            <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
+              {{ busy ? '重置中…' : '重置密码' }}
+            </button>
+          </template>
+
+          <!-- 步骤 2b：本机信息恢复（点选本机已登记账号） -->
+          <template v-else-if="recoverStep === 'local'">
+            <p class="text-xs text-text-muted mb-2">选择一个本机账号。超级隐私模式的账号没有主密钥包裹，只能用恢复词恢复。</p>
+            <p class="text-[11px] text-text-muted mb-2">提醒：同一 Windows 账号下，本机恢复等同于共用钥匙；重要账号请使用超级隐私模式。</p>
+            <div v-if="recoverAccounts.length" class="mb-2 max-h-44 overflow-auto rounded-xl border border-border">
+              <button
+                v-for="a in recoverAccounts"
+                :key="a.slug"
+                type="button"
+                class="w-full text-left px-3 py-2 text-sm border-b border-border"
+                :class="recoverSlug === a.slug ? 'bg-surface-hover' : ''"
+                @click="recoverSlug = a.slug"
+              >
+                <span class="font-medium">{{ a.username }}</span>
+                <span class="block text-[11px] text-text-muted">{{ a.slug }}.db</span>
+              </button>
+            </div>
+            <p v-else class="text-xs text-text-muted mb-2">
+              {{ recoverLoading ? '正在读取本机账号…' : '本机没有可恢复的账号，请改用恢复词或从备份恢复。' }}
+            </p>
+            <button type="submit" :disabled="busy || !recoverSlug" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
+              {{ busy ? '恢复中…' : '恢复' }}
+            </button>
+          </template>
+
+          <!-- 步骤 3：本机恢复成功后强制设置新密码 -->
+          <template v-else-if="recoverStep === 'setpass'">
+            <p class="text-xs text-text-muted mb-2">已通过本机数据库验证身份，请设置新密码后进入系统。</p>
+            <input :value="recoveredAccount" readonly placeholder="账号" class="border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="confirm" type="password" placeholder="确认新密码" autocomplete="new-password" class="border p-2 w-full mb-4 rounded-xl" />
+            <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
+              {{ busy ? '保存中…' : '设置新密码' }}
+            </button>
+          </template>
+        </template>
+      </form>
+    </div>
+
+    <!-- 注册（超级隐私）：恢复词展示 + 抄写确认，与设置页「切到超级隐私」共用同一组件 -->
+    <RecoveryKeyDialog
+      v-if="mode === 'recovery'"
+      :visible="true"
+      :phrase="recoveryPhrase"
+      :username="restoredUsername"
+      description="这是超级隐私模式的恢复词，也是忘记密码时的唯一凭证。请点击「下载文本」保存到安全的地方，然后抄写前 3 个词完成注册。"
+      confirm-text="确认并完成注册"
+      cancel-text="返回"
+      @confirm="onRecoveryConfirm"
+      @cancel="switchMode('register')"
+    />
 
     <!-- 确认弹窗（覆盖恢复 / 注册完成确认） -->
     <ConfirmDialog
@@ -176,13 +192,18 @@ import { useNotification } from '../composables/useNotification.js';
 import { reportError } from '../utils/reportError.js';
 import AppSelect from '../components/base/AppSelect.vue';
 import '../styles/dialog-transition.css';
-import { INVOKE } from '../electronChannels.js';
 import { storeMediaToken } from '../utils/apiUrl';
+import { fetchLocalAccounts, recoverFromLocalDb, submitRecoveredPassword } from '../utils/localRecover.js';
+import { useDisposables } from '../utils/disposables.js';
+import { INVOKE } from '../electronChannels.js';
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
 // 悬停预取：ConfirmDialog 的 chunk 提前加载（供 @mouseenter → prefetch 使用）
 const loadConfirmDialog = () => import('../components/base/ConfirmDialog.vue');
 const ConfirmDialog = defineAsyncComponent(loadConfirmDialog);
+// 恢复词弹窗：注册（超级隐私）与设置页切换等级共用同一个组件
+const loadRecoveryKeyDialog = () => import('../components/dialogs/RecoveryKeyDialog.vue');
+const RecoveryKeyDialog = defineAsyncComponent(loadRecoveryKeyDialog);
 
 // 注册可选的四种安全等级（与引导页 / 系统设置共用同一套文案）
 const SECURITY_LEVELS = [
@@ -195,7 +216,16 @@ const SECURITY_LEVELS = [
 const router = useRouter();
 
 const mode = ref('login');           // login | register | recovery | recover
-const securityLevel = ref('password'); // 注册安全等级：plain | nopass | password | privacy
+// 模板渲染用的形态：抄写密钥（recovery）阶段表单不卸载，继续按「注册」渲染留在弹窗背后。
+// 卸载会让背景里的卡片硬切一下；留着它 + 宽度收回 20rem，视觉上就是卡片自己缩了一下。
+const cardMode = computed(() => (mode.value === 'recovery' ? 'register' : mode.value));
+// 卡片宽度：只有注册页要放得下最长的安全等级文案（24rem），其余 20rem —— 抄写密钥阶段也算「其余」，
+// 所以那一步是 24rem → 20rem 的连续收缩（宽度过渡见文件末尾样式），form 本身一律 w-full。
+const cardWidth = computed(() => (mode.value === 'register' ? '24rem' : '20rem'));
+// 注册安全等级：plain | nopass | password | privacy
+// 默认留空（下拉显示「请选择模式」）：预选任何一档都会让人误以为已经选好了，
+// 而安全等级直接决定加密方式与能否找回，必须由用户自己确认一次。
+const securityLevel = ref('');
 const levelTipVisible = ref(false);    // 安全等级风险说明弹窗
 const levelTipType = ref('password');  // password | privacy
 const levelTipSuppress = ref(false);   // 回退赋值时抑制再次弹窗
@@ -211,13 +241,10 @@ const recoverLoading = ref(false);
 const recoverSlug = ref('');           // 本机恢复选中的库 slug
 const recoveredAccount = ref('');      // 本机恢复成功后的账号（只读展示）
 const recoveredUser = ref(null);       // 本机恢复签发的登录用户信息
-// 注册成功后的恢复密钥展示
+// 注册成功后的恢复密钥展示（下载 / 抄写校验都在 RecoveryKeyDialog 内部完成）
 const recoveryPhrase = ref('');
 const draftId = ref('');             // 待确认注册草稿 id（抄写通过后真正建库）
 const restoredUsername = ref('');
-const copyWords = ref('');
-const recoveryDownloaded = ref(false); // 必须下载过恢复密钥文本才允许确认注册
-const copyError = ref('');
 const busy = ref(false);
 const restoreBundle = ref(null);
 const restoreFile = ref('');
@@ -230,13 +257,11 @@ const confirmAction = ref('restore');   // restore=覆盖恢复 | recovery=注�
 const confirmText = ref('确定');
 const cancelText = ref('取消');
 
-const dbFileInput = ref(null);
-
 const registerNeedsPassword = computed(() => {
   return securityLevel.value === 'password' || securityLevel.value === 'privacy';
 });
 const securityLevelOptions = computed(() => SECURITY_LEVELS);
-// 安全等级说明弹窗文案（超级隐私模式的「取消」会回退到普通密码）
+// 安全等级说明弹窗文案（超级隐私模式的「取消」会退回未选择状态）
 const levelTipMessage = computed(() => {
   return levelTipType.value === 'privacy'
     ? '请您妥善保管好您的密钥，如果丢失，任何人将无法打开您的数据（包括开发者），若担心密码丢失，请使用其他模式'
@@ -252,10 +277,10 @@ watch(securityLevel, (v) => {
 });
 
 function switchMode(m) {
-  mode.value = m; copyError.value = ''; loginError.value = ''; busy.value = false;
+  mode.value = m; loginError.value = ''; busy.value = false;
   if (m === 'restore') { password.value = ''; recoverPhrase.value = ''; restoreBundle.value = null; restoreFile.value = ''; }
-  // 注册默认是普通密码模式：进来先把该等级的边界说清楚
-  if (m === 'register') tipSecurityLevel(securityLevel.value);
+  // 注册页不再默认预选安全等级（进来没有选择 → 不弹任何说明），
+  // 只有用户自己选到「普通密码 / 超级隐私」时由 watch(securityLevel) 弹一次说明。
   if (m === 'recover') {
     recoverStep.value = 'menu';
     recoverPhrase.value = ''; recoverAccounts.value = []; recoverSlug.value = '';
@@ -263,47 +288,124 @@ function switchMode(m) {
     recoveredUser.value = null; password.value = ''; confirm.value = '';
   }
 }
+// 四种形态共用同一个 <form>（模板里按 mode 分支），Enter / 提交都从这里分派，
+// 与拆成四个 form 时的行为一致；卡片因此只换内容、不换盒子，高度才有得过渡。
+function onPageSubmit() {
+  if (mode.value === 'login') return login();
+  if (mode.value === 'restore') return restore();
+  if (mode.value === 'register') return register();
+  if (mode.value === 'recover') return onRecoverSubmit();
+}
+// 卡片高度过渡：高度是内容撑出来的 auto，光改宽度接不上旧高度，只能
+// 「换内容前记旧高 → 换完量新高 → 播一段 height 动画 → 结束交还 auto」。
+// 用 WAAPI 而不是 CSS transition：transition 要靠「先钉成 from、强制回流、再改成 to」起跳，
+// 实测变矮那个方向两次赋值会被合并成一次、动画根本不播；WAAPI 直接给首尾关键帧，两个方向都稳。
+// 过渡期间才加 .login-card--clip（overflow:hidden）：变矮的那一段旧内容会溢出卡片；
+// 常驻则会把输入框聚焦光圈等溢出特效一起剪掉。
+const cardRef = ref(null);
+const d = useDisposables();
+const HEIGHT_ANIM_MS = 260;             // 与 .login-card-sizer 的宽度过渡时长保持一致
+let cardAnim = null;
+let cardAnimSeq = 0;
+// 凡是「字段数量会变」的开关都得过这一层，否则就是瞬跳：
+// · mode —— 登录 / 注册 / 找回 / 从备份恢复，四态内容多寡完全不同；
+// · securityLevel —— 只有 password / privacy 才多出两个密码框（见 registerNeedsPassword）；
+// · recoverStep —— menu → phrase → local → setpass，每步字段数都不一样。
+// 同一次切换里多个值一起变（例如改等级时顺带清空错误）由 Vue 合并成一次调用，只播一段动画。
+async function animateCardHeight() {
+  const seq = ++cardAnimSeq;
+  const el = cardRef.value;
+  // 视图卸载过（例如已跳去首页）时就没有可量的高度
+  if (!el) return;
+  // 上一次可能还没播完：先撤掉动画与裁剪，否则这里量到的是被动画覆盖的旧值
+  if (cardAnim) { cardAnim.cancel(); cardAnim = null; }
+  el.style.height = '';
+  el.classList.remove('login-card--clip');
+  const from = el.offsetHeight;           // pre flush：此刻还是旧形态
+  await nextTick();
+  const card = cardRef.value;
+  if (seq !== cardAnimSeq || !card) return;
+  const to = card.offsetHeight;
+  if (!to || Math.abs(to - from) < 1) return;
+  // 关闭动画效果时直接就位（WAAPI 不受 html.no-animations 的 CSS 兜底约束，得自己判）
+  if (document.documentElement.classList.contains('no-animations')) return;
+  card.classList.add('login-card--clip');
+  const anim = card.animate(
+    [{ height: from + 'px' }, { height: to + 'px' }],
+    { duration: HEIGHT_ANIM_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' }
+  );
+  cardAnim = anim;
+  const done = () => {
+    if (seq !== cardAnimSeq) return;      // 已被下一次切换接管
+    card.style.height = '';
+    card.classList.remove('login-card--clip');
+    cardAnim = null;
+  };
+  anim.onfinish = done;
+  d.timeout(done, HEIGHT_ANIM_MS + 80);   // onfinish 没派发（被打断 / 环境异常）时兜底
+}
+watch([mode, securityLevel, recoverStep], () => { void animateCardHeight(); });
+// 找回密码「本机账号列表」是异步到货的：列表撑高卡片那一刻也走同一段动画。
+// 空数组要跳过 —— 打开该步骤时会先赋一次 []，那时高度没变，别白播一段。
+watch(recoverAccounts, (list) => {
+  if (!Array.isArray(list) || list.length === 0) return;
+  void animateCardHeight();
+});
+// 登录失败的内联错误行同样是内容增减（出现 / 换行数变多），一并走动画。
+// 空串之间赋值高度没变，animateCardHeight 自己会在 |Δ| < 1 时提前返回。
+watch(loginError, () => { void animateCardHeight(); });
 // 选择安全等级时的风险说明弹窗：普通密码只有「确定」，超级隐私「确认 / 取消」
 function tipSecurityLevel(v) {
   if (v !== 'password' && v !== 'privacy') return;
   levelTipType.value = v;
   levelTipVisible.value = true;
 }
-// 超级隐私模式的「取消」：回退到默认的普通密码模式，且不再连锁弹出普通密码说明
+// 超级隐私模式的「取消」：退回未选择状态（下拉重新显示「请选择模式」），且不再连锁弹出说明
 function onLevelTipCancel() {
   levelTipVisible.value = false;
   levelTipSuppress.value = true;
-  securityLevel.value = 'password';
+  securityLevel.value = '';
   nextTick(() => { levelTipSuppress.value = false; });
 }
-function openDbPicker() {
-  dbFileInput.value && dbFileInput.value.click();
-}
-function onPickDbFile(e) {
-  const file = e.target.files && e.target.files[0];
-  e.target.value = ''; // 清空以允许再次选择同一文件
-  if (!file) return;
-  // 选择的若是导出的 .json 备份包：复用「从备份恢复」逻辑，预填后引导填密码/助记词恢复
-  if (/\.json$/i.test(file.name)) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(reader.result);
-        if (parsed.version !== 2) throw new Error('不是有效的 v2 备份包');
-        restoreBundle.value = parsed;
-        restoreFile.value = file.name;
-        mode.value = 'restore';
-        useNotification().info('已识别备份包，账号 ' + (parsed.username || '…') + '：请输入密码或助记词后点「解包并恢复」');
-      } catch (err) {
-        useNotification().error('备份文件无法解析：' + err.message);
-      }
-    };
-    reader.readAsText(file);
+// 「从数据库登录」：选 .db 库文件，或 .json 备份包（转去「从备份恢复」填密码/助记词）。
+//
+// 走主进程的原生 dialog（IPC select-db-file），不用渲染层的 <input type="file">：
+// Chromium 的 file chooser 传不了默认目录，每次都从系统上次停留的位置开始，
+// 停在 OneDrive / 网络位置时光枚举目录就要 0.5~2 秒 —— 点下去就像「卡了一下才弹框」。
+// 主进程这条能记住上次目录（首次落在数据目录，.db 就在那里），并按 .db/.json 过滤。
+//
+// 返回三态（见 electron/main/main.ipc-contract.js）：ok / fail / canceled。
+// 取消要安静吞掉，不能弹「选择失败」。
+async function openDbPicker() {
+  let res;
+  try {
+    res = await window.electron.invoke(INVOKE.SELECT_DB_FILE);
+  } catch (err) {
+    useNotification().error('打开文件选择器失败');
     return;
   }
-  // 本机已有 .db 库文件：直接绑定
+  if (!res || res.outcome === 'canceled') return;
+  if (res.outcome !== 'ok') return useNotification().error(res.error || '选择文件失败');
+
+  // 备份包：主进程已把文本读出来，这里直接解析（省掉一次 FileReader）
+  if (res.kind === 'json') {
+    let parsed;
+    try {
+      parsed = JSON.parse(res.text);
+      if (parsed.version !== 2) throw new Error('不是有效的 v2 备份包');
+    } catch (err) {
+      return useNotification().error('备份文件无法解析：' + err.message);
+    }
+    restoreBundle.value = parsed;
+    restoreFile.value = res.name;
+    mode.value = 'restore';
+    useNotification().info('已识别备份包，账号 ' + (parsed.username || '…') + '：请输入密码或助记词后点「解包并恢复」');
+    return;
+  }
+
+  // 本机已有 .db 库文件：后端按文件名在数据目录里找登记（不读这个路径本身）
   busy.value = true;
-  axios.post('/api/db-login', { file: file.name }).then(res => {
+  axios.post('/api/db-login', { file: res.name }).then(res => {
     username.value = res.data.username;
     useNotification().success('已选择数据库，账号 ' + res.data.username + '，请输入密码登录');
   }).catch(err => {
@@ -324,12 +426,15 @@ function login() {
   }).finally(() => { busy.value = false; });
 }
 function register() {
+  if (!securityLevel.value) return useNotification().warning('请先选择安全模式');
   if (!username.value) return useNotification().warning('请填写账号');
   if (registerNeedsPassword.value) {
     if (!password.value || password.value.length < 6) return useNotification().warning('密码长度至少 6 位');
     if (password.value !== confirm.value) return useNotification().warning('两次输入的密码不一致');
   }
   busy.value = true;
+  // 隐私等级会跳到恢复词弹窗：先预取 chunk，避免展示前出现空白等待
+  prefetch(loadRecoveryKeyDialog);
   const payload = { username: username.value, role: 'teacher', level: securityLevel.value };
   if (registerNeedsPassword.value) payload.password = password.value;
   axios.post('/api/register', payload).then(res => {
@@ -350,60 +455,9 @@ function register() {
     reportError(err, { action: '注册' });
   }).finally(() => { busy.value = false; });
 }
-async function copyRecovery() {
-  try {
-    await navigator.clipboard.writeText(recoveryPhrase.value);
-    useNotification().success('已复制恢复密钥');
-  } catch (_) {
-    useNotification().error('复制失败');
-  }
-}
-async function downloadTxt() {
-  const content = `班集 - 恢复密钥\n账号：${restoredUsername.value}\n\n请妥善保存以下 12 个恢复词，忘记密码时可用来找回：\n\n${recoveryPhrase.value}\n`;
-  const fileName = `恢复密钥-${restoredUsername.value || 'account'}.txt`;
-  try {
-    // 走 Electron 原生保存对话框，写盘成功才返回成功；用户取消则保持锁定
-    const res = await window.electron.invoke(INVOKE.SAVE_FILE, { defaultName: fileName, data: content });
-    if (res && res.canceled) return;
-    if (res && res.error) {
-      reportError(new Error(res.error), { action: '保存恢复密钥' });
-      return;
-    }
-    recoveryDownloaded.value = true;   // 文件已真正保存，解锁「确认并完成注册」
-    useNotification().success('恢复密钥文本已保存到本地');
-  } catch (e) {
-    reportError(e, { action: '保存恢复密钥' });
-  }
-}
-function finishRecovery() {
-  copyError.value = '';
-  // 必须先把恢复密钥保存到本地，否则不让继续
-  if (!recoveryDownloaded.value) {
-    copyError.value = '请先将恢复密钥保存到本地再继续注册';
-    return;
-  }
-  const expected = recoveryPhrase.value
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 3)
-    .map(w => w.replace(/^\d+\./, ''));
-  const raw = copyWords.value || '';
-
-  // 兼容三种输入：带空格分词 / 无空格但带序号（如 1.水2.络3.木）/ 纯顶住汉字（水络木）
-  const bySpace = raw.split(/\s+/).filter(Boolean).map(w => w.replace(/^\d+\./, ''));
-  const byId = [...raw.matchAll(/\d+\.\s*([^\d]+)/g)].map(m => m[1].replace(/\s+/g, ''));
-  const chars = raw.replace(/[^\u4e00-\u9fa5]/g, '').split('');
-
-  const spacedOk = bySpace.length === expected.length && expected.every((w, i) => bySpace[i] === w);
-  const bracketedOk = byId.length === expected.length && expected.every((w, i) => byId[i] === w);
-  const jammedOk = !spacedOk && chars.length >= 3 && chars.join('') === expected.join('');
-
-  if (!spacedOk && !bracketedOk && !jammedOk) {
-    copyError.value = '前 3 个词抄写不正确，请按顺序抄写，如「' + expected.join(' ') + '」';
-    return;
-  }
-  copyError.value = '';
-  // 抄写通过后：先弹出「恢复密钥仅此一份」的警示确认，用户确认后才真正创建账号
+// 恢复词弹窗的下载 / 复制 / 抄写校验都在 RecoveryKeyDialog 内完成，
+// 这里只接手「已确认保存」之后的动作：先弹一次「仅此一份」的警示，再真正建库。
+function onRecoveryConfirm() {
   confirmAction.value = 'recovery';
   confirmTitle.value = '重要提醒';
   confirmText.value = '我已确认保存，继续注册';
@@ -428,7 +482,8 @@ async function confirmRecovery() {
       router.push('/');
     })
     .catch(err => {
-      copyError.value = err.response?.data?.error || '注册失败';
+      // 确认建库失败：恢复词弹窗已经关掉了，改用提示条，避免错误无处显示
+      reportError(err, { action: '确认注册' });
     })
     .finally(() => { busy.value = false; });
 }
@@ -530,14 +585,14 @@ function recoverBack() {
   confirm.value = '';
 }
 // 本机恢复：列出本机已登记账号（隐私库除外），由用户按账号名点选
+// 请求层与「设置 → 修改密码 → 忘记密码」共用（utils/localRecover.js），别在这里另写一份
 function openLocalRecover() {
   recoverStep.value = 'local';
   recoverSlug.value = '';
   recoverAccounts.value = [];
   recoverLoading.value = true;
-  axios.get('/api/accounts').then(res => {
-    const list = (res.data && res.data.accounts) || [];
-    recoverAccounts.value = list.filter(a => !a.protect);
+  fetchLocalAccounts().then(list => {
+    recoverAccounts.value = list;
   }).catch(err => {
     reportError(err, { action: '读取本机账号' });
   }).finally(() => { recoverLoading.value = false; });
@@ -569,16 +624,23 @@ function resetByPhrase() {
     reportError(err, { action: '重置' });
   }).finally(() => { busy.value = false; });
 }
-// 本机信息恢复：选中的本机库即凭证，签发带 recover 标记的临时登录态，随后强制设新密码
+// 本机信息恢复：选中的本机库即凭证。后端按账号的安全等级分流：
+// 有登录密码（password）时签发的是 recover 态 token，只能先改密换正式 token；
+// 明文 / 免密账号本来就没有登录密码，后端直接给常规 token —— 不该被迫设一个密码
+// （强设会把免密档静默升级成普通密码、给明文库写进它不允许存在的密码哈希）。
+// 请求与落 token 都在 utils/localRecover.js（设置页「忘记密码」共用同一份）。
 function recoverByLocalAccount() {
   if (!recoverSlug.value) return useNotification().warning('请先选择要恢复的账号');
   busy.value = true;
-  axios.post('/api/db-recover', { file: recoverSlug.value + '.db' }).then(res => {
-    setToken(res.data.token);
-    storeMediaToken(res.data.mediaToken);
-    recoveredUser.value = res.data.user;
-    recoveredAccount.value = res.data.user.username;
-    username.value = res.data.user.username;
+  recoverFromLocalDb({ file: recoverSlug.value + '.db' }).then(data => {
+    if (data.mustChangePassword === false) {
+      setCurrentUser(data.user || {});
+      useNotification().success('已通过本机数据库验证，正在进入系统');
+      return router.push('/');
+    }
+    recoveredUser.value = data.user;
+    recoveredAccount.value = data.user.username;
+    username.value = data.user.username;
     password.value = '';
     confirm.value = '';
     recoverStep.value = 'setpass';
@@ -591,12 +653,8 @@ function saveRecoveredPassword() {
   if (!password.value || password.value.length < 6) return useNotification().warning('新密码至少 6 位');
   if (password.value !== confirm.value) return useNotification().warning('两次输入的新密码不一致');
   busy.value = true;
-  axios.put('/api/account/password', { newPassword: password.value }).then(res => {
-    // 后端换发了不含 recover 标记的常规 token，落盘后进入系统
-    if (res.data && res.data.token) {
-      setToken(res.data.token);
-      storeMediaToken(res.data.mediaToken);
-    }
+  // 后端换发了不含 recover 标记的常规 token（token 落盘在 utils/localRecover.js 里）
+  submitRecoveredPassword(password.value).then(() => {
     setCurrentUser(recoveredUser.value || {});
     useNotification().success('新密码已设置');
     router.push('/');
@@ -605,3 +663,18 @@ function saveRecoveredPassword() {
   }).finally(() => { busy.value = false; });
 }
 </script>
+
+<style>
+/* 登录卡片宽度过渡：切换形态（登录 ↔ 注册 …）时从 20rem 平滑长到 24rem，而不是瞬跳。
+   必须盯在「一直存在的」外壳上，form 是每次互换的新元素，改它自身的宽接不上旧宽度。
+   关闭动画时全局 html.no-animations 会把时长压到 0，这里不用另外判断。 */
+.login-card-sizer {
+  transition: width 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* 卡片高度过渡的裁剪层：高度动画由 script 里的 watch(mode) 用 WAAPI 播，
+   只有「变矮」那一小段旧内容会溢出卡片，所以只在过渡期间加这个类；
+   常驻 overflow:hidden 会连带剪掉输入框聚焦光圈等溢出特效，不能常开。 */
+.login-card--clip {
+  overflow: hidden;
+}
+</style>

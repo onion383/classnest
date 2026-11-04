@@ -159,10 +159,12 @@
     "desktop-widget"
   ],
   "get-usb-auto-open": [
-    "main"
+    "main",
+    "setup"
   ],
   "set-usb-auto-open": [
-    "main"
+    "main",
+    "setup"
   ],
   "open-external": [
     "main"

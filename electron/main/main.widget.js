@@ -93,8 +93,9 @@ let preFullscreenBounds = null
 let sessionWidgetEnabled = null
 
 // ===== 桌面小组件状态 =====
-// 「桌面小组件按需创建」：主窗口渲染层延迟到「首帧真正空闲」才回报，主进程据此错峰创建窗口
-let desktopEnabled = true
+// 「桌面小组件按需创建」：主窗口渲染层延迟到「首帧真正空闲」才回报，主进程据此错峰创建窗口。
+// 初值取 false：渲染层迟迟不回报（页面崩了/加载失败）时就不建窗，默认关闭是安全方向
+let desktopEnabled = false
 // 置底是**唯一形态**（不再有开关）：窗口是否已成功置底；attach 失败时退回普通顶层窗口
 let desktopLayerOn = false
 // 拖动起点：内容矩形 + 鼠标位置（均为 DIP）
@@ -180,6 +181,9 @@ function createWidgetWindow() {
   widgetWindow.on('closed', () => {
     if (widgetWindow === self) widgetWindow = null
   })
+
+  // 启动耗时打点跟着「真正建窗」走：工具箱改为按需创建后，启动路径上通常不再建它
+  startupTimer.mark('widget 创建完成')
 }
 
 // 工具箱浮窗的会话级显隐：隐藏即销毁，避免渲染进程常驻占用内存（约 20MB 量级）。
@@ -513,15 +517,14 @@ function registerWidgetIpc(opts = {}) {
     return !!widgetWindow && !widgetWindow.isDestroyed() && event.sender === widgetWindow.webContents
   }
 
-  // 主窗口渲染层空闲回报：同时创建工具箱浮窗，并（按启用状态）创建/关闭桌面小组件窗口
+  // 主窗口渲染层空闲回报：按启用状态创建/关闭「桌面小组件」窗口。
+  // 工具箱**不在这里建**：它的开关存在后端库里，渲染层登录后读到才下发
+  // （widget-set-session-visible）；未启用就根本不该有这个窗口 ——
+  // 早先无条件建窗再让浮窗自己隐藏，屏幕上会先闪一下。
   ipcMain.on('widgets-ready', (event, enabled) => {
     const mainWindow = getMainWindow()
     if (!mainWindow || mainWindow.isDestroyed()) return
     if (event.sender !== mainWindow.webContents) return
-    if (!widgetWindow || widgetWindow.isDestroyed()) {
-      createWidgetWindow()
-      startupTimer.mark('widget 创建完成')
-    }
     setDesktopEnabled(!!enabled)
   })
 

@@ -3,7 +3,9 @@ function migrateWidget(conn) {
   conn.exec(`
     CREATE TABLE IF NOT EXISTS widget_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      toolbox_enabled INTEGER DEFAULT 1,
+      -- 工具箱默认关闭：首次进入不该先被一堆窗口围住，由引导页「功能开关」明确勾选才开。
+      -- 只影响新建库；已有库的那一行保持原值（INSERT OR IGNORE 不会覆盖）。
+      toolbox_enabled INTEGER DEFAULT 0,
       note_save_path TEXT DEFAULT '',
       screenshot_save_path TEXT DEFAULT '',
       -- desktop_apps：桌面小组件常用软件列表（JSON 数组文本）

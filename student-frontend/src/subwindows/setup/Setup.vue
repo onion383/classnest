@@ -30,7 +30,7 @@
         type="button"
         class="welcome-x dlg-close absolute! top-3 right-3"
         title="关闭"
-        @click="quitSetup"
+        @click="askQuit()"
       >&times;</button>
       <div class="welcome-inner">
         <img src="/logo.webp" alt="logo" class="welcome-logo" />
@@ -39,8 +39,96 @@
           <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold text-white bg-blue-500 leading-none">预览版</span>
         </div>
         <p class="welcome-hi">欢迎使用~</p>
+        <p class="welcome-tip">目前这个版本仍然在测试状态，可能会不稳定或者有破坏性改动，尽请谅解</p>
         <p class="welcome-tip">首次使用前，我们需要进行一些初始化设置</p>
-        <button type="button" class="btn-primary welcome-btn" @click="screen = 'wizard'">开始</button>
+        <button type="button" class="btn-primary welcome-btn" @click="screen = 'mode'">开始</button>
+      </div>
+    </div>
+
+    <!-- 引导方式：标题栏与步骤页完全同款（左上角位置、字号一致），下方两张卡片并排，
+         底部同为「上一步 / 下一步」。两种方式写入的设置完全相同，差别只在走几步。 -->
+    <div v-else-if="screen === 'mode'" class="setup-card bg-surface">
+      <div class="setup-head">
+        <h1 class="setup-title">引导方式</h1>
+        <p class="setup-desc">两种方式引导的所有设置均可在进入软件后修改，请不用担心</p>
+        <button
+          type="button"
+          class="setup-x dlg-close absolute! top-3 right-3"
+          title="关闭"
+          @click="askQuit()"
+        >&times;</button>
+      </div>
+
+      <div class="mode-body" role="radiogroup" aria-label="引导方式">
+        <button
+          type="button"
+          role="radio"
+          :aria-checked="mode === 'fast'"
+          class="mode-card"
+          :class="{ 'is-active': mode === 'fast' }"
+          @click="mode = 'fast'"
+        >
+          <span class="mode-card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path class="ic-fill" d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12z" />
+            </svg>
+          </span>
+          <span class="mode-card-head">
+            <span class="mode-card-name">快速引导</span>
+            <span class="mode-card-badge">推荐</span>
+          </span>
+          <span class="mode-card-steps">3 步骤</span>
+          <span class="mode-card-note">帮助您快速完成软件的基础设置，其余的可以进入软件后再调整。</span>
+          <span class="mode-card-list">
+            <span class="mode-card-list-title">包括</span>
+            <span class="mode-card-tags">
+              <span class="mode-card-tag">用户须知</span>
+              <span class="mode-card-tag">账户设置</span>
+              <span class="mode-card-tag">班级与学期</span>
+            </span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          role="radio"
+          :aria-checked="mode === 'full'"
+          class="mode-card"
+          :class="{ 'is-active': mode === 'full' }"
+          @click="mode = 'full'"
+        >
+          <span class="mode-card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h9M17 17h3" />
+              <circle class="ic-fill" cx="15" cy="7" r="2" />
+              <circle class="ic-fill" cx="9" cy="12" r="2" />
+              <circle class="ic-fill" cx="15" cy="17" r="2" />
+            </svg>
+          </span>
+          <span class="mode-card-head">
+            <span class="mode-card-name">全面引导</span>
+          </span>
+          <span class="mode-card-steps">6 步骤</span>
+          <span class="mode-card-note">帮助您较为完整地完成软件设置，适合想一次配好的情况。</span>
+          <span class="mode-card-list">
+            <span class="mode-card-list-title">包括</span>
+            <span class="mode-card-tags">
+              <span class="mode-card-tag">用户须知</span>
+              <span class="mode-card-tag">账户设置</span>
+              <span class="mode-card-tag">班级与学期</span>
+              <span class="mode-card-tag">主题选择</span>
+              <span class="mode-card-tag">储存设置</span>
+              <span class="mode-card-tag">功能开关</span>
+            </span>
+          </span>
+        </button>
+      </div>
+
+      <div class="setup-foot">
+        <div class="foot-btns">
+          <button type="button" class="btn-ghost" @click="screen = 'welcome'">上一步</button>
+          <button type="button" class="btn-primary" @click="startWizard(mode)">下一步</button>
+        </div>
       </div>
     </div>
 
@@ -49,18 +137,30 @@
       <div class="setup-head">
         <h1 class="setup-title">首次安装引导</h1>
         <p class="setup-desc">完成以下设置即可开始使用</p>
+        <!-- 首次初始化进度：常驻右上角的小胶囊，任何一步都能看到后端在预热。
+             放在标题栏里但 pointer-events:none —— 它只是状态展示，不该抢拖拽或点击；
+             关闭按钮在它右侧（right-3），所以胶囊的 right 要留出关闭按钮的宽度。 -->
+        <span
+          class="perf-chip"
+          :class="{ 'is-done': warmup.done }"
+          :title="warmup.done ? '首次性能优化已完成' : (warmup.detail || warmup.phase || '正在初始化')"
+        >
+          <span class="perf-dot" :class="warmup.done ? 'is-ok' : 'is-run'"></span>
+          <span>{{ warmup.done ? '首次性能优化已完成' : '首次性能优化中' }}</span>
+          <span v-if="!warmup.done" class="perf-chip-num">{{ warmup.percent || 0 }}%</span>
+        </span>
         <!-- 右上角关闭：作为可拖拽标题栏的子元素（与欢迎页 × 同结构），
              no-drag 才会真正生效、点击才可响应；点击完全退出软件（前后端） -->
         <button
           type="button"
           class="setup-x dlg-close absolute! top-3 right-3"
           title="关闭"
-          @click="quitSetup"
+          @click="askQuit()"
         >&times;</button>
       </div>
 
       <div class="setup-body">
-        <!-- 左栏：只读进度（1-5 顺序编号，不可点击切换） -->
+        <!-- 左栏：只读进度（顺序编号，不可点击切换） -->
         <aside class="setup-side glass-panel">
           <div
             v-for="it in list"
@@ -99,9 +199,13 @@
 
           <!-- ===== 账户设置 ===== -->
           <template v-else-if="current === 'account'">
-            <!-- 已完成：只读摘要，避免重复建号 -->
-            <div v-if="registered" class="done-box">
-              <div class="done-title">账户已创建</div>
+            <!-- 已确认：只读摘要。此时账号还没真正创建（建库在点「完成」时），
+                 所以给一个「修改」入口 —— 返回上一步改用户名不该是死路。 -->
+            <div v-if="accountReady" class="done-box">
+              <div class="done-head">
+                <div class="done-title">账户信息已确认</div>
+                <button type="button" class="btn-ghost done-edit" @click="editAccount">修改</button>
+              </div>
               <div class="f-row">
                 <label class="f-label">用户名</label>
                 <div class="f-static">{{ account.username }}</div>
@@ -110,7 +214,7 @@
                 <label class="f-label">安全等级</label>
                 <div class="f-static">{{ securityLevelLabel }}</div>
               </div>
-              <p class="f-hint">点击「下一步」继续设置班级信息。</p>
+              <p class="f-hint">点击「修改」可以再次修改账户。</p>
             </div>
 
             <template v-else>
@@ -179,7 +283,7 @@
             </template>
           </template>
 
-          <!-- ===== 班级设置 ===== -->
+          <!-- ===== 班级与学期 ===== -->
           <template v-else-if="current === 'class'">
             <div class="pane">
               <div class="f-row">
@@ -187,15 +291,20 @@
                 <input v-model.trim="classInfo.name" class="f-input" placeholder="如：高一（3）班" autocomplete="off" />
               </div>
               <div class="f-row">
-                <label class="f-label">班风</label>
-                <input v-model.trim="classInfo.mottoStyle" class="f-input" placeholder="如：团结、自律、进取" autocomplete="off" />
+                <label class="f-label">学期名称 <i class="req">*</i></label>
+                <input v-model.trim="semester.name" class="f-input" placeholder="如：2026秋季学期" autocomplete="off" />
               </div>
               <div class="f-row">
-                <label class="f-label">学风</label>
-                <input v-model.trim="classInfo.xuefeng" class="f-input" placeholder="如：勤思、笃学、求真" autocomplete="off" />
+                <label class="f-label">开始日期</label>
+                <input v-model="semester.start" type="date" class="f-input" />
+              </div>
+              <div class="f-row">
+                <label class="f-label">结束日期</label>
+                <input v-model="semester.end" type="date" class="f-input" />
               </div>
               <p v-if="errorMsg" class="f-error">{{ errorMsg }}</p>
-              <p class="f-hint">班级名称必填，班风与学风可稍后在系统中修改。</p>
+              <p class="f-hint">学期起止日期已按当前月份填好推荐值，可直接修改。</p>
+              <p class="f-hint">值日与座位的补存范围、座位指数结算都依赖它计算，之后也能在「设置 → 学期设置」里修改。</p>
             </div>
           </template>
 
@@ -267,45 +376,80 @@
             </div>
           </template>
 
-          <!-- ===== 性能优化 ===== -->
-          <template v-else>
+          <!-- ===== 功能开关 ===== -->
+          <template v-else-if="current === 'features'">
             <div class="pane">
-              <div class="perf-box">
-                <template v-if="warmup.done">
-                  <span class="perf-dot is-ok"></span>
-                  <span class="perf-text">优化已经自动完成~</span>
-                </template>
-                <template v-else>
-                  <span class="perf-dot is-run"></span>
-                  <span class="perf-text">{{ warmup.phase || '正在进行首次初始化' }}</span>
-                </template>
+              <!-- 三项默认关闭（opt-in）：首次进入不该先被一堆窗口围住 -->
+              <!-- 卡片间距与「用户须知」的 .notice-list 保持一致（14px），别让三张卡贴成一块 -->
+              <div class="feature-list">
+                <div class="anim-toggle">
+                  <span class="anim-toggle-text">
+                    <span class="anim-toggle-label">启用工具箱</span>
+                    <span class="anim-toggle-desc">屏幕左边的浮标，内含便签、截图与常用软件</span>
+                  </span>
+                  <AppSwitch :model-value="features.toolbox" aria-label="启用工具箱" @change="onFeatureChange('toolbox', $event)" />
+                </div>
+                <div class="anim-toggle">
+                  <span class="anim-toggle-text">
+                    <span class="anim-toggle-label">启用桌面小组件</span>
+                    <span class="anim-toggle-desc">贴在桌面上显示时钟、便签与常用软件（置底显示，不挡操作）</span>
+                  </span>
+                  <AppSwitch :model-value="features.desktopWidget" aria-label="启用桌面小组件" @change="onFeatureChange('desktopWidget', $event)" />
+                </div>
+                <div class="anim-toggle">
+                  <span class="anim-toggle-text">
+                    <span class="anim-toggle-label">插入新 U 盘时自动打开</span>
+                    <span class="anim-toggle-desc">用文件资源管理器打开刚插入的 U 盘（仅 Windows）</span>
+                  </span>
+                  <AppSwitch :model-value="features.usbAutoOpen" aria-label="插入新U盘时自动打开" @change="onFeatureChange('usbAutoOpen', $event)" />
+                </div>
+                <p v-if="errorMsg" class="f-error">{{ errorMsg }}</p>
+                <p class="f-hint">都不是必选项，全部不勾也能正常使用。之后可随时在「设置 → 工具箱设置 / 桌面小组件设置」里改。</p>
               </div>
-              <div class="perf-bar">
-                <div class="perf-bar-fill" :class="{ 'is-done': warmup.done }" :style="{ width: (warmup.percent || 0) + '%' }"></div>
-              </div>
-              <div class="perf-nums">
-                <span>{{ warmup.detail || '请稍候…' }}</span>
-                <span class="perf-percent">{{ warmup.percent || 0 }}%</span>
-              </div>
-              <p class="f-hint">初始化在后台进行，不影响继续设置；完成后会自动提示。</p>
             </div>
           </template>
+
           </div>
           </Transition>
         </section>
       </div>
 
-      <!-- 底部操作 -->
+      <!-- 底部操作：首次初始化进度已挪到右上角胶囊（全程可见，不再只挂在最后一屏） -->
       <div class="setup-foot">
-        <button type="button" class="btn-ghost" :disabled="!canPrev || busy" @click="prev">上一步</button>
-        <span class="step-indicator">{{ activeNo }} / {{ totalSteps }}</span>
-        <button type="button" class="btn-primary" :disabled="busy" @click="next">
-          {{ nextLabel }}
-        </button>
+        <div class="foot-btns">
+          <button type="button" class="btn-ghost" :disabled="!canPrev || busy" @click="prev">上一步</button>
+          <span class="step-indicator">{{ activeNo }} / {{ totalSteps }}</span>
+          <button type="button" class="btn-primary" :disabled="busy" @click="next">
+            {{ nextLabel }}
+          </button>
+        </div>
       </div>
     </div>
     </Transition>
   </div>
+  <!-- 关闭引导确认：× 的位置很小、误触代价却不小（会丢掉「已完成引导」标记，
+       下次启动还得重走），所以关窗之前统一拦一道 -->
+  <ConfirmDialog
+    v-if="quitWarnVisible"
+    :visible="quitWarnVisible"
+    title="温馨提示"
+    message="确认关闭引导吗？如果本次关闭引导，下次启动的时候需要重新引导。"
+    :show-cancel="true"
+    confirm-text="确认"
+    cancel-text="取消"
+    @confirm="onQuitConfirm"
+    @cancel="quitWarnVisible = false"
+  />
+  <!-- 预热未完成时点「完成」的提示：只有「知道了」，没有取消（不是让用户选择，是告知） -->
+  <ConfirmDialog
+    v-if="perfWarnVisible"
+    :visible="perfWarnVisible"
+    title="温馨提示"
+    message="首次性能优化还未完成，进入程序可能会卡顿，请不用担心。"
+    :show-cancel="false"
+    confirm-text="知道了"
+    @confirm="onPerfWarnConfirm"
+  />
   <!-- 安全等级风险说明：普通密码只有「确定」，超级隐私「确认 / 取消」（取消回退默认档） -->
   <ConfirmDialog
     v-if="levelTipVisible"
@@ -321,7 +465,7 @@
 </template>
 
 <script setup>
-import { setToken, setCurrentUser } from '../../utils/authStorage.js'
+import { setToken, setCurrentUser, getToken } from '../../utils/authStorage.js'
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import axios from 'axios'
 import { useThemeStore } from '../../stores/theme'
@@ -340,14 +484,28 @@ const PREVIEW = {
   glass2: { bg: '#e6ecff', side: '#ffffff', bar: '#5b7cfa' },
 }
 
-const STEPS = [
+// 引导方式：'fast'（3 步）/ 'full'（6 步）。两者共用同一份步骤实现，只差「中间三步走不走」。
+// 「用户须知」两种模式都要走：开源许可、本地优先、密码提醒属于告知，不能因为选了快速就省掉。
+// 每次进入都要选一次：开发模式每次启动都会重走引导，模式不该被上次的选择锁住。
+const mode = ref('fast')
+
+const FULL_STEPS = [
   { key: 'notice', label: '用户须知' },
   { key: 'account', label: '账户设置' },
-  { key: 'class', label: '班级设置' },
+  { key: 'class', label: '班级与学期' },
   { key: 'theme', label: '主题选择' },
   { key: 'storage', label: '储存设置' },
-  { key: 'perf', label: '性能优化' },
+  { key: 'features', label: '功能开关' },
 ]
+const FAST_STEPS = [
+  { key: 'notice', label: '用户须知' },
+  { key: 'account', label: '账户设置' },
+  { key: 'class', label: '班级与学期' },
+]
+// 「性能优化」不在这里：它是一块常驻右上角的胶囊（见 .perf-chip），不占步骤编号。
+// 快速模式也没有「完成」摘要屏：跳过的项本来就全用默认值，再列三行「改」等于
+// 让用户逐个点开确认——正好违背「快速 = 降低认知成本」。要调的去设置里调。
+const STEPS = computed(() => (mode.value === 'fast' ? FAST_STEPS : FULL_STEPS))
 
 const SECURITY_LEVELS = [
   { value: 'plain', label: '明文模式（不加密）' },
@@ -373,7 +531,14 @@ const warnRemember = ref(false) // 低版本提示页「不再提示」勾选
 const step = ref(0)
 const sub = ref(0)
 const dir = ref(1) // 1=下一步（新卡片从右进）| -1=上一步（新卡片从左进）
-const registered = ref(false)
+// 账户表单是否已确认（草稿已就绪）。**这不等于账号已存在** —— 真正建库在点「完成」时，
+// 所以中途返回上一步仍可改用户名（见 editAccount）。
+const accountReady = ref(false)
+// 后端草稿 id（所有安全等级都有；超级隐私模式还要靠它取恢复词）
+const accountDraftId = ref('')
+// 本轮引导是否已经建号：finish 里学期保存失败后重试时，绝不能重复调 confirm
+// （草稿在 confirm 成功时已被消费，再调只会报「确认已过期」）
+const accountCreated = ref(false)
 const busy = ref(false)
 const errorMsg = ref('')
 const storageHint = ref('')
@@ -395,7 +560,14 @@ const recovery = ref({
   copyWords: '',
   saved: false,
 })
-const classInfo = ref({ name: '', mottoStyle: '', xuefeng: '' })
+const classInfo = ref({ name: '' })
+// 学期：id 非空 = 库里已有当前学期（引导在开发模式下每次启动都会重走，那就要「改」而不是「再插一条」）
+const semester = ref({ id: null, name: '', start: '', end: '' })
+const semesterPrefilled = ref(false)
+// 功能开关：三项默认全关（与三个功能的默认值一致 —— 首次进入不先弹一堆窗口）
+const features = ref({ toolbox: false, desktopWidget: false, usbAutoOpen: false })
+// 工具箱的当前值只有读到了才可信：读不到就既不显示为「开」，也不在完成时回写（否则会把库里的开静默改掉）
+const featuresLoaded = ref(false)
 // 日夜模式切换：与设置页同一套控件（仅 glass / glass2 支持夜间配色）
 const modeSwitchOptions = [
   { value: 'day', label: '日间', icon: 'sun' },
@@ -405,11 +577,16 @@ const dirs = ref({ dataDir: '', thumbsDir: '' })
 const busyDataDir = ref(false)
 const busyThumbsDir = ref(false)
 const warmup = ref({ phase: '', detail: '', percent: 0, done: false })
+// 预热没跑完就点「完成」时的温馨提示（见 tryFinish）。只提示一次：学期保存失败留在
+// 同一屏再点「完成」时不该再弹一遍，否则成了「每次都要点知道了」的拦路虎。
+const perfWarnVisible = ref(false)
+const perfWarnAcknowledged = ref(false)
 // on() 返回的订阅句柄（非响应式），卸载时按句柄退订
 let _onMain = null
 
-const totalSteps = computed(() => STEPS.length)
-const current = computed(() => STEPS[step.value].key)
+const totalSteps = computed(() => STEPS.value.length)
+const current = computed(() => STEPS.value[step.value].key)
+const isLastStep = computed(() => step.value === STEPS.value.length - 1)
 // 安全等级说明弹窗文案（与登录页注册保持一致）
 const levelTipMessage = computed(() => {
   return levelTipType.value === 'privacy'
@@ -445,13 +622,22 @@ const securityLevelLabel = computed(() => {
     privacy: '超级隐私模式',
   }[account.value.securityLevel] || '—'
 })
+// 学期起止校验：与后端 validateSemesterRange 同口径（YYYY-MM-DD 字典序即时间序）。
+// 为什么前端也要拦：存反了 semesterRange() 解析成「结束 < 开始」，值日/座位的快照补存会整段
+// 静默跳过，表现为「历史记录一直是空的」，而界面上看不出哪里错了。
+const semesterDateError = computed(() => {
+  const { start, end } = semester.value
+  if (!start || !end) return '请填写学期起止日期'
+  if (end < start) return '学期结束日期不能早于开始日期'
+  return ''
+})
 const nextLabel = computed(() => {
-  if (current.value === 'perf') return busy.value ? '处理中…' : '完成'
-  return busy.value ? '处理中…' : '下一步'
+  if (busy.value) return '处理中…'
+  return isLastStep.value ? '完成' : '下一步'
 })
 // 左栏进度：已过步骤为 done、当前为 active、其后为 pending
 const list = computed(() => {
-  return STEPS.map((s, i) => ({
+  return STEPS.value.map((s, i) => ({
     key: s.key,
     label: s.label,
     no: i + 1,
@@ -581,7 +767,88 @@ async function changeThumbsDir() {
     busyThumbsDir.value = false
   }
 }
+// ---------- 学期 ----------
+// 预填推荐日期：日期口径由后端 autoSemester() 唯一决定（设置页「增加学期」用的也是它），
+// 渲染层不再抄一份月份分档。已有当前学期时后端返回它的真实值，这里就变成「带出原值」。
+//
+// 分流依据是「有没有登录态」：引导进行中账号还没创建（建库推迟到「完成」），
+// 这时只能走免登录的 /api/setup/semester-prefill 拿纯推荐值；
+// 已有账号重进引导时仍走 schedule 接口，才能拿到当前学期的 id（走 PUT、不再插一条）。
+async function loadSemesterPrefill() {
+  if (semesterPrefilled.value) return
+  const url = getToken() ? '/api/schedule/semesters/prefill' : '/api/setup/semester-prefill'
+  try {
+    const { data } = await axios.get(url)
+    semester.value = {
+      id: data.id ?? null,
+      name: data.name || '',
+      start: data.start_date || '',
+      end: data.end_date || '',
+    }
+    semesterPrefilled.value = true
+  } catch (_) {
+    // 后端未就绪时留空：用户手填也能走完，不因为预填失败卡住引导
+  }
+}
+// ---------- 功能开关 ----------
+// 三项的真相分散在三处：桌面小组件在 localStorage、U 盘在主进程的 json、工具箱在后端库。
+// 进入该步各读一次，避免「翻回来时显示成默认值」—— 显示值和真正会写入的值必须一致。
+async function loadFeaturePrefs() {
+  try {
+    features.value.desktopWidget = (localStorage.getItem('desktopWidgetEnabled') ?? '0') === '1'
+  } catch (_) {}
+  try {
+    const res = await window.electron?.invoke(INVOKE.GET_USB_AUTO_OPEN)
+    features.value.usbAutoOpen = !!res?.enabled
+  } catch (_) {}
+  try {
+    const { data } = await axios.get('/api/widget-settings')
+    if (data && data.success) {
+      features.value.toolbox = !!data.data.toolboxEnabled
+      featuresLoaded.value = true
+    }
+  } catch (_) {
+    // 后端未就绪/未登录：工具箱保持未勾选，完成时也不回写（见 saveFeaturePrefs）
+  }
+}
+function onFeatureChange(key, value) {
+  features.value[key] = !!value
+  errorMsg.value = ''
+}
+// 不阻塞「完成」：这三项都是可选项，写失败的方向是「少弹窗口」，
+// 用户之后在设置里再开一次即可，没必要把人卡在最后一步。
+// force：本次刚建号时必须写 —— 建号前 GET 拿不到库里的值（401），
+// 不能把「没读到」当成「用户没开过」，否则引导里勾上的工具箱会在进系统后消失。
+async function saveFeaturePrefs({ force = false } = {}) {
+  try { localStorage.setItem('desktopWidgetEnabled', features.value.desktopWidget ? '1' : '0') } catch (_) {}
+  try { await window.electron?.invoke(INVOKE.SET_USB_AUTO_OPEN, features.value.usbAutoOpen) } catch (err) {
+    console.error('[setup] 保存U盘自动打开设置失败:', err)
+  }
+  if (!featuresLoaded.value && !force) return
+  // 后端 PUT 只更新传入的字段（见 routes/widgetSettings.js 的 sets 分支），
+  // 所以这里只传工具箱开关，不会碰到两个保存路径与常用软件列表。
+  try {
+    await axios.put('/api/widget-settings', { toolboxEnabled: !!features.value.toolbox })
+  } catch (err) {
+    console.error('[setup] 保存工具箱开关失败:', err)
+  }
+}
+// 只在这一步进入时拉一次：来回翻步骤不该把用户勾过的项重置回库里的值。
+// 也不能放 onMounted —— 那时账户还没建，GET /api/widget-settings 会 401。
+watch(current, (v) => {
+  if (v === 'class') loadSemesterPrefill()
+  if (v === 'features') loadFeaturePrefs()
+})
+
 // ---------- 导航 ----------
+// 进入引导：mode 决定走 3 步还是 6 步，步骤表是 computed，这里只切开关
+function startWizard(m) {
+  mode.value = m
+  step.value = 0
+  sub.value = 0
+  errorMsg.value = ''
+  screen.value = 'wizard'
+}
 function next() {
   errorMsg.value = ''
   dir.value = 1
@@ -589,26 +856,37 @@ function next() {
   if (current.value === 'account') return nextAccount()
   if (current.value === 'class') {
     if (!classInfo.value.name) { errorMsg.value = '请填写班级名称'; return }
+    if (!semester.value.name) { errorMsg.value = '请填写学期名称'; return }
+    const dateErr = semesterDateError.value
+    if (dateErr) { errorMsg.value = dateErr; return }
+    // 快速模式下这里就是最后一步：校验通过直接收尾。
+    // 千万不能统一 `step += 1` —— 越界后 current 取到 undefined.key 会整屏白掉。
+    if (isLastStep.value) return tryFinish()
     step.value += 1
     return
   }
   if (current.value === 'theme') { step.value += 1; return }
   if (current.value === 'storage') { step.value += 1; return }
-  return finish()
+  // features（完整模式最后一步）直接收尾：「性能优化」不是一步，也不在这一步里，
+  // 它是常驻右上角的胶囊（.perf-chip）。
+  return tryFinish()
 }
 function prev() {
   errorMsg.value = ''
   storageHint.value = ''
   dir.value = -1
   if (current.value === 'account' && sub.value > 0) { sub.value -= 1; return }
-  // 已在第一步：返回欢迎页（整个引导的最前面）
-  if (step.value === 0 && sub.value === 0) { screen.value = 'welcome'; return }
+  // 已在第一步：退回「引导方式」选择屏（再往前是欢迎页）
+  if (step.value === 0) { screen.value = 'mode'; return }
   step.value -= 1
   if (current.value === 'account') sub.value = subSteps.value.length - 1
 }
 // ---------- 账户设置 ----------
+// 这一整步只准备「草稿」：草稿只活在内存里（pendingRegs，30 分钟 TTL），库里还没有账号。
+// 真正建库发生在点「完成」时（finish → confirmAccount）。这样中途关窗、或返回上一步
+// 改用户名，都不会在库里留下一个改不掉的半成品账号。
 async function nextAccount() {
-  if (registered.value) { step.value += 1; sub.value = 0; return }
+  if (accountReady.value) { step.value += 1; sub.value = 0; return }
   const key = subKey.value
   if (key === 'info') return submitAccountInfo()
   return confirmRegister()
@@ -634,52 +912,53 @@ async function submitAccountInfo() {
       username: account.value.username,
       role: 'teacher',
       encrypted: level !== 'plain',
+      // defer：只存草稿、不建库（后端 routes/auth.js 的 defer 分支）
+      defer: true,
     }
     if (level === 'privacy') payload.privacy = true
     if (canSetPassword.value) payload.password = account.value.password
     const { data } = await axios.post('/api/register', payload)
-    if (data.draftId) {
-      // 有密码：后端先返回草稿与恢复密钥，进入抄写确认子步骤
-      recovery.value.draftId = data.draftId
-      recovery.value.phrase = data.recovery?.phrase || ''
+    accountDraftId.value = data.draftId || ''
+    if (!accountDraftId.value) throw new Error('账户信息暂存失败，请重试')
+    const phrase = data.recovery?.phrase || ''
+    if (phrase) {
+      // 超级隐私模式的恢复词就是库钥匙的第二把钥匙，必须在建库前抄好，所以仍在这一步展示
+      recovery.value.draftId = accountDraftId.value
+      recovery.value.phrase = phrase
       recovery.value.copyWords = ''
       recovery.value.saved = false
       sub.value = 1
-    } else {
-      onRegistered(data)
+      return
     }
+    accountReady.value = true
+    step.value += 1
   } catch (err) {
-    errorMsg.value = err?.response?.data?.error || err?.message || '注册失败，请重试'
+    errorMsg.value = err?.response?.data?.error || err?.message || '账户信息暂存失败，请重试'
   } finally {
     busy.value = false
   }
 }
-async function confirmRegister() {
+// 恢复词抄写确认：只做前端校验，**不再请求后端** —— 建库留给 finish()，
+// 这样「上一步」改完用户名不会留下一个已经确认过的旧账号。
+function confirmRegister() {
   if (!recovery.value.saved) { errorMsg.value = '请先下载或复制恢复密钥'; return }
   if (!checkCopyWords()) { errorMsg.value = '抄写的前 3 个词不正确，请核对'; return }
-  busy.value = true
-  try {
-    // 超级隐私模式：复用这份恢复词作为隐私恢复词，确认时一并提交密码与恢复词
-    const body = { draftId: recovery.value.draftId }
-    if (account.value.securityLevel === 'privacy') {
-      body.password = account.value.password
-      body.phrase = recovery.value.phrase
-    }
-    const { data } = await axios.post('/api/register/confirm', body)
-    onRegistered(data)
-  } catch (err) {
-    errorMsg.value = err?.response?.data?.error || err?.message || '注册失败，请重试'
-  } finally {
-    busy.value = false
-  }
-}
-function onRegistered(data) {
-  if (data && data.token) setToken(data.token)
-  storeMediaToken(data && data.mediaToken)
-  if (data && data.user) setCurrentUser(data.user)
-  registered.value = true
+  errorMsg.value = ''
+  accountReady.value = true
   sub.value = 0
   step.value += 1
+}
+// 回上一步改账户：丢掉上一份草稿的引用即可（草稿在内存里自然过期，从未占用账号）。
+// 恢复词一起清掉 —— 换用户名后旧恢复词不再对应任何账号，留着只会误导。
+function editAccount() {
+  accountReady.value = false
+  accountDraftId.value = ''
+  recovery.value.phrase = ''
+  recovery.value.draftId = ''
+  recovery.value.copyWords = ''
+  recovery.value.saved = false
+  sub.value = 0
+  errorMsg.value = ''
 }
 // 前端比对前 3 词：兼容序号、空格、连写（与登录页一致）
 function checkCopyWords() {
@@ -711,8 +990,18 @@ async function copyPhrase() {
   }
 }
 // ---------- 关闭引导 ----------
-// 关闭按钮（欢迎页与各步骤页）：通知主进程完全退出软件（前端窗口 + 后端子进程），
-// 且不写「引导完成」标记——下次启动仍会重新进入引导，不会直接进入主窗口。
+// 关闭按钮（欢迎页 / 引导方式 / 各步骤页）：先弹一次确认，再通知主进程完全退出软件。
+// 为什么拦一道：引导中途关闭会保留账户但丢掉「已完成引导」标记 —— 下次启动还得重走一遍，
+// 而 × 只有一个像素见方的位置，误触代价不小（用户以为只是关个提示框）。
+const quitWarnVisible = ref(false)
+function askQuit() {
+  quitWarnVisible.value = true
+}
+function onQuitConfirm() {
+  quitWarnVisible.value = false
+  quitSetup()
+}
+// 真正的退出：不写「引导完成」标记——下次启动仍会重新进入引导，不会直接进入主窗口。
 function quitSetup() {
   window.electron?.send(SEND.SETUP_QUIT)
 }
@@ -728,30 +1017,118 @@ function openDownload() {
   window.electron?.send(SEND.LAUNCH_OPEN_DOWNLOAD)
 }
 // ---------- 完成 ----------
+// 学期写入：有当前学期就改它，没有才新建（新建时后端会把新行标为当前学期）。
+// 为什么不直接 POST 一条：开发模式下引导每次启动都走一遍，POST 会让学期行越堆越多。
+async function saveSemester() {
+  const body = {
+    name: semester.value.name,
+    start_date: semester.value.start,
+    end_date: semester.value.end,
+  }
+  if (semester.value.id) await axios.put(`/api/schedule/semesters/${semester.value.id}`, body)
+  else await axios.post('/api/schedule/semesters', body)
+}
+// 收尾入口：预热（首次初始化）还在跑时先告知一句「可能会卡顿」，确认后再进。
+// 为什么不直接等它跑完：预热在后台跑，用户可能三步就走完了，不该被它拖住；
+// 但一点提示都不给，进主界面第一下卡顿又会被当成「软件坏了」。
+function tryFinish() {
+  if (!warmup.value.done && !perfWarnAcknowledged.value) {
+    perfWarnVisible.value = true
+    return
+  }
+  return finish()
+}
+function onPerfWarnConfirm() {
+  perfWarnVisible.value = false
+  perfWarnAcknowledged.value = true
+  finish()
+}
+// 建号：把草稿变成真正的账号库（全程只该调用一次）。
+// 非隐私档只传 draftId；超级隐私档还要带密码与恢复词，后端要拿它们包裹主密钥。
+async function confirmAccount() {
+  const body = { draftId: accountDraftId.value }
+  if (account.value.securityLevel === 'privacy') {
+    body.password = account.value.password
+    body.phrase = recovery.value.phrase
+  }
+  const { data } = await axios.post('/api/register/confirm', body)
+  if (data && data.token) setToken(data.token)
+  storeMediaToken(data && data.mediaToken)
+  if (data && data.user) setCurrentUser(data.user)
+  return data
+}
+// 回到某个步骤（草稿过期时把用户送回账户步骤，而不是让他停在最后一屏反复点「完成」）
+function gotoStep(key) {
+  const i = STEPS.value.findIndex((s) => s.key === key)
+  if (i >= 0) { step.value = i; sub.value = 0 }
+}
 async function finish() {
   busy.value = true
   errorMsg.value = ''
+  // 本次调用开始时是否已有账号：学期保存失败后用户再点「完成」，不能重复建号
+  const isNewAccount = !accountCreated.value
   try {
     await waitBackend()
-    await axios.put('/api/widget-settings/class-info', {
-      name: classInfo.value.name,
-      mottoStyle: classInfo.value.mottoStyle,
-      xuefeng: classInfo.value.xuefeng,
-    })
-  } catch (err) {
-    // 班级信息保存失败不阻塞进入系统，仅记录
-    console.error('[setup] 保存班级信息失败:', err)
-  } finally {
+    // 1) 建号：引导里所有设置填完之后才真正落库（见账户步骤的 defer 注释）
+    if (isNewAccount) {
+      try {
+        await confirmAccount()
+        accountCreated.value = true
+      } catch (err) {
+        const status = err?.response?.status
+        if (status === 400 || status === 409) {
+          // 草稿过期（30 分钟）或用户名在等待期间被占用：只能回账户步骤重填
+          accountReady.value = false
+          accountDraftId.value = ''
+          recovery.value.phrase = ''
+          recovery.value.draftId = ''
+          recovery.value.copyWords = ''
+          recovery.value.saved = false
+          sub.value = 0
+          errorMsg.value = `${err?.response?.data?.error || '账户信息已过期'}，请重新填写账户信息`
+          gotoStep('account')
+        } else {
+          errorMsg.value = err?.response?.data?.error || '账户创建失败，请重试'
+        }
+        busy.value = false
+        return
+      }
+    }
+    // 2) 班级信息：班风/学风已从引导页移走（首页齿轮里仍可填），这里只提交班名。
+    // PUT /class-info 会把没传的字段写成空串 —— 首次安装时本来就是空的，无副作用。
+    try {
+      await axios.put('/api/widget-settings/class-info', { name: classInfo.value.name })
+    } catch (err) {
+      // 班级信息保存失败不阻塞进入系统，仅记录
+      console.error('[setup] 保存班级信息失败:', err)
+    }
+    // 3) 学期单独写且失败要拦住「完成」：起止日期是值日/座位补存范围的唯一来源，
+    // 静默失败会让用户以为配好了，实际后续补存全按旧范围（或空范围）走。
+    try {
+      await saveSemester()
+    } catch (err) {
+      errorMsg.value = err?.response?.data?.error || '学期设置保存失败，请重试'
+      busy.value = false
+      return
+    }
+    // 4) 功能开关在学期之后写：它失败不拦「完成」，所以放最后，别挡住关键的那步。
+    // isNewAccount 时强制落库：建号前读不到库里的工具箱状态（401），不能拿「没读到」当「不该写」。
+    await saveFeaturePrefs({ force: isNewAccount })
     busy.value = false
     window.electron?.send(SEND.SETUP_COMPLETE)
+  } catch (err) {
+    errorMsg.value = err?.message || '完成引导失败，请重试'
+    busy.value = false
   }
 }
-// 储存目录变更会重启后端，等待其恢复后再写入班级信息
+// 储存目录变更会重启后端，等待其恢复后再建号/写入
 async function waitBackend(timeout = 15000) {
   const start = Date.now()
   for (;;) {
     try {
-      await axios.get('/api/accounts')
+      // 探活必须用免登录接口：引导进行中账号还没创建，拿 /api/accounts 探会被 401 挡住，
+      // 每次都要白等满 15 秒。validateStatus 让任何 HTTP 响应都算「后端活着」。
+      await axios.get('/api/setup/semester-prefill', { validateStatus: () => true })
       return true
     } catch (_) {}
     if (Date.now() - start > timeout) return false
@@ -868,6 +1245,141 @@ onBeforeUnmount(() => {
   padding: 10px 44px;
   font-size: 15px;
   -webkit-app-region: no-drag;
+}
+
+/* 引导方式：标题栏直接复用 .setup-head —— 与后续步骤页同一位置、同一字号，切换画面时标题不跳动。
+   卡片区用与 .setup-body 相同的内边距（0 16px），左边缘和后面的步骤内容对齐。 */
+.mode-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  padding: 2px 16px 0;
+  -webkit-app-region: no-drag;
+}
+.mode-card {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  /* 垂直居中：两张卡的内容块高度必须相等，否则短的那张会整体下移、图标标题对不齐。
+     高度靠 .mode-card-tags 的 min-height 兜底（见下），不靠这里的对齐方式。 */
+  justify-content: center;
+  gap: 4px;
+  padding: 32px 22px 20px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  background: var(--color-surface-hover);
+  /* 圆角与左栏当前步骤同一档（--radius-control），深色/基础主题下毛玻璃的 button 圆角不生效，
+     这里必须自己声明，否则只有玻璃主题是圆角。 */
+  border-radius: var(--radius-control);
+  /* 不加可见描边：只靠底色区分选中/未选中。毛玻璃主题给 button 补了 border-width/style，
+     颜色声明成 transparent 就能压住，也不需要提高选择器权重。 */
+  border: 1px solid transparent;
+  /* 只给位移动画：底色的切换要跟左栏一样「一下就到」，加过渡反而显得迟钝。
+     这里的位移只服务按下反馈（:active），悬停不位移——两张卡一起上浮很像按钮，画面会晃。
+     要改回悬停上浮，记得把 transition 保留着，否则按下会瞬间跳。 */
+  transition: transform 0.1s ease;
+  -webkit-app-region: no-drag;
+}
+.mode-card:active {
+  transform: translateY(1px);
+}
+/* 选中态只用淡蓝底（与左栏当前步骤同一套：--color-primary-light），不加蓝色描边——
+   两张卡片并排时两道蓝框会把画面切碎。 */
+.mode-card.is-active {
+  background: var(--color-primary-light);
+}
+.mode-card-icon {
+  width: 40px;
+  height: 40px;
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--color-text-muted);
+  /* 保留白底，但不描边：选中时淡蓝底上是一块白方块，正好把图标托起来 */
+  background: var(--color-surface);
+  border: 0;
+}
+.mode-card-icon svg {
+  width: 21px;
+  height: 21px;
+}
+.mode-card.is-active .mode-card-icon {
+  color: var(--color-primary);
+}
+/* 选中时图标由「线条」变「实心」：只填这几块面，不换描边颜色，也不给方框加蓝边 */
+.mode-card-icon svg .ic-fill {
+  fill: none;
+}
+.mode-card.is-active .mode-card-icon svg .ic-fill {
+  fill: currentColor;
+}
+.mode-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mode-card-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.mode-card-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-inverse);
+  background: var(--color-primary);
+}
+.mode-card-steps {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+.mode-card-note {
+  margin-top: 16px;
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--color-text-secondary);
+}
+.mode-card-list {
+  width: 100%;
+  margin-top: 20px;
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--color-border);
+}
+.mode-card-list-title {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.mode-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px;
+  /* 固定两行高度：快速引导 4 个标签、全面引导 6 个（必占两行）。
+     不定高的话两张卡的内容块高度不同，居中后图标就错行了。 */
+  min-height: 64px;
+}
+.mode-card-tag {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
 
 /* 低版本系统提示画面：复用欢迎页的卡片/居中布局，仅内容区样式不同（红字文案 + 两个按钮 + 下载链接 + 勾选框） */
@@ -1291,6 +1803,13 @@ onBeforeUnmount(() => {
   color: var(--color-text-muted);
 }
 
+/* 功能开关：卡片之间的间距对齐「用户须知」的 .notice-list（14px） */
+.feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 /* 动画效果开关 */
 .anim-toggle {
   display: flex;
@@ -1320,23 +1839,64 @@ onBeforeUnmount(() => {
 }
 
 /* 完成态摘要 */
+/* 「修改」跟标题同一行：按钮是标题旁的次要操作，不该单独占一行 */
+.done-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
 .done-title {
   font-size: 16px;
   font-weight: 600;
   color: var(--color-success);
-  margin-bottom: 12px;
+}
+.done-edit {
+  padding: 3px 10px;
+  font-size: 13px;
 }
 
-/* 性能优化 */
-.perf-box {
-  display: flex;
+/* 首次初始化进度：右上角一枚小毛玻璃胶囊（关闭按钮左侧）。
+   用 span 而不是 button —— 毛玻璃主题会给所有 button 补描边/发光/定死尺寸；
+   pointer-events:none 让它只是状态展示，鼠标落下时归标题栏（仍然可以拖窗口）。 */
+.perf-chip {
+  position: absolute;
+  top: 13px;
+  /* 关闭按钮 right-3(12px) + 28px 宽 = 左边缘在 40px，这里留 8px 间隙 */
+  right: 48px;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  /* 与 .dlg-close 同一套玻璃写法：底色/描边都由当前文字色派生，
+     夜间模式下 --color-text 翻成亮色，这里跟着反转，不用再单独写夜间覆盖 */
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
+  backdrop-filter: blur(10px) saturate(1.15);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  box-shadow: 0 1px 6px var(--alpha-black-05, rgba(15, 23, 42, 0.05));
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+.perf-chip-num {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.perf-chip.is-done,
+.perf-chip.is-done .perf-chip-num {
+  color: var(--color-success);
 }
 .perf-dot {
-  width: 13px;
-  height: 13px;
+  width: 7px;
+  height: 7px;
   flex-shrink: 0;
   border-radius: 50%;
 }
@@ -1346,47 +1906,21 @@ onBeforeUnmount(() => {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
-.perf-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text);
-}
-.perf-bar {
-  height: 10px;
-  border-radius: 999px;
-  background: var(--color-surface-hover);
-  border: 1px solid var(--color-border);
-  overflow: hidden;
-}
-.perf-bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--color-primary);
-  transition: width 0.2s ease;
-}
-.perf-bar-fill.is-done { background: var(--color-success); }
-.perf-nums {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-}
-.perf-percent {
-  font-weight: 600;
-  color: var(--color-text);
-  font-variant-numeric: tabular-nums;
-}
 
 /* 底部 */
 .setup-foot {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 18px 14px;
+  -webkit-app-region: no-drag;
+}
+.foot-btns {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 18px 14px;
-  -webkit-app-region: no-drag;
+  width: 100%;
 }
 .step-indicator {
   font-size: 13px;

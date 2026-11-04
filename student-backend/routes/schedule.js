@@ -75,13 +75,8 @@ router.post('/apply-master', (req, res) => {
 // 学期独立成表：设置页可「增加学期 / 选择学期 / 修改学期名」。
 // schedule_settings.semester_start/end 保留为「当前学期」的镜像，
 // 座位补存范围、座位指数结算等既有逻辑继续读 /settings，不必感知学期表。
-function autoSemester() {
-  const y = new Date().getFullYear();
-  const m = new Date().getMonth() + 1;
-  if (m >= 7) return { name: `${y}秋季学期`, start_date: `${y}-09-01`, end_date: `${y + 1}-01-31` };
-  if (m === 1) return { name: `${y - 1}秋季学期`, start_date: `${y - 1}-09-01`, end_date: `${y}-01-31` };
-  return { name: `${y}夏季学期`, start_date: `${y}-02-01`, end_date: `${y}-06-30` };
-}
+// 推荐日期算法在 utils/semester.js：引导页也要用同一份（那时还没有库，进不来这个路由）。
+const { autoSemester } = require('../utils/semester');
 
 function currentSemester() {
   return db.prepare('SELECT id, name, start_date, end_date FROM semesters WHERE is_current = 1 ORDER BY id DESC LIMIT 1').get()
@@ -135,6 +130,23 @@ router.post('/semesters', (req, res) => {
       .run(name, start_date, end_date);
   })();
   res.json({ message: '学期已增加', id: info.lastInsertRowid, name, start_date, end_date });
+});
+
+// 引导页预填：把「新建学期时后端会自己算的默认值」提前暴露给渲染层。
+//
+// 设置页的「增加学期」是用户点确定后才由 POST 里的 autoSemester() 补日期；引导页要在用户
+// 动手填之前就把推荐日期显示出来，所以这里把**同一份** autoSemester() 结果给前端。
+// 不要在渲染层再抄一遍月份分档 —— 抄两份迟早对不上（一处改 9 月、另一处还停在 7 月）。
+//
+// 已有当前学期时返回它的真实值（id 非空）：引导页据此走「改这条」而不是「再插一条」。
+// 开发模式每次启动都进引导，重复完成引导不能把学期的行越堆越多。
+router.get('/semesters/prefill', (req, res) => {
+  const cur = currentSemester();
+  if (cur) {
+    return res.json({ id: cur.id, name: cur.name, start_date: cur.start_date, end_date: cur.end_date });
+  }
+  const def = autoSemester();
+  res.json({ id: null, name: def.name, start_date: def.start_date, end_date: def.end_date });
 });
 
 // 切换当前学期（设置页「选择学期」即切换；注意声明在 /semesters/:id 之前，避免被参数路由截走）

@@ -118,8 +118,8 @@ flowchart TD
 | POST | `/db-login` | 选择账号库并校验（隐私模式下走口令包裹） |
 | POST | `/db-recover` | 凭本机登记库 + 主密钥恢复登录；`password` 档只发 recover 态（仅授权改密），`plain` / `nopass` 直接发常规 token |
 | POST | `/login` | bcrypt 异步比对 → 签发 7 天 JWT → 写 httpOnly Cookie |
-| POST | `/register` | 生成恢复密钥草稿（12 字），返回前 3 词供确认 |
-| POST | `/register/confirm` | 确认恢复词后创建账号与加密库 |
+| POST | `/register` | 注册；`defer=1` 时任何等级都只存草稿（首次引导用），否则非隐私等级立即建库 |
+| POST | `/register/confirm` | 用草稿创建账号与加密库（`encrypted` 跟着草稿走，缺省按加密） |
 | POST | `/recover-password` | 恢复密钥哈希比对 → 重置密码 |
 
 #### 处理标准示范：`POST /register`（挂载 `/api`）
@@ -175,7 +175,7 @@ flowchart TD
 ### 4. 网格与业务
 
 #### [`routes/schedule.js`](../../../student-backend/routes/schedule.js)（`/api/schedule`） · 课程表路由
-`GET /`、`PUT /`（实行课表）、`GET/PUT /master`（模板）、`POST /apply-master`、`GET/PUT /settings`；学期：`GET /semesters`、`POST /semesters`、`PUT /semesters/current`、`PUT /semesters/:id`、`DELETE /semesters/:id`；历史四组由 [`historyRoutes.js`](../../../student-backend/routes/historyRoutes.js) 注册（`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`DELETE /history/:weekStart`）。
+`GET /`、`PUT /`（实行课表）、`GET/PUT /master`（模板）、`POST /apply-master`、`GET/PUT /settings`；学期：`GET /semesters`、`GET /semesters/prefill`（推荐/当前学期，供首次引导预填）、`POST /semesters`、`PUT /semesters/current`、`PUT /semesters/:id`、`DELETE /semesters/:id`；历史四组由 [`historyRoutes.js`](../../../student-backend/routes/historyRoutes.js) 注册（`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`DELETE /history/:weekStart`）。
 
 #### [`routes/seats.js`](../../../student-backend/routes/seats.js)（`/api/seats`） · 座位路由
 `GET /`、`PUT /`、`PATCH /cell`、`PATCH /master/cell`、`GET/PUT /master`、`POST /apply-master`、`GET/PUT /settings`、`GET/PUT /weight`（权重表）、`GET/PUT/DELETE /draft`（排表草稿）、`GET /daily`（当日视图）、历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。**不复用** `historyRoutes`：`seat_history` 多出 mode/rows/cols/seats/aisle_cols/groups_config 等列。

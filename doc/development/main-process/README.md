@@ -231,7 +231,7 @@ electron/
 - **写配置必须抛错**：`config.saveAppConfig`（保存应用配置的函数）写失败会抛出，调用方（如目录搬迁）应据此中止，避免「数据在新目录、配置却指向已删除旧目录」的错位状态。
 - **主动停止后端与自动重启**：任何需要重启后端的操作（目录搬迁、缩略图目录变更、加密转换、重连）都应先 `backend.stopBackendProcess()`（停止后端子进程，其内部已摘除自动重启监听并停心跳），再 `backend.startBackend()`（启动后端子进程），避免 `fork`（派生子进程）出两个后端。
 - **迁移/加密流程的窗口数保护**：执行前先创建进度窗口再关闭其它窗口，保证窗口数不为 0，避免触发 `window-all-closed`（所有窗口关闭事件）导致应用提前退出；同时 `tray.beginCloseWithoutMenu()`（托盘放行关闭主窗口的方法）放行主窗口关闭。
-- **测试开关**（均通过环境变量，默认关闭）：`FORCE_SETUP=1/0` 强制/跳过首次引导；`SIM_BACKEND_FAIL` 让后端起不来（验证失败页）；`SIM_BACKEND_CRASH=once|dead` 模拟运行期崩溃（验证重连/满 5 次进全屏）；`INP_DEBUG=1` 开 CDP 远程调试端口 9222；`NODE_EXEC_PATH` 指定开发模式后端 node 路径。
+- **测试开关**（均通过环境变量，默认关闭）：`FORCE_SETUP=1/0` 强制 / 跳过首次引导（**开发模式默认每次启动都进引导页**，不再需要 `FORCE_SETUP=1`；开发下要跳过用 `FORCE_SETUP=0`，打包版仍只在全新安装时进）；`SIM_BACKEND_FAIL` 让后端起不来（验证失败页）；`SIM_BACKEND_CRASH=once|dead` 模拟运行期崩溃（验证重连/满 5 次进全屏）；`INP_DEBUG=1` 开 CDP 远程调试端口 9222；`NODE_EXEC_PATH` 指定开发模式后端 node 路径。
 - **启动计时的停收标准**：`rendererStartupLogged`（启动日志停收标记）会在真正应用页 `did-finish-load`（页面加载完成事件）后停收 `[startup]` 日志，新增页面 / 日志时需注意该口径（前端重启不计入启动耗时）。
 - **`app://`（应用自定义协议）与新入口页**：新增顶级 html 入口需确保其位于 `student-frontend/dist` 顶层（`setupAppProtocol`（注册应用协议的启动逻辑）启动时枚举 html 入口名单），否则会被当作 SPA（单页应用）路由回退到 `index.html`（主页面）。
 

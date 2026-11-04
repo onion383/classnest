@@ -598,16 +598,19 @@ app.whenReady().then(() => {
     // （不能把 fork 提到 ready 之前：DB_MASTER_KEY 依赖 safeStorage，见文件上方说明。）
     // 全新安装（本机无任何账号库）先弹首次引导向导，完成后再进入主界面；
     // 非首启维持原路径——主窗口立即创建，不增加任何串行等待。
-    // 首次引导默认只在「本机全新安装」（firstRunAtStartup，即数据目录无 index.db）时出现，
-    // 开发模式不再默认进入；需要预览引导页时用 FORCE_SETUP=1，跳过时用 FORCE_SETUP=0。
+    // 引导页出现时机（优先级从高到低）：
+    //   FORCE_SETUP=1 → 一定进（打包版也能强制预览）；FORCE_SETUP=0 → 一定不进（开发模式的逃逸开关）。
+    //   开发模式（isDev）→ 默认**每次都进**：引导流程要反复改、反复看，不该每次靠手敲环境变量。
+    //   打包版 → 只在「本机全新安装」（firstRunAtStartup，即数据目录无 index.db）时进。
     const forceSetup = process.env.FORCE_SETUP === '1'
     const skipSetup = process.env.FORCE_SETUP === '0'
+    const devEntersSetup = isDev
 
     // 进入正式启动：建窗（启动窗口或主窗口）→ 起后端 → 内存采样。
     // 「启动窗口」= 引导窗口；它同时承担低版本系统提示（plan.warn 为首屏提示画面）。
     const proceedStartup = () => {
       const needWarn = shouldWarnOsVersion()
-      const needSetup = !skipSetup && (forceSetup || firstRunAtStartup)
+      const needSetup = !skipSetup && (forceSetup || devEntersSetup || firstRunAtStartup)
       if (needWarn || needSetup) {
         launchPlan = { warn: needWarn, setup: needSetup }
         if (needWarn) startupTimer.mark('命中低版本系统，先显示提示画面')

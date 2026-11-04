@@ -259,9 +259,14 @@ router.post('/register', async (req, res) => {
     return res.status(409).json({ error: '该账号已被注册' });
   }
 
+  // defer=1：只存草稿、不建库（首次引导用）。引导里要到点「完成」才真正注册 ——
+  // 否则中途关窗会在库里留下一个半成品账号，而那个账号的用户名在引导里已经改不了。
+  const defer = req.body.defer === true || req.body.defer === 1 || req.body.defer === '1';
+
   // 只有超级隐私模式需要恢复词：它是库钥匙的第二把钥匙。
-  // 其余等级（明文 / 无密码 / 普通密码）不再生成恢复词草稿，直接建库并签发登录态。
-  if (!wantPrivacy) {
+  // 其余等级（明文 / 无密码 / 普通密码）不必等确认，直接建库并签发登录态；
+  // 但 defer 时所有等级都只存草稿，由 /register/confirm 统一收尾。
+  if (!wantPrivacy && !defer) {
     try {
       const { slug } = dbManager.createTeacher(uname, passwordHash, 'teacher', wantEncrypted);
       console.log('[register] 注册成功:', uname, 'slug:', slug, 'encrypted:', wantEncrypted, 'hasPassword:', !!passwordHash);
@@ -282,15 +287,25 @@ router.post('/register', async (req, res) => {
     }
   }
 
-  // 超级隐私模式：先生成恢复密钥，存草稿；抄写通过后由 /api/register/confirm 真正建库。
-  const phrase = pickPhrase();
-  const restoreHash = deriveRestoreHash(phrase);
-  const draftId = pendingRegs.put({ username: uname, passwordHash, role: 'teacher', restoreHash, privacy: wantPrivacy });
-  console.log('[register] 生成待确认草稿:', uname, 'draftId:', draftId);
+  // 草稿路径（超级隐私模式，或 defer 的其它等级）：恢复词只有隐私模式需要 ——
+  // 它是库钥匙的第二把钥匙；其余等级 defer 时只等一个「完成」信号，不需要抄写。
+  const phrase = wantPrivacy ? pickPhrase() : '';
+  const restoreHash = wantPrivacy ? deriveRestoreHash(phrase) : '';
+  const draftId = pendingRegs.put({
+    username: uname,
+    passwordHash,
+    role: 'teacher',
+    restoreHash,
+    privacy: wantPrivacy,
+    // 建库时要按用户选的方式落盘：confirm 里不传就会默认加密，
+    // 明文模式的草稿若丢了这一项，会被建成一个需要钥匙的加密库，用户下次登不进去
+    encrypted: wantEncrypted,
+  });
+  console.log('[register] 生成待确认草稿:', uname, 'draftId:', draftId, 'defer:', defer, 'privacy:', wantPrivacy, 'encrypted:', wantEncrypted);
   res.json({
-    message: '注册进行中，请抄写前 3 个恢复词完成确认',
+    message: wantPrivacy ? '注册进行中，请抄写前 3 个恢复词完成确认' : '注册信息已暂存，完成引导时创建账号',
     draftId,
-    recovery: { phrase: formatPhrase(phrase), hash: restoreHash },
+    recovery: wantPrivacy ? { phrase: formatPhrase(phrase), hash: restoreHash } : null,
     user: { username: uname, role: 'teacher', dbSlug: null },
   });
 });
@@ -329,7 +344,10 @@ router.post('/register/confirm', async (req, res) => {
   }
 
   try {
-    const { slug } = dbManager.createTeacher(draft.username, draft.passwordHash, draft.role);
+    // encrypted 必须从草稿带过来：不给第四参就默认 true，
+    // 明文模式的草稿会被建成加密库（下次登录直接进不去）。
+    // 兼容旧草稿（没有该字段）：`!== false` 落回「加密」，与原行为一致。
+    const { slug } = dbManager.createTeacher(draft.username, draft.passwordHash, draft.role, draft.encrypted !== false);
     const resolved = dbManager.resolveByUsername(draft.username);
     if (resolved && draft.restoreHash) {
       resolved.conn.prepare('UPDATE users SET recovery_hash = ? WHERE username = ?').run(draft.restoreHash, draft.username);
@@ -345,7 +363,7 @@ router.post('/register/confirm', async (req, res) => {
       }
     }
     pendingRegs.remove(draftId);
-    console.log('[register/confirm] 确认注册成功:', draft.username, 'slug:', slug, 'privacy:', !!draft.privacy);
+    console.log('[register/confirm] 确认注册成功:', draft.username, 'slug:', slug, 'privacy:', !!draft.privacy, 'encrypted:', draft.encrypted !== false);
     // 签发登录态，注册成功即自动进入系统，无需再回登录页手动登录
     const userRow = resolved.conn.prepare('SELECT id, username, role FROM users WHERE username = ?').get(draft.username);
     const { token, mediaToken } = issueSession(req, {
@@ -357,7 +375,7 @@ router.post('/register/confirm', async (req, res) => {
       token,
       mediaToken,
       protect: !!draft.privacy,
-      user: { id: userRow.id, username: draft.username, role: draft.role, dbSlug: slug, hasPassword: true },
+      user: { id: userRow.id, username: draft.username, role: draft.role, dbSlug: slug, hasPassword: !!draft.passwordHash },
     });
   } catch (err) {
     console.error('[register/confirm] 注册抛异常:', draft.username, err.stack || err.message);

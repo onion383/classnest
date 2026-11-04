@@ -207,6 +207,63 @@ async function runPrivacy() {
   return { pass, fail };
 }
 
+// -------------------------------------------------------------------------
+// 3. 引导用的 defer 草稿：注册只存草稿不落库，confirm 才真正建账号
+//
+// 为什么单列一段：首次引导把「建号」推迟到点「完成」时（前端 Setup.vue 的 finish），
+// 靠的正是 /register 的 defer 参数。这条链路上一旦退化成「defer 也建库」，
+// 表现是「引导中途关窗后账号已经存在、用户名却改不了」——界面上完全看不出异常。
+// -------------------------------------------------------------------------
+async function runDefer() {
+  let pass = 0, fail = 0;
+  const chk = (ok, label, extra) => {
+    if (ok) { pass++; console.log('  ✓', label, extra || ''); }
+    else { fail++; console.log('  ✗', label, extra || ''); }
+  };
+  const pwd = 'pass123456';
+
+  console.log('=== 1. defer 注册：只回草稿，不签发登录态 ===');
+  const uname = 'defer' + Date.now().toString().slice(-6);
+  let r = await post('/api/register', { username: uname, password: pwd, role: 'teacher', level: 'password', defer: true });
+  const draftId = r.json && r.json.draftId;
+  chk(r.status === 200 && !!draftId, '拿到草稿 id', 'status=' + r.status + ' ' + (r.json && (r.json.message || r.json.error)));
+  chk(!!(r.json && !r.json.token), '没有 token（尚未建库）', r.json && r.json.token ? '✗ 竟然直接登录了' : '✓');
+  if (!draftId) return { pass, fail: fail + 1 };
+
+  console.log('=== 2. 草稿不占用用户名：同名的普通注册应成功 ===');
+  r = await post('/api/register', { username: uname, password: pwd, role: 'teacher', level: 'password' });
+  chk(r.status === 200, '草稿期间同名未被占用', 'status=' + r.status + ' ' + (r.json && (r.json.message || r.json.error)));
+
+  console.log('=== 3. 名字被真正注册后，旧草稿 confirm 应被拒（不会建出两份）===');
+  r = await post('/api/register/confirm', { draftId });
+  chk(r.status === 409, 'confirm 撞名被拒', 'status=' + r.status + ' ' + (r.json && r.json.error));
+
+  console.log('=== 4. defer → confirm：建号并签发登录态 ===');
+  const uname2 = 'deferok' + Date.now().toString().slice(-6);
+  r = await post('/api/register', { username: uname2, password: pwd, role: 'teacher', level: 'password', defer: true });
+  const d2 = r.json && r.json.draftId;
+  r = await post('/api/register/confirm', { draftId: d2 });
+  chk(r.status === 200 && !!(r.json && r.json.token), 'confirm 建号', 'status=' + r.status + ' ' + (r.json && (r.json.message || r.json.error)));
+
+  console.log('=== 5. 建出来的库能用注册时的密码登录 ===');
+  r = await post('/api/login', { username: uname2, password: pwd });
+  chk(r.status === 200 && !!(r.json && r.json.token), '新账号可登录', 'status=' + r.status);
+
+  console.log('=== 6. 明文模式的草稿必须建成明文库（encrypted 要跟着草稿走）===');
+  // 危险点：confirm 里不给 createTeacher 传 encrypted 就默认建加密库 →
+  // 明文用户体验成「注册完就登不进去」。这里用「不带密码能登录」间接验证它是明文库。
+  const uname3 = 'deferplain' + Date.now().toString().slice(-6);
+  r = await post('/api/register', { username: uname3, role: 'teacher', level: 'plain', defer: true });
+  const d3 = r.json && r.json.draftId;
+  r = await post('/api/register/confirm', { draftId: d3 });
+  chk(r.status === 200 && !!(r.json && r.json.token), '明文档 confirm 建号', 'status=' + r.status + ' ' + (r.json && (r.json.message || r.json.error)));
+  chk(!!(r.json && r.json.user && r.json.user.hasPassword === false), 'hasPassword 为 false（草稿里没密码哈希）', r.json && r.json.user ? JSON.stringify(r.json.user.hasPassword) : '无 user');
+  r = await post('/api/login', { username: uname3 });
+  chk(r.status === 200 && !!(r.json && r.json.token), '不带密码可登录（确实是明文库）', 'status=' + r.status + ' ' + (r.json && r.json.error));
+
+  return { pass, fail };
+}
+
 ;(async () => {
   if (EXTERNAL) {
     console.log('（连外部后端：' + BASE + '，须为明文模式）\n')
@@ -225,6 +282,10 @@ async function runPrivacy() {
   console.log('\n########## 超级隐私模式 ##########');
   const privacy = await runPrivacy();
   pass += privacy.pass; fail += privacy.fail;
+
+  console.log('\n########## 引导草稿（defer） ##########');
+  const defer = await runDefer();
+  pass += defer.pass; fail += defer.fail;
 
   console.log('\n=== 结果：通过 ' + pass + ' / 失败 ' + fail + ' ===');
   // 必须先等后端退出再删数据目录，否则临时目录删不掉（Windows 句柄延迟）

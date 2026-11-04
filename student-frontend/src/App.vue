@@ -600,6 +600,18 @@ function onAiConfigChanged() {
   loadAiEnabled()
 }
 
+// 工具箱浮窗由主进程「读到开启才建」（不再在 widgets-ready 里无条件创建）。
+// 开关存在后端库里，这里登录后读一次再下发；未登录（登录页）不读 —— 那时接口 401，
+// 而且登录前也没必要建浮窗。读不到就不建：多弹一个窗口比少弹一个更烦。
+async function applyToolboxPreference() {
+  if (!getToken()) return
+  try {
+    const { data } = await axios.get('/api/widget-settings')
+    const on = !!(data && data.success && data.data && data.data.toolboxEnabled)
+    window.electron?.send(SEND.WIDGET_SET_SESSION_VISIBLE, on)
+  } catch (_) {}
+}
+
 // ---- 关闭选择弹窗（复用现有弹窗动画，替代主进程原生菜单） ----
 // 工具箱右键「关闭工具箱」：先读完整设置、再整体写回。
 // 后端 PUT /api/widget-settings 是整体覆盖，只传 toolboxEnabled 会把两个保存路径清空。
@@ -663,6 +675,7 @@ function setupShutdownIpc() {
       reconnectRetrying.value = false
       checkSeatDraft()
       loadAiEnabled()
+      applyToolboxPreference()
       return
     }
     if (data.type === 'backend-failed') {
@@ -722,16 +735,18 @@ setupShutdownIpc()
 fetchPendingNotification()
 // 兜住「就绪广播早于本组件创建」的竞态：查一次当前状态，确保之后运行期异常能接管提示。
 // 后端确认就绪后顺带查一次智能排表草稿（此时接口才可用，避免启动瞬间静默失败）。
-window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) { backendEverReady.value = true; checkSeatDraft(); loadAiEnabled() } }).catch(() => {})
+window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) { backendEverReady.value = true; checkSeatDraft(); loadAiEnabled(); applyToolboxPreference() } }).catch(() => {})
 // AI 设置变更（启用/停用、换模型）后刷新图标显隐
 window.addEventListener('ai-config-changed', onAiConfigChanged)
 
 // 切页时保持浮窗状态（用户可边操作边问）；若切换到 AI 助手页则收起浮窗
-watch(() => route.path, () => {
+watch(() => route.path, (to, from) => {
   syncPageKey()
   if (route.path === '/ai-assistant') assistantOpen.value = false
   // 切页时收起搜索弹窗
   searchOpen.value = false
+  // 刚登录：登录页没有 token，上面几处都跳过了，这里补一次工具箱状态
+  if (from === '/login' && to !== '/login') applyToolboxPreference()
 })
 
 onMounted(() => {
@@ -743,7 +758,7 @@ onMounted(() => {
   // 早于此前它会紧压在「后端就绪」的处理之前，占用启动关键路径的时间。
   const reportWidgetsReady = () => {
     try {
-      const enabled = (localStorage.getItem('desktopWidgetEnabled') ?? '1') !== '0'
+      const enabled = (localStorage.getItem('desktopWidgetEnabled') ?? '0') !== '0'
       if (window.electron?.send) window.electron.send(SEND.WIDGETS_READY, enabled)
     } catch (_) {}
   }

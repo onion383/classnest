@@ -44,6 +44,7 @@ const secureChannel = require('./services/secureChannel');
 const { deleteRow } = require('./services/tableService');
 const { studentRelations, purgeStudentRelations } = require('./services/studentRelations');
 const { resolveNames } = require('./services/provisionalStudents');
+const { autoSemester } = require('./utils/semester');
 
 // 关键路由：启动时立即加载（登录必需）
 const authRoutes = require('./routes/auth');
@@ -115,6 +116,12 @@ app.use('/uploads', authStatic(), express.static(dbManager.uploadsDir));
 app.use('/api/background', authStatic(), express.static(dbManager.backgroundDir));
 
 // ===================== 关键路由（登录页必需） =====================
+// 引导页学期推荐（免登录）：首次安装时账号还没创建，但「班级与学期」表单要先显示推荐日期。
+// 只返回 autoSemester() 的纯日期建议，不读任何用户数据 —— 所以放在鉴权之外是安全的。
+// 已登录且库里有当前学期时，前端走 /api/schedule/semesters/prefill（能拿到真实值与 id）。
+app.get('/api/setup/semester-prefill', (req, res) => {
+  res.json({ id: null, ...autoSemester() });
+});
 app.use('/api', authRoutes);
 app.use('/api/account', accountRoutes);
 app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students', {

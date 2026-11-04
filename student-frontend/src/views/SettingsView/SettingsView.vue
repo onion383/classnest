@@ -902,7 +902,7 @@ const screenshotSavePath = ref('')
 const screenshotDir = ref('')
 const usbAutoOpen = ref(false)
 // 桌面小组件启用状态：localStorage 持久化，默认启用（主进程据此按需创建桌面小组件窗口）
-const desktopWidgetEnabled = ref((localStorage.getItem('desktopWidgetEnabled') ?? '1') !== '0')
+const desktopWidgetEnabled = ref((localStorage.getItem('desktopWidgetEnabled') ?? '0') !== '0')
 const loaded = ref(false)
 const _fromMainHandler = ref(null)
 // 数据目录 / 缓存目录

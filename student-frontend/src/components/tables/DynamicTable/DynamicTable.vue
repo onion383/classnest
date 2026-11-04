@@ -1436,6 +1436,17 @@ watch(() => ctx.rows.value, (newVal, oldVal) => {
   // 先构建行键集合再过滤，避免选中项多 + 行数大时的 O(n×m) 逐条 some
   const keys = new Set(newVal.map(r => r._rowKey));
   selectedRowKeys.value = selectedRowKeys.value.filter(key => keys.has(key));
+  // 行高缓存同步清理：**只保留当前还存在的行键**。
+  // 为什么：rowHeights 按 _rowKey 累积，从来不删 → 切换班级/筛选/删行之后，
+  //   旧行的键一直留在 Map 里 → 单调增长（长时间使用就是内存泄漏）。
+  // 为什么不是「整体清空」：行高缓存被虚拟滚动的几何计算直接读
+  //   （见下面的 rowHeights.get(...)），清空会让已渲染行的估算高度跳变 → 滚动位置错乱。
+  //   保留仍然存在的键，既不泄漏也不影响几何。
+  if (ctx.rowHeights.value.size > keys.size) {
+    for (const k of [...ctx.rowHeights.value.keys()]) {
+      if (!keys.has(k)) ctx.rowHeights.value.delete(k);
+    }
+  }
   // 仅当「新增行被保存/取消」（由有 → 无）时才重算列宽并钉住；
   // 普通增删/移动行前后都没有新增行，列宽不会因新增输入而变，无需测量
   const prevHadNew = (oldVal || []).some(r => r._isNew);

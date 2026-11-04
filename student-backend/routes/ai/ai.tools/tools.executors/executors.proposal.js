@@ -110,7 +110,9 @@ function normalizeJsonProposal({ table, id, values, label }) {
     // 先清洗再比较/展示：确认页显示的就是落库值
     let cleaned;
     try {
-      cleaned = cleanProposalValue(table, k, values[k], '文字');
+      // 不要传 '文字'：那会覆盖 cleanProposalValue 内部按 table_meta 取的真实列类型，
+      // 数值/日期列于是被当文本清洗，脏值能一路进提案（审查 v4 · B03-05）
+      cleaned = cleanProposalValue(table, k, values[k]);
     } catch (e) {
       return { error: `列「${k}」取值不合法：${e.message}` };
     }

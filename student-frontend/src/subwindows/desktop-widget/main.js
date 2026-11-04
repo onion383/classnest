@@ -1,4 +1,5 @@
-import { getToken as loadStoredToken, TOKEN_KEY } from '../../utils/authStorage.js'
+import { getToken as loadStoredToken, TOKEN_KEY, AUTH_CHANGED_EVENT } from '../../utils/authStorage.js'
+import { resetUserScopedCaches } from '../../utils/userScopedCache.js'
 import { createApp } from 'vue'
 // 桌面组件里也用到带 <script setup vapor> 的组件（AnimatedClock 时钟），
 // 3.6 通道下同样需要 interop 插件；3.5 通道下该模块是 null（见 vite.config.js）。
@@ -75,6 +76,13 @@ function bootstrap() {
     if (!e.key) return
     if (e.key === TOKEN_KEY) {
       tokenPromise = null
+      // 本窗口的用户级缓存（信道会话等）也要作废：登出只清了主窗口那份注册表，
+      // 这里得自己清一次，否则换号后本窗口还拿着旧用户的信道会话。
+      resetUserScopedCaches()
+      // **业务数据必须立刻作废**：原来只清了 token 缓存，组件里的课表/值日/倒计时/
+      // 请假/学生/常用软件仍是上一个用户的，最长要等 5 分钟后的轮询才刷新 → 旧数据外露。
+      // 这里广播一个窗口内事件，组件收到后自行清空并重拉。
+      window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT))
       return
     }
     if (!e.key.startsWith('app-')) return

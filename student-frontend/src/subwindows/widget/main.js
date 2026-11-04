@@ -5,6 +5,8 @@ import '../../styles/index.css'
 import { setupApiClient, backendBaseUrl } from '../../utils/httpClient'
 import { loadThemeStyles } from '../../styles/themeLoader'
 import { useThemeStore } from '../../stores/theme'
+import { TOKEN_KEY } from '../../utils/authStorage.js'
+import { resetUserScopedCaches } from '../../utils/userScopedCache.js'
 
 // 配置 API 基础地址：与 setup / desktop-widget 两个窗口共用 backendBaseUrl()（
 // 生产模式返回完整地址，开发模式返回空串走 Vite 代理）。原来这里写死 'http://localhost:3000'，
@@ -23,7 +25,14 @@ theme.applyTheme()
 // 主窗口切主题/日夜间时写的是同源 localStorage，本窗口会收到 storage 事件，
 // 据此重新读取设置并重新应用，实现实时跟随（只关心主题相关键，登录 token 等变化忽略）。
 window.addEventListener('storage', (e) => {
-  if (!e.key || !e.key.startsWith('app-')) return
+  if (!e.key) return
+  if (e.key === TOKEN_KEY) {
+    // 登出/换号：本窗口的用户级缓存（信道会话等）要跟着作废。
+    // 登出只清了主窗口那份注册表，别的窗口得自己清一次。
+    resetUserScopedCaches()
+    return
+  }
+  if (!e.key.startsWith('app-')) return
   theme.reloadFromStorage()
 })
 

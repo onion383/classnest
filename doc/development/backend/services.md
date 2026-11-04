@@ -12,6 +12,7 @@ classnest/
 │   │   ├── dynamicTable.js
 │   │   └── historyRoutes.js  # 历史快照路由工厂
 │   ├── services/
+│   │   ├── accountRename.js  # 改用户名的跨库两写（带补偿）
 │   │   ├── bcryptAsync.js  # 用户名规则
 │   │   ├── businessRules.js  # 业务规则校验
 │   │   ├── dutyCells.js
@@ -103,6 +104,14 @@ classnest/
 #### [`services/studentRename.js`](../../../student-backend/services/studentRename.js) · 学生改名级联
 - **定位**：学生姓名变更的级联更新（跨表改引用）。
 - **调用方**：`routes/dynamicTable.js` 的 `PUT`、`students` 改名路径。
+- **匹配口径（六处联写必须一致）**：一律「trim 后比较 + 写回**规范名**」。值日 `cells` 与座位 `seats` 是手工录入的 JSON，写入路径只查类型、**不 trim**（`assertDutyCellShape` / `assertSeatCell`），库里确实存在 `' 张三 '` 这种带空格的旧名。口径不一致时（有的 trim 比、有的严格比）改名后同一学生在不同表里名字对不上 → 值日指数再也归不到他名下，且界面不报错。写回不保留原空格：下游 `DutyView` / `SeatView` 的 `acc[name]` 是**精确键聚合**，留空格会让统计键分裂成两个桶。
+
+#### [`services/accountRename.js`](../../../student-backend/services/accountRename.js) · 改用户名的跨库两写（带补偿）
+- **定位**：用户名存在**两处** —— `index.db` 的 registry 登记表（跨库的登录真源）与业务库的 `users` 表。两个 SQLite 文件，**事务无法跨库**，所以不能靠包事务解决，只能显式补偿。
+- **导出**：`renameUsernameWithCompensation`。
+- **顺序**：先改 registry（权威侧，决定「能不能用这个名字登录」），再改业务库。
+- **补偿**：业务库写失败（含 `changes = 0`）时把 registry 改回改之前的用户名，让「旧名仍可登录」重新成立；**回滚前必须确认 registry 当前仍是本次写入的新名**，否则会覆盖掉期间发生的并发改名。补偿本身失败时不掩盖原始错误。
+- **调用方**：`routes/account.js` 的 `PUT /username`。
 
 #### [`services/provisionalStudents.js`](../../../student-backend/services/provisionalStudents.js) · 临时学生建档
 - **定位**：名册外姓名自动建档（AI/表格里输入未登记姓名时生成「临时学生」）。
@@ -175,6 +184,7 @@ classnest/
 | [`utils/date.js`](../../../student-backend/utils/date.js) | 本地日期字符串 | `pad2`、`localDateStr`、`todayStr` |
 | [`utils/json.js`](../../../student-backend/utils/json.js) | JSON 安全读写 | `safeJson`、`readDocJson` |
 | [`utils/sql.js`](../../../student-backend/utils/sql.js) | SQL 辅助 | `now`、`isDateStr`、`cleanUp`、`maxPosition`、`buildInsert`、`buildUpdate` |
+| [`utils/slugScopes.js`](../../../student-backend/utils/slugScopes.js) | 按库（slug）隔离的进程内状态：各库 `album_photos.id` 独立自增，裸 id 键 / 全局攒批会串库。状态自己登记，登出统一失效 | `safeSlug`、`createSlugBuckets`、`createSlugBatch`、`clearAllForSlug` |
 
 ---
 

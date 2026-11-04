@@ -31,6 +31,7 @@ student-backend/
 │   ├── schema.album.js            # 相册、照片、扫描任务
 │   ├── schema.ai.js               # AI 配置、模型、会话、消息、快照
 │   ├── schema.undo.js             # 撤销历史
+│   ├── schemaUtil.js             # 建表前小工具：按真实类型删除同名对象（DROP VIEW 只认视图、DROP TABLE 只认表）
 │   └── schema.widget.js           # 桌面小组件设置
 └── services/
     └── slotStore.js               # 物理槽位写入（逻辑名视图只读）
@@ -100,6 +101,7 @@ flowchart LR
 | [`schema.core.js`](../../../student-backend/schema/schema.core.js) | `students`（学生）、`table_meta`（表元数据）、`users`（用户）、`pending_requests`（待处理请求） |
 | [`schema.fee.js`](../../../student-backend/schema/schema.fee.js) / [`schema.leave.js`](../../../student-backend/schema/schema.leave.js) / [`schema.score.js`](../../../student-backend/schema/schema.score.js) | 班费、请假、分数 |
 | [`schema.schedule.js`](../../../student-backend/schema/schema.schedule.js) / [`schema.seat.js`](../../../student-backend/schema/schema.seat.js) / [`schema.duty.js`](../../../student-backend/schema/schema.duty.js) | 物理槽位表 `*_slots`（按 kind 分行）+ 逻辑名只读视图（`schedule` / `master_schedule` / `duty_layout` / `seat_template` 等），写入走 [`services/slotStore.js`](../../../student-backend/services/slotStore.js) |
+| [`schemaUtil.js`](../../../student-backend/schema/schemaUtil.js) | 建表前小工具 `dropObjectIfExists(conn, name)`：按 `sqlite_master` 里的**真实类型**删除同名对象。`IF EXISTS` 只抑制「不存在」，**不抑制「类型不对」** —— 老库里这些名字可能还是表（如 `schedule` 拆分前），`DROP VIEW IF EXISTS schedule` 会抛 `use DROP TABLE to delete table schedule`，导致 `initSchema` 批量语句中断、库打不开，且报错指不到是哪个名字型不对 |
 | [`schema.history.js`](../../../student-backend/schema/schema.history.js) | `domain_history`（三域历史合并）+ `schedule_history` / `duty_history` / `seat_history` 只读视图 |
 | [`schema.group.js`](../../../student-backend/schema/schema.group.js) | 分组维度/小组/成员 |
 | [`schema.cadre.js`](../../../student-backend/schema/schema.cadre.js) | 班干部职务与成员 |

@@ -9,14 +9,17 @@
 
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
+// 关服务要强制断开存量 keep-alive 连接，否则事件循环仍有活 handle → 脚本永不退出
+const { closeServer } = require('../tools/closeServer.cjs')
 const fs = require('fs')
 const os = require('os')
+const { makeTempDir, removeDirWithRetry } = require('../smoke/_tmpdir.cjs')
 
 const BACKEND = path.join(__dirname, '..', '..', 'student-backend')
 const BACKEND_MODULES = path.join(BACKEND, 'node_modules')
 
 // 隔离环境：必须早于 require dbManager（它在加载时校验主密钥）
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'banji-viewer-load-'))
+const DATA_DIR = makeTempDir('banji-viewer-load-')
 process.env.DB_MASTER_KEY = 'viewer-load-probe-master-key'
 process.env.DATA_DIR = DATA_DIR
 process.env.ALBUM_THUMBS_DIR = path.join(DATA_DIR, 'album-thumbs')
@@ -259,7 +262,10 @@ app.whenReady().then(async () => {
   log('')
   log('注：本地回环 + 本机磁盘，真实环境（机械盘、大图、杀软扫描）只会更慢。')
 
-  server.close()
+  await closeServer(server)
   win.destroy()
+  // 临时目录要删：这个探针此前从不清理，每跑一次在系统 temp 留一个（实测已积 6 个）。
+  // Electron 里 sqlite 句柄同样在进程内开着，删不掉就靠重试 + 明确告警，不再无声无息。
+  await removeDirWithRetry(DATA_DIR)
   app.exit(0)
 })

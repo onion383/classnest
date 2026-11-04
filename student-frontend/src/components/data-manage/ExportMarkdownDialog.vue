@@ -81,7 +81,8 @@ async function doExport() {
     }
   } catch (err) {
     console.error('导出失败:', err)
-    notifyError('导出失败，请重试')
+    // 把具体原因带出来（写盘失败/权限不足等）：笼统的「请重试」对用户没有帮助
+    notifyError(err && err.message ? '导出失败：' + err.message : '导出失败，请重试')
   } finally {
     exporting.value = false
   }

@@ -90,7 +90,7 @@
               <template v-else>
                 <button
                   v-for="(r, idx) in visibleResults"
-                  :key="keyword + '#' + r.id"
+                  :key="r.id"
                   class="tb-search-row w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left text-sm text-text transition-theme"
                   :class="{ 'bg-surface-hover': idx === activeIndex }"
                   :style="{ animationDelay: Math.min(idx, 10) * 30 + 'ms' }"
@@ -123,7 +123,8 @@ import axios from 'axios'
 import {
   PAGES, SETTINGS_SECTIONS, SETTINGS_ITEMS, matchKeywords, REMOTE_SOURCE, buildRemoteResults,
 } from '../../config/searchData.js'
-import { useSeq } from '../../composables/useSeq.js'
+import { createLatest } from '../../utils/latestOnly.js'
+import { useDisposables } from '../../utils/disposables.js'
 import { useThemeStore } from '../../stores/theme'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import CustomScrollbar from './CustomScrollbar.vue'
@@ -156,9 +157,20 @@ const remoteSearching = ref(false)
 const pinyinMatch = ref(null)
 
 let pinyinPromise = null
-let remoteTimer = null
 // 在途远程请求的取消器：用户继续输入时上一次的结果已经没用了，让后端别白算完
 let remoteAbort = null
+
+// 资源登记表：远程搜索的 debounce 定时器与在途请求都登记在这里，
+// 弹窗关闭或组件卸载时统一释放（原先两者都没人管，关掉弹窗仍会白白发一次搜索）。
+const disposables = useDisposables()
+// 防抖调度器：每次调用自动取消上一次未触发的定时器
+const scheduleRemote = disposables.defer()
+// 作用域结束时（含卸载）中止仍在途的请求
+disposables.add(() => {
+  if (!remoteAbort) return
+  try { remoteAbort.abort() } catch (_) { /* 已结束 */ }
+  remoteAbort = null
+})
 
 // 本地可搜项（页面 + 设置）：静态数据，构建一次即可
 const items = (() => {
@@ -247,9 +259,16 @@ watch(keyword, () => {
 
 // 打开弹窗（visible 由 false 变为 true）：清空关键字重新开始，列全部可搜项并聚焦输入框
 // （内置远程搜索 + 拼音库在首次打开时懒加载，行为与抽出前一致）
-watch(() => props.visible, (v) => { if (v) onOpened() })
+watch(() => props.visible, (v) => { if (v) onOpened(); else stopRemoteSearch() })
 // 兜住「点击时 chunk 还没加载完」：组件挂载时若已是打开态，同样走一次打开初始化
 onMounted(() => { if (props.visible) onOpened() })
+
+// 关闭弹窗 = 本次远程检索到此结束：撤掉待发的 debounce 定时器、中止在途请求。
+// 弹窗组件本身不会被卸载（外层只把内容 v-if 掉），所以不能只靠卸载清理。
+function stopRemoteSearch() {
+  scheduleRemote.cancel()
+  abortRemote()
+}
 
 function onOpened() {
   keyword.value = ''
@@ -272,10 +291,9 @@ function ensurePinyin() {
 //
 // 竞态守卫用请求序号而不是「比较关键字」：后者在「输入 a → 删空 → 再输 a」时会失效
 // —— 两次 q 相同，旧响应照样能通过检查，把过期的结果盖上来。
-const remoteSeq = useSeq()
+const remoteSeq = createLatest()
 
 function scheduleRemoteSearch() {
-  clearTimeout(remoteTimer)
   const q = keyword.value.trim()
   if (!q) {
     remoteResults.value = []
@@ -286,7 +304,7 @@ function scheduleRemoteSearch() {
     return
   }
   remoteSearching.value = true
-  remoteTimer = setTimeout(() => fetchRemoteSearch(q), 250)
+  scheduleRemote(() => fetchRemoteSearch(q), 250)
 }
 
 // 取消在途请求。axios 的取消会在 catch 里抛 ERR_CANCELED，那里要放行（不是失败）。
@@ -297,23 +315,23 @@ function abortRemote() {
 }
 
 async function fetchRemoteSearch(q) {
-  const my = remoteSeq.take()
+  const my = remoteSeq.begin()
   // 先取消上一次：后端在做的是同步查询，越早掐掉越省 CPU
   abortRemote()
   remoteAbort = new AbortController()
   try {
     const { data } = await axios.get(REMOTE_SOURCE.endpoint, { params: { q }, signal: remoteAbort.signal })
     // 响应回来时已不是最新一次检索：丢弃（快速输入时后发的请求可能先到）
-    if (!remoteSeq.isLatest(my)) return
+    if (!remoteSeq.isCurrent(my)) return
     remoteResults.value = buildRemoteResults(data && data.groups)
   } catch (e) {
     // 主动取消：不是错误，保持现有结果不动
     if (e && (e.code === 'ERR_CANCELED' || e.name === 'CanceledError')) return
     // 后端未就绪/未登录：静默，仅清空远程结果，不影响本地搜索
-    if (!remoteSeq.isLatest(my)) return
+    if (!remoteSeq.isCurrent(my)) return
     remoteResults.value = []
   } finally {
-    if (remoteSeq.isLatest(my)) remoteSearching.value = false
+    if (remoteSeq.isCurrent(my)) remoteSearching.value = false
   }
 }
 

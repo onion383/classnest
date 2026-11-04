@@ -32,7 +32,6 @@ classnest/
         │   ├── useRowSortDrag.js  # 行排序拖拽
         │   ├── useSeatDraft.js  # 座位草稿
         │   ├── useSeatGrid.js  # 座位/网格
-        │   ├── useSeq.js  # 异步竞态序号
         │   ├── useSyncStudentNames.js  # 人名自动补建
         │   ├── useTableCRUD.js  # 动态列 CRUD（增删改查）
         │   ├── useThumbBatch.js  # 缩略图批量预取
@@ -42,7 +41,7 @@ classnest/
 ```
 <!-- doc-tree:end -->
 
-26 个文件：根目录 19 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
+25 个文件：根目录 18 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
 
 ---
 
@@ -85,12 +84,6 @@ classnest/
 - **导出**：`flashRowById(container, id)`（滚动并闪烁高亮）、`focusRowWhenReady(containerGetter, id, { tries = 25, interval = 80 })`（页面未就绪时重试）、`applyRouteRowFocus(host, options)`（按路由 query 里的 `focus` 定位，内部重试直到命中/超时）。
 - **调用方**：`ScheduleView.common.js`（以及同样接受 `?focus=` 的表格页），配合 `AiChatMessages` 的 `goto`。
 - **注意事项**：`parse` 依赖的页签/数据未就绪时会重试，不要在调用点再包一层定时器。
-
-#### [`useSeq.js`](../../../student-frontend/src/composables/useSeq.js) · 异步竞态序号
-- **导出**：`useSeq()` → `{ take(), current(), isLatest(n) }`；闭包普通变量（非 ref），不参与渲染。
-- 用法标准：请求前 `take()`，每个 `await` 之后、写状态前 `isLatest(my)`；`catch` 与 `finally` 同样判断。
-- **调用方**：`AlbumView`、`AiGridPreview`、`ExportAlbumIndex`、`ImportExcel`。
-- **备注**：不替代 `AbortController`（请求中断控制器；`SSE`（服务器持续推送事件流）的主动中断仍用它）。
 
 #### [`useSeatDraft.js`](../../../student-frontend/src/composables/useSeatDraft.js) · 座位排表草稿
 - **导出**：`useSeatDraft()` → `{ draft, fetchDraft, saveDraft, clearDraft }`。
@@ -185,7 +178,7 @@ classnest/
 
 ## 注意事项
 
-- 并发请求统一用 `useSeq`（竞态序号组合式函数）判断「是否最新」，`await`（等待异步请求返回）后写状态前必须校验，避免旧响应覆盖新状态。
+- 并发请求统一用 `createLatest`（竞态序号守卫，在 [`utils/latestOnly.js`](../../../student-frontend/src/utils/latestOnly.js)）判断「是否最新」，`await`（等待异步请求返回）后写状态前必须校验，避免旧响应覆盖新状态。**全库只有这一份实现**（原 `composables/useSeq.js` 已于 2026-11-04 合并过来）。
 - 写操作登记撤销时，撤销键与对应页面/表格保持一致，否则 `Ctrl+Z`（撤销快捷键）无法回退。
 - `composables/ai/`（AI 专用组合式函数目录）只服务 AI 页面与组件，不要在其他页面直接复用其流式状态。
 

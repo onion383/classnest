@@ -41,20 +41,47 @@ function walk(dir, out) {
 const files = []
 for (const t of TARGETS) walk(path.join(ROOT, t), files)
 
-const EMPTY_CATCH = /\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/
-const EMPTY_CATCH_ARROW = /\.catch\(\s*(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{\s*\}\s*\)/
+// 空 catch 的判定：**按块匹配**，不能只看单行。
+//   原来用单行正则 `catch (...) { }` → 多行写法的空 catch（下面注释占几行）完全漏报，
+//   而「空 catch」正是这个工具要抓的东西 —— 漏报等于工具失效。
+//   做法：把源码里的注释与字符串先抹平（否则注释里的字面量会干扰匹配），
+//   再用跨行正则找 `catch (…) {` 后面**只跟空白**的块。
+const STRIP_COMMENTS = /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g
+const EMPTY_CATCH_BLOCK = /\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/g
+const EMPTY_CATCH_ARROW = /\.catch\(\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{\s*\}\s*\)/g
 const HAS_MARK = /best-effort/i
+
+// catch 计数：只算**真正**的 catch 块起点。
+//   原来 `/\bcatch\s*\(/g` 会把 `.catch(` 也算进去 → 分母偏宽 → 覆盖率虚高。
+const CATCH_KEYWORD = /(?<![.\w])catch\s*(?:\([^)]*\))?\s*\{/g
 
 let catchCount = 0
 let consoleErrorCount = 0
 const violations = []
 
 for (const file of files) {
-  const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/)
-  lines.forEach((line, i) => {
-    catchCount += (line.match(/\bcatch\s*\(/g) || []).length
+  const raw = fs.readFileSync(file, 'utf8')
+  const lines = raw.split(/\r?\n/)
+  // 抹平注释后的整篇文本（用于跨行匹配空 catch）
+  const code = raw.replace(STRIP_COMMENTS, (m) => m.replace(/[^\n]/g, ' '))
+  const codeLines = code.split(/\r?\n/)
+
+  // ① 跨行空 catch 块：定位所有 `catch (...) {` 且块内只有空白的位置
+  const emptyBlockLines = new Set()
+  let m
+  EMPTY_CATCH_BLOCK.lastIndex = 0
+  while ((m = EMPTY_CATCH_BLOCK.exec(code)) !== null) {
+    const lineNo = code.slice(0, m.index).split('\n').length
+    emptyBlockLines.add(lineNo)
+  }
+
+  codeLines.forEach((line, i) => {
+    // catch 计数：只算 catch 关键字，不算 .catch(
+    catchCount += (line.match(CATCH_KEYWORD) || []).length
     consoleErrorCount += (line.match(/console\.error/g) || []).length
-    if (!EMPTY_CATCH.test(line) && !EMPTY_CATCH_ARROW.test(line)) return
+
+    const isEmpty = emptyBlockLines.has(i + 1) || EMPTY_CATCH_ARROW.test(line)
+    if (!isEmpty) return
     const prev = i > 0 ? lines[i - 1] : ''
     if (HAS_MARK.test(line) || HAS_MARK.test(prev)) return
     violations.push({ file: path.relative(ROOT, file), line: i + 1, code: line.trim() })

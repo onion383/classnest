@@ -72,18 +72,38 @@ function syncGroups(dimId, newCount) {
   }
 }
 
-// 宿舍（内置）维度：按 男生宿舍数 + 女生宿舍数 重建组，组名带编号并标记性别
+// 宿舍（内置）维度：按 男生宿舍数 + 女生宿舍数 同步组，组名带编号并标记性别。
+// 只在数量变化时增删差额，并统一规范组名与排序。
+// 不能像原来那样「全删重建」：老师只是改一下每组人数 / 组长称呼，全班宿舍分配
+//（谁在几号宿舍）就会被一起清空，而这一步没有写撤销记录，等于不可恢复。
 function syncGenderGroups(dimId, maleCount, femaleCount) {
-  // 先清空旧组及成员
-  const oldGroups = db.prepare('SELECT id FROM groups WHERE dimension_id = ?').all(dimId);
+  const groups = db.prepare('SELECT id, gender FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId);
+  // 老数据的 gender 可能为空：按「男」处理（原实现也是先男后女）
+  const male = groups.filter(g => Number(g.gender) !== 1);
+  const female = groups.filter(g => Number(g.gender) === 1);
+
   const delMembers = db.prepare('DELETE FROM group_members WHERE group_id = ?');
   const delGroup = db.prepare('DELETE FROM groups WHERE id = ?');
-  for (const g of oldGroups) { delMembers.run(g.id); delGroup.run(g.id); }
+  const updGroup = db.prepare('UPDATE groups SET name = ?, gender = ?, sort_order = ? WHERE id = ?');
+  const insGroup = db.prepare('INSERT INTO groups (dimension_id, name, gender, sort_order) VALUES (?, ?, ?, ?)');
 
-  const insert = db.prepare('INSERT INTO groups (dimension_id, name, gender, sort_order) VALUES (?, ?, ?, ?)');
   let sort = 1;
-  for (let i = 1; i <= maleCount; i++) insert.run(dimId, `男生宿舍${i}`, 0, sort++);
-  for (let i = 1; i <= femaleCount; i++) insert.run(dimId, `女生宿舍${i}`, 1, sort++);
+  [
+    { list: male, count: maleCount, prefix: '男生宿舍', gender: 0 },
+    { list: female, count: femaleCount, prefix: '女生宿舍', gender: 1 },
+  ].forEach(({ list, count, prefix, gender }) => {
+    // 多出来的组从尾部删（连同成员）
+    for (let i = count; i < list.length; i++) {
+      delMembers.run(list[i].id);
+      delGroup.run(list[i].id);
+    }
+    for (let i = 0; i < count; i++) {
+      const name = `${prefix}${i + 1}`;
+      // 保留的组只改名/性别/排序，id 不变 → 成员分配原样留着
+      if (i < list.length) updGroup.run(name, gender, sort++, list[i].id);
+      else insGroup.run(dimId, name, gender, sort++);
+    }
+  });
 }
 
 // GET /api/group-manage/bootstrap —— 维度列表 + 第一个维度详情（供前端初始加载）
@@ -202,15 +222,36 @@ router.delete('/dimensions/:id', (req, res) => {
 
 // 移动维度
 router.post('/dimensions/move', (req, res) => {
+  try {
     const { id, direction } = req.body;
-  const dims = listDimensions();
-  const idx = dims.findIndex(d => d.id === id);
-  const target = direction === 'up' ? idx - 1 : idx + 1;
-  if (idx < 0 || target < 0 || target >= dims.length) return res.status(400).json({ error: '已到边界' });
-  const tmp = dims[idx]; dims[idx] = dims[target]; dims[target] = tmp;
-  const upd = db.prepare('UPDATE group_dimensions SET sort_order = ? WHERE id = ?');
-  dims.forEach((d, i) => upd.run(i + 1, d.id));
-  res.json({ message: '排序已更新' });
+    // 「确保内置默认维度存在」是一个**写**（listDimensions → ensureDefaultDim），
+    // 它原先藏在读函数里，且发生在排序更新之前、又不在同一个事务里 ——
+    // 排序中途失败时，这条默认维度已经落库：用户只是「移动了一下排序」，
+    // 库里却凭空多出一个维度。
+    //
+    // 现在把它和排序更新放进同一个事务：要么都成、要么都不成。
+    // ensureDefaultDim 自带事务（嵌套时 better-sqlite3 走 SAVEPOINT，行为一致）。
+    //
+    // 边界判断也放进事务内（它依赖事务内的读），但结果用变量带出来，
+    // 响应仍在事务外发 —— 事务里不做 IO。
+    let atBoundary = false;
+    const tx = db.transaction(() => {
+      ensureDefaultDim();
+      const dims = db.prepare('SELECT * FROM group_dimensions ORDER BY sort_order, id').all();
+      const idx = dims.findIndex(d => d.id === id);
+      const target = direction === 'up' ? idx - 1 : idx + 1;
+      if (idx < 0 || target < 0 || target >= dims.length) { atBoundary = true; return; }
+      const tmp = dims[idx]; dims[idx] = dims[target]; dims[target] = tmp;
+      const upd = db.prepare('UPDATE group_dimensions SET sort_order = ? WHERE id = ?');
+      // 逐条 UPDATE 也放进同一个事务：中途失败时排序不会只改一半
+      dims.forEach((d, i) => upd.run(i + 1, d.id));
+    });
+    tx();
+    if (atBoundary) return res.status(400).json({ error: '已到边界' });
+    res.json({ message: '排序已更新' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============ 组 ============

@@ -38,24 +38,29 @@ function sha256File(filePath) {
 }
 
 // 校验已下载的安装包。
-// 返回 { ok, error?, verified: 'sha256' | 'size-only' }
+// 返回 { ok, error?, verified: 'sha256' | 'size-only', sha256?: string }
 //   · 大小与 expectedSize（asset.size 或 Content-Length）不一致 → 失败；
 //   · digest 形如 sha256:<64 hex> → 比对哈希；
 //   · 没有 digest → 仅大小校验，标记 size-only（调用方负责 warn）。
+//   · sha256：本次**实际算出的**文件哈希（无论发布方是否提供 digest 都算），
+//     供调用方留作「安装前复核」的凭据 —— 见 updater.js 的 downloadedInstallerDigest。
 async function verifyDownloadedFile({ filePath, expectedSize, digest }) {
   const size = fs.statSync(filePath).size;
   if (expectedSize > 0 && size !== expectedSize) {
     return { ok: false, error: '下载文件不完整' };
   }
   const d = String(digest || '').toLowerCase();
+  // 无论发布方是否提供 digest，都把本地实际哈希算出来：
+  //   有 digest 时用于比对（防止资产被替换/中间劫持）；
+  //   无 digest 时留作安装前的复核凭据（防止下载后被本地替换）。
+  const actual = await sha256File(filePath);
   if (/^sha256:[0-9a-f]{64}$/.test(d)) {
-    const actual = await sha256File(filePath);
     if (actual !== d.slice('sha256:'.length)) {
       return { ok: false, error: '更新包校验失败（SHA-256 不一致）' };
     }
-    return { ok: true, verified: 'sha256' };
+    return { ok: true, verified: 'sha256', sha256: actual };
   }
-  return { ok: true, verified: 'size-only' };
+  return { ok: true, verified: 'size-only', sha256: actual };
 }
 
 module.exports = { assertHttpsUrl, sha256File, verifyDownloadedFile };

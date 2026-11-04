@@ -95,7 +95,7 @@ import DynamicTable from '../tables/DynamicTable/DynamicTable.vue';
 const GridView = defineAsyncComponent(() => import('../tables/GridView/GridView.vue'));
 import { parseSheet } from '../../utils/importSheet.js';
 import { saveBlobWithDialog } from '../../utils/saveFile.js';
-import { useSeq } from '../../composables/useSeq.js';
+import { createLatest } from '../../utils/latestOnly.js';
 import '../../styles/dialog-transition.css';
 import { ref, computed, watch, defineAsyncComponent } from 'vue';
 
@@ -115,7 +115,7 @@ const props = defineProps({
 const emit = defineEmits(['import-data', 'cancel']);
 
 // 请求序号挂实例上：Options API 没有 setup 作用域；序号不参与渲染，不必进 data
-const seq = useSeq();
+const seq = createLatest();
 
 // 预览最多渲染多少行（进 data 是为了模板里也能读到，用于显示截断提示）
 const previewLimit = ref(3000);
@@ -268,7 +268,7 @@ function handleFile(e) {
   const file = e.target.files[0];
   if (!file) return;
   // 每次选文件都让上一轮读取/解析失效，包括随后因体积被拒绝的分支
-  const my = seq.take();
+  const my = seq.begin();
   // 大小上限：超大文件会让 xlsx 解析长时间卡死甚至内存暴涨，超过 10MB 直接拒绝
   if (file.size > 10 * 1024 * 1024) {
     resetFile();
@@ -279,7 +279,7 @@ function handleFile(e) {
   fileName.value = file.name;
   const reader = new FileReader();
   reader.onload = async (ev) => {
-    if (!seq.isLatest(my)) return;
+    if (!seq.isCurrent(my)) return;
     fileData.value = new Uint8Array(ev.target.result);
     // 选中文件后自动解析预览，无需再点击「解析预览」
     await parseFile();
@@ -287,7 +287,7 @@ function handleFile(e) {
   // 读盘失败（文件被移动/权限不足/设备断开）时必须给出提示，
   // 否则界面停在「请选择一个文件进行解析」，用户以为是自己没选中文件
   reader.onerror = () => {
-    if (!seq.isLatest(my)) return;
+    if (!seq.isCurrent(my)) return;
     fileData.value = null;
     parseError.value = '文件读取失败，请重新选择文件';
   };
@@ -337,7 +337,7 @@ async function parseFile() {
   filteredCount.value = 0;
   // 大依赖 xlsx（SheetJS）延迟到真正导入文件时才加载，避免随表格页一打开就拖进几 MB 代码
   const XLSX = await import('xlsx');
-  if (!seq.isLatest(my)) return;
+  if (!seq.isCurrent(my)) return;
   try {
     let workbook = null
     // CSV 先按正确编码转成文本再解析：GBK 文件必须走这条，否则中文全是乱码
@@ -346,11 +346,11 @@ async function parseFile() {
       if (text) workbook = XLSX.read(text, { type: 'string' })
     }
     if (!workbook) workbook = XLSX.read(fileData.value, { type: 'array' })
-    if (!seq.isLatest(my)) return;
+    if (!seq.isCurrent(my)) return;
     const picked = pickSheet(XLSX, workbook)
     if (!picked) { parseError.value = '文件无有效数据'; return; }
     const parsed = picked.parsed
-    if (!seq.isLatest(my)) return;
+    if (!seq.isCurrent(my)) return;
     if (parsed.fields.length === 0) { parseError.value = '未识别到列标题'; return; }
     previewFields.value = parsed.fields.map(h => ({ name: h, type: '文字' }));
     filteredCount.value = parsed.skipped;
@@ -367,7 +367,7 @@ async function parseFile() {
     });
     previewRows.value = parsed.rows;
   } catch (e) {
-    if (!seq.isLatest(my)) return;
+    if (!seq.isCurrent(my)) return;
     parseError.value = '文件解析失败：' + e.message;
   }
 }

@@ -1,6 +1,7 @@
 import { onMounted, onUnmounted, onActivated, onDeactivated, reactive, watch } from 'vue'
 import { pushUndo, undoStatus, applyUndo } from '../api/undo'
 import { useNotification } from './useNotification.js'
+import { reportError } from '../utils/reportError.js'
 
 // 登记撤销失败时的弱提示（B09-14/15/16）。
 // 调用处原先统一 `.catch(() => {})`：操作本身已经完成，但撤销列表里没有这一条，
@@ -21,9 +22,10 @@ export function recordCellUndo(key, rowId, fieldName, oldVal, newVal) {
       type: 'cell_update',
       label: `${fieldName}：「${oldVal == null ? '' : oldVal}」→「${newVal == null ? '' : newVal}」`,
       payload: { table: key, rowId, field: fieldName, oldValue: oldVal, newValue: newVal }
-    }).then(() => refreshUndoStatus(true)).catch(() => {})
+    }).then(() => refreshUndoStatus(true)).catch(() => warnUndoFailed(`${fieldName} 的修改`))
   } catch {
-    /* 撤销记录失败不影响主流程 */
+    // 主流程已完成，只是这条撤销没登记上 —— 必须让用户知道「这次撤不回去」
+    warnUndoFailed(`${fieldName} 的修改`)
   }
 }
 
@@ -60,9 +62,9 @@ export function recordGridCellUndo(key, table, row, col, oldVal, newVal, label, 
   try {
     pushUndo({ key, type: 'grid_cell', label: text, payload, origin: origin || '' })
       .then(() => { if (!origin) refreshUndoStatus(true) })
-      .catch(() => {})
+      .catch(() => warnUndoFailed(label || '单元格修改'))
   } catch {
-    /* 撤销记录失败不影响主流程 */
+    warnUndoFailed(label || '单元格修改')
   }
 }
 
@@ -73,9 +75,11 @@ export function recordGridSnapshotUndo(key, table, oldArr, newArr, label) {
   const payload = { table, oldValue: oldArr, newValue: newArr }
   if (label) payload.label = label
   try {
-    pushUndo({ key, type: 'grid_snapshot', label: label || '整块变更', payload }).then(() => refreshUndoStatus(true)).catch(() => {})
+    pushUndo({ key, type: 'grid_snapshot', label: label || '整块变更', payload })
+      .then(() => refreshUndoStatus(true))
+      .catch(() => warnUndoFailed(label || '整块变更'))
   } catch {
-    /* 撤销记录失败不影响主流程 */
+    warnUndoFailed(label || '整块变更')
   }
 }
 
@@ -116,9 +120,11 @@ export function recordRowUpdate(key, oldRow, newRow) {
   const payload = { table: key, rowId: newRow ? newRow.id : oldRow.id, oldRow, newRow }
   try {
     const name = (newRow || oldRow)?.姓名 || (newRow || oldRow)?.group_name || (newRow || oldRow)?.主题 || (newRow || oldRow)?.名称 || `#${payload.rowId}`
-    pushUndo({ key, type: 'row_update', label: `${name}`, payload }).then(() => refreshUndoStatus(true)).catch(() => {})
+    pushUndo({ key, type: 'row_update', label: `${name}`, payload })
+      .then(() => refreshUndoStatus(true))
+      .catch(() => warnUndoFailed(`${name} 的修改`))
   } catch {
-    /* 撤销记录失败不影响主流程 */
+    warnUndoFailed(`${name} 的修改`)
   }
 }
 
@@ -183,9 +189,16 @@ export function performUndo(redo = false) {
         refreshUndoStatus(true)
         return true
       }
+      // 后端明确回绝（没记录可撤 / 记录已被占用）：必须给反馈。
+      // 原样返回 false 的话，用户按 Ctrl+Z 或点按钮后界面毫无变化（审查 v4 · B10-05）。
+      reportError(new Error(data.message || data.error || '没有可撤销的记录'), { action: redo ? '重做' : '撤销' })
       return false
     })
-    .catch(() => false)
+    .catch((err) => {
+      // 网络错误同理：静默吞掉就等于「点了没反应」
+      reportError(err, { action: redo ? '重做' : '撤销', hint: '本次操作未生效' })
+      return false
+    })
     .finally(() => { undoState.busy = false })
 }
 

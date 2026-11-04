@@ -38,21 +38,23 @@ router.post('/', (req, res) => {
         const stu = db.prepare('SELECT id, 姓名, 学号 FROM students WHERE id = ?').get(body.studentId);
         if (!stu) return res.status(404).json({ error: '学生不存在' });
         data.student_id = stu.id;
-        data.姓名 = body.姓名 || stu.姓名;
-        data.学号 = body.学号 !== undefined ? body.学号 : (stu.学号 || null);
+        data.姓名 = sanitizeField(body.姓名 || stu.姓名, 'score_records', '姓名');
+        data.学号 = sanitizeField(body.学号 !== undefined ? body.学号 : (stu.学号 || null), 'score_records', '学号');
       } else {
         data.student_id = null;
-        data.姓名 = body.姓名 || null;
-        data.学号 = body.学号 || null;
+        data.姓名 = sanitizeField(body.姓名, 'score_records', '姓名');
+        data.学号 = sanitizeField(body.学号, 'score_records', '学号');
       }
     }
 
     data.类型 = body.类型 === '扣分' ? '扣分' : '加分';
-    data.项目 = body.项目 || null;
+    // 文本列同样要过清洗：零宽字符会让「同一项目」变成两个统计项（审查 v4 · B02-02）
+    data.项目 = sanitizeField(body.项目, 'score_records', '项目');
     // 分值走列级规则（数字 + 范围 0~100000）；非数字直接报错，不再 `Number(x) || 0` 静默成 0 分
     data.分值 = sanitizeField(body.分值 ?? 0, 'score_records', '分值') ?? 0;
-    data.原因 = body.原因 || null;
-    data.加分时间 = body.加分时间 || now();
+    data.原因 = sanitizeField(body.原因, 'score_records', '原因');
+    // 加分时间按日期列清洗：裸写会把「2026-13-45」这类串原样落库，导出/排序时才炸
+    data.加分时间 = sanitizeField(body.加分时间 || now(), 'score_records', '加分时间');
     data.created_at = now();
 
     const result = buildInsert('score_records', data);

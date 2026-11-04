@@ -6,6 +6,9 @@ const { validateRow } = require('../services/businessRules');
 const { normalizeSeats, assertSeatCell, SEAT_MAX_ROWS, SEAT_MAX_COLS } = require('../services/sanitize');
 const { readDocJson } = require('../utils/json');
 const { isDateStr } = require('../utils/sql');
+// 日期口径统一走 utils/date（本地时区）。此前本文件自己复制了一份
+// localDateStr/parseDateStr/shiftDateStr/mondayOf，与 duty.js 逐字重复。
+const { localDateStr, localDateTimeStr, shiftDateStr, mondayOf } = require('../utils/date');
 
 function validateSeatSize(rows, cols) {
   if (rows < 1 || rows > SEAT_MAX_ROWS) return `行数需在 1 ~ ${SEAT_MAX_ROWS} 之间`;
@@ -17,6 +20,29 @@ function validateSeatSize(rows, cols) {
 function validateCellCoord(row, col) {
   if (row < 0 || row >= SEAT_MAX_ROWS) return `行坐标需在 0 ~ ${SEAT_MAX_ROWS - 1} 之间`;
   if (col < 0 || col >= SEAT_MAX_COLS) return `列坐标需在 0 ~ ${SEAT_MAX_COLS - 1} 之间`;
+  return null;
+}
+
+// 单格写入还必须落在**当前布局**的行列范围内。
+//
+// PATCH /cell 是唯一不经过 normalizeSeats 的座位写入口：它按坐标就地改一格，
+// 而 normalizeSeats 只校「不超过全局上限 50×30」，不校「不超过当前 rows/cols」。
+// 于是 row=10 的单格提交能把 seats 数组撑到 11 行，而 rows/cols 仍写着旧值 ——
+// 前端按 rows/cols 渲染，多出来的行永远看不见，却一直占着库；
+// 更糟的是下一次整块 PUT 会按 rows/cols 裁剪（slice(0, rows)），把这几行静默丢掉。
+//
+// 这里按当前布局校，越界直接拒，不让「看不见的行」进库。
+function validateCellInLayout(table, row, col) {
+  const doc = store.getDoc(table);
+  if (!doc) return null; // 没有布局记录时无「当前尺寸」可校，交给全局上限兜底
+  const rows = Number(doc.rows);
+  const cols = Number(doc.cols);
+  if (Number.isInteger(rows) && rows > 0 && row >= rows) {
+    return `行坐标超出当前座位表范围（当前 ${rows} 行）`;
+  }
+  if (Number.isInteger(cols) && cols > 0 && col >= cols) {
+    return `列坐标超出当前座位表范围（当前 ${cols} 列）`;
+  }
   return null;
 }
 
@@ -127,6 +153,8 @@ router.patch('/cell', (req, res) => {
   if (!Number.isInteger(row) || !Number.isInteger(col)) return res.status(400).json({ error: '参数格式错误' })
   const coordErr = validateCellCoord(row, col)
   if (coordErr) return res.status(400).json({ error: coordErr })
+  const layoutErr = validateCellInLayout('seat_layout', row, col)
+  if (layoutErr) return res.status(400).json({ error: layoutErr })
   const valueErr = validateCellValue(value, row, col)
   if (valueErr) return res.status(400).json({ error: valueErr })
   updateSingleCell('seat_layout', row, col, value)
@@ -138,6 +166,8 @@ router.patch('/master/cell', (req, res) => {
   if (!Number.isInteger(row) || !Number.isInteger(col)) return res.status(400).json({ error: '参数格式错误' })
   const coordErr = validateCellCoord(row, col)
   if (coordErr) return res.status(400).json({ error: coordErr })
+  const layoutErr = validateCellInLayout('seat_template', row, col)
+  if (layoutErr) return res.status(400).json({ error: layoutErr })
   const valueErr = validateCellValue(value, row, col)
   if (valueErr) return res.status(400).json({ error: valueErr })
   updateSingleCell('seat_template', row, col, value)
@@ -300,7 +330,9 @@ router.put('/draft', (req, res) => {
     return res.status(400).json({ error: '草稿内容为空' });
   }
 
-  const savedAt = new Date().toISOString();
+  // 本地时间口径（与全库一致）。原来用 toISOString() 是 UTC，
+  // 东八区 00:00–08:00 之间存进去的时间戳「日期部分」是昨天。
+  const savedAt = localDateTimeStr();
   store.setDoc('seat_draft', {
     mode: mode || 'single',
     rows,
@@ -333,28 +365,7 @@ router.put('/settings', (req, res) => {
 // ======================== 历史快照（按天） ========================
 // 快照按天保存：每行代表某一天（snap_date）的座位；week_start 为由该天推导的周一，
 // 历史下拉按 week_start 聚合，回看时取该周最后一天的快照。
-function localDateStr(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-}
-function parseDateStr(s) {
-  const [y, m, d] = String(s).split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-function shiftDateStr(s, days) {
-  const d = parseDateStr(s);
-  d.setDate(d.getDate() + days);
-  return localDateStr(d);
-}
-function mondayOf(s) {
-  const d = parseDateStr(s);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  d.setDate(diff);
-  return localDateStr(d);
-}
+// localDateStr / shiftDateStr / mondayOf 见 utils/date.js（全库唯一实现）。
 
 // 历史列表：按周聚合（代表日期 = 该周最后一天），供下拉框使用
 router.get('/history', (req, res) => {
@@ -437,41 +448,50 @@ router.post('/snapshot/backfill', (req, res) => {
     if (upper < start) return res.json({ message: '学期范围外', inserted: 0 });
 
     const layout = store.getDoc('seat_layout');
+    // 用 readDocJson 解析 seats/settings：裸 JSON.parse 遇到畸形记录会抛，
+    // 一条脏记录就能让整个补录请求 500（补录整批都不落库）。
+    // 读路径降级成空座位/空设置即可 —— 补录的是「快照」，不影响源数据。
     const layoutPayload = layout ? {
       mode: layout.mode,
       rows: layout.rows,
       cols: layout.cols,
-      seats: JSON.parse(layout.seats),
-      settings: JSON.parse(layout.settings),
+      ...readDocJson(layout, { seats: [], settings: {} }),
     } : null;
 
+    // 写循环整体放进一个事务（与 routes/duty.js 的同名接口同款改法）：
+    // 逐日 INSERT 各自提交时，中途失败会留下半截快照（前几天已落库、后几天没有），
+    // 用户看到的是「补了 37 天」这种半吊子结果。整批要么全成、要么全不成。
+    // 循环体全是同步调用（没有 await），可以安全地放进 better-sqlite3 的同步事务。
     let inserted = 0;
-    let cur = start;
-    while (cur <= upper) {
-      const isToday = cur === today;
-      const exists = store.histFind('seat', cur, null);
-      if (isToday && includeToday && layoutPayload) {
-        // 今天：总是覆盖为当前临时表
-        if (exists) store.histUpdateByDate('seat', cur, null, layoutPayload);
-        else store.histInsert('seat', {
-          weekStart: mondayOf(cur), snapDate: cur, mode: layoutPayload.mode,
-          payload: { ...layoutPayload, aisleCols: [], groupsConfig: [] },
-        });
-        inserted++;
-      } else if (!exists) {
-        // 过去日期：缺失才补，沿用最近一天座位；没有更早快照则用当前座位
-        const prev = store.histPrev('seat', cur, null);
-        const payload = prev ? prev.payload : layoutPayload;
-        if (payload) {
-          store.histInsert('seat', {
-            weekStart: mondayOf(cur), snapDate: cur, mode: payload.mode || 'single',
-            payload: { ...payload, aisleCols: [], groupsConfig: [] },
+    const tx = db.transaction(() => {
+      let cur = start;
+      while (cur <= upper) {
+        const isToday = cur === today;
+        const exists = store.histFind('seat', cur, null);
+        if (isToday && includeToday && layoutPayload) {
+          // 今天：总是覆盖为当前临时表
+          if (exists) store.histUpdateByDate('seat', cur, null, layoutPayload);
+          else store.histInsert('seat', {
+            weekStart: mondayOf(cur), snapDate: cur, mode: layoutPayload.mode,
+            payload: { ...layoutPayload, aisleCols: [], groupsConfig: [] },
           });
           inserted++;
+        } else if (!exists) {
+          // 过去日期：缺失才补，沿用最近一天座位；没有更早快照则用当前座位
+          const prev = store.histPrev('seat', cur, null);
+          const payload = prev ? prev.payload : layoutPayload;
+          if (payload) {
+            store.histInsert('seat', {
+              weekStart: mondayOf(cur), snapDate: cur, mode: payload.mode || 'single',
+              payload: { ...payload, aisleCols: [], groupsConfig: [] },
+            });
+            inserted++;
+          }
         }
+        cur = shiftDateStr(cur, 1);
       }
-      cur = shiftDateStr(cur, 1);
-    }
+    });
+    tx();
     res.json({ message: `已补存 ${inserted} 天`, inserted });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -495,12 +515,14 @@ router.post('/history/week', (req, res) => {
     if (!isDateStr(raw)) return res.status(400).json({ error: '周起始日期格式不正确' });
     const weekStart = mondayOf(raw);
     const layout = store.getDoc('seat_layout');
+    // 用 readDocJson 解析 seats/settings：裸 JSON.parse 遇到畸形记录会抛，
+    // 一条脏记录就能让整个补录请求 500（补录整批都不落库）。
+    // 读路径降级成空座位/空设置即可 —— 补录的是「快照」，不影响源数据。
     const layoutPayload = layout ? {
       mode: layout.mode,
       rows: layout.rows,
       cols: layout.cols,
-      seats: JSON.parse(layout.seats),
-      settings: JSON.parse(layout.settings),
+      ...readDocJson(layout, { seats: [], settings: {} }),
     } : null;
 
     let inserted = 0;

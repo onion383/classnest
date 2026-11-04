@@ -4,7 +4,7 @@
  * 覆盖：正常嵌套目录 / 空目录条目 / 符号链接 / 路径穿越 / 绝对路径 / 反斜杠路径。
  * 样本用 Python zipfile 生成（jszip 造不出 symlink 和恶意路径）。
  *
- * 跑法：node testjs/unzip-safe-test.cjs
+ * 跑法：node testjs/smoke/unzip-safe-test.cjs
  */
 const fs = require('node:fs')
 const os = require('node:os')
@@ -24,12 +24,27 @@ function pythonAvailable() {
   } catch (_) { return false }
 }
 
+// 目标目录之外「不应该出现」的路径：既用于开跑前清残留，也用于收尾断言。
+// TMP 自己那条不参与预清理 —— 它属于本次运行，清了会掩盖真泄漏。
+function outsideLeakPaths() {
+  return [
+    path.join(__dirname, '..', 'tmp', 'evil.txt'),
+    path.join(os.tmpdir(), 'evil.txt'),
+    path.resolve('/tmp/evil.txt'),
+  ]
+}
+
 function buildSamples() {
   fs.rmSync(TMP, { recursive: true, force: true })
   fs.mkdirSync(TMP, { recursive: true })
+  // 先清上一轮可能留下的「泄漏证据」：断言的是「本次解压没往目标外写」，
+  // 若上轮被强杀留下 evil.txt，本轮就会假失败。清完再解压，泄漏才归因到本次。
+  for (const stale of outsideLeakPaths()) {
+    try { fs.unlinkSync(stale) } catch (_) { /* 不存在或不可删 */ }
+  }
   const code = `
 import zipfile, os
-d = r'${TMP.replace(/\\/g, '\\\\')}'
+d = r'${TMP.replace(/\\/g, '/')}'
 big = 'X' * (512 * 1024)   # 512KB，验证流式不整体读入
 
 # ① 正常包：嵌套目录 + 空目录 + 大文件
@@ -108,12 +123,7 @@ const cases = [
   console.log(`${emptyDirOk ? '✓' : '✗'} 空目录条目已创建`)
 
   // 恶意包不应该在目标目录外产生任何东西（含绝对路径 /tmp 与系统临时目录）
-  const leakPaths = [
-    path.join(TMP, 'evil.txt'),
-    path.join(__dirname, '..', 'tmp', 'evil.txt'),
-    path.join(os.tmpdir(), 'evil.txt'),
-    path.resolve('/tmp/evil.txt'),
-  ]
+  const leakPaths = [path.join(TMP, 'evil.txt'), ...outsideLeakPaths()]
   const leaked = leakPaths.filter((p) => fs.existsSync(p))
   if (leaked.length) failed++
   console.log(`${leaked.length ? '✗' : '✓'} 目标目录外没有产生文件${leaked.length ? '（发现 ' + leaked.join(',') + '）' : ''}`)

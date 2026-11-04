@@ -127,7 +127,7 @@ import axios from 'axios'
 import CadreTreeList from './CadreTreeList.vue'
 import CustomScrollbar from './base/CustomScrollbar.vue'
 import { useNotification } from '../composables/useNotification'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 import { pushUndo } from '../api/undo'
 import { refreshUndoStatus } from '../composables/useUndo.js'
 
@@ -153,7 +153,7 @@ const treeScrollRef = ref(null)
 // 切页签后才挂载，就永远收不到这个 focus 了。所以定位由这里自己做。
 const route = useRoute()
 const router = useRouter()
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 function applyFocus() {
   const key = String(route.query.focus || '')
   if (!key.startsWith('cadre:')) return

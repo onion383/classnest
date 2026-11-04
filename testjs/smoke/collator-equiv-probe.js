@@ -5,7 +5,7 @@
 //   ① 排序结果与改动前**逐位一致**（最重要：排序变了就是功能回归）
 //   ② 性能确实提升
 //
-// 跑法：node testjs/collator-equiv-probe.js
+// 跑法：node testjs/smoke/collator-equiv-probe.js
 // =========================================================================
 
 // 复刻 utils/collator.js 的两个比较器（此脚本独立运行，不依赖前端构建）

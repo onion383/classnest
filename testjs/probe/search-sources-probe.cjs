@@ -17,6 +17,8 @@
 // 退出码：有断言失败 → 1，否则 0。
 // =========================================================================
 const path = require('path')
+// 关服务要强制断开存量 keep-alive 连接，否则事件循环仍有活 handle → 脚本永不退出
+const { closeServer } = require('../tools/closeServer.cjs')
 const http = require('http')
 const assert = require('assert/strict')
 
@@ -165,7 +167,7 @@ const CASES = [
 ]
 
 async function run() {
-  const server = app.listen(0)
+  const server = app.listen(0, '127.0.0.1')
   await new Promise((r) => server.once('listening', r))
   let failed = 0
   for (const c of CASES) {
@@ -184,7 +186,7 @@ async function run() {
       console.log(`  ✗ ${c.q} → ${e.message}`)
     }
   }
-  server.close()
+  await closeServer(server)
   conn.close()
   console.log(failed ? `\n${failed}/${CASES.length} 条失败` : `\n全部通过（${CASES.length} 条）`)
   process.exit(failed ? 1 : 0)

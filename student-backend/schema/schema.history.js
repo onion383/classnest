@@ -1,5 +1,9 @@
+const { dropObjectIfExists } = require('./schemaUtil');
 // schema 拆分子文件：三域历史快照（课表 / 值日 / 座位）合并为一张 domain_history + 只读逻辑视图。
 function migrateHistory(conn) {
+  // 这些名字在 SQL 里是 CREATE VIEW，但老库里可能还是表；DROP VIEW 遇到表会抛错，
+  // 直接让 initSchema 中断。先按真实类型删干净，下面的 DROP VIEW/TABLE 就成了空操作。
+  for (const n of ['schedule_history', 'duty_history', 'seat_history']) dropObjectIfExists(conn, n);
   // 原先 schedule_history / duty_history / seat_history 三张结构不同的历史表，
   // 合并为一张带 domain 的 domain_history，快照内容统一存 payload JSON：
   //   schedule → { cells, settings }

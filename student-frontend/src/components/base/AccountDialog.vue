@@ -46,6 +46,7 @@ import { useRouter } from 'vue-router'
 import axios from 'axios'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { clearMediaToken } from '../../utils/apiUrl'
+import { AUTH_API } from '../../utils/apiPaths.js'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
@@ -70,7 +71,7 @@ const roleText = computed(() => (user.value.role === 'teacher' ? '班主任' : '
 
 function doLogout() {
   // 通知后端吊销本次会话（原 token 立即失效），再清本地登录态
-  axios.post('/api/auth/logout').catch(() => {})
+  axios.post(AUTH_API.logout).catch(() => {})
   clearAuth()
   clearMediaToken() // 媒体凭据与登录同 sid，登出即失效；本地也清掉，避免死 token 继续拼进图片 URL
   confirmOpen.value = false

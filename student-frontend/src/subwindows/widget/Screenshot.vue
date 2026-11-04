@@ -28,6 +28,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import { INVOKE } from '../../electronChannels.js'
+import { hideForCapture, restoreAfterCapture } from './captureHide.js'
 
 const emit = defineEmits(['close'])
 
@@ -47,18 +48,7 @@ const filePath = computed(() => {
   return '保存至：图片/screenshots/'
 })
 
-// 截屏前把整窗内容藏起来，比主进程「setOpacity(0) 后盲等 150ms」又快又确定：
-// 窗口是 transparent，内容一隐藏它在屏幕上就等于不存在。
-// 等两帧 + 一个宏任务，确保合成器已提交、DWM 已更新，之后主进程直接抓屏即可。
-function hideForCapture() {
-  document.documentElement.style.visibility = 'hidden'
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))
-  })
-}
-function restoreAfterCapture() {
-  document.documentElement.style.visibility = ''
-}
+// 截屏前把整窗内容藏起来（实现与「为什么不能用 setOpacity」见 captureHide.js）
 
 async function capture() {
   try {

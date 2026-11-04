@@ -1,5 +1,9 @@
+const { dropObjectIfExists } = require('./schemaUtil');
 // schema 拆分子文件：卫生值日槽位表（设置/当前/模板/权重/草稿）+ 只读逻辑视图。
 function migrateDuty(conn) {
+  // 这些名字在 SQL 里是 CREATE VIEW，但老库里可能还是表；DROP VIEW 遇到表会抛错，
+  // 直接让 initSchema 中断。先按真实类型删干净，下面的 DROP VIEW/TABLE 就成了空操作。
+  for (const n of ['duty_settings', 'duty_layout', 'duty_template', 'duty_weight', 'duty_draft']) dropObjectIfExists(conn, n);
   // 原 duty_settings / duty_layout / duty_template / duty_weight / duty_draft 五张同构单例表
   // 合并为 duty_slots，按 kind 区分：
   //   settings：全局「星期 + 劳动项目」配置（days/items）
@@ -18,8 +22,10 @@ function migrateDuty(conn) {
       conditions TEXT NOT NULL DEFAULT '[]',
       saved_at TEXT NOT NULL DEFAULT ''
     );
+    -- items 必须按模式分键（{daily,big}）：services/dutyMode.unpackMode 只认这个结构，
+    -- 播种成扁平数组时全新库进值日页一个项目都看不到（界面保存一次才会被改成分键结构）。
     INSERT OR IGNORE INTO duty_slots (kind, items) VALUES
-      ('settings', '[{"name":"擦黑板","difficulty":0.6,"count":1},{"name":"倒垃圾","difficulty":0.7,"count":2},{"name":"扫地","difficulty":0.8,"count":2}]');
+      ('settings', '{"daily":[{"name":"擦黑板","difficulty":0.6,"count":1},{"name":"倒垃圾","difficulty":0.7,"count":2},{"name":"扫地","difficulty":0.8,"count":2}],"big":[{"name":"擦黑板","difficulty":0.6,"count":1},{"name":"倒垃圾","difficulty":0.7,"count":2},{"name":"扫地","difficulty":0.8,"count":2}]}');
     INSERT OR IGNORE INTO duty_slots (kind) VALUES ('current'), ('template'), ('weight'), ('draft');
 
     -- 只读逻辑视图：保持既有 SELECT 的写法与结果形状不变（写统一走 services/slotStore.js）

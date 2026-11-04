@@ -282,7 +282,7 @@ import StatBarList from '../components/base/StatBarList.vue'
 import { useNotification } from '../composables/useNotification.js'
 import { recordCellUndo, useUndoShortcut } from '../composables/useUndo.js'
 import { formatDate, formatDateTime } from '../utils/dateTime.js'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
 const loadAddLeaveDialog = () => import('../components/dialogs/AddLeaveDialog.vue')
@@ -303,7 +303,7 @@ const { success: notifySuccess, error: notifyError, info: notifyInfo } = useNoti
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 
 // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y 撤销、重做请假表
 useUndoShortcut('leave_records', {
@@ -318,7 +318,6 @@ const recordsViewOptions = [
   { value: 'table', label: '表格' },
   { value: 'timeline', label: '时间轴' }
 ]
-const loading = ref(false)
 const students = ref([])
 const leaves = ref([])
 const addDialogVisible = ref(false)
@@ -545,7 +544,6 @@ function rangeOf(item) {
   return text
 }
 async function loadAll() {
-  loading.value = true
   try {
     const [stuRes, leavesRes] = await Promise.all([
       axios.get(`${API}/students`),
@@ -557,8 +555,6 @@ async function loadAll() {
   } catch (err) {
     notifyError('加载失败')
     return false
-  } finally {
-    loading.value = false
   }
 }
 async function refresh() {

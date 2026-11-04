@@ -231,7 +231,7 @@ import { useUndoShortcut, recordRowDelete } from '../composables/useUndo.js'
 import { undoById } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
 import { resourceUrl } from '../utils/apiUrl'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
@@ -291,7 +291,7 @@ const table = useTableCRUD(`${API_BASE}/fee-records`, DEFAULT_FIELDS, {
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 const applyFocus = () => applyRouteRowFocus(rowFocusHost)
 onMounted(applyFocus)
 onActivated(applyFocus)

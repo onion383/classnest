@@ -204,7 +204,7 @@ import { zhCollator } from '../utils/collator.js'
 import { useNotification } from '../composables/useNotification.js'
 import { recordCellUndo, recordRowInsert, recordRowDelete, recordRowUpdate, useUndoShortcut } from '../composables/useUndo.js'
 import { formatDate } from '../utils/dateTime.js'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
 defineOptions({ name: 'ScoreManagement' })
 
@@ -222,7 +222,7 @@ const API = '/api'
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 
 const activeTab = ref('today')
 const loading = ref(false)

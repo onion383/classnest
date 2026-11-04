@@ -37,20 +37,51 @@ function parseCounts(tap) {
   return { tests: get('tests'), pass: get('pass'), fail: get('fail') }
 }
 
+// 单个测试文件的最长运行时间。卡片级测试正常情况下毫秒~秒级完成；
+// 没有这道闸时，一个死循环（例如重定向环未设上限）会把整个板块挂住 7 分钟以上，
+// 被中断后还会留下孤儿进程继续吃 CPU。
+// 可用环境变量 TEST_FILE_TIMEOUT_MS 覆盖（冒烟/行为测试若确有慢文件可调大）。
+const FILE_TIMEOUT_MS = Number(process.env.TEST_FILE_TIMEOUT_MS) || 120000
+
+// Windows 下 node --test 会再 fork 一个跑用例的子进程，只 kill 父进程会留下孤儿。
+function killTree(child) {
+  if (!child.pid || child.exitCode !== null) return
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+  } else {
+    child.kill('SIGKILL')
+  }
+}
+
 function runOne(full) {
   return new Promise((resolve) => {
     const t0 = Date.now()
-    const child = spawn(process.execPath, ['--test', full], {
+    // 显式指定 tap：Node 22+ 默认 reporter 随版本/终端而变，不指定时汇总行可能
+    // 变成 `ℹ tests 5`，导致下面的 parseCounts 全部取不到（总数显示 0）。
+    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', full], {
       cwd: path.join(__dirname, '..'),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let out = ''
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      killTree(child)
+    }, FILE_TIMEOUT_MS)
+    timer.unref()
     child.stdout.on('data', (d) => (out += d))
     child.stderr.on('data', (d) => (out += d))
-    child.on('error', (e) => resolve({ ok: false, ms: Date.now() - t0, tap: String(e), counts: {} }))
-    child.on('close', (code) =>
-      resolve({ ok: code === 0, ms: Date.now() - t0, tap: out, counts: parseCounts(out) })
-    )
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      resolve({ ok: false, ms: Date.now() - t0, tap: String(e), counts: {} })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      const tap = timedOut
+        ? out + `\n# 超时：${full} 超过 ${FILE_TIMEOUT_MS}ms 未结束，已终止\n`
+        : out
+      resolve({ ok: !timedOut && code === 0, ms: Date.now() - t0, tap, counts: parseCounts(out) })
+    })
   })
 }
 

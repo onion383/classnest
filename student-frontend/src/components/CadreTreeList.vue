@@ -261,6 +261,9 @@ function onInputChange(e) {
   })
 }
 function onInputKeydown(e) {
+  // 中文输入法组字期间（isComposing）不能响应回车/方向键：
+  // 拼音还没打完就按回车会选中候选，把用户正在输入的拼音吞掉。
+  if (e.isComposing || e.keyCode === 229) return
   const list = candidates.value
   if (e.key === 'Tab' || e.key === 'Enter') {
     if (list.length > 0) { e.preventDefault(); pickCandidate(list[suggest.value.index]) }

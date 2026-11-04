@@ -313,7 +313,7 @@ function currentTimeInfo() {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const date = aiDateStr(now);
   const time = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
   const offset = -now.getTimezoneOffset() / 60;
   return {
@@ -337,12 +337,18 @@ async function runWebSearch(args, ctx) {
   const query = String((args && args.query) || '').trim();
   if (!query) return { ok: false, error: '缺少搜索词 query' };
   const count = Math.min(Math.max(parseInt(args && args.count, 10) || 5, 1), 10);
+  // 超时与「客户端断开」两个信号取并集：
+  //   审查 v4 · B03-11 —— 原先只用固定 30s 超时，用户点「中断」后这个搜索仍会跑满 30s
+  //   （ctx.signal 由 /chat/stream 挂上 clientGone.signal，中断时即 abort）。
+  const timeout = AbortSignal.timeout(30000);
+  const clientSignal = ctx && ctx.signal;
+  const signal = clientSignal ? AbortSignal.any([timeout, clientSignal]) : timeout;
   try {
     const r = await fetch('https://api.deepseek.com/v1/tools/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.api_key}` },
       body: JSON.stringify({ query, count, need_content: false }),
-      signal: AbortSignal.timeout(30000),
+      signal,
     });
     if (!r.ok) {
       let msg = '';

@@ -5,10 +5,12 @@ const { db, getFields } = require('../../db');
 const store = require('../../services/slotStore');
 const { sanitizeField } = require('../../services/sanitize');
 const { validateRow } = require('../../services/businessRules');
+const { purgeStudentRelations } = require('../../services/studentRelations');
 const dbManager = require('../../dbManager/dbManager');
 const { READ_TABLES, JSON_WRITE_TABLES } = require('./ai.constants');
 const { tableColumns, displayColumns, serializeColVal, clearTableColumnsCache } = require('./ai.helpers');
 const { safeJson } = require('../../utils/json');
+const { localDateStr, mondayOf } = require('../../utils/date');
 const { toModeMap } = require('../../services/dutyMode');
 // 工具相关常量/执行器惰性加载：仅在真正处理对应路由时才 require
 const tools = () => require('./ai.tools/tools');
@@ -44,18 +46,8 @@ router.get('/records/:table', (req, res) => {
 // 解析统一用 utils/json 的 safeJson；模式拆包用 services/dutyMode 的 toModeMap。
 // 这两个函数此前在本文件各写了一份，与 duty.js / search.js / AI 执行器逐字重复。
 
-// 取某天所在周的周一（YYYY-MM-DD），与各页历史快照的周口径一致
-function mondayOf(date) {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const dow = d.getDay() === 0 ? 7 : d.getDay(); // 周一=1 ... 周日=7
-  d.setDate(d.getDate() - (dow - 1));
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function localDateStr(date) {
-  const p = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
-}
+// 取某天所在周的周一（YYYY-MM-DD），与各页历史快照的周口径一致。
+// 实现见 utils/date.js 的 mondayOf（入参兼容 Date，且不会改掉调用方的 Date）。
 
 // 写入前把当前行的旧值快照进 domain_history（幂等 upsert，失败不阻断写入，仅记录）
 function snapshotBeforeWrite(table, row) {
@@ -128,7 +120,9 @@ function applyDocWrite(table, id, values) {
   try {
     for (const k of Object.keys(values)) {
       if (k === 'id' || !cols.includes(k) || values[k] === undefined) continue;
-      cleaned[k] = sanitizeField(values[k], table, k, '文字');
+      // 用该列在 table_meta 登记的真实类型兜底：写死 '文字' 会让数值/日期列
+      // 走文本清洗，脏值（如 '2026-13-45'）能直接落库（审查 v4 · B03-05）
+      cleaned[k] = sanitizeField(values[k], table, k, colType(table, k));
     }
   } catch (e) {
     return { error: e.message };
@@ -242,6 +236,13 @@ router.post('/apply-batch', (req, res) => {
           if (!Number.isInteger(id) || id <= 0) throw new Error(`${at}：缺少有效的记录 id`);
           const old = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
           if (!old) throw new Error(`${at}：要删除的记录不存在（${table} id=${id}）`);
+          // 删学生必须连带清理松耦合关联（请假/加分/座位/值日/小组/班干部）：
+          // 界面上删学生走的是 purgeStudentRelations，AI 这条路径原先只删主表，
+          // 于是留下「指向不存在学生的孤儿记录」——值日指数、名单统计全被污染，
+          // 而且用户看不见（审查 v4 · B03-01）。
+          if (table === 'students') {
+            purgeStudentRelations(old, { leave: true, score: true, seat: true, duty: true, group: true, cadre: true });
+          }
           db.prepare(`DELETE FROM "${table}" WHERE id = ?`).run(id);
           results.push({ action: 'delete', table, id, row: old });
         } else {
@@ -281,7 +282,11 @@ router.post('/snapshot/restore', (req, res) => {
     const src = path.join(dir, `${name}.db`);
     if (!fs.existsSync(src)) return res.status(404).json({ error: `快照不存在：${name}` });
     const target = dbManager.dbFilePath(slug);
-    dbManager.evictConn(slug);
+    // 还原要用独占文件句柄（而且必须把旧连接丢掉，否则下次查询还连着还原前的库）。
+    // evictConn 默认会跳过「仍有请求在用」的连接，这里必须强制关：
+    // 本请求自己就持有计数，默认行为会静默跳过 → 文件覆盖了但连接还指着旧句柄，
+    // 表现为「回滚成功但界面没变」。（这条是 B05-04 加守卫后冒烟立即抓出来的）
+    dbManager.evictConn(slug, { force: true });
     fs.copyFileSync(src, target);
     for (const suffix of ['-wal', '-shm']) {
       try { fs.rmSync(target + suffix, { force: true }); } catch (_) { /* 忽略 */ }

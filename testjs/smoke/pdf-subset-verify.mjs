@@ -9,7 +9,7 @@
  *      子集会另存到 testjs/tmp/subset-out.ttf，由 font-subset-verify.mjs 逐字核对 cmap（本脚本必须跑在前）；
  *   4. 两次调用的文本与子集文件都真实落盘，供 Python 端核对。
  *
- * 跑法：node testjs/pdf-subset-verify.mjs
+ * 跑法：node testjs/smoke/pdf-subset-verify.mjs
  */
 import fs from 'node:fs'
 import path from 'node:path'

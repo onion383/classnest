@@ -34,7 +34,9 @@ classnest/
 │   │   │       └── Setup.vue  # 欢迎页 + 分步表单（注册、班级信息、主题）
 │   │   └── utils/
 │   │       ├── albumMedia.js  # 媒体类型判定、缩略图版本拼接、parseThumbBatch 二进制解析
+│   │       ├── apiPaths.js  # 认证端点路径单一来源（后端 authRoutes 挂在 /api 下，没有 /api/auth 这层）
 │   │       ├── apiUrl.js  # apiUrl(path)、resourceUrl(path)：补后端地址并为图片/背景追加 …
+│   │       ├── latestOnly.js  # createLatest()：异步结果回来时假定世界没变（全库唯一的序号守卫）
 │   │       ├── authStorage.js  # token / 当前用户的唯一读写点（空值语义、坏 JSON 防御）
 │   │       ├── backendReady.js  # waitForBackendReady(timeoutMs=4000)（等待后端就绪，超时 …
 │   │       ├── changelog.js  # 解析仓库根 CHANGELOG.md 为更新历史条目
@@ -44,6 +46,7 @@ classnest/
 │   │       ├── dateTime.js  # pad2 / formatDate / formatDateTime / formatDat…
 │   │       ├── dialogOverlayPulse.js  # 遮罩点击提示的全局事件委托（捕获阶段拦截）
 │   │       ├── dialogPrefetch.js  # v-preload 指令：悬停 80ms 后加载弹窗 chunk
+│   │       ├── disposables.js  # 资源登记表：定时器/监听器/AbortController 随作用域统一释放
 │   │       ├── fileName.js  # 文件名校验/清洗、默认名生成
 │   │       ├── hbSubset.js  # harfbuzz wasm 子集引擎（每次新建实例、用完即弃）
 │   │       ├── heatColor.js  # 热力配色（分数/密度映射）
@@ -53,6 +56,8 @@ classnest/
 │   │       ├── jwt.js  # JWT 解码（base64url，不用 atob）与过期判断
 │   │       ├── pdfFont.js  # 中文 PDF 字体：全量缓存 + 按字符动态子集，失败回退全量
 │   │       ├── reportError.js  # 统一错误上报/提示（含上下文）
+│   │       ├── renameOutcome.js  # 改名级联结果判定（skipped → 可展示提示）
+│   │       ├── userScopedCache.js  # 用户作用域缓存：登记清理函数，登出统一清（不点名）
 │   │       ├── routePrefetch.js  # prefetchRoute(router, path)：悬停预取目标路由 chunk
 │   │       ├── rowReuse.js  # 表格行复用与 key 稳定（减少重渲染）
 │   │       ├── saveFile.js  # 保存对话框与写文件（经主进程 save-file）
@@ -111,10 +116,11 @@ classnest/
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，26 个）
+### 4. 工具（`src/utils/`，30 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |
+| [`apiPaths.js`](../../../student-frontend/src/utils/apiPaths.js) | 认证端点路径**单一来源**（`AUTH_API`）：登出、媒体凭据等端点的真实路径。后端 `authRoutes` 挂在 `/api` 下，**没有 `/api/auth` 这一层** —— 写成 `/api/auth/logout` 会恒 404 且被 `.catch(() => {})` 吞掉（登出看着成功、服务端 session 没吊销） | `AccountDialog`、`SettingsView`、`apiUrl.js` |
 | [`apiUrl.js`](../../../student-frontend/src/utils/apiUrl.js) | `apiUrl(path)`、`resourceUrl(path)`：补后端地址并为图片/背景追加 token | 各视图的资源显示处 |
 | [`httpClient.js`](../../../student-frontend/src/utils/httpClient.js) | `setupApiClient({ baseURL, getToken })`、`backendBaseUrl()`：各窗口共用的 axios 装配（token、退避重试、安全通道） | `subwindows/setup`、`widget`、`desktop-widget` 的 `main.js` |
 | [`backendReady.js`](../../../student-frontend/src/utils/backendReady.js) | `waitForBackendReady(timeoutMs=4000)`（等待后端就绪，超时 4 秒）、`isBackendReady()`（是否已就绪） | `httpClient`、`main.js` |
@@ -124,6 +130,7 @@ classnest/
 | [`dateTime.js`](../../../student-frontend/src/utils/dateTime.js) | `pad2 / formatDate / formatDateTime / formatDateTimeLocal` | 各弹窗、`AnimatedClock`、工具箱 `Timer` |
 | [`collator.js`](../../../student-frontend/src/utils/collator.js) | `zhCollator`、`naturalCollator`（复用 `Intl.Collator`） | 表格排序、文件名自然排序 |
 | [`saveFile.js`](../../../student-frontend/src/utils/saveFile.js) | 保存对话框与写文件（经主进程 `save-file`） | 导出组件 |
+| [`renameOutcome.js`](../../../student-frontend/src/utils/renameOutcome.js) | `readRenameOutcome(res)`：把后端改名响应的 `renamed.skipped` 翻译成可展示提示。学生改名时后端会一并级联「只存姓名」的关联表，旧名有同名学生时跳过级联（宁可不同步也不能改错人）；此前前端**完全不看这个字段** → 用户以为改名全部生效，实际值日表/座位表还挂着旧名，历史值日指数从此归不到他名下，且界面不报错 | `useTableCRUD` 的单格保存 |
 | [`fileName.js`](../../../student-frontend/src/utils/fileName.js) | 文件名校验/清洗、默认名生成 | 导出组件 |
 | [`csvCell.js`](../../../student-frontend/src/utils/csvCell.js) | CSV 单元格转义（逗号/引号/换行） | CSV 导出 |
 | [`importSheet.js`](../../../student-frontend/src/utils/importSheet.js) | Excel/CSV 解析、表头识别与模糊匹配：`normalizeLoose`（全角/空白/标点/星期写法归一）、`matchCandidate`（编辑距离 + 包含关系，同分返回候选）、`resolveHeader`（按同义词顺序解析实际列名） | `ImportExcel`、`DutyView`、`DutySettingsDialog` |
@@ -141,6 +148,10 @@ classnest/
 | [`routePrefetch.js`](../../../student-frontend/src/utils/routePrefetch.js) | `prefetchRoute(router, path)`：悬停预取目标路由 chunk | `Sidebar` |
 | [`reportError.js`](../../../student-frontend/src/utils/reportError.js) | 统一错误上报/提示（含上下文） | 各 composable/视图 |
 | [`inpProbe.js`](../../../student-frontend/src/utils/inpProbe.js) | INP 探针前端打点 | 仅调试构建 |
+| [`latestOnly.js`](../../../student-frontend/src/utils/latestOnly.js) | `createLatest()`：**全库唯一**的序号守卫（`begin()` / `isCurrent()` / `current()` / `invalidate()`）。语义 = 「异步结果回来时假定世界没变」。手写 `let seq=0` 抄三遍容易把比较写反。原先还有一份 `composables/useSeq.js`（`take()` / `isLatest()`），语义相同 → 2026-11-04 合并到本文件，旧文件删除；**别再新建第二份** | 值日模式切换、相册选择器、表格刷新、AI 模型识别、每日回填、历史快照 |
+| [`leaveState.js`](../../../student-frontend/src/utils/leaveState.js) | `isOnLeaveOn(leave, date)` / `leavesOn(leaves, date)`：**「今天在不在校」的唯一口径** = 状态「请假中」且 开始时间 ≤ 今天 ≤ 结束时间（首尾都算；结束时间为空按「请到销假为止」；还没开始的假不算；`date` 可传 `Date` 或带时间的日期串，按本地日期比）。此前这个口径在 4 处以不同写法各写一遍：首页右上角数字数「所有请假中」（不看日期）、首页「今日请假」卡片筛「开始时间=今天」→ 同一屏两个数字互相矛盾（跨天假只进数字不进卡片）；桌面挂件是第三份；请假管理的「当前请假中」是第四份（但它是**管理视角**，含过期未销假，别硬套本文件） | 首页 `attendance` 与「今日请假」卡片、桌面挂件 `attendance` |
+| [`userScopedCache.js`](../../../student-frontend/src/utils/userScopedCache.js) | 用户作用域缓存：缓存自己登记清理函数，登出时统一清（**不点名**）—— 三个登出入口不用各记一遍，下次加缓存也不会漏 | 学期开始日缓存、仪表盘快照 |
+| [`disposables.js`](../../../student-frontend/src/utils/disposables.js) | 「资源随作用域释放」登记表（`createDisposables()` / `useDisposables()`）：定时器、事件监听器、AbortController **就地登记**，作用域结束时统一释放。资源创建处与销毁处本来隔着几百行，靠人脑配对必然漏（审查 v4 批 11 的根因修复）。`useDisposables()` 用 `getCurrentScope` + `onScopeDispose`，**不用组件实例代理**（本项目已全库清零） | 搜索弹窗的远程检索、便签窗口的拖拽与截屏链、迁移窗的完成定时器、桌面挂件的窗口级监听、表格行定位的重试链 |
 
 ### 5. 指令
 

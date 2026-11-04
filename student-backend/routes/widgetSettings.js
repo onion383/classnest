@@ -66,36 +66,47 @@ router.get('/', (req, res) => {
 });
 
 // 更新小组件设置
+// 部分是「补丁式」更新：只写请求里真的出现的字段。
+// 原实现无条件整行覆盖，于是前端任何一处「只改一项」的保存都会误伤其余设置
+// （只改截屏目录 → 工具箱开关被写成 0、笔记目录被清空）。
 router.put('/', (req, res) => {
   try {
-    const { toolboxEnabled, noteSavePath, screenshotSavePath, desktopApps } = req.body;
+    const { toolboxEnabled, noteSavePath, screenshotSavePath, desktopApps } = req.body || {};
+
+    const sets = [];
+    const vals = [];
+
+    if (toolboxEnabled !== undefined) {
+      sets.push('toolbox_enabled = ?');
+      vals.push(toolboxEnabled ? 1 : 0);
+    }
+
     // 保存目录同样禁止「..」上跳与非法字符，避免桌面挂件把文件写到预期之外的位置
-    let notePath;
-    let shotPath;
     try {
-      notePath = cleanPath(noteSavePath, '笔记保存路径') || '';
-      shotPath = cleanPath(screenshotSavePath, '截屏保存路径') || '';
+      if (noteSavePath !== undefined) {
+        sets.push('note_save_path = ?');
+        vals.push(cleanPath(noteSavePath, '笔记保存路径') || '');
+      }
+      if (screenshotSavePath !== undefined) {
+        sets.push('screenshot_save_path = ?');
+        vals.push(cleanPath(screenshotSavePath, '截屏保存路径') || '');
+      }
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
-    // 只传了其他字段（如工具箱开关）时保持原列表不动；传了列表才按上限重写
-    const normalized = normalizeApps(desktopApps);
-    const appsJson = normalized
-      ? JSON.stringify(normalized)
-      : db.prepare('SELECT desktop_apps FROM widget_settings WHERE id = 1').get()?.desktop_apps || '[]';
-    db.prepare(`
-      UPDATE widget_settings SET
-        toolbox_enabled = ?,
-        note_save_path = ?,
-        screenshot_save_path = ?,
-        desktop_apps = ?
-      WHERE id = 1
-    `).run(
-      toolboxEnabled ? 1 : 0,
-      notePath,
-      shotPath,
-      appsJson
-    );
+
+    // 只传了其他字段（如工具箱开关）时保持原列表不动；传了合法数组才按上限重写
+    if (desktopApps !== undefined) {
+      const normalized = normalizeApps(desktopApps);
+      if (normalized) {
+        sets.push('desktop_apps = ?');
+        vals.push(JSON.stringify(normalized));
+      }
+    }
+
+    if (sets.length === 0) return res.json({ success: true, message: '没有需要保存的设置' });
+
+    db.prepare(`UPDATE widget_settings SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
     res.json({ success: true, message: '小组件设置已保存' });
   } catch (err) {
     res.status(500).json({ error: err.message });

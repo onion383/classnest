@@ -23,8 +23,9 @@
 //   模板：行容器加 :attr="items.indexOf(item)"、:class="{ [rowClass]: dragIdx === items.indexOf(item) }"，
 //        手柄 @mousedown="sort.handleDown($event, items.indexOf(item))"，容器 @scroll="sort.onScroll"
 // =========================================================================
-import { nextTick } from 'vue'
+import { nextTick, onBeforeUnmount } from 'vue'
 import { applyRowShift, clearShift, createEdgeAutoScroll } from './tableDragFx'
+import { useDisposables } from '../utils/disposables.js'
 
 const EASE = 'cubic-bezier(0.22, 0.61, 0.36, 1)'
 // 插入位判定的滞回死区（px）：交界处上下微抖不切换
@@ -35,6 +36,9 @@ const ROW_TRANS = `height ${ROW_MS}ms ${EASE}, opacity ${ROW_MS}ms ease, margin-
 
 export function useRowSortDrag({ items, dragIdx, overIdx, attr, rowClass = '', onMoved = null }) {
   const sel = `[${attr}]`
+  // 资源登记表：行进/行出的动画收尾定时器登记在这里，组件卸载时自动清掉
+  // （原先不落盘 → 卸载后仍在改已销毁元素的样式）。
+  const disposables = useDisposables()
 
   // 拖拽期临时状态（非响应式：每帧读写，不参与渲染）
   let list = null   // 行所在容器
@@ -158,6 +162,32 @@ export function useRowSortDrag({ items, dragIdx, overIdx, attr, rowClass = '', o
     if (dragIdx) dragIdx.value = null
     if (overIdx) overIdx.value = null
   }
+
+  /**
+   * 拖拽中途被卸载（切页/关弹窗）：必须原地放弃，不能走 finish ——
+   * finish 会按 lastEv 的落点把行真的挪过去，用户没松手却改了顺序。
+   * 原先完全没有 onBeforeUnmount：ghost 留在 body、window 上挂着 mousemove/mouseup、
+   * rAF 与自动滚动的帧还在跑，指向已经销毁的行元素（审查 v4 · B10-08）。
+   */
+  function abortDrag() {
+    if (onMove) window.removeEventListener('mousemove', onMove)
+    if (onUp) window.removeEventListener('mouseup', onUp)
+    onMove = null
+    onUp = null
+    if (raf) { cancelAnimationFrame(raf); raf = null }
+    if (autoScroll) { try { autoScroll.stop() } catch (_) { /* 已停止 */ } autoScroll = null }
+    if (ghost) { ghost.remove(); ghost = null }
+    lastEv = null
+    if (rows) {
+      setTransition(rows, 'none')
+      clear()
+      setTransition(rows, '')
+    }
+    dragIdx.value = null
+    if (overIdx) overIdx.value = null
+  }
+
+  onBeforeUnmount(abortDrag)
 
   function finish(ev) {
     if (onMove) window.removeEventListener('mousemove', onMove)
@@ -306,7 +336,7 @@ export function useRowSortDrag({ items, dragIdx, overIdx, attr, rowClass = '', o
     el.style.height = h + 'px'
     el.style.opacity = '1'
     el.style.marginBottom = '' // 交回 .mb-1
-    setTimeout(() => {
+    disposables.timeout(() => {
       if (!el.isConnected) return
       el.style.height = ''
       el.style.opacity = ''
@@ -333,7 +363,7 @@ export function useRowSortDrag({ items, dragIdx, overIdx, attr, rowClass = '', o
     el.style.height = '0px'
     el.style.opacity = '0'
     el.style.marginBottom = '0'
-    setTimeout(done, ROW_MS)
+    disposables.timeout(done, ROW_MS)
   }
 
   return { handleDown, clear, onScroll, enterAt, leaveAt }

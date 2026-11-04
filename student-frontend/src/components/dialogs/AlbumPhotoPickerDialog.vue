@@ -72,6 +72,7 @@
 <script setup vapor>
 import { getToken } from '../../utils/authStorage.js'
 import { reportError } from '../../utils/reportError.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import { ref, computed, nextTick, watch } from 'vue'
 import axios from 'axios'
 import DialogShell from '../base/DialogShell.vue'
@@ -159,13 +160,18 @@ function clearSelection() {
   selected.value = new Set()
 }
 
+// 读取守卫：快速换相册 / 关掉再开时，先发的请求后回来会把新相册的列表
+// 覆盖成旧相册的内容（缩略图与勾选全对不上）。只认最后一次。
+const loadGuard = createLatest()
 async function load() {
   if (!props.albumId) { groups.value = []; return }
+  const token = loadGuard.begin()
   loading.value = true
   // 换了相册 → 旧的 objectURL 全作废（照片 id 不同，留着会显示错图）
   clearThumbBatch()
   try {
     const res = await axios.get(`/api/album/${props.albumId}/photos`, { headers: authHeaders() })
+    if (!loadGuard.isCurrent(token)) return
     groups.value = res.data.data || []
     photoMap.clear()
     for (const g of groups.value) for (const p of g.photos || []) photoMap.set(p.id, p)
@@ -178,10 +184,11 @@ async function load() {
     // 列表就绪 → 立即触发一次批量预取（不等滚动）
     refreshThumbBatch()
   } catch (err) {
+    if (!loadGuard.isCurrent(token)) return
     groups.value = []
     reportError(err, { action: '读取照片' })
   } finally {
-    loading.value = false
+    if (loadGuard.isCurrent(token)) loading.value = false
   }
 }
 

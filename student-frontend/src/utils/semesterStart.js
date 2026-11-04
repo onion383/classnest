@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { registerUserScopedReset } from './userScopedCache.js'
 
 // 学期开始日期（/api/schedule/settings 里的 semester_start）。
 //
@@ -29,3 +30,6 @@ export function invalidateSemesterStart() {
   cached = null
   inflight = null
 }
+
+// 登出/换号也必须失效：开学日是**某个库**的设置，换一个账号看到的是别人的学期
+registerUserScopedReset(invalidateSemesterStart)

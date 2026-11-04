@@ -161,8 +161,19 @@ router.post('/members/:id/move', (req, res) => {
   const mem = db.prepare('SELECT * FROM cadre_members WHERE id=?').get(id);
   if (!mem) return res.status(404).json({ error: '担任学生不存在' });
   const cadreId = Number(req.body.cadre_id) || 0;
-  if (!db.prepare('SELECT id FROM cadres WHERE id=?').get(cadreId)) {
+  const target = db.prepare('SELECT name, max_count FROM cadres WHERE id=?').get(cadreId);
+  if (!target) {
     return res.status(400).json({ error: '职务不存在' });
+  }
+  // 跨职务移动也要守目标名额：单条添加接口（POST /:id/members）查了 max_count，
+  // 漏在这里就能靠拖拽把「班长（限 1 人）」塞成 3 个人，前端计数与评优统计一起失真。
+  // 同一职务内拖动人数不变，不需要校验。
+  if (Number(mem.cadre_id) !== cadreId) {
+    const maxCount = Math.max(1, Number(target.max_count) || 1);
+    const curCount = db.prepare('SELECT COUNT(*) AS n FROM cadre_members WHERE cadre_id=?').get(cadreId).n;
+    if (curCount >= maxCount) {
+      return res.status(400).json({ error: `「${target.name}」人数已达上限 ${maxCount} 人` });
+    }
   }
   let index = Number.isFinite(req.body.index) ? Number(req.body.index) : null;
   const tx = db.transaction(() => {

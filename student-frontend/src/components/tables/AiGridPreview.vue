@@ -23,6 +23,7 @@
 
 <script>
 import { apiFetch } from '../../utils/apiUrl.js'
+import { registerUserScopedReset } from '../../utils/userScopedCache.js'
 
 // 日期表头兜底（课表/值日缺省时）
 const DEFAULT_DAYS = ['周一', '周二', '周三', '周四', '周五']
@@ -70,12 +71,18 @@ export function invalidateStudentMap() {
   _studentMap = null
   _studentMapAt = 0
 }
+
+// 这份 id→姓名 映射是**跟着登录用户走**的进程内缓存：换号后必须失效，
+// 否则新用户看到的是上一个用户的姓名（座位表里存的是学生 id，靠它还原成名字）。
+// TTL 只挡住「长时间不换号」的情况，挡不住「刚换完号就看预览」。
+// 登记到用户级清理表（见 utils/userScopedCache.js），登出统一调。
+registerUserScopedReset(invalidateStudentMap)
 </script>
 
 <script setup vapor>
 import GridView from './GridView/GridView.vue'
 import { generateColHeaders, buildSeatLikeRows } from '../../composables/useSeatGrid.js'
-import { useSeq } from '../../composables/useSeq.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import { ref, watch } from 'vue'
 
 // AI 网格预览：按表名取当前行（id=1），还原成 GridView 的 colHeaders + rows 只读展示。
@@ -116,14 +123,14 @@ function applyStyle(o) {
 // 表名/覆盖值可能连续变化（watch 会连续触发 load）：
 // 用请求序号丢弃旧响应，避免旧表的数据覆盖新表的预览（B11-06）
 async function load() {
-  const my = seq.take()
+  const my = seq.begin()
   loading.value = true; error.value = ''
   const family = FAMILY[props.table]
   if (!family) { error.value = '该表暂不支持网格预览'; loading.value = false; return }
   try {
     const r = await apiFetch(`/api/ai/records/${props.table}?ids=1`)
     const j = await r.json()
-    if (!seq.isLatest(my)) return
+    if (!seq.isCurrent(my)) return
     if (!r.ok || !j.success) throw new Error(j.error || '读取失败')
     const base = (j.data && j.data.rows && j.data.rows[0]) || {}
     const row = { ...base, ...(props.override || {}) }
@@ -133,15 +140,15 @@ async function load() {
     else if (family === 'seat') built = await buildSeat(row)
     else if (family === 'duty') built = buildDuty(row)
     // buildSeat 里还 await 了学生名映射，期间可能已切到别的表：再核对一次序号
-    if (!seq.isLatest(my)) return
+    if (!seq.isCurrent(my)) return
     if (!built) { error.value = '该数据暂无法还原成网格'; return }
     applyStyle(built)
   } catch (e) {
-    if (!seq.isLatest(my)) return
+    if (!seq.isCurrent(my)) return
     error.value = e.message || '读取失败'
   } finally {
     // 只由最新请求关闭 loading
-    if (seq.isLatest(my)) loading.value = false
+    if (seq.isCurrent(my)) loading.value = false
   }
 }
 // 座位表：与座位页同款几何（讲台行 + 走廊列），数值格把学生 id 还原成姓名
@@ -249,6 +256,6 @@ function buildDuty(row) {
 }
 
 // 请求序号挂实例上：Options API 没有 setup 作用域；序号不参与渲染，不必进 data
-const seq = useSeq()
+const seq = createLatest()
 load()
 </script>

@@ -53,6 +53,11 @@ function restoreBundle({ slug, username, data, dbKey, encrypted = true }) {
     throw new Error('非法的库标识');
   }
   const filePath = dbFilePath(slug);
+  // 顺序很关键：**先断开连接再覆盖文件**。
+  // 反过来的话，旧连接还开着时 Windows 上写同名文件会 EBUSY；即便写成功，
+  // 旧连接的 -wal 之后仍可能被重放到新库上，两份数据交错（审查 v4 · B05-03）。
+  // 恢复属维护窗口操作，强制关（force）——此时不应有人在写。
+  evictConn(slug, { force: true });
   fs.writeFileSync(filePath, Buffer.from(data, 'base64'));
   // 覆盖 .db 后必须清掉同名的 -wal/-shm 残留，否则旧库的日志会被 New 库重放导致损坏
   for (const suffix of ['-wal', '-shm']) {
@@ -61,7 +66,6 @@ function restoreBundle({ slug, username, data, dbKey, encrypted = true }) {
   // 用本机主密钥重新包裹库钥匙后登记，后续登录走常规主密钥路径即可打开；
   // 明文库无需钥匙，wrapped_key 留空占位（NOT NULL 约束）
   registryUpsert(slug, username, encrypted ? wrapKey(dbKey) : '', encrypted ? 1 : 0);
-  evictConn(slug);
   return { slug };
 }
 
@@ -108,8 +112,9 @@ async function convertDbEncryption(slug, encrypt, onProgress) {
     return conn;
   };
 
-  // 先驱逐缓存连接（含 auth 中间件为本次请求打开的连接），确保转换期间本库无其它句柄
-  evictConn(slug);
+  // 先驱逐缓存连接（含 auth 中间件为本次请求打开的连接），确保转换期间本库无其它句柄。
+  // 转换要独占文件，必须强制关（force）——守卫生效时会直接跳过，那就白转了
+  evictConn(slug, { force: true });
 
   let conn = null;
   try {

@@ -12,6 +12,7 @@
  * 跑法：node testjs/smoke/album-photo-info-test.cjs
  */
 const http = require('node:http')
+const { makeTempDir, removeDirWithRetry } = require('./_tmpdir.cjs')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -20,7 +21,7 @@ const BACKEND = path.join(__dirname, '..', '..', 'student-backend')
 const BACKEND_MODULES = path.join(BACKEND, 'node_modules')
 
 // 隔离环境：必须早于 require dbManager（它在加载时校验主密钥）
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'banji-photo-info-'))
+const DATA_DIR = makeTempDir('banji-photo-info-')
 process.env.DB_MASTER_KEY = 'photo-info-smoke-master-key'
 process.env.DATA_DIR = DATA_DIR
 process.env.ALBUM_THUMBS_DIR = path.join(DATA_DIR, 'album-thumbs')
@@ -32,6 +33,22 @@ const albumRouter = require(path.join(BACKEND, 'routes', 'album'))
 
 const USERNAME = 'photo-info-smoke'
 const { slug } = dbManager.createTeacher(USERNAME, 'not-a-real-hash', 'teacher')
+
+let server = null
+// 收尾必须覆盖 setup 阶段：原先 try 从「起完监听」才开始，建库/造数据/监听任一步抛错
+// 都会直接 exit(2)，临时目录与端口全留着（每失败一次漏一个目录）。
+async function cleanup() {
+  if (server) {
+    await new Promise((r) => {
+      const t = setTimeout(r, 2000)      // keep-alive 连接会让 close 迟迟不回调
+      try { server.closeAllConnections?.() } catch (_) { /* 老版本无此方法 */ }
+      server.close(() => { clearTimeout(t); r() })
+    })
+    server = null
+  }
+  try { dbManager.evictConn(slug) } catch (_) { /* best-effort：关闭库连接 */ }
+  await removeDirWithRetry(DATA_DIR)
+}
 
 let failed = 0
 const check = (name, ok, detail) => {
@@ -121,7 +138,7 @@ async function makeP3Jpeg() {
   }
   app.use('/api/album', bind, albumRouter)
 
-  const server = await new Promise((resolve) => {
+  server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s))
   })
   const port = server.address().port
@@ -164,13 +181,13 @@ async function makeP3Jpeg() {
     const r3 = await request(port, { path: '/api/album/photo/9999/info' })
     check('④ 不存在 → 404', r3.status === 404, r3.text)
   } finally {
-    await new Promise((r) => server.close(r))
-    try { fs.rmSync(DATA_DIR, { recursive: true, force: true }) } catch (_) { /* 句柄未释放 */ }
+    await cleanup()
   }
 
   console.log(failed === 0 ? '\n全部通过' : `\n${failed} 项失败`)
   process.exit(failed === 0 ? 0 : 1)
-})().catch((e) => {
+})().catch(async (e) => {
   console.error('冒烟异常：', e)
+  await cleanup()
   process.exit(2)
 })

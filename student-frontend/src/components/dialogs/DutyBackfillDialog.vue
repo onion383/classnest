@@ -89,7 +89,8 @@ import DialogShell from '../base/DialogShell.vue'
 import axios from 'axios'
 import WeekSwitcher from '../base/WeekSwitcher.vue'
 import { useNotification } from '../../composables/useNotification.js'
-import { mondayOf, shiftDateStr, diffDays } from '../../utils/dateTime.js'
+import { mondayOf, shiftDateStr, diffDays, localDateStr } from '../../utils/dateTime.js'
+import { createLatest } from '../../utils/latestOnly.js'
 
 defineOptions({ name: 'DutyBackfillDialog' })
 
@@ -113,6 +114,8 @@ const endDate = ref('');
 const formOpen = ref(false);
 // 当前周每天的记录（后端返回，元素含 snap_date）
 const dailyRows = ref([]);
+// 「只认最后一次」的守卫：快速切周时，旧响应后到会把每日记录覆盖成上一周的
+const dailyGuard = createLatest();
 // 学期起始周的周一（用于周数换算）；学期未填日期时为空
 const semesterMonday = ref('');
 
@@ -186,8 +189,7 @@ async function loadWeeks() {
   weeks.value = list
 
   // 默认选中「包含今天的周」，不在列表内则选第一项
-  const d = new Date()
-  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const today = localDateStr(new Date())
   const todayMonday = mondayOf(today)
   let def = ''
   if (weeks.value.some(w => w.week_start === todayMonday)) def = todayMonday
@@ -223,10 +225,13 @@ async function loadDaily() {
   const from = currentWeek.value
   if (!from) { dailyRows.value = []; return }
   const to = shiftDateStr(from, 6)
+  const token = dailyGuard.begin();
   try {
     const res = await axios.get('/api/duty/daily', { params: { mode: props.mode, from, to } })
+    if (!dailyGuard.isCurrent(token)) return;
     dailyRows.value = Array.isArray(res.data) ? res.data : ((res.data && res.data.data) || [])
   } catch (e) {
+    if (!dailyGuard.isCurrent(token)) return;
     console.error(e)
     dailyRows.value = []
   }

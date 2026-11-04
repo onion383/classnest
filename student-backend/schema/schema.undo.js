@@ -18,6 +18,12 @@ function migrateUndo(conn) {
   `);
   // 优化：按资源分组查询/删最旧记录
   conn.exec(`CREATE INDEX IF NOT EXISTS idx_undo_key ON undo_history (key, id);`);
+  // 优化：按 (dir, origin) 查询 —— AI 批次的整批回退/撤销列表都走这个条件
+  //   （见 routes/undo/undo.records.js：`WHERE dir = 1 AND origin = ?`、
+  //    `WHERE dir = 1 AND origin <> ''`）。
+  //   原来的 idx_undo_key 是 (key, id)，**不覆盖**这两个条件 → 每次查批次都全表扫。
+  //   undo_history 的写入不频繁（只在用户编辑/AI 改动时插），多这一个索引很划算。
+  conn.exec(`CREATE INDEX IF NOT EXISTS idx_undo_dir_origin ON undo_history (dir, origin);`);
 }
 
 module.exports = { migrateUndo };

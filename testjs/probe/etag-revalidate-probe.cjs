@@ -17,6 +17,8 @@
 const { app, BrowserWindow } = require('electron')
 const http = require('http')
 const path = require('path')
+// 关服务要强制断开存量 keep-alive 连接，否则事件循环仍有活 handle → 脚本永不退出
+const { closeServer } = require('../tools/closeServer.cjs')
 const fs = require('fs')
 
 app.on('window-all-closed', () => { /* 保持进程活着，等探针跑完 */ })
@@ -146,7 +148,7 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.error('执行失败：', e.message)
   } finally {
-    server.close()
+    await closeServer(server)
   }
 
   let pass = 0

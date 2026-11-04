@@ -18,12 +18,13 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const http = require('node:http')
+const { removeDirWithRetry, makeTempDir } = require('./_tmpdir.cjs')
 
 const ROOT = path.join(__dirname, '..', '..')
 const BACKEND = path.join(ROOT, 'student-backend')
 const NM = path.join(BACKEND, 'node_modules')
 
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'undo-batch-'))
+const DATA_DIR = makeTempDir('undo-batch-')
 process.env.DB_MASTER_KEY = 'undo-batch-test-key'
 process.env.DATA_DIR = DATA_DIR
 process.env.ALBUM_THUMBS_DIR = path.join(DATA_DIR, 'thumbs')
@@ -69,6 +70,8 @@ function request(port, { method = 'GET', p = '/', body } = {}) {
       res.on('end', () => { let json = null; try { json = JSON.parse(text) } catch (_) { } resolve({ status: res.statusCode, json, text }) })
     })
     req.on('error', (e) => resolve({ status: 0, error: e.message }))
+    // 没有超时的请求在服务端挂死时会把这个脚本也挂住（CI 上表现为整体不退）
+    req.setTimeout(8000, () => { req.destroy(); resolve({ status: 0, error: 'timeout' }) })
     if (body !== undefined) req.write(JSON.stringify(body))
     req.end()
   })
@@ -82,8 +85,21 @@ const bind = (req, res, next) => {
 }
 app.use('/api/undo', bind, undoRouter)
 
+let server = null
+// 收尾要覆盖正常与异常两条路径。原先只有正常路径 server.close()，
+// 断言抛错时直接 exit(1) —— 临时 DATA_DIR 永久留在系统 temp，每跑一次漏一个。
+async function cleanup() {
+  if (server) await new Promise((r) => server.close(r))
+  try { dbManager.evictConn(slug) } catch (_) { /* best-effort：关闭库连接 */ }
+  await removeDirWithRetry(DATA_DIR)
+}
+
 ;(async () => {
-  const server = app.listen(0)
+  // 必须等 listening 再取端口：带 host 的 listen 是异步完成的，
+  // 紧接着 address() 可能拿到 null（不带 host 时刚好同步完成，所以以前没暴露）。
+  server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s))
+  })
   const port = server.address().port
 
   // 登记一条单元格撤销
@@ -167,7 +183,7 @@ app.use('/api/undo', bind, undoRouter)
   check('按 origin 整批重做', r5.json && r5.json.ok === true && r5.json.batch === 2, r5.text)
   check('整批重做后数据回来', readCell('students', 1, '姓名') === '张三E' && readCell('students', 2, '姓名') === '李四E', [readCell('students', 1, '姓名'), readCell('students', 2, '姓名')])
 
-  server.close()
   console.log(failed ? `\n${failed} 条断言失败` : '\n全部通过')
+  await cleanup()
   process.exit(failed ? 1 : 0)
-})().catch((e) => { console.error(e); process.exit(1) })
+})().catch(async (e) => { console.error(e); await cleanup(); process.exit(1) })

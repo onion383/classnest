@@ -620,10 +620,14 @@ test('createSerialSaver：在途期间的多次请求合并，不并发发请求
   const { createSerialSaver } = await loadSerialSaver()
   let calls = 0
   let release
+  // quietMs: 0 —— 本例只测「并发合并」这一条契约，不掺防抖。
+  //   默认带 300ms 静默期时，3 次同步 request 都落在静默期内 → 合并成**一次**保存，
+  //   saveFn 还没被调用（calls 仍是 0）→ 断言「首轮已在途」就不成立了。
+  //   防抖本身的行为由 testjs/behavior/serialSaver.test.js 专门守。
   const saver = createSerialSaver(async () => {
     calls++
     if (calls === 1) await new Promise((r) => { release = r })
-  })
+  }, { quietMs: 0 })
   const p1 = saver.request()
   assert.equal(saver.busy, true)
   const p2 = saver.request()
@@ -728,54 +732,57 @@ test('_isSingleUnpicked：缺 options 的题按「无选项」处理，不抛 Ty
 
 
 // =========================================================================
-// useSeq：异步竞态序号守卫
+// createLatest：异步竞态序号守卫（全库唯一实现，utils/latestOnly.js）
 // 迁移自 5 处手写的 `let xxxSeq = 0`，这里锁住语义，防止以后被改成
 // 「共享计数器」（会导致两个组件互相作废对方请求）。
+// 2026-11-04：原先还有一份 composables/useSeq.js（take/isLatest），
+//   两份近似封装并存 → 合并到 utils/latestOnly.js（begin/isCurrent），
+//   `current()` 能力从 useSeq 搬了过来。
 // =========================================================================
-const loadSeq = () => import(pathToFileURL(path.join(__dirname, '../../student-frontend/src/composables/useSeq.js')).href)
+const loadSeq = () => import(pathToFileURL(path.join(__dirname, '../../student-frontend/src/utils/latestOnly.js')).href)
 
-test('useSeq：take 递增，isLatest 只认最新号', async () => {
-  const { useSeq } = await loadSeq()
-  const seq = useSeq()
-  const a = seq.take()
-  const b = seq.take()
+test('createLatest：begin 递增，isCurrent 只认最新号', async () => {
+  const { createLatest } = await loadSeq()
+  const seq = createLatest()
+  const a = seq.begin()
+  const b = seq.begin()
   assert.equal(a, 1)
   assert.equal(b, 2)
-  assert.equal(seq.isLatest(a), false, '旧号必须被判为过期')
-  assert.equal(seq.isLatest(b), true)
+  assert.equal(seq.isCurrent(a), false, '旧号必须被判为过期')
+  assert.equal(seq.isCurrent(b), true)
 })
 
-test('useSeq：current 读当前号但不递增（同一批请求的第二阶段沿用）', async () => {
-  const { useSeq } = await loadSeq()
-  const seq = useSeq()
-  const a = seq.take()
+test('createLatest：current 读当前号但不递增（同一批请求的第二阶段沿用）', async () => {
+  const { createLatest } = await loadSeq()
+  const seq = createLatest()
+  const a = seq.begin()
   assert.equal(seq.current(), a)
   assert.equal(seq.current(), a, 'current 不能改变序号')
-  assert.equal(seq.isLatest(a), true)
+  assert.equal(seq.isCurrent(a), true)
 })
 
-test('useSeq：invalidate 作废所有在途请求', async () => {
-  const { useSeq } = await loadSeq()
-  const seq = useSeq()
-  const a = seq.take()
+test('createLatest：invalidate 作废所有在途请求', async () => {
+  const { createLatest } = await loadSeq()
+  const seq = createLatest()
+  const a = seq.begin()
   seq.invalidate()
-  assert.equal(seq.isLatest(a), false, 'invalidate 后旧号必须失效')
-  const b = seq.take()
-  assert.equal(seq.isLatest(b), true)
-  assert.equal(seq.isLatest(a), false)
+  assert.equal(seq.isCurrent(a), false, 'invalidate 后旧号必须失效')
+  const b = seq.begin()
+  assert.equal(seq.isCurrent(b), true)
+  assert.equal(seq.isCurrent(a), false)
 })
 
-test('useSeq：两次调用互不干扰（不能是模块级共享计数器）', async () => {
-  const { useSeq } = await loadSeq()
-  const one = useSeq()
-  const two = useSeq()
-  const a = one.take()
-  const b = two.take()
+test('createLatest：两次调用互不干扰（不能是模块级共享计数器）', async () => {
+  const { createLatest } = await loadSeq()
+  const one = createLatest()
+  const two = createLatest()
+  const a = one.begin()
+  const b = two.begin()
   assert.equal(a, 1)
   assert.equal(b, 1, '两个实例各自从 1 开始')
-  one.take()
-  assert.equal(one.isLatest(a), false)
-  assert.equal(two.isLatest(b), true, '另一个实例的号不受影响')
+  one.begin()
+  assert.equal(one.isCurrent(a), false)
+  assert.equal(two.isCurrent(b), true, '另一个实例的号不受影响')
 })
 
 // =========================================================================

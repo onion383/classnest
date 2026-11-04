@@ -23,6 +23,18 @@ function runQuery({ table, where, order_by, order_dir, limit }) {
       };
     }
     if (keys.length) {
+      // 值类型先挡：better-sqlite3 只认 数字/字符串/BigInt/Buffer/null，
+      // 传对象或数组会在 prepare().all() 里抛 "SQLite3 can only bind ..."。
+      // 那是原生层异常，冒出去只会变成一条模型看不懂的 tool 失败，
+      // 它既不知道哪个字段错了、也没法自己修正（审查 v4 · B03-04）。
+      const bad = keys.filter((k) => where[k] !== null && typeof where[k] === 'object');
+      if (bad.length) {
+        return {
+          error: `where 的值只能是文本 / 数字 / 空值：${bad
+            .map((k) => `「${k}」收到${Array.isArray(where[k]) ? '数组' : '对象'}`)
+            .join('；')}。要多值请分多次查询，区间筛选用 aggregate 的 where_range`,
+        };
+      }
       sql += ' WHERE ' + keys.map((k) => `"${k}" = ?`).join(' AND ');
       keys.forEach((k) => params.push(where[k]));
     }

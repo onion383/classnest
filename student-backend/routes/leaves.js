@@ -35,20 +35,22 @@ router.post('/', (req, res) => {
     const stu = db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE id = ?').get(body.studentId);
     if (!stu) return res.status(404).json({ error: '学生不存在' });
     data.student_id = stu.id;
-    data.姓名 = body.姓名 || stu.姓名;
-    data.家长联系电话 = body.家长联系电话 !== undefined ? body.家长联系电话 : (stu.家长联系电话 || null);
-    data.学生联系电话 = body.学生联系电话 !== undefined ? body.学生联系电话 : (stu.学生联系电话 || null);
+    // 文本列统一走 sanitizeField：裸赋值会把零宽字符/控制字符/超长串原样落库，
+    // 之后搜索、导出、AI 读到的都是脏值（审查 v4 · B02-02）。
+    data.姓名 = sanitizeField(body.姓名 || stu.姓名, 'leave_records', '姓名');
+    data.家长联系电话 = sanitizeField(body.家长联系电话 !== undefined ? body.家长联系电话 : (stu.家长联系电话 || null), 'leave_records', '家长联系电话');
+    data.学生联系电话 = sanitizeField(body.学生联系电话 !== undefined ? body.学生联系电话 : (stu.学生联系电话 || null), 'leave_records', '学生联系电话');
   } else {
     data.student_id = null;
-    data.姓名 = body.姓名 || null;
-    data.家长联系电话 = body.家长联系电话 || null;
-    data.学生联系电话 = body.学生联系电话 || null;
+    data.姓名 = sanitizeField(body.姓名, 'leave_records', '姓名');
+    data.家长联系电话 = sanitizeField(body.家长联系电话, 'leave_records', '家长联系电话');
+    data.学生联系电话 = sanitizeField(body.学生联系电话, 'leave_records', '学生联系电话');
   }
 
   data.类型 = body.类型 ? sanitizeField(body.类型, 'leave_records', '类型', '文字') : null;
   data.开始时间 = sanitizeField(body.开始时间 || null, 'leave_records', '开始时间', '日期');
   data.结束时间 = sanitizeField(body.结束时间 || null, 'leave_records', '结束时间', '日期');
-  data.备注 = body.备注 || null;
+  data.备注 = sanitizeField(body.备注, 'leave_records', '备注');
   data.状态 = '请假中';
   data.返校时间 = null;
   data.created_at = now();
@@ -66,6 +68,20 @@ router.post('/', (req, res) => {
 router.put('/:id', (req, res) => {
     const row = cleanUp(req.body || {}, EDITABLE, 'leave_records');
   if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
+  // cleanUp 的跨字段校验只能看到本次请求带的列：只改「结束时间」时「开始时间」为空，
+  // assertLeaveWindow 在任一时间为空时直接放行 → 结束时间可以被改到开始之前。
+  // 这里用库里的旧行补齐后再校验一次（新增接口本来就有这条校验，行为要对齐）。
+  if (row.开始时间 !== undefined || row.结束时间 !== undefined) {
+    const old = db.prepare('SELECT 开始时间, 结束时间 FROM leave_records WHERE id = ?').get(Number(req.params.id));
+    if (!old) return res.status(404).json({ error: '记录不存在' });
+    const start = row.开始时间 !== undefined ? row.开始时间 : old.开始时间;
+    const end = row.结束时间 !== undefined ? row.结束时间 : old.结束时间;
+    try {
+      validateRow('leave_records', { 开始时间: start, 结束时间: end });
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
   buildUpdate('leave_records', row, req.params.id);
   res.json({ message: '修改成功' });
 });

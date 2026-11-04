@@ -84,9 +84,16 @@ function purgeSeatRelation(student) {
     if (!Array.isArray(row)) continue;
     for (let i = 0; i < row.length; i++) {
       const cell = row[i];
+      // 姓名分支一律 trim 后比较：座位格是手工录入的 JSON，写入路径只查类型、不 trim，
+      // 库里可能存在 ' 张三 ' 这种带空格的旧名。对象分支原先用严格 ===，与字符串分支
+      // 口径不一致 —— 删学生时漏清这格，人删了名字还挂在座位上。
       const hit = (typeof cell === 'number' && cell === student.id)
         || (typeof cell === 'string' && cell.trim() === student['姓名'])
-        || (cell && typeof cell === 'object' && (cell.student_id === student.id || cell.name === student['姓名'] || cell['姓名'] === student['姓名']));
+        || (cell && typeof cell === 'object' && (
+          cell.student_id === student.id
+          || (typeof cell.name === 'string' && cell.name.trim() === student['姓名'])
+          || (typeof cell['姓名'] === 'string' && cell['姓名'].trim() === student['姓名'])
+        ));
       if (hit) { row[i] = null; removed++; }
     }
   }

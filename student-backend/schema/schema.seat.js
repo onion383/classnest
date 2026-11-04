@@ -1,5 +1,9 @@
+const { dropObjectIfExists } = require('./schemaUtil');
 // schema 拆分子文件：座位槽位表（当前/模板/草稿/权重）+ 只读逻辑视图。
 function migrateSeat(conn) {
+  // 这些名字在 SQL 里是 CREATE VIEW，但老库里可能还是表；DROP VIEW 遇到表会抛错，
+  // 直接让 initSchema 中断。先按真实类型删干净，下面的 DROP VIEW/TABLE 就成了空操作。
+  for (const n of ['seat_layout', 'seat_template', 'seat_weight', 'seat_draft']) dropObjectIfExists(conn, n);
   // 原 seat_layout / seat_template / seat_draft / seat_weight 四张同构单例表合并为 seat_slots：
   //   current ：当前座位（mode/rows/cols/seats/aisle_cols/groups_config/settings）
   //   template：座位模板（同上）

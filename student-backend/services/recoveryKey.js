@@ -20,9 +20,53 @@ function pickPhrase() {
   return chars.join('');
 }
 
-// 派生：恢复密钥 -> 哈希（用于服务端保存校验，不存明文）
-function deriveRestoreHash(phrase) {
+// 恢复词哈希的版本标识。
+//
+// 为什么需要：哈希一旦写进 users.recovery_hash 就**不能随便改** —— 用户已经把 12 个字
+// 抄在纸上存着了，改算法 = 他们的恢复词永久失效、账号再也救不回来。
+// 所以哈希串里带一个版本前缀，将来换算法时：
+//   · 新哈希写 'restore:v2:...'（带新前缀）
+//   · 校验时按版本分别比对（v1 走旧算法、v2 走新算法）
+//   · 用户下次重置恢复密钥时自然升级到新版本
+// 没有版本标识时，库里存着一堆无法区分算法的哈希 —— 换算法只能全库作废。
+//
+// v1 的算法必须**一字不改**地保留：它是已发布版本写进库的值。
+const RESTORE_HASH_VERSION = 'v1';
+
+// v1：单轮 sha256('restore:' + phrase)，无盐。
+// 安全性说明：恢复词本身有 12×log2(197) ≈ 91.5 bit 熵，全字表暴力枚举需要 3.4×10²⁷ 次
+// 尝试 —— 无盐彩虹表在这个熵下不构成实际威胁（预先枚举 10²⁷ 条物理上不可行）。
+// 真正的风险是「哈希串不带版本标识」，已由 RESTORE_HASH_VERSION 解决。
+function deriveRestoreHashV1(phrase) {
   return crypto.createHash('sha256').update('restore:' + phrase).digest('hex');
+}
+
+// 按版本派生哈希。v1 与历史实现完全一致（保证已发的恢复词仍可用）。
+// 输出格式与 deriveRestoreHash 一致（带版本前缀），这样 verifyRestoreHash
+// 直接拿它跟库里的哈希比即可。
+function deriveRestoreHashByVersion(phrase, version) {
+  if (version === 'v1') return 'restore:' + RESTORE_HASH_VERSION + ':' + deriveRestoreHashV1(phrase);
+  // 未知版本：按 v1 处理（宁可宽松校验，也不要让用户永远登不进去）
+  return 'restore:' + RESTORE_HASH_VERSION + ':' + deriveRestoreHashV1(phrase);
+}
+
+// 派生：恢复密钥 -> 哈希（用于服务端保存校验，不存明文）
+// 输出格式：'restore:<版本>:<hex>'
+function deriveRestoreHash(phrase) {
+  return 'restore:' + RESTORE_HASH_VERSION + ':' + deriveRestoreHashV1(phrase);
+}
+
+// 校验恢复词：按哈希里带的版本标识选择算法。
+// 这是**唯一**应该用来比对的地方 —— 所有比对点都走它，将来换算法只改这一处。
+function verifyRestoreHash(phrase, storedHash) {
+  if (typeof storedHash !== 'string' || !storedHash) return false;
+  // 从哈希串里解析版本标识；没有标识的（历史值）按 v1 处理。
+  const m = /^restore:(v\d+):/.exec(storedHash);
+  if (!m) {
+    // 历史格式：裸 sha256 hex（无前缀）—— 也是 v1
+    return safeEqualHash(deriveRestoreHashV1(phrase), storedHash);
+  }
+  return safeEqualHash(deriveRestoreHashByVersion(phrase, m[1]), storedHash);
 }
 
 // 归一化：仅保留汉字，兼容用户粘贴带序号（1.水 …）或带空格的格式
@@ -48,4 +92,7 @@ function safeEqualHash(a, b) {
   return diff === 0;
 }
 
-module.exports = { pickPhrase, deriveRestoreHash, normalizePhrase, formatPhrase, safeEqualHash };
+module.exports = {
+  pickPhrase, deriveRestoreHash, normalizePhrase, formatPhrase, safeEqualHash,
+  verifyRestoreHash, RESTORE_HASH_VERSION,
+};

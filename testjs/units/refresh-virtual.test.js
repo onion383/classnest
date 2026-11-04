@@ -181,5 +181,9 @@ const ins = db.prepare(`INSERT INTO album_photos (album_id, file_path, file_name
   db.close();
   fs.rmSync(imgDir, { recursive: true, force: true });
   fs.rmSync(tmpThumbs, { recursive: true, force: true });
+  // ⚠️ 临时库也要删：dataDir 在**仓库里**（testjs/.startup-measure/），
+  //   原来只清了 imgDir / tmpThumbs（这两个在系统 temp），rv.db 留在仓库里
+  //   → 跑一次测试就在工作区留下一个二进制文件（会进 git status）。
+  fs.rmSync(dataDir, { recursive: true, force: true });
   console.log(`\n通过 ${passed} 项` + (process.exitCode ? '，有失败' : '，全部通过'));
 })().catch(e => { console.error('测试崩溃:', e); process.exit(1); });

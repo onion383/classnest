@@ -171,6 +171,7 @@ import DialogShell from '../base/DialogShell.vue'
 import '../../styles/dialog-transition.css'
 import { useNotification } from '../../composables/useNotification.js'
 import { formatDateTimeLocal } from '../../utils/dateTime.js'
+import { createLatest } from '../../utils/latestOnly.js'
 
 defineOptions({ name: 'AddScoreDialog' })
 
@@ -195,6 +196,9 @@ const dims = ref([]);
 const activeDimId = ref(0);
 const selectedGroupId = ref(0);
 const activeDimGroups = ref([]);
+// 「只认最后一次」的守卫：快速切换分组维度时，先发的请求后回来会把小组列表覆盖成旧维度的
+const dimsGuard = createLatest();
+const dimGroupsGuard = createLatest();
 const commonProjects = ref(['卫生', '纪律', '学习', '助人', '劳动', '进步']);
 const form = ref({
   type: '加分',
@@ -266,10 +270,13 @@ function reset() {
 }
 // 加载分组维度列表
 async function loadDims() {
+  const token = dimsGuard.begin();
   try {
     const res = await axios.get('/api/group-manage/bootstrap')
+    if (!dimsGuard.isCurrent(token)) return;
     dims.value = res.data.dimensions || []
   } catch (err) {
+    if (!dimsGuard.isCurrent(token)) return;
     // 分组数据不可用时，仅个人加分可用
     dims.value = []
   }
@@ -279,10 +286,13 @@ async function onDimChange() {
   selectedGroupId.value = 0
   activeDimGroups.value = []
   if (activeDimId.value) {
+    const token = dimGroupsGuard.begin();
     try {
       const res = await axios.get(`/api/group-manage/${activeDimId.value}`)
+      if (!dimGroupsGuard.isCurrent(token)) return;
       activeDimGroups.value = (res.data.groups) || []
     } catch (err) {
+      if (!dimGroupsGuard.isCurrent(token)) return;
       activeDimGroups.value = []
     }
   }

@@ -84,6 +84,8 @@
       </div>
     </div>
 
+    <div class="timer-hint" v-if="hint">{{ hint }}</div>
+
     <div class="timer-controls">
       <button v-if="!running" class="btn-primary" @click="start">开始</button>
       <button v-else class="btn-warning" @click="pause">暂停</button>
@@ -102,6 +104,8 @@ defineEmits(['close'])
 
 const mode = ref('countup') // 'countup' | 'countdown'
 const running = ref(false)
+// 面向用户的即时提示（浮窗里没有主应用的 notification 通道，只能就地显示）
+const hint = ref('')
 
 // 倒计时设置值
 const settings = ref({ hours: 0, minutes: 5, seconds: 0 })
@@ -151,15 +155,17 @@ function adjustTime(unit, delta) {
 
 function start() {
   if (running.value) return
-  running.value = true
 
+  // ⚠️ 倒计时时长为 0 时不能静默返回：
+  //   原来这里直接 return，用户点了「开始」什么都没发生（按钮也不变），
+  //   看起来像坏了。必须给出可见反馈。
   if (mode.value === 'countdown' && totalSeconds.value <= 0) {
-    running.value = false
+    hint.value = '请先设置倒计时时长（小时 / 分钟 / 秒）'
     return
   }
+  hint.value = ''
+  running.value = true
 
-  // 以时间戳为基准计算已走秒数：setInterval 在后台/卡顿时会漏拍，
-  // 单纯 ++/-- 会越来越慢，用 Date.now() 差值可自动追平。
   const startedAt = Date.now()
   const baseTotal = totalSeconds.value
   interval = setInterval(() => {
@@ -168,7 +174,11 @@ function start() {
       totalSeconds.value = baseTotal + elapsed
     } else {
       totalSeconds.value = Math.max(0, baseTotal - elapsed)
-      if (totalSeconds.value <= 0) pause()
+      if (totalSeconds.value <= 0) {
+        pause()
+        // 倒计时归零要通知：否则用户不知道时间到了（浮窗可能不在前台）
+        hint.value = '⏰ 时间到'
+      }
     }
   }, 1000)
 }
@@ -183,6 +193,7 @@ function pause() {
 
 function reset() {
   pause()
+  hint.value = ''
   if (mode.value === 'countup') {
     totalSeconds.value = 0
   } else {
@@ -296,6 +307,17 @@ onUnmounted(() => {
   flex-wrap: nowrap;
   gap: 4px;
   justify-content: center;
+}
+
+/* 就地提示条（浮窗没有主应用的 notification 通道，只能就地显示） */
+.timer-hint {
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-control);
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .timer-controls button {

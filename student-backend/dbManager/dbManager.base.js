@@ -230,6 +230,11 @@ function touchConn(slug) {
 }
 
 // 请求开始/结束使用某库连接（成对调用；withDb 已包好，业务侧不用管）
+// 是否仍有请求持有该库连接。evictConn 用它决定能不能关（见 dbManager.conn.js）
+function isConnInUse(slug) {
+  return (connUseCount.get(slug) || 0) > 0;
+}
+
 function beginConnUse(slug) {
   connUseCount.set(slug, (connUseCount.get(slug) || 0) + 1);
 }
@@ -454,6 +459,7 @@ module.exports = {
   CONN_CACHE_MAX,
   CONN_CACHE_HARD_MAX,
   beginConnUse,
+  isConnInUse,
   endConnUse,
   touchConn,
   setCachedConn,

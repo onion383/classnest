@@ -27,6 +27,7 @@ const { readExifDate } = require('./albumExif');
 // 懒加载：ffmpeg 只为视频封面抓帧时使用，且可能触发按需下载
 const { ensureFfmpeg } = require('./services/ffmpeg');
 const { now } = require('./utils/sql');
+const { localDateStr } = require('./utils/date');
 
 // 缩略图尺寸 / 质量 / 缓存版本
 // 尺寸 512 → 256（网格格子 4 列时约 207 CSS px，125% 缩放下 ≈ 260 物理px，256 够 1:1 显示；
@@ -38,6 +39,9 @@ const { now } = require('./utils/sql');
 // 旧缩略图会在下次被请求时自动按新参数重建，不需要手动清缓存。
 const THUMB_SIZE = 256;
 const THUMB_QUALITY = 82;
+// ffmpeg 抓帧的超时：单个视频超过这个时长还没出图就放弃。
+// 正常视频 0.1~1s 内完成；给到 30s 是为了容忍大文件 / 慢盘。
+const FFMPEG_THUMB_TIMEOUT_MS = 30000;
 // 本次 +1（5）：尺寸 512 → 256，旧缩略图（v≤4）全部按新尺寸重建（首屏浏览会有一轮现场生成，
 // 受并发信号量与配额闸约束，扫一遍之后就全是缓存命中）。
 const THUMB_VERSION = 5;
@@ -75,10 +79,7 @@ function mediaTypeOf(fileName) {
 }
 
 function dateKey(date) {
-  const d = date instanceof Date ? date : new Date(date);
-  if (!d || isNaN(d.getTime())) return '';
-  const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return localDateStr(date);
 }
 
 /* ------------------------------------------------------------------拍摄时间解析
@@ -146,7 +147,11 @@ async function genThumb(photoId, filePath, isVideo, slug) {
       const ffmpegPath = await ensureFfmpeg();
       if (!ffmpegPath) { return ''; }
       await new Promise((resolve, reject) => {
+        // ⚠️ 必须设超时：ffmpeg 遇到损坏的视频/网络挂载的目录可能**永不退出**，
+        // 而这里持有 acquireThumbSlot 抢到的槽位 → 槽位永不释放 → 整个扫描 worker 卡死。
+        // execFile 的 timeout 选项到点会发 kill 信号并让回调带 err（ killed=true）。
         execFile(ffmpegPath, ['-y', '-ss', '0.1', '-i', filePath, '-frames:v', '1', '-vf', `scale=${THUMB_SIZE}:-2`, '-q:v', '4', tmp],
+          { timeout: FFMPEG_THUMB_TIMEOUT_MS, killSignal: 'SIGKILL' },
           err => err ? reject(err) : resolve());
       });
     } else {
@@ -603,10 +608,19 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
     }
     // 续扫时把已跳过的部分计入 scanned，进度条不会倒退
     task.scanned = startIdx;
+    // 「文件循环是否完整跑完」必须用显式标记表达，不能拿进度计数去推断。
+    // 原来用 `scanned >= files.length` 当清理门，而 scanned 只在处理成功时才 +1：
+    // 只要有一个文件 stat 失败（刚被删 / 被占用 / 权限不足）或被 `continue` 跳过，
+    // 清理门就永远不成立 → 整个「索引有、磁盘无」清理被跳过，
+    // 用户删掉的照片索引行会一直残留在相册里（B05-10）。
+    let loopCompleted = true;
     for (let i = startIdx; i < files.length; i++) {
       const { name, full } = files[i];
-      if (!await waitWhilePaused(conn, task, albumId)) break;
+      if (!await waitWhilePaused(conn, task, albumId)) { loopCompleted = false; break }
       try {
+        // 「已遍历」在进入本次迭代时就记：它是进度条的分子，也是断点依据。
+        // 放在末尾的话，本次迭代任何一步抛错（stat / 读 EXIF / 写库）都会让它漏记。
+        task.scanned++;
         const st = await fsp.stat(full);
         const mtime = st.mtime.toISOString();
         const isVideo = VIDEO_EXT.test(name);
@@ -630,7 +644,6 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
             photoId = row.id;
           }
         }
-        task.scanned++;
         // 全量更新：无条件重建缩略图（这正是「全量」与「增量」的区别 —— 用户用它来刷新缓存）
         const tp = await genThumb(photoId, full, isVideo, slug);
         if (tp) thumbWriter.add(photoId, tp);
@@ -652,7 +665,7 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
     // 只有完整跑完、清单可信时才清理「磁盘上确实没有了的文件」。
     // （旧实现在开头就把整表删光，收集阶段一被中断相册就变成 0 张，
     //   而磁盘文件一个没少 —— 这就是「文件夹里照片还在、相册却空了」的成因。）
-    if (task.scanned >= files.length) {
+    if (loopCompleted) {
       const foundPaths = new Set(files.map(f => f.full));
       await deletePhotosNotIn(conn, albumId, task, foundPaths, slug, complete);
     }
@@ -730,10 +743,14 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
     for (const f of files) foundPaths.add(f.full);
     // 续扫时把已跳过的部分计入 scanned，进度条不会倒退
     task.scanned = startIdx;
+    // 同全量扫描：循环是否完整跑完用显式标记，不能靠 scanned 推断（一个 stat 失败就卡死清理门）
+    let loopCompleted = true;
     for (let i = startIdx; i < files.length; i++) {
       const { name, full } = files[i];
-      if (!await waitWhilePaused(conn, task, albumId)) break;
+      if (!await waitWhilePaused(conn, task, albumId)) { loopCompleted = false; break }
       try {
+        // 「已遍历」在进入迭代时就记，任何后续异常都不影响它（见全量扫描处的说明）
+        task.scanned++;
         const st = await fsp.stat(full);
         const mtime = st.mtime.toISOString();
         const old = existing.get(full);
@@ -764,10 +781,6 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
           const tp = await genThumb(photoId, full, VIDEO_EXT.test(name), slug);
           if (tp) thumbWriter.add(photoId, tp);
         }
-        // 「已遍历」计数必须覆盖跳过的未变文件：清理阶段用 scanned >= files.length 判断
-        // 文件循环是否完整跑完。只在 mtime 变化/新插入时自增，会让一次「什么都没变」的
-        // 增量扫描永远不触发「索引有、磁盘无」清理，用户删掉的照片索引行永久残留。
-        task.scanned++;
         // 处理完这个文件才推进断点（中途崩溃时这个文件会重扫，代价很小）
         persistScanProgress(conn, albumId, task.token, 'incremental', 'process', full, task.scanned, task.total, false);
       } catch (_) {}
@@ -780,11 +793,11 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
     // 2. 清理已删除文件（索引存在但磁盘已不存在）
     //
     // 两个前提缺一不可，缺了就跳过清理（宁可索引里留几条陈旧记录，也不能凭空清空相册）：
-    //   · 文件循环完整跑完 —— 被停止/暂停时只处理了清单的一部分，
+    //   · 文件循环完整跑完（loopCompleted）—— 被停止/暂停时只处理了清单的一部分，
     //     拿部分清单判断「已删除」会把还没扫到的那半片索引全删掉；
     //   · 收集阶段没读不到任何目录（complete）—— 有目录读不到时清单是残缺的
     //     （权限、OneDrive 占位未落地、网络盘抖动），读不到的那片会被误判成「已删除」。
-    if (task.scanned >= files.length && complete) {
+    if (loopCompleted && complete) {
       for (const [filePath, record] of existing) {
         if (!foundPaths.has(filePath)) {
           // 缩略图缓存：按库隔离路径删除，并清掉内存索引

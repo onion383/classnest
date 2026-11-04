@@ -12,7 +12,7 @@ import './styles/index.css'
 import { loadThemeStyles } from './styles/themeLoader'
 import { useThemeStore, PRESET_IDS } from './stores/theme'
 import { setupApiClient, backendBaseUrl } from './utils/httpClient'
-import { ensureMediaToken, clearMediaToken } from './utils/apiUrl'
+import { ensureMediaToken, clearMediaToken, resourceUrl } from './utils/apiUrl'
 import { useNotification } from './composables/useNotification'
 import { ensureDashboardData } from './composables/useDashboardData'
 import { installInpProbe } from './utils/inpProbe'
@@ -109,7 +109,10 @@ const DEFAULT_GLASS_BG_NIGHT = import.meta.env.PROD
   : `${import.meta.env.BASE_URL}glass-bg-night.webp`
 const customBg = localStorage.getItem(BG_IMAGE_KEY) || ''
 const startupBgUrl = () => {
-  if (customBg) return customBg
+  // 自定义背景图必须走 resourceUrl：它需要带鉴权凭据，
+  // 直接用 localStorage 里的裸路径 → 首帧请求 401 → 背景图不显示，
+  // 要等 applyTheme 之后才被修正（用户会看到"闪一下白底"）。
+  if (customBg) return resourceUrl(customBg)
   if (savedTheme !== 'glass') return ''
   return savedMode === 'night' ? DEFAULT_GLASS_BG_NIGHT : DEFAULT_GLASS_BG
 }

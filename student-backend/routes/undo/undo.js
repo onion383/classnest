@@ -6,6 +6,7 @@
 // =========================================================================
 
 const express = require('express')
+const { safeJson } = require('../../utils/json');
 const { db } = require('../../db')
 const { executors } = require('./undo.executors')
 const {
@@ -38,7 +39,9 @@ router.get('/', (req, res) => {
       ts: r.ts,
       // origin 交给前端折叠：同一次动作的多条记录合成一行（一次动作一步）
       origin: r.origin,
-      payload: JSON.parse(r.payload || '{}')
+      // 裸 JSON.parse：一条畸形记录就让整个撤销面板 500（列表都打不开，用户也就没法撤别的）。
+      // 读取侧用项目统一的 safeJson 兜底，坏的按 {} 处理（审查 v4 · C03-01）。
+      payload: safeJson(r.payload, {})
     })
   }
   res.json({ groups })
@@ -108,9 +111,21 @@ router.post('/origin/:origin/redo', async (req, res) => {
   res.json({ ok: true, label: batchLabel(b), batch: b.count })
 })
 
+// 路径里的 :id 收敛成正整数。
+// Number('abc') → NaN、Number('1.5') → 1.5、Number('') → 0：这些值绑进 SQL 不会抛错
+// （better-sqlite3 允许 NaN），只是查不到记录 → 表现为「记录不存在」。
+// 但「静默查不到」是**误导**：用户点了撤销却看到「记录不存在」，实际是请求本身就不合法。
+// 按项目既有口径（ai.dataRoutes / ai.config 都是 Number.isInteger(id) && id > 0）显式拒绝。
+function parseUndoId(raw) {
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  return id;
+}
+
 // 撤销某条（dir 1 -> 0）
 router.post('/:id/undo', async (req, res) => {
-  const id = Number(req.params.id)
+  const id = parseUndoId(req.params.id)
+  if (id == null) return res.status(400).json({ error: '记录 id 无效' })
   const r = await flip(id, 1, 0, 'undo')
   if (r.error) return res.status(400).json({ error: r.error })
   res.json({ ok: true, label: r.label, change: r.change })
@@ -118,7 +133,8 @@ router.post('/:id/undo', async (req, res) => {
 
 // 重做某条（dir 0 -> 1）
 router.post('/:id/redo', async (req, res) => {
-  const id = Number(req.params.id)
+  const id = parseUndoId(req.params.id)
+  if (id == null) return res.status(400).json({ error: '记录 id 无效' })
   const r = await flip(id, 0, 1, 'redo')
   if (r.error) return res.status(400).json({ error: r.error })
   res.json({ ok: true, label: r.label, change: r.change })
@@ -126,7 +142,8 @@ router.post('/:id/redo', async (req, res) => {
 
 // 删除单条
 router.delete('/:id', (req, res) => {
-  const id = Number(req.params.id)
+  const id = parseUndoId(req.params.id)
+  if (id == null) return res.status(400).json({ error: '记录 id 无效' })
   db.prepare('DELETE FROM undo_history WHERE id = ?').run(id)
   res.json({ ok: true })
 })

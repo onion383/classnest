@@ -258,6 +258,8 @@ export function useAiExec(ctx) {
           const { data } = await undoById(id)
           if (!data || !data.ok) throw new Error((data && data.error) || '撤回失败')
           label = data.label || label
+          // 成功的立刻出队：部分失败后重试只撤剩下的，不会对已撤的再撤一次
+          p.undoIds = p.undoIds.filter((x) => x !== id)
         }
         p.reverted = true
         notify(label ? `已撤回：${label}` : '已撤回更改')

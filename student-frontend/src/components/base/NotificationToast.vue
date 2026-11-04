@@ -89,6 +89,10 @@ function onHover(item) {
 
 function onLeave(item) {
   item._paused = false
+  // duration=0 是「常驻通知」（不自动消失），必须手动关。
+  // 这时 _remaining 恒为 0，若照常排 setTimeout(remove, 0)，
+  // 用户鼠标一移开就被立刻误杀 —— 常驻通知根本活不下来。
+  if (!item._originalDuration) return
   // 用剩余时间重新开始计时器
   item._startTime = Date.now()
   item.timer = setTimeout(() => remove(item.id), item._remaining)

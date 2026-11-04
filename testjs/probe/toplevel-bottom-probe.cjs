@@ -38,7 +38,14 @@ const GetWindowRect = user32.func('int GetWindowRect(void *h, _Out_ TRECT *r)')
 const SetWindowPos = user32.func(
   'int SetWindowPos(void *h, void *after, int x, int y, int cx, int cy, uint32 flags)'
 )
-process.on('uncaughtException', (e) => log('uncaught: ' + (e && e.message)))
+// 未捕获异常必须**记日志后退出**，不能只记日志继续跑。
+// 只记日志的后果：脚本带着一个未捕获的异常继续执行，后面的步骤可能"看起来正常"，
+//   最后打印一个成功结论 —— 探针的结论就不可信了（比直接崩掉更糟：崩掉至少会暴露）。
+// 退出码 3 = 与其它失败码区分开（表示"跑挂了"而不是"检查不通过"）。
+process.on('uncaughtException', (e) => {
+  log('uncaught: ' + (e && e.message))
+  process.exit(3)
+})
 
 const GW_HWNDPREV = 3
 const GW_HWNDNEXT = 2

@@ -20,12 +20,26 @@ const g = require('../../electron/main/main.path-guard')
 const isWin = process.platform === 'win32'
 const SYS_ROOT = isWin ? (process.env.SystemRoot || process.env.windir || 'C:\\Windows') : '/etc'
 
+// 本文件创建的临时目录统一登记、**在 after 里一次性清掉**。
+//
+// 为什么必须统一清理：tempDir() 被 6 个用例各调一次，原来只有「符号链接」那个用例
+// 在末尾 rmSync 了 —— 其余 5 个用例创建的目录**全部泄漏**到系统 temp，
+// 跑一次测试就攒 5 个垃圾目录（长期跑测试会攒几百个）。
+// 统一登记 + after 清理 = 每个用例都不用管清理，也不会漏。
+const createdDirs = new Set()
 function tempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'pathguard-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pathguard-'))
+  createdDirs.add(dir)
+  return dir
 }
 
 test.after(() => {
   g.setProtectedRoots([])
+  // best-effort 清理：Windows 上文件句柄可能还没释放，失败就算了（不能因清理失败让测试变红）
+  for (const dir of createdDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch (_) { /* best-effort: 清理临时目录 */ }
+  }
+  createdDirs.clear()
 })
 
 test('normalizeAbsolute：只接受绝对路径，拒绝空串/NUL/相对路径', () => {

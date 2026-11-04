@@ -39,6 +39,12 @@ function migrateAlbum(conn) {
   conn.exec(`CREATE INDEX IF NOT EXISTS idx_album_photos_album_mtime ON album_photos (album_id, mtime DESC);`);
   // 优化：时间轴按拍摄日期（photo_date，优先 EXIF）倒序分组展示，走这个索引
   conn.exec(`CREATE INDEX IF NOT EXISTS idx_album_photos_album_date ON album_photos (album_id, photo_date DESC);`);
+  // 优化：**游标分页**走 (album_id, id) —— 扫描/续扫都是
+  //   `WHERE album_id = ? AND id > ? ORDER BY id ASC LIMIT ?`（见 albumScan.js）。
+  //   上面两个索引的排序键是 mtime / photo_date，**不覆盖 ORDER BY id**
+  //   → 每个分页批次都要 filesort，大相册（几万张）每批都排一次。
+  //   (album_id, id) 既是等值前缀又是排序键 → 直接顺序扫，无排序开销。
+  conn.exec(`CREATE INDEX IF NOT EXISTS idx_album_photos_album_id ON album_photos (album_id, id);`);
 
   // 扫描任务持久化（2026-10-22）：软件被关掉/崩溃时，正在跑的相册扫描会丢。
   // 这里把「进行中的扫描」落到库表，重启后可据此续扫，避免大相册从头再来。

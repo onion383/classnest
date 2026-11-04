@@ -12,6 +12,7 @@
 //     响应体为 { d: 同格式加密串 }，由后端中间件包装。
 
 import { INVOKE } from '../electronChannels.js'
+import { registerUserScopedReset } from '../utils/userScopedCache.js'
 
 const subtle = crypto.subtle
 const BASE = 'http://localhost:3000'
@@ -19,6 +20,9 @@ const BASE = 'http://localhost:3000'
 let kMaster = null
 let sessionKey = null
 let sessionId = null
+// 会话代次：登出/换号会 +1。在途的握手回来时若代次已变，说明这次握手属于旧用户，
+// 不能再把会话写回（否则登出后又被“复活”）。
+let sessionGen = 0
 // 本会话是否已把登录身份绑定到后端：绑定后凭据里不再携带 token，
 // 被动抓包只能拿到「不可复用」的一次性密文。
 let authBound = false
@@ -119,6 +123,7 @@ let pendingSession = null
 async function ensureSession() {
   if (sessionKey) return { sessionId, sessionKey }
   if (pendingSession) return pendingSession
+  const gen = sessionGen
   pendingSession = (async () => {
     const master = await getMasterKey()
     if (!master) throw new Error('secure channel: no master key')
@@ -143,7 +148,11 @@ async function ensureSession() {
       { name: 'HKDF', hash: 'SHA-256', salt: hexToBytes(master), info: utf8('campus-secure-v1') },
       ikm, 256,
     )
-    sessionKey = await subtle.importKey('raw', ke, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+    const key = await subtle.importKey('raw', ke, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+    // 握手期间发生了登出/换号：这次会话属于旧用户，不能写回。
+    // 抛错让调用方重试（重试会走一次新的握手），而不是拿旧会话继续发请求。
+    if (gen !== sessionGen) throw new Error('secure channel: session invalidated')
+    sessionKey = key
     sessionId = peer.sessionId
     return { sessionId, sessionKey }
   })().finally(() => { pendingSession = null })
@@ -200,8 +209,17 @@ export async function decodeStreamEvent(raw) {
 
 // 会话失效（15 分钟超时等）后强制清空，下次请求重新握手
 export function clearSession() {
+  // 代次 +1：让在途的握手回来时发现「会话已作废」而不再写回
+  sessionGen++
   sessionKey = null
   sessionId = null
   // 新会话在后端没有任何绑定，下一次请求必须重新携带 token 建立身份
   authBound = false
 }
+
+// 登出/换号必须清掉信道会话：会话密钥与「已绑定身份」标记都是**跟着用户走**的状态。
+// 不清的话：换号后前端仍认为「本会话已绑定身份」，于是新用户的请求不携带 token，
+// 而后端那条会话上还挂着上一个用户的绑定 → 前端与后端对「当前是谁」认知不一致。
+// 登记到用户级清理表（见 utils/userScopedCache.js），登出统一调。
+// 注：master key 不是用户级（整个应用共用一把），不清。
+registerUserScopedReset(clearSession)

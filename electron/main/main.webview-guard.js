@@ -50,7 +50,15 @@ function registerWebviewGuard({ getMainWindow, isDev }) {
     // 2) webview（访客页）自身：拦下 target=_blank 的新窗口请求，改为在同一 webview 内跳转，
     //    内容始终留在抽屉里、不额外弹窗；并限制其内部导航协议白名单（阻断 file:/data: 等）。
     contents.setWindowOpenHandler(({ url }) => {
-      if (isHttpUrl(url)) contents.loadURL(url)
+      if (isHttpUrl(url)) {
+        // loadURL 返回 Promise，加载失败（网络不通/证书错误/页面已死）会 reject。
+        // 原先没接 → unhandled rejection：Electron 主进程打一条难懂的警告，
+        // 而抽屉里的网页会**停在旧页面不动**，用户看着像是「点了没反应」（B01-09）。
+        // 这里接住并记日志，让失败可诊断；导航失败不该拖垮主进程。
+        contents.loadURL(url).catch((err) => {
+          console.warn('[webview-guard] 网页跳转失败:', url, err && err.message)
+        })
+      }
       return { action: 'deny' }
     })
     contents.on('will-navigate', (e, url) => {

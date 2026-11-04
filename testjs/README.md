@@ -95,7 +95,7 @@ node testjs/run-smoke.cjs --bail     # 第一个失败就停
 | 脚本 | 覆盖范围 |
 | --- | --- |
 | `api-smoke.cjs` | 后端基础接口连通 |
-| `auth-smoke.js` | 认证链路：注册 → 确认 → 登录 → 改密 → 改名，以及隐私模式下的口令包裹/恢复词校验（**需后端**，默认端口 3999，`PORT` 可覆盖） |
+| `auth-smoke.js` | 认证链路：注册 → 确认 → 登录 → 改密 → 改名，以及隐私模式下的口令包裹/恢复词校验（**默认自起隔离后端**：随机端口 + 临时数据目录 + 不注入 SECURE_MASTER；要连外部后端得显式 `AUTH_SMOKE_EXTERNAL=1 PORT=xxxx`，只给 `PORT` 不算） |
 | `collator-equiv-probe.js` | `Intl.Collator` 与前端等价排序一致性 |
 | `unzip-safe-test.cjs` | 自研安全解压：符号链接/路径穿越/绝对路径/反斜杠全部拦截 |
 | `pptx-guard-test.cjs` | PPTX 导入的守卫生效 |

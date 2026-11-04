@@ -97,10 +97,14 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 
 #### 2.6 preload 的 IPC 通道白名单机制
 
+**白名单是「按窗口角色裁剪」的**：主进程用 `electron/ipc-policy.json`（通道 → 允许的窗口角色）裁剪出本窗口可用的通道，
+再经 `additionalArguments` 注入 preload。渲染层拿不到越权通道 —— 比等主进程拒绝更早一步。
+详见 [2.8 IPC 授权模型](#28-ipc-授权模型通道--允许的窗口角色)。
+
 - `preload.js` 定义三张白名单：
-  - `validSendChannels`：单向发送（`ipcRenderer.send`），如 `to-main`/`to-widget`、`widget-*`、`win-minimize/maximize-toggle/close`、`shutdown-action`、`quit-app`、`show-native-context-menu`、`theme-chrome`、`desktop-widget-enabled`、`widgets-ready`、`migration-*`、`setup-*`、`update-install` 等；
-  - `validInvokeChannels`：请求-响应（对应 `ipcMain.handle`），如 `select-folder`/`select-image-file`/`save-file`/`open-file`/`open-folder`/`screenshot-capture`/`note-save`、`get-master-key`、`apps-select-file`/`apps-resolve-paths`/`apps-launch`、`get-data-directories`/`set-data-dir`/`set-thumbs-dir`/`set-db-encryption`/`set-initial-data-dir`、`backend-status`/`boot-status`/`restart-backend`/`backend-failure`/`probe-backend`、`perf-*`、`get-app-version`/`update-check` 等；
-  - `validReceiveChannels`：仅 `from-main`、`from-widget`（主进程 → 渲染进程）。
+  - `validSendChannels`：单向发送（`ipcRenderer.send`），如 `to-widget`、`widget-*`、`win-minimize/maximize-toggle/close`、`shutdown-action`、`quit-app`、`show-native-context-menu`、`theme-chrome`、`desktop-widget-enabled`、`widgets-ready`、`migration-*`、`setup-*`、`update-install` 等；
+  - `validInvokeChannels`：请求-响应（对应 `ipcMain.handle`），如 `select-folder`/`save-file`/`open-file`/`open-folder`/`screenshot-capture`/`note-save`、`get-master-key`、`apps-select-file`/`apps-resolve-paths`/`apps-launch`、`get-data-directories`/`set-data-dir`/`set-thumbs-dir`/`set-skills-dir`/`set-db-encryption`/`set-initial-data-dir`、`backend-status`/`boot-status`/`restart-backend`/`backend-failure`/`probe-backend`、`perf-*`、`get-app-version`/`update-check` 等；
+  - `validReceiveChannels`：仅 `from-main`（主进程 → 渲染进程）。`from-widget` 已删除 —— 配套的 `to-main` 通道整条链路无生产者也无消费者。
 - 其余通道（按用途归类，均来自 `electron/ipc-channels.json`）：
   - 工具箱/桌面组件拖拽与交互：`widget-drag-move`、`widget-drag-end`、`widget-exit`、`desktop-widget-content-ready`、`desktop-widget-drag-start`、`desktop-widget-drag-move`、`desktop-widget-drag-end`、`desktop-widget-open-page`
   - AI 右键菜单：`ai-context-menu`
@@ -110,6 +114,35 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 - 暴露的 `window.electron`：`send` 仅放行 `validSendChannels`；`invoke` 对白名单外通道直接 `Promise.reject`；`on/once` 仅放行 `validReceiveChannels`；`getPathForFile(file)` 走 `webUtils` 取拖入文件的真实路径（Electron 32 起 `File.path` 已移除）。
 - 监听器缓存 `listenerMap`：`on` 时保存「用户 callback → 包装后的 wrapper」映射，`off` 时据此取出真正的 wrapper 再 `removeListener`（并兼容传入 wrapper 的情况），避免因引用不同而无法解绑造成内存泄漏。
 - `contextBridge.exposeInMainWorld('__SECURE_CHANNEL__', process.argv.includes('--secure-channel'))`：仅当主进程通过 `additionalArguments` 传入 `--secure-channel` 时置位，前端据此对业务 JSON API 启用加密传输。
+
+#### 2.8 IPC 授权模型（通道 → 允许的窗口角色）
+
+**问题**：5 个窗口（main / widget / desktop-widget / setup / migration）原本共用**同一份**通道白名单，
+preload 层区分不了「谁在调」；主进程只能逐 handler 手写 `event.sender !== X.webContents`，
+散在 8 个文件、两种写法，**12 条通道漏了 5 条** —— 漏的恰好是最危险的那批。
+
+**做法**：授权模型收口成「一张表 + 两个执行点」。
+
+| 件 | 作用 |
+|---|---|
+| `electron/ipc-policy.json` | **唯一事实来源**：通道 → 允许的窗口角色。由 `testjs/probe/ipc-policy-gen.mjs` 从渲染层**静态 import 图**推导，不是手写猜的 |
+| `electron/main/main.ipc-auth.js` | 角色登记、`isAllowed` 判定、`installIpcGuard()` 统一拦截、角色化白名单裁剪 |
+| 执行点 1（渲染层） | `main.web-prefs.js` 按角色裁剪通道名单后注入 preload → 越权通道渲染层就调不到 |
+| 执行点 2（主进程） | `installIpcGuard()` 包装 `ipcMain.handle/on`，**每一次注册**自动带发送方校验，含将来新加的通道 |
+
+**关键性质**：
+
+- **fail-closed**：表里没有的通道一律拒绝。新增通道忘登记 → 开发期立刻表现为「调用没生效」，而不是「忘了写 if 就等于放行」。
+- **单一判据**：改一处即可，不必同步 N 个 handler。
+- **角色 ≠ 窗口**：`get-master-key` 授权给 5 个角色 —— 凡是装了 `apiClient` 的窗口都会建安全通道（`setupApiClient` → `setupSecureAxios`），包括引导窗。
+- **所有窗口同 origin**（`app://local` 或 dev 的 `127.0.0.1:5173`），所以「同源」不构成任何边界 —— 边界只由授权表与「渲染层不加载外部内容」构成。
+
+**授权表怎么来的**：`ipc-policy-gen.mjs` 对每个通道的每个调用点文件做两段判定 ——
+文件在 `src/subwindows/<role>/**` → 角色就是 `<role>`；文件是公共模块（`src/` 根下）→ 角色 = 能 import 到它的入口集合。
+「当前无调用方但能力应当保留」的通道（如 `set-db-encryption`：后端接口与迁移窗 crypt 模式都在，只差设置页入口）在生成器的 `OVERRIDE` 里显式登记。
+
+**回归保障**：`testjs/probe/ipc-policy-probe.cjs`（表与名单一一对应、授权覆盖真实调用方、敏感通道仅主窗口、fail-closed、裁剪正确）
+与 `testjs/probe/ipc-guard-probe.cjs`（拦截层放行/拒绝/幂等）。
 
 #### 2.7 托盘与窗口关闭确认流程
 
@@ -139,7 +172,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 
 ### 1. 主进程目录树
 
-`electron/main/` 下共 **21 个 `main.*.js`** 模块 + `main.js` 入口：
+`electron/main/` 下共 **23 个 `main.*.js`** 模块 + `main.js` 入口：
 
 ```
 electron/
@@ -160,13 +193,16 @@ electron/
 ├── main/main.window-material.js 窗口原生背景材质（亚克力/云母）
 ├── main/main.web-prefs.js       BrowserWindow 的 webPreferences 公共模板
 ├── main/main.webview-guard.js   <webview> 安全护栏 + 刷新快捷键拦截
+├── main/main.ipc-auth.js        IPC 授权层（通道 → 允许的窗口角色；统一拦截 + 白名单裁剪）
+├── main/main.ipc-contract.js    IPC 结果契约层（成功 / 失败 / 用户取消 三态互斥的统一表达）
 ├── main/main.path-guard.js      IPC 路径 / URL 白名单
 ├── main/main.dev-loader.js      开发模式加载（Vite 轮询 / loading 页 / 重试导航）
 ├── main/main.migration.js       数据目录搬迁引擎
 ├── main/main.inpLog.js          INP 归因落盘（仅开发模式）
 ├── main/main.startup-timer.js   启动事件计时器
 ├── preload.js                   预加载脚本：IPC 通道白名单 + contextBridge
-├── ipc-channels.json            IPC 通道白名单单一来源（经 additionalArguments 注入）
+├── ipc-channels.json            IPC 通道名单单一来源（经 additionalArguments 注入）
+├── ipc-policy.json              IPC 授权表：通道 → 允许的窗口角色（唯一事实来源）
 ├── startup.html                 打包模式引导窗口静态占位页
 ├── afterPack.js                 electron-builder afterPack：精简 Windows 产物
 ├── app-icon.png / tray-icon.png 应用图标 / 托盘图标
@@ -179,15 +215,16 @@ electron/
 | 覆盖范围 | 文档 | 主要内容 |
 | --- | --- | --- |
 | `electron/main/main.js` | [entry.md](./entry.md) | 入口编排：加载期顺序、主窗口、`whenReady`、引导/低版本提示、迁移与加密、入口 IPC、退出收尾 |
-| 21 个 `main.*.js` | [modules.md](./modules.md) | 逐模块职责、关键导出 / IPC 通道、依赖与被依赖 |
-| `electron/` 根文件与安装器资源 | [root-files.md](./root-files.md) | `preload.js`、`ipc-channels.json`、`startup.html`、图标、`afterPack.js`、`inno/`、`installer-assets/` |
+| 23 个 `main.*.js` | [modules.md](./modules.md) | 逐模块职责、关键导出 / IPC 通道、依赖与被依赖 |
+| `electron/` 根文件与安装器资源 | [root-files.md](./root-files.md) | `preload.js`、`ipc-channels.json`、`ipc-policy.json`、`startup.html`、图标、`afterPack.js`、`inno/`、`installer-assets/` |
 
 ---
 ## 三、主进程标准
 
 - **模块依赖注入标准**：`main.js`（主进程入口 / 编排者），`main.backend.js`（后端进程）/`main.perf.js`（性能采集）/`main.tray.js`（托盘）/`main.widget.js`（小组件窗口）/`main.dialogs.js`（系统对话框）/`main.apps.js`（常用软件）/`main.updater.js`（更新）均通过 `registerXxxIpc(opts)`（各模块注册 IPC 的标准函数）注入窗口引用（getter 闭包，调用时取当前值）或回传出口，各模块内部不直接持有 `mainWindow`（主窗口引用）变量。新增窗口引用时需同步更新这些注入项。
-- **async-ipc 与单向广播的分工**：请求-响应走 `ipcMain.handle`（Electron 请求-响应通道注册）；主进程 → 渲染层统一用 `from-main`（主进程发往渲染层），工具箱 → 主窗口用 `from-widget`（工具箱发往主窗口）；任何新通道必须同步加入 `preload.js`（预加载脚本）白名单，否则前端调用会被静默拒绝或 `reject`（返回失败的 Promise）。
+- **async-ipc 与单向广播的分工**：请求-响应走 `ipcMain.handle`（Electron 请求-响应通道注册）；主进程 → 渲染层统一用 `from-main`（主进程发往渲染层）；任何新通道必须同步加入 `electron/ipc-channels.json`（通道名单）与 `electron/ipc-policy.json`（授权表），否则前端调用会被静默拒绝或 `reject`（返回失败的 Promise）。
 - **sandbox 默认开启**：所有窗口 `sandbox:true`（沙箱开关）且 `contextIsolation:true`（上下文隔离）、`nodeIntegration:false`（关闭 Node 集成）；如遇 Electron 版本回退导致沙箱启动崩溃，才考虑临时置 `false`（软件层仍由 `contextIsolation`（上下文隔离）兜底）。
+- **IPC 结果必须三态互斥**：`ipcMain.handle`（Electron 请求-响应通道注册）的返回体统一走 `main.ipc-contract.js`（结果契约层）的 `ok()` / `fail()` / `canceled()`。**「用户取消」与「执行失败」必须能区分**：取消是用户的正常选择（前端安静吞掉），失败是要提示用户的错误（前端必须弹提示）。两者共用一个 `canceled:true`（取消标记）表达时，失败会被当成取消而静默 —— 这正是批 13 修掉的 B01-06。新增 handler 时用 `contract.safe()`（异常转成失败**返回值**）或 `contract.safeReject()`（保留 reject 语义但换成可读 message），二选一取决于前端现有代码是 `try/catch` 还是读返回值。
 - **`webSecurity`（网页安全策略开关）仅开发模式关闭**，生产必须开启，禁止在打包后关闭网页安全策略。
 - **主窗口系「不透明 + 系统材质」，桌面组件「渲染层自绘磨砂」**：亚克力 / 云母材质在透明窗口上会被禁用，主窗口 / 迁移窗口 / 进度窗口仍遵循 `transparent:false`（不透明窗口）+ `backgroundMaterial`（系统背景材质），浮窗（工具箱）是唯一使用 `transparent:true`（透明窗口）的窗口。桌面组件要的是稳定的「桌面被模糊」观感（`DWM`（Windows 桌面窗口管理器）材质只做壁纸亮度采样 + 强着色、观感随 build 变），改为「壁纸图 + CSS 全局模糊 + 奶白遮罩」自绘（见 [widgets.md](../widgets.md)），不依赖系统材质，挂桌面层（`WS_CHILD`（子窗口样式））时同样可用。
 - **safeStorage 时序**：`DB_MASTER_KEY`（数据库主密钥）依赖 `safeStorage`（Electron 安全存储），只能在 `app ready`（应用就绪事件）之后生成 / `fork`（派生子进程），切勿提前到模块加载期。主密钥文件 `db-master.key` 与数据库同目录存放，会随数据目录一起迁移。

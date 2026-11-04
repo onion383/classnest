@@ -173,7 +173,7 @@ import { useTableCRUD } from '../composables/useTableCRUD.js'
 import { useUndoShortcut, recordRowDelete } from '../composables/useUndo.js'
 import { undoById } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
 // 学生信息 / 班干部管理 Tab
 const tabsList = [
@@ -236,7 +236,7 @@ const table = useTableCRUD(`${API_BASE}/students`, DEFAULT_FIELDS, {
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 // 班干部结果（focus=cadre:<职务id>）：这里只切页签，定位交给 CadreManage 自己做。
 // 不能在这里调 applyRouteRowFocus —— 它解析成功后会 router.replace 清掉 query，
 // 而 CadreManage 是 v-if 懒加载、切页签后才挂载，清早了它就永远收不到 focus。

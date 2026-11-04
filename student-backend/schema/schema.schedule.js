@@ -1,5 +1,9 @@
+const { dropObjectIfExists } = require('./schemaUtil');
 // schema 拆分子文件：学期表 + 课表槽位表（current/master）+ 只读逻辑视图 + 学期播种。
 function migrateSchedule(conn) {
+  // 这些名字在 SQL 里是 CREATE VIEW，但老库里可能还是表；DROP VIEW 遇到表会抛错，
+  // 直接让 initSchema 中断。先按真实类型删干净，下面的 DROP VIEW/TABLE 就成了空操作。
+  for (const n of ['schedule', 'master_schedule', 'schedule_settings']) dropObjectIfExists(conn, n);
   conn.exec(`
     -- 学期表：支持「多学期列表 + 当前学期」（设置页可增加学期、选择学期、修改学期名）。
     -- 当前学期的起止日期即「学期范围」，座位/值日补存与指数结算统一从这里读取。

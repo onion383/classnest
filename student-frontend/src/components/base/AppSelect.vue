@@ -8,7 +8,7 @@
       @click="toggle"
       @keydown.down.prevent="move(1)"
       @keydown.up.prevent="move(-1)"
-      @keydown.enter.prevent="open ? commit(hoverIdx) : (open = true)"
+      @keydown.enter.prevent="open ? commit(hoverIdx) : openMenu()"
       @keydown.escape="open = false"
     >
       <span class="av-select__value" :class="{ 'av-select__value--placeholder': !resolved || resolved.value == null }">
@@ -143,14 +143,33 @@ function placeMenu() {
   }
 }
 
+// 打开菜单并把 hover 落到一个**可用项**上。
+//
+// 为什么必须初始化 hoverIdx：键盘路径是「第一次 Enter 打开 → 第二次 Enter 选中」，
+//   若打开时 hoverIdx 还是 -1，第二次 Enter 就成了 commit(-1) → list[-1] 是 undefined
+//   → commit 里静默 return → **按回车没反应**（用户看不出是哪里坏了）。
+//   点击路径原来是对的（toggle 里做了初始化），键盘路径漏了 —— 现在两条路共用本函数。
+//
+// 落点规则：优先当前选中项；没有选中项、或选中项已禁用 → 落到第一个可用项。
+function openMenu() {
+  open.value = true
+  let i = list.value.findIndex(o => o.value === props.modelValue)
+  if (i < 0 || (list.value[i] && list.value[i].disabled)) {
+    i = list.value.findIndex(o => !o.disabled)
+  }
+  hoverIdx.value = i
+  placeMenu()
+  menuZ.value = _layerZ()
+}
+
 function toggle() {
   if (props.disabled) return
-  open.value = !open.value
-  hoverIdx.value = open.value ? list.value.findIndex(o => o.value === props.modelValue) : -1
   if (open.value) {
-    placeMenu()
-    menuZ.value = _layerZ()
+    open.value = false
+    hoverIdx.value = -1
+    return
   }
+  openMenu()
 }
 
 // 菜单层级：从触发器往上取祖先里最大的 z-index 再叠一层，保证压过包住它的浮层。
@@ -168,7 +187,9 @@ function _layerZ() {
 }
 
 function move(step) {
-  if (!open.value) { open.value = true; placeMenu(); return }
+  // 关闭态按方向键：走 openMenu()（要初始化 hoverIdx 并设置菜单 z-index），
+  // 原来只置 open=true → hoverIdx 停在 -1 且 menuZ 没设（菜单可能被压住、也选不中）。
+  if (!open.value) { openMenu(); return }
   const n = list.value.length
   if (!n) return
   let i = hoverIdx.value

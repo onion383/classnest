@@ -46,7 +46,11 @@ function normBool(value, name) {
   if (typeof value === 'boolean') return value ? 1 : 0;
   if (typeof value === 'number') return value ? 1 : 0;
   const s = cleanText(value).toLowerCase();
-  if (s === '' || s === 'true' || s === '1') return 1;
+  // 纯空白串 trim 后是 ''，此前和 'true' 一起落到 return 1 —— 一个空格就把开关打开了
+  // （widget_settings.toolbox_enabled 这类 bool 列尤其明显，审查 v4 · B04-01）。
+  // 空就是空：与上面 `value == null || value === ''` 的口径保持一致。
+  if (s === '') return 0;
+  if (s === 'true' || s === '1') return 1;
   if (s === 'false' || s === '0') return 0;
   throw new Error(`字段「${name}」需要是布尔值（true/false 或 1/0），收到：${value}`);
 }
@@ -192,7 +196,7 @@ function cleanPath(value, name) {
 //         'date'     严格日期校验        {}
 //         'bool'     布尔（落库 0/1）    {}
 //         'path'     路径（禁 .. 与非法字符）
-//         'json'     JSON 列形状         { shape: 'array' | 'object' }
+//         'json'     JSON 列形状         { shape: 'array' | 'object', each?: 'slot' | 'int' | 'path' }
 //         'apps'     软件列表数组        {}
 //         'classinfo' 班级信息对象       {}
 // 未命中的列退回按列类型清洗（见 sanitizeField）。
@@ -201,13 +205,20 @@ const COLUMN_RULES = {
   // 临时学生标记：0=正式 1=临时。它是「成员状态」，不是第二套身份（id 仍是 students.id）。
   students: {
     is_provisional: { kind: 'number', min: 0, max: 1, integer: true },
+    // 年龄：语义上就是整数（DDL 也是 INTEGER），但过去只靠 table_meta 的类型回退兜着，
+    // 而种子把 年龄 写成了「文字」→ 任何字符串都能存进 INTEGER 列（SQLite 亲和只保证
+    // 存储类，不做约束）。这里显式声明，不再依赖元数据播得对不对。
+    年龄: { kind: 'number', min: 0, max: 150, integer: true },
   },
   // —— 班费记录 ——
   fee_records: {
     收支类型: { kind: 'enum', values: ['收入', '支出'] },
     收支金额: { kind: 'number', min: 0, max: 100000000, decimals: 2 },
     收支时间: { kind: 'date' },
-    收据: { kind: 'path' },
+    // 收据是**多张图**的路径数组（前端一次最多传 10 张，存成 JSON 数组文本）。
+    // 曾经写成单路径 'path'：前端 JSON.stringify 数组后整串提交，必然 400，
+    // 多图收据一张也存不进去。列模型就该是「路径数组」，别退回去当单值处理。
+    收据: { kind: 'json', shape: 'array', each: 'path' },
   },
   // —— 请假记录 ——
   leave_records: {
@@ -370,6 +381,22 @@ function assertIntElements(arr, name) {
   });
 }
 
+// 路径数组元素校验（班费多收据）：每个元素按**单列路径同一套规则**清洗。
+// 空元素直接剔除（前端传 [''] 等价于没有收据），非文本元素报错。
+// 返回清洗后的新数组：调用方用它序列化落库，不能原地改传入值。
+function sanitizePathElements(arr, name) {
+  const out = [];
+  arr.forEach((el, i) => {
+    if (el == null || el === '') return;
+    if (typeof el !== 'string') {
+      throw new Error(`字段「${name}」第 ${i + 1} 个路径应为文本，收到：${JSON.stringify(el)}`);
+    }
+    const p = cleanPath(el, name);
+    if (p) out.push(p);
+  });
+  return out;
+}
+
 // 值日名单结构校验：{ 项目名: { 星期: [姓名,...] } }
 // 项目值必须是对象、星期值必须是数组、数组元素必须是姓名文本（拒 null/数字/对象）
 function assertDutyCellShape(cells, name) {
@@ -477,10 +504,11 @@ function applyRule(value, rule, name) {
     case 'path':
       return cleanPath(value, name);
     case 'json': {
-      const v = parseJsonShape(value, rule.shape, name);
+      let v = parseJsonShape(value, rule.shape, name);
       if (Array.isArray(v)) {
         if (rule.each === 'slot') assertSlotElements(v, name, 1);
         else if (rule.each === 'int') assertIntElements(v, name);
+        else if (rule.each === 'path') v = sanitizePathElements(v, name);
       }
       return v;
     }

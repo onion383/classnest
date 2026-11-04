@@ -29,13 +29,42 @@ function isAuthRequired(error) {
 //   - onAuthExpired：收到「登录态失效」401 时如何处理（清 token / 提示 / 跳登录）
 //   - onUnreachable：请求判定为「后端不可达」时的探测回调（每次失败触发一次）
 //   - writeRetryGuard：重连期间是否允许自动重发该请求（写请求禁重发，避免重复落库）
+
+/**
+ * 默认的写请求重发守卫：**只放行读请求**（GET / HEAD）。
+ *
+ * 读请求幂等 → 重试没有副作用；写请求（POST / PUT / DELETE）重试可能重复落库。
+ *
+ * 注意：这个守卫**只在「后端不可达 → 等待重连」那个分支里被调用**
+ * （见下面响应拦截器的 `isBackendUnreachable(error)` 分支）——
+ * 也就是说「调用它」本身就等价于「现在处于重连期间」，不需要再判断状态位。
+ * 主窗口自己传了带 `backendReconnecting` 判断的版本，是更严格的额外约束。
+ *
+ * 为什么要有默认值：见下面 setupApiClient 的参数注释 —— 默认放行会让
+ * **没传守卫的窗口**（子窗口）把写请求重发 6 次。
+ */
+function defaultWriteRetryGuard(config) {
+  const m = (config?.method || 'get').toLowerCase()
+  return m === 'get' || m === 'head'
+}
 export function setupApiClient({
   baseURL,
   getToken = loadStoredToken,
   onTokenRenewed,
   onAuthExpired,
   onUnreachable,
-  writeRetryGuard = () => true,
+  // ⚠️ 默认值必须是「**写请求不重发**」，不能是放行。
+  //
+  // 原默认值是 `() => true`（放行），于是**任何没传守卫的窗口**（子窗口 setup /
+  // widget / desktop-widget 都只传了 baseURL）在后端重连期间，写请求会被自动
+  // 重发最多 6 次 → 重复落库 / 重复提交。
+  //
+  // 「主窗口传了守卫、子窗口没传」是典型的**默认值不安全**：
+  // 以后新增窗口忘了传守卫，又会静默恢复成放行。
+  //
+  // 所以默认值内置成「按 method 判定」：读请求幂等 → 允许重试；写请求 → 禁重发。
+  // 需要覆盖的窗口仍可显式传入自己的守卫。
+  writeRetryGuard = defaultWriteRetryGuard,
 } = {}) {
   if (baseURL) axios.defaults.baseURL = baseURL
 

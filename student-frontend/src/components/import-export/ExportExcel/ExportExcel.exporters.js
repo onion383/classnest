@@ -756,7 +756,9 @@ export function useExportFormats(ctx) {
       const headers = fields.map(f => f.name);
       // 保持逐行 `+=`：实测 5 万行时它与「数组 join」都在 32ms 上下（互有胜负，属噪声），
       // V8 的 rope 字符串对连续拼接本来就有优化，没必要为此多一层数组。
-      let csv = '\uFEFF' + headers.join(',') + '\n';
+      // 表头必须和数据行走同一个转义：列名里带逗号/引号时，不过 csvCell 会让整行列错位；
+      // 另外 csvCell 还负责挡 =+@ 开头的公式注入，表头同样能触发（审查 v4 · B09-02）。
+      let csv = '\uFEFF' + headers.map(h => csvCell(h)).join(',') + '\n';
       rows.forEach(row => {
         if (row._isPodium) {
           const isRowNumTable = ctx.isPodiumRowWithRowNum(row, headers);

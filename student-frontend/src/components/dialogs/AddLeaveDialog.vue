@@ -293,7 +293,17 @@ function submit() {
     if (common.家长联系电话 !== (base.家长联系电话 || '')) changed.家长联系电话 = common.家长联系电话
     if (common.学生联系电话 !== (base.学生联系电话 || '')) changed.学生联系电话 = common.学生联系电话
     if (Object.keys(changed).length) {
-      emit('ask-save-phones', { studentId: base.student_id, ...changed })
+      // ⚠️ 必须校验 studentId 有效性：请假记录的 student_id **可以是 null**
+      //   （学生当时不在名册，或后来被删 —— 后端 routes/leaves.js 有 `student_id = null` 这条路径）。
+      //   原来直接传 base.student_id → undefined/null → 上层 PUT /api/students/undefined
+      //   → 必然失败，只弹一句「联系方式保存失败」，用户完全不知道是自己的记录缺学生关联。
+      // 修法：拿不到有效学生 id 就不去存联系方式，并明确告知原因（不弹「保存失败」这种误导提示）。
+      const studentId = base.student_id
+      if (studentId == null || studentId === '') {
+        useNotification().warning('该请假记录未关联学生档案，联系方式未能同步到班级管理')
+        return
+      }
+      emit('ask-save-phones', { studentId, ...changed })
     }
     return
   }

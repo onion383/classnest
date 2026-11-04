@@ -260,6 +260,7 @@ async function postBatch(list, buildUrl, body, action) {
 // 汇总行暂停/继续：在跑的任务统一下发，同时把队列也冻住
 async function togglePauseAll() {
   const next = !allPaused.value
+  const prev = queuePaused.value
   queuePaused.value = next
   const ok = await postBatch(
     albums.value,
@@ -267,7 +268,10 @@ async function togglePauseAll() {
     { paused: next },
     next ? '暂停全部扫描' : '继续全部扫描'
   )
-  if (ok) useNotification().info(next ? '已暂停所有扫描任务' : '已继续所有扫描任务')
+  // 失败要把队列冻状态拨回去：queuePaused 是本地闸门，闸门关了但后端没暂停 →
+  // 队列永远停在 while (queuePaused) 那行不动，用户看到的是「卡住」而不是「暂停失败」。
+  if (!ok) queuePaused.value = prev
+  else useNotification().info(next ? '已暂停所有扫描任务' : '已继续所有扫描任务')
   fetchTasks()
 }
 

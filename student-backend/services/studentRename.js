@@ -28,6 +28,11 @@ function nameStillUsedByOthers(oldName) {
 }
 
 // 座位里可能是 "姓名"、"123"（id）、{student_id,name}、{姓名}：四种都认
+//
+// 匹配口径与值日表一致：**trim 后比较**，写回一律写规范名（newName）。
+// 座位是手工录入的网格，历史数据可能带首尾空格（' 张三 '）—— 各分支口径不一致时
+// （字符串用 trim、对象用严格 ===），改名后同一学生在座位表里一半新名一半旧名。
+// 写回不保留原空格：下游 SeatView 的 acc[name] 是精确键聚合，留空格会让统计键分裂。
 function renameSeatCells(seats, oldName, newName) {
   let changed = 0;
   if (!Array.isArray(seats)) return changed;
@@ -39,8 +44,8 @@ function renameSeatCells(seats, oldName, newName) {
         row[i] = newName; changed++; continue;
       }
       if (cell && typeof cell === 'object') {
-        if (cell.name === oldName) { cell.name = newName; changed++; }
-        if (cell['姓名'] === oldName) { cell['姓名'] = newName; changed++; }
+        if (typeof cell.name === 'string' && cell.name.trim() === oldName) { cell.name = newName; changed++; }
+        if (typeof cell['姓名'] === 'string' && cell['姓名'].trim() === oldName) { cell['姓名'] = newName; changed++; }
       }
     }
   }
@@ -57,24 +62,40 @@ function renameStudentRefs(oldName, newName) {
 
   const counts = { duty: 0, seat: 0, score: 0, leave: 0, group: 0, cadre: 0 };
 
-  const duty = store.getDoc('duty_layout');
-  if (duty) {
-    const cells = safeJson(duty.cells, {});
-    counts.duty = renameDutyName(cells, from, to);
-    if (counts.duty) store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
-  }
+  // 六处联写必须原子：分成六次提交时，中途任一步抛错（库忙、磁盘满、SQL 约束）
+  // 都会留下「前面表改了、后面表没改」的状态 —— 同一学生在值日表叫新名、
+  // 在加减分表叫旧名，界面不报任何错，历史值日指数也再也归不到他名下。
+  // better-sqlite3 的事务是同步的，被外层事务调用时自动降级为 SAVEPOINT。
+  db.transaction(() => {
+    const duty = store.getDoc('duty_layout');
+    if (duty) {
+      const cells = safeJson(duty.cells, {});
+      counts.duty = renameDutyName(cells, from, to);
+      if (counts.duty) store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
+    }
 
-  const seat = store.getDoc('seat_layout');
-  if (seat) {
-    const seats = safeJson(seat.seats, []);
-    counts.seat = renameSeatCells(seats, from, to);
-    if (counts.seat) store.setDoc('seat_layout', { seats: JSON.stringify(seats) });
-  }
+    const seat = store.getDoc('seat_layout');
+    if (seat) {
+      const seats = safeJson(seat.seats, []);
+      counts.seat = renameSeatCells(seats, from, to);
+      if (counts.seat) store.setDoc('seat_layout', { seats: JSON.stringify(seats) });
+    }
 
-  counts.score = db.prepare('UPDATE score_records SET 姓名 = ? WHERE 姓名 = ?').run(to, from).changes;
-  counts.leave = db.prepare('UPDATE leave_records SET 姓名 = ? WHERE 姓名 = ?').run(to, from).changes;
-  counts.group = db.prepare('UPDATE group_members SET member_name = ? WHERE member_name = ?').run(to, from).changes;
-  counts.cadre = db.prepare('UPDATE cadre_members SET student_name = ? WHERE student_name = ?').run(to, from).changes;
+    // 四张「只存姓名」的表：SQL 侧用 TRIM(列) 匹配，与上面两处 JSON 表的
+    // trim 比较保持同一口径。
+    //
+    // 为什么不直接 `WHERE 姓名 = ?`：值日表/座位表的值日名单与座位格是手工录入的
+    // JSON，**写入路径只查类型、不 trim**（assertDutyCellShape / assertSeatCell），
+    // 库里确实可能存在 ' 张三 ' 这种带空格的旧名。而这四张表虽然常规写入都过
+    // sanitizeField（会 trim），历史数据与直接改库仍可能带空格 —— 一旦某张表漏改，
+    // 同一学生就在不同表里叫不同名字，界面不报任何错。
+    //
+    // 这四张表的姓名列本来就没有索引（只有 students.姓名 有），TRIM 匹配不影响性能。
+    counts.score = db.prepare('UPDATE score_records SET 姓名 = ? WHERE TRIM(姓名) = ?').run(to, from).changes;
+    counts.leave = db.prepare('UPDATE leave_records SET 姓名 = ? WHERE TRIM(姓名) = ?').run(to, from).changes;
+    counts.group = db.prepare('UPDATE group_members SET member_name = ? WHERE TRIM(member_name) = ?').run(to, from).changes;
+    counts.cadre = db.prepare('UPDATE cadre_members SET student_name = ? WHERE TRIM(student_name) = ?').run(to, from).changes;
+  })();
 
   const changed = Object.values(counts).some((n) => n > 0);
   return { changed, counts };

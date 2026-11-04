@@ -9,7 +9,7 @@ const { initSchema } = require('../schema/schema');
 const {
   dataDir, als, connCache, touchConn, setCachedConn, ensureIndex,
   openFile, registryFindBySlug, unwrapKey, getUnlockedKey, clearUnlockedKey,
-  beginConnUse, endConnUse,
+  beginConnUse, endConnUse, isConnInUse,
 } = require('./dbManager.base');
 
 // 打开（或打开后初始化）某个 slug 对应的库并缓存
@@ -30,13 +30,23 @@ function getConn(slug, passphrase, encrypted = true) {
   return conn;
 }
 
-// 关闭并移出某库的缓存连接（加密转换等需要独占文件句柄的场景使用）
-function evictConn(slug) {
-  if (connCache.has(slug)) {
-    const conn = connCache.get(slug);
-    try { conn.close(); } catch (_) { /* 关闭失败可忽略 */ }
-    connCache.delete(slug);
+// 关闭并移出某库的缓存连接。
+// force=false（默认）：仍有请求在用这个连接时**不关** —— 强 close 会让在途查询直接抛
+//   "database is closed"，表现为偶发的保存失败/白屏，而调用点根本不知道发生了这件事
+//   （审查 v4 · B05-04）。这类调用交给 LRU，在计数归零后自然回收。
+// force=true：调用方确实需要独占文件句柄（恢复备份、加密转换、删账号、登出锁库），
+//   这些是维护窗口内的操作，调用方已保证没有并发写。
+function evictConn(slug, opts = {}) {
+  const force = !!(opts && opts.force);
+  if (!connCache.has(slug)) return false;
+  if (!force && isConnInUse(slug)) {
+    console.warn(`[db] 跳过关闭 ${slug}：仍有请求在使用该连接`);
+    return false;
   }
+  const conn = connCache.get(slug);
+  try { conn.close(); } catch (_) { /* 关闭失败可忽略 */ }
+  connCache.delete(slug);
+  return true;
 }
 
 // ---------- 请求内取当前库 ----------
@@ -117,7 +127,7 @@ function holdConnUntilResponse(slug, res) {
 // 锁定某库：关闭连接缓存并丢弃内存里的库钥匙（登出时调用）
 function lockDb(slug) {
   if (!slug) return;
-  evictConn(slug);
+  evictConn(slug, { force: true });
   clearUnlockedKey(slug);
 }
 

@@ -1,0 +1,259 @@
+{
+  "_comment": "通道 → 允许的窗口角色（由静态 import 图推导，见 testjs/probe/ipc-policy-probe.cjs）",
+  "widget-resize": [
+    "widget"
+  ],
+  "widget-drag-start": [
+    "widget"
+  ],
+  "widget-drag-move": [
+    "widget"
+  ],
+  "widget-drag-end": [
+    "widget"
+  ],
+  "widget-center": [
+    "widget"
+  ],
+  "widget-restore-position": [
+    "widget"
+  ],
+  "widget-fullscreen": [
+    "widget"
+  ],
+  "widget-restore": [
+    "widget"
+  ],
+  "widget-set-visible": [
+    "widget"
+  ],
+  "widget-set-session-visible": [
+    "main",
+    "widget"
+  ],
+  "widget-context-menu": [
+    "widget"
+  ],
+  "widget-exit": [
+    "widget"
+  ],
+  "to-widget": [
+    "main"
+  ],
+  "win-minimize": [
+    "main"
+  ],
+  "win-maximize-toggle": [
+    "main"
+  ],
+  "win-close": [
+    "main"
+  ],
+  "shutdown-action": [
+    "main"
+  ],
+  "quit-app": [
+    "main"
+  ],
+  "show-native-context-menu": [
+    "main"
+  ],
+  "ai-context-menu": [
+    "main"
+  ],
+  "theme-chrome": [
+    "desktop-widget",
+    "main",
+    "migration",
+    "setup",
+    "widget"
+  ],
+  "desktop-widget-enabled": [
+    "main"
+  ],
+  "desktop-widget-content-ready": [
+    "desktop-widget"
+  ],
+  "desktop-widget-drag-start": [
+    "desktop-widget"
+  ],
+  "desktop-widget-drag-move": [
+    "desktop-widget"
+  ],
+  "desktop-widget-drag-end": [
+    "desktop-widget"
+  ],
+  "desktop-widget-open-page": [
+    "desktop-widget"
+  ],
+  "widgets-ready": [
+    "main"
+  ],
+  "migration-ready": [
+    "migration"
+  ],
+  "migration-dismiss": [
+    "migration"
+  ],
+  "setup-ready": [
+    "setup"
+  ],
+  "setup-complete": [
+    "setup"
+  ],
+  "setup-quit": [
+    "setup"
+  ],
+  "launch-skip-warn": [
+    "setup"
+  ],
+  "launch-open-download": [
+    "setup"
+  ],
+  "update-install": [
+    "main"
+  ],
+  "inp-report": [
+    "main"
+  ],
+  "select-folder": [
+    "main",
+    "setup"
+  ],
+  "save-background-image": [
+    "main"
+  ],
+  "save-file": [
+    "main"
+  ],
+  "screenshot-capture": [
+    "widget"
+  ],
+  "screenshot-region": [
+    "main"
+  ],
+  "screenshot-region-show": [
+    "main"
+  ],
+  "screenshot-region-end": [
+    "main"
+  ],
+  "note-save": [
+    "widget"
+  ],
+  "open-file": [
+    "main"
+  ],
+  "open-folder": [
+    "main",
+    "migration",
+    "setup"
+  ],
+  "get-session-widget-visible": [
+    "widget"
+  ],
+  "get-desktop-layer-state": [
+    "desktop-widget"
+  ],
+  "get-usb-auto-open": [
+    "main"
+  ],
+  "set-usb-auto-open": [
+    "main"
+  ],
+  "open-external": [
+    "main"
+  ],
+  "get-master-key": [
+    "desktop-widget",
+    "main",
+    "migration",
+    "setup",
+    "widget"
+  ],
+  "apps-select-file": [
+    "desktop-widget"
+  ],
+  "apps-resolve-paths": [
+    "desktop-widget"
+  ],
+  "apps-launch": [
+    "desktop-widget"
+  ],
+  "get-data-directories": [
+    "main",
+    "setup"
+  ],
+  "set-data-dir": [
+    "main"
+  ],
+  "set-thumbs-dir": [
+    "main"
+  ],
+  "set-skills-dir": [
+    "main"
+  ],
+  "set-db-encryption": [
+    "main"
+  ],
+  "set-initial-data-dir": [
+    "setup"
+  ],
+  "get-setup-warmup": [
+    "setup"
+  ],
+  "launch-plan": [
+    "setup"
+  ],
+  "get-pending-notification": [
+    "main"
+  ],
+  "backend-status": [
+    "desktop-widget",
+    "main",
+    "setup",
+    "widget"
+  ],
+  "boot-status": [
+    "setup"
+  ],
+  "restart-backend": [
+    "main"
+  ],
+  "backend-failure": [
+    "main"
+  ],
+  "probe-backend": [
+    "main"
+  ],
+  "perf-snapshot": [
+    "main"
+  ],
+  "perf-restart-frontend": [
+    "main"
+  ],
+  "perf-restart-widget": [
+    "main"
+  ],
+  "perf-relaunch-app": [
+    "main"
+  ],
+  "perf-gc": [
+    "main"
+  ],
+  "perf-startup": [
+    "main"
+  ],
+  "get-app-version": [
+    "main"
+  ],
+  "update-check": [
+    "main"
+  ],
+  "set-content-protection": [
+    "main"
+  ],
+  "copy-sensitive-text": [
+    "main"
+  ]
+}

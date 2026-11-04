@@ -184,6 +184,14 @@ export function useScheduleMaster(ctx, { API_BASE }) {
       }
     },
     async saveMasterSettings(settings) {
+      // 先留快照：设置已写到本地，保存失败时必须回滚，
+      // 否则界面显示「已保存」但刷新后又变回旧值（与 active.js 的 saveActiveSettings 同口径）。
+      const prev = {
+        settings: ctx.masterSettings.value,
+        headers: ctx.masterColHeaders.value,
+        // adjustCells 可能原地改写行/列，回滚必须用快照而不是引用
+        cells: JSON.parse(JSON.stringify(ctx.masterCells.value))
+      };
       ctx.masterSettings.value = {
         sections: settings.sections,
         periods: settings.periods,
@@ -192,7 +200,15 @@ export function useScheduleMaster(ctx, { API_BASE }) {
       ctx.masterColHeaders.value = settings.days;
       ctx.masterSettingsVisible.value = false;
       ctx.masterCells.value = ctx.adjustCells(ctx.masterCells.value, ctx.masterSettings.value);
-      await ctx.saveMaster();
+      const ok = await ctx.saveMaster();
+      if (!ok) {
+        ctx.masterSettings.value = prev.settings;
+        ctx.masterColHeaders.value = prev.headers;
+        ctx.masterCells.value = prev.cells;
+        // 重新打开设置弹窗：用户刚填的东西还在弹窗里（弹窗持有自己的草稿），
+        // 不会因为一次失败就白填。
+        ctx.masterSettingsVisible.value = true;
+      }
     },
     async applyMasterToActive() {
       try {

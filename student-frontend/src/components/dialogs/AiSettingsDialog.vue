@@ -105,6 +105,7 @@
   <!-- 删除确认弹窗 -->
   <ConfirmDialog
     :visible="confirmShow"
+    :title="confirmTitle"
     :message="confirmMessage"
     :show-cancel="true"
     @confirm="onRemoveConfirm"
@@ -123,7 +124,7 @@ import AppSwitch from '../base/AppSwitch.vue'
 import AddModelDialog from './AddModelDialog.vue'
 import ConfirmDialog from '../base/ConfirmDialog.vue'
 import { reportError } from '../../utils/reportError.js'
-import { useSeq } from '../../composables/useSeq.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
 
@@ -181,7 +182,7 @@ watch(() => props.show, (val) => {
 
 // 请求序号挂实例上（Options API 没有 setup 作用域）：load 会被 watch(show)、
 // 保存后回调、删除确认等多路并发触发，慢的那次回来不能覆盖新状态。
-const seq = useSeq()
+const seq = createLatest()
 
 function close() {
   emit('close')
@@ -203,20 +204,20 @@ function remapChoices() {
 // 重新 discover。discover 是真实外网请求（后端 20s 超时），每次操作都对每个
 // 服务商发一遍，就是「切个模型要等几秒」的根因。
 async function refreshModelsOnly() {
-  const my = seq.take()
+  const my = seq.begin()
   loadError.value = ''
   try {
     const [cfg, list] = await Promise.all([
       axios.get('/api/ai/config'),
       axios.get('/api/ai/models'),
     ])
-    if (!seq.isLatest(my)) return
+    if (!seq.isCurrent(my)) return
     enabled.value = cfg.data.success && cfg.data.data.enabled
     floatingEnabled.value = cfg.data.success ? cfg.data.data.floatingEnabled !== false : true
     models.value = list.data.success ? list.data.data : []
     remapChoices()
   } catch (err) {
-    if (!seq.isLatest(my)) return
+    if (!seq.isCurrent(my)) return
     console.error('刷新模型列表失败:', err)
     loadError.value = '刷新模型列表失败：' + (err.response?.data?.error || err.message || '未知错误')
   }
@@ -224,14 +225,14 @@ async function refreshModelsOnly() {
 // 全量加载：本地两项 + 为每个服务商 discover 可用模型。
 // 只在**打开设置弹窗**与**新增模型**时调用（新增可能引入新服务商，必须发现一次）。
 async function load() {
-  const my = seq.take()
+  const my = seq.begin()
   loadError.value = ''
   try {
     const [cfg, list] = await Promise.all([
       axios.get('/api/ai/config'),
       axios.get('/api/ai/models'),
     ])
-    if (!seq.isLatest(my)) return
+    if (!seq.isCurrent(my)) return
     enabled.value = cfg.data.success && cfg.data.data.enabled
     floatingEnabled.value = cfg.data.success ? cfg.data.data.floatingEnabled !== false : true
     models.value = list.data.success ? list.data.data : []
@@ -256,14 +257,14 @@ async function load() {
       }
     }))
     // discover 是逐个服务商串行的，最容易出现「旧的先发、后到」
-    if (!seq.isLatest(my)) return
+    if (!seq.isCurrent(my)) return
     providerChoices.value = newChoices
     // 将服务商结果映射到各卡片（保留旧 choices 直到新数据就位）
     remapChoices()
     if (discoverFailed) loadError.value = '部分服务商的可用模型加载失败，模型下拉可能不完整'
   } catch (err) {
     // 过期请求的失败不要盖掉新请求的结果
-    if (!seq.isLatest(my)) return
+    if (!seq.isCurrent(my)) return
     console.error('加载 AI 配置失败:', err)
     loadError.value = '加载 AI 配置失败：' + (err.response?.data?.error || err.message || '未知错误')
   }
@@ -272,14 +273,20 @@ async function load() {
 async function onCardModelChange(id) {
   const item = models.value.find((x) => x.id === id)
   if (!item || !item.model) return
+  let ok = false
   try {
     await axios.put(`/api/ai/models/${id}`, { model: item.model })
+    ok = true
   } catch (err) {
     // 原生 alert 会阻塞渲染进程且样式与项目通知体系脱节（v1 B07-6 已统一过 history.js 同类问题）
     reportError(err, { action: '切换模型' })
   }
+  // 无论成败都重新拉一次：下拉的 v-model 已经把本地值改了，
+  // 失败时靠这次拉取把列表恢复成后端的真值（否则界面显示的是没存上的模型）。
   await refreshModelsOnly()
-  emit('saved')
+  // 失败时不能 emit('saved')：父组件收到「保存成功」会去做后续动作（比如关闭弹窗），
+  // 而后端其实根本没改 → 用户以为改好了。
+  if (ok) emit('saved')
 }
 async function toggleEnabled(value) {
   const prev = enabled.value
@@ -328,7 +335,8 @@ async function selectModel(id) {
     await refreshModelsOnly()
     emit('saved')
   } catch (err) {
-    console.error('选中失败:', err)
+    // 只打控制台的话，用户点了「设为当前模型」看不出失败，以为已经切过去了（审查 v4 · B07-04）
+    reportError(err, { action: '切换当前模型' })
   }
 }
 // 打开「添加模型」弹窗（清空编辑态目标）

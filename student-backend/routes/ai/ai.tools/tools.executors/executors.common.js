@@ -12,8 +12,8 @@ function pinyinMatch(text, key) {
   try { return !!PM_MOD.match(text, key); } catch (_) { return false; }
 }
 
+const { localDateStr: aiDateStr } = require('../../../../utils/date');
 function aiPad2(n) { return String(n).padStart(2, '0'); }
-function aiDateStr(d) { return `${d.getFullYear()}-${aiPad2(d.getMonth() + 1)}-${aiPad2(d.getDate())}`; }
 function aiTodayStr() { return aiDateStr(new Date()); }
 // 从任意文本里抽出 YYYY-MM-DD（兼容 2026/9/1、2026.09.01 等写法）；抽不到返回 ''
 function aiParseDate(s) {

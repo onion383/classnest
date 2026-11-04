@@ -20,6 +20,11 @@ import { fetchThumbBatch } from '../utils/albumMedia'
 
 // 可视区变化后多久发一次批量请求（毫秒）
 const DEBOUNCE_MS = 120
+// 整批失败后的自动重试间隔：失败时不在 urls 里留任何标记，只排一次 run()。
+// 等到 800ms 而不是 120ms，是给「后端刚重启 / 网络刚恢复」留出时间，避免连着撞墙。
+const RETRY_DELAY_MS = 800
+// 连续整批失败的上限：到顶就回落单张（见 load 里的注释），别让格子一直空着。
+const RETRY_MAX = 2
 // 一次批量请求最多带多少张
 const CHUNK = 100
 // 已生成 objectURL 的缩略图最多保留多少张（LRU 上限）
@@ -44,6 +49,8 @@ export function useThumbBatch(getVisibleIds, options = {}) {
 
   let timer = 0
   let destroyed = false
+  // 连续「整批没拿到」的次数，成功一次即归零。到 RETRY_MAX 就回落单张。
+  let failStreak = 0
   // 已创建但尚未 revoke 的 objectURL
   const liveUrls = new Set()
 
@@ -101,28 +108,55 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     for (let i = 0; i < want.length; i += CHUNK) {
       const chunk = want.slice(i, i + CHUNK)
       chunk.forEach(id => inflight.add(id))
-      const map = await fetchThumbBatch(chunk)
-      if (destroyed) {
-        chunk.forEach(id => inflight.delete(id))
-        return
-      }
-      const next = new Map(urls.value)
-      for (const [id, blob] of map) {
-        const u = URL.createObjectURL(blob)
-        liveUrls.add(u)
-        next.set(id, u)
-      }
-      // 这一批里没回来的 id：服务端不现场生成缩略图，所以批量永远拿不到它。
-      // 写入空串（而不是留 undefined）是为了把「还在拿」和「放弃批量」区分开 ——
-      // 否则调用方会一直等，格子永远是空的。
-      for (const id of chunk) {
-        if (!map.has(id)) {
-          miss.add(id)
-          next.set(id, '')
+      try {
+        const map = await fetchThumbBatch(chunk)
+        if (destroyed) return
+        // null = 这次没拿到（网络断 / 后端 5xx / 响应解析失败），跟「服务端确实没这张」
+        // 是两回事。**失败时不写任何状态**：这些 id 仍是 undefined，不在 urls 也不在 miss，
+        // 下一次 run()（滚动、切换相册、下面的自动重试）自然会重新请求一遍。
+        //
+        // 以前的写法是把失败也折成空 Map，再统一写 miss + ''，等于一次抖动就把这些 id
+        // 永久判成「没有缩略图」——批量预取对它们彻底失效，后半程只能逐张回落。
+        if (!map) {
+          failStreak++
+          if (failStreak > RETRY_MAX) {
+            // 连续失败到上限：放弃批量、回落单张。此时写 '' 是这张 id 的**第一次**赋值，
+            // 调用方把 <img> src 定成单张 URL，之后不会再被 blob 改第二次（不会重解码闪动）。
+            const next = new Map(urls.value)
+            for (const id of chunk) {
+              miss.add(id)
+              next.set(id, '')
+            }
+            urls.value = next
+          } else {
+            scheduleRetry()
+          }
+          continue
         }
-        inflight.delete(id)
+        failStreak = 0
+        const next = new Map(urls.value)
+        for (const [id, blob] of map) {
+          const u = URL.createObjectURL(blob)
+          liveUrls.add(u)
+          next.set(id, u)
+        }
+        // 这一批里没回来的 id：服务端不现场生成缩略图，所以批量永远拿不到它。
+        // 写入空串（而不是留 undefined）是为了把「还在拿」和「放弃批量」区分开 ——
+        // 否则调用方会一直等，格子永远是空的。
+        for (const id of chunk) {
+          if (!map.has(id)) {
+            miss.add(id)
+            next.set(id, '')
+          }
+        }
+        urls.value = next
+      } catch (_) {
+        // 建 objectURL 之类的本地异常：同样不写状态，留给下次重试
+      } finally {
+        // 无论成功、失败、提前 return 还是异常，inflight 都必须清干净 ——
+        // 漏掉一个 id 就等于它在这辈子都不会再进批量。
+        chunk.forEach(id => inflight.delete(id))
       }
-      urls.value = next
     }
   }
 
@@ -143,6 +177,14 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     if (timer) { clearTimeout(timer); timer = 0 }
     if (immediate) { run(); return }
     timer = setTimeout(() => { timer = 0; run() }, DEBOUNCE_MS)
+  }
+
+  // 整批失败后的自动重试：不写任何缓存状态，只把 run() 再排一次。
+  // 复用同一个 timer，所以 onBeforeUnmount / clear 已有的清理逻辑同时覆盖它。
+  function scheduleRetry() {
+    if (!enabled || destroyed) return
+    if (timer) { clearTimeout(timer); timer = 0 }
+    timer = setTimeout(() => { timer = 0; run() }, RETRY_DELAY_MS)
   }
 
   // 可视区 id 列表变化 → 调度一次批量预取。
@@ -174,6 +216,11 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     // 手动触发一次：立即执行（切换相册、首次加载完照片时用，不等防抖）
     refresh: () => schedule(true),
     // 清空所有缓存（切换相册时用）
-    clear: () => { revokeAll(); miss.clear(); inflight.clear(); lastUsed.clear() },
+    // 清空所有缓存（切换相册时用）：连同重试定时器一起停掉，
+    // 否则上一本相册排的那次 run() 会落到新相册的可见区上，白发一轮请求。
+    clear: () => {
+      if (timer) { clearTimeout(timer); timer = 0 }
+      revokeAll(); miss.clear(); inflight.clear(); lastUsed.clear(); failStreak = 0
+    },
   }
 }

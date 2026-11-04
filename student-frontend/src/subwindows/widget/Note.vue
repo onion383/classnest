@@ -51,7 +51,7 @@
     <template v-else>
       <div class="canvas-area" ref="canvasArea" @mousedown="onCanvasMouseDown">
         <canvas ref="bgCanvas" class="bg-canvas"></canvas>
-        <canvas ref="hlCanvas" class="hl-canvas"></canvas>
+        <canvas ref="hlCanvas" class="hl-canvas" :style="{ opacity: HL_OPACITY }"></canvas>
         <canvas
           ref="drawCanvas"
           class="draw-canvas"
@@ -158,8 +158,18 @@ import IconGlyph from '../../components/base/IconGlyph.vue'
 import axios from 'axios'
 import { calcW, drawCurveSegment } from './Note.curve.js'
 import { INVOKE } from '../../electronChannels.js'
+import { hideForCapture, restoreAfterCapture } from './captureHide.js'
+import { useDisposables } from '../../utils/disposables.js'
 
 const emit = defineEmits(['close', 'ready', 'shrink'])
+
+// 荧光笔的不透明度**只在合成时生效**，必须两端用同一个值：
+//   · 屏幕上是 CSS opacity（整层一起变淡，笔画交叠处不会越描越黑）
+//   · 导出时要把同一层叠到临时画布上，CSS opacity 不进位图 —— 不补 globalAlpha
+//     导出的 PNG 里高亮就是全不透明的实色，盖住底下的字。
+// 值写在这里、模板 inline style 与导出两处都引用它，避免改一处忘另一处。
+const HL_OPACITY = 0.35
+
 const canvasArea = ref(null)
 const bgCanvas = ref(null)
 const hlCanvas = ref(null)
@@ -172,6 +182,12 @@ const noteState = ref('loading')
 const saveFilePath = ref('')
 const saveError = ref('')
 let autoCloseTimer = null
+
+// 资源登记表：拖拽期挂在 document 上的监听器、截屏加载链、收尾定时器都登记在这里，
+// 组件卸载时统一释放（原先拖拽中途卸载 → 监听器永久留在 document 上）。
+const disposables = useDisposables()
+// 卸载标志：截屏/保存是异步链，卸载后仍会往下走；每一步 await 之后都要先看它。
+let disposed = false
 
 const saveStatusText = computed(() => {
   if (noteState.value === 'saving') return '正在保存...'
@@ -249,6 +265,10 @@ function onToolbarDragStart(e) {
   tbDragging = true
   tbStart = { x: e.clientX, y: e.clientY }
   tbPosStart = { x: toolbarPos.x, y: toolbarPos.y }
+  // 监听器登记到资源表：鼠标松开时正常移除，但**拖拽途中组件被卸载**时，
+  // onUp 永远不会执行 → 原先这两个监听器会永久留在 document 上。
+  let cancelMove = null
+  let cancelUp = null
   const onMove = (ev) => {
     if (!tbDragging || !toolbarRef.value) return
     const w = toolbarRef.value.offsetWidth
@@ -263,11 +283,13 @@ function onToolbarDragStart(e) {
   const onUp = () => {
     tbDragging = false
     toolbarPlaced = true
-    document.removeEventListener('mousemove', onMove)
-    document.removeEventListener('mouseup', onUp)
+    if (cancelMove) cancelMove()
+    if (cancelUp) cancelUp()
+    cancelMove = null
+    cancelUp = null
   }
-  document.addEventListener('mousemove', onMove)
-  document.addEventListener('mouseup', onUp)
+  cancelMove = disposables.listen(document, 'mousemove', onMove)
+  cancelUp = disposables.listen(document, 'mouseup', onUp)
 }
 
 // 绘制
@@ -429,16 +451,23 @@ async function startSave() {
   tc.width = canvasW; tc.height = canvasH
   const tctx = tc.getContext('2d')
   tctx.drawImage(bgImage, 0, 0, canvasW, canvasH)
+  // 荧光笔那一层在屏幕上是靠 CSS opacity 变淡的，CSS 不会进图 —— 这里必须补上同样的 alpha，
+  // 否则导出的 PNG 里高亮是全不透明的实色（文字被盖住）。整层一次 alpha，不要逐笔改，
+  // 否则笔画交叠处会叠加变深，与屏幕所见不一致。
+  tctx.globalAlpha = HL_OPACITY
   tctx.drawImage(hlCanvas.value, 0, 0)
+  tctx.globalAlpha = 1
   tctx.drawImage(drawCanvas.value, 0, 0)
 
   // 切换到保存界面（白色），再收缩窗口，避免黑色 canvas 闪现
   noteState.value = 'saving'
   emit('shrink')
   await new Promise(r => setTimeout(r, 200))
+  if (disposed) return
 
   try {
     const blob = await new Promise(r => tc.toBlob(r, 'image/png'))
+    if (disposed) return
     if (!blob) {
       saveError.value = '保存失败：画布未初始化'
       noteState.value = 'saveError'
@@ -451,6 +480,7 @@ async function startSave() {
     let saveDir = ''
     try {
       const settingsRes = await axios.get('/api/widget-settings')
+      if (disposed) return
       if (settingsRes.data.success) {
         saveDir = settingsRes.data.data.noteSavePath
       }
@@ -459,15 +489,18 @@ async function startSave() {
     // 直接传 Uint8Array：IPC 走结构化克隆的二进制路径（内存紧凑），
     // 避免 Array.from 将每个字节装箱成 Number（全屏 PNG 会膨胀 8~16 倍）。
     const res = await window.electron.invoke(INVOKE.NOTE_SAVE, arr, { saveDir })
+    if (disposed) return
     if (res.success) {
       saveFilePath.value = res.filePath
       noteState.value = 'saved'
-      autoCloseTimer = setTimeout(() => emit('close'), 3000)
+      // 收尾定时器登记到资源表：卸载时自动清掉，不必再各自 clearTimeout
+      autoCloseTimer = disposables.timeout(() => emit('close'), 3000)
     } else {
       saveError.value = '保存失败，请重试'
       noteState.value = 'saveError'
     }
   } catch (err) {
+    if (disposed) return
     saveError.value = err.message || '保存失败'
     noteState.value = 'saveError'
   }
@@ -475,7 +508,7 @@ async function startSave() {
 
 function confirmSave() {
   if (autoCloseTimer) {
-    clearTimeout(autoCloseTimer)
+    autoCloseTimer()
     autoCloseTimer = null
   }
   emit('close')
@@ -483,7 +516,7 @@ function confirmSave() {
 
 function close() {
   if (autoCloseTimer) {
-    clearTimeout(autoCloseTimer)
+    autoCloseTimer()
     autoCloseTimer = null
   }
   emit('close')
@@ -492,8 +525,21 @@ function close() {
 // 加载截图
 async function loadScreenshot() {
   await new Promise(resolve => setTimeout(resolve, 500))
-  const res = await window.electron.invoke(INVOKE.SCREENSHOT_CAPTURE)
-  if (!res.success || !res.dataUrl) {
+  // 卸载后不再往下走：后续会写 ref、emit、动 DOM，全是给已销毁的组件擦屁股
+  if (disposed) return
+  // 自己先藏好再抓屏。
+  // 不能指望主进程的 hideWidget：浮窗是 transparent 窗口，Windows 上 setOpacity(0)
+  // 对它不生效，抓出来的图里会带上本窗口「加载中」的卡片（它就成了注释的背景）。
+  // 见 captureHide.js。
+  await hideForCapture()
+  let res
+  try {
+    res = await window.electron.invoke(INVOKE.SCREENSHOT_CAPTURE, { hideWidget: false })
+  } finally {
+    restoreAfterCapture()
+  }
+  if (disposed) return
+  if (!res || !res.success || !res.dataUrl) {
     noteState.value = 'saveError'
     saveError.value = '截屏失败，请重试'
     return
@@ -501,6 +547,7 @@ async function loadScreenshot() {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = async () => {
+      if (disposed) return
       bgImage = img
       emit('ready')
       // 先在小窗口渲染 canvas，ResizeObserver 会在全屏扩展后自动重绘
@@ -564,6 +611,8 @@ function placeToolbar() {
 }
 
 let ro = null
+// ResizeObserver 也登记到资源表：卸载时统一断开
+disposables.add(() => { if (ro) { ro.disconnect(); ro = null } })
 onMounted(async () => {
   // onMounted 的 async 回调返回值无人接收：loadScreenshot 一旦抛错就是未处理的 Promise 拒绝。
   // 这里显式捕获并留日志，画布/工具栏照常初始化（没有截图时只是空画布）。
@@ -581,8 +630,9 @@ onMounted(async () => {
   }
 })
 onUnmounted(() => {
-  if (ro) ro.disconnect()
-  if (autoCloseTimer) clearTimeout(autoCloseTimer)
+  // 先置位：异步链每一步 await 之后都要先看它，避免卸载后继续写 ref / emit / 动 DOM
+  disposed = true
+  // 拖拽监听器、ResizeObserver、收尾定时器由资源表统一释放
 })
 </script>
 
@@ -731,7 +781,8 @@ onUnmounted(() => {
 
 .hl-canvas {
   z-index: 2;
-  opacity: 0.35;
+  /* opacity 由模板 inline style 从 HL_OPACITY 注入：导出时要按同一个值合成，
+     写死在 CSS 里两处会漂移（改了 CSS 忘了导出，PNG 就又不透明了） */
   pointer-events: none;
 }
 

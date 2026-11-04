@@ -17,12 +17,13 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const http = require('node:http')
+const { makeTempDir, removeDirWithRetry } = require('./_tmpdir.cjs')
 
 const ROOT = path.join(__dirname, '..', '..')
 const BACKEND = path.join(ROOT, 'student-backend')
 const NM = path.join(BACKEND, 'node_modules')
 
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'cadre-undo-'))
+const DATA_DIR = makeTempDir('cadre-undo-')
 process.env.DB_MASTER_KEY = 'cadre-undo-test-key'
 process.env.DATA_DIR = DATA_DIR
 process.env.ALBUM_THUMBS_DIR = path.join(DATA_DIR, 'thumbs')
@@ -51,6 +52,8 @@ function request(port, { method = 'GET', p = '/', body } = {}) {
       res.on('end', () => { let json = null; try { json = JSON.parse(text) } catch (_) { } resolve({ status: res.statusCode, json, text }) })
     })
     req.on('error', (e) => resolve({ status: 0, error: e.message }))
+    // 没有超时的请求在服务端挂死时会把这个脚本也挂住
+    req.setTimeout(8000, () => { req.destroy(); resolve({ status: 0, error: 'timeout' }) })
     if (body !== undefined) req.write(JSON.stringify(body))
     req.end()
   })
@@ -88,8 +91,27 @@ const memberState = (list, out = []) => {
   return out
 }
 
+let server = null
+// 收尾覆盖正常与异常两条路径：原先只有正常路径 server.close()，
+// 断言抛错时直接 exit(1)，临时 DATA_DIR 永久留在系统 temp（实测已积 13 个）。
+async function cleanup() {
+  if (server) {
+    await new Promise((r) => {
+      const t = setTimeout(r, 2000)
+      try { server.closeAllConnections?.() } catch (_) { /* 老版本无此方法 */ }
+      server.close(() => { clearTimeout(t); r() })
+    })
+    server = null
+  }
+  try { dbManager.evictConn(slug) } catch (_) { /* best-effort：关闭库连接 */ }
+  await removeDirWithRetry(DATA_DIR)
+}
+
 ;(async () => {
-  const server = app.listen(0)
+  // 带 host 的 listen 是异步完成的，紧接着 address() 可能拿到 null
+  server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s))
+  })
   const port = server.address().port
 
   // 建一棵树：班长(2人上限) + 其下级「组长」，各挂学生
@@ -129,7 +151,13 @@ const memberState = (list, out = []) => {
   tree = (await request(port, { p: '/api/cadres' })).json.tree
   check('重做删除：职务行再次消失', !findNode(tree, rootId), tree)
   check('重做删除：下级再次上移', findNode(tree, childId).parent_id === 0, findNode(tree, childId))
-  check('重做删除：成员再次清空', !findNode(tree, childId).members.some((m) => m.student_name === '王五') === false, findNode(tree, childId).members)
+  // ⚠️ 标签原来写「成员再次清空」，与逻辑**相反**：
+  //   `!some(王五) === false` 等价于 `some(王五) === true` → 断言的是「王五**在**成员里」。
+  // 而实际语义也对得上：级联删除只清**目标职务**（班长/root）的成员，
+  //   下级职务（childId）上移但**它自己的成员不受影响** —— 王五仍在 childId 里。
+  // 所以是标签写错、逻辑没错（改逻辑会让这条用例变成假失败）。
+  // 这里把标签改成它真正在断言的那件事。
+  check('重做删除：王五不受影响（王五属下级职务，不随上级删除而清空）', findNode(tree, childId).members.some((m) => m.student_name === '王五'), findNode(tree, childId).members)
 
   // 复原，供排序用例使用
   await dbManager.withDb(slug, () => executors.cadre_delete.undo(snap))
@@ -209,7 +237,22 @@ const memberState = (list, out = []) => {
   tree = (await request(port, { p: '/api/cadres' })).json.tree
   check('撤销后「数学组长」重新出现', !!findNode(tree, groupNode.id), tree)
 
-  server.close()
+  // ===== C03-01：畸形 payload 不能让整块撤销列表 500 =====
+  console.log('\n== C03-01 撤销列表容错 ==')
+  dbManager.withDb(slug, () => {
+    dbManager.current()
+      .prepare("INSERT INTO undo_history (key, type, label, payload, dir, ts, origin) VALUES (?, ?, ?, ?, 1, ?, '')")
+      .run('班干部', 'cell_update', '一条被改坏的记录', '{这不是 JSON', '2026-11-04 12:00:00')
+  })
+  const listRes = await request(port, { p: '/api/undo' })
+  check('畸形 payload 不影响列表接口（应 200，不是 500）', listRes.status === 200, listRes.text)
+  const badRec = ((listRes.json && listRes.json.groups) || [])
+    .flatMap((g) => g.records || [])
+    .find((r) => r.label === '一条被改坏的记录')
+  check('坏记录仍在列表里，payload 按 {} 兜底（不静默丢条）',
+    !!badRec && badRec.payload && typeof badRec.payload === 'object', badRec)
+
   console.log(failed ? `\n${failed} 条断言失败` : '\n全部通过')
+  await cleanup()
   process.exit(failed ? 1 : 0)
-})().catch((e) => { console.error(e); process.exit(1) })
+})().catch(async (e) => { console.error(e); await cleanup(); process.exit(1) })

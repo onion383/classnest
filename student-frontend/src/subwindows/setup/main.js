@@ -42,6 +42,10 @@ async function resolveLaunch() {
 }
 
 // 先解析画面、再等样式，二者就绪后才挂载：避免先渲染欢迎页再跳到提示页的闪动。
+//
+// ⚠️ 这条链失败时不能静默：链尾无 catch → unhandled rejection，且 app 永不 mount
+// → 用户看到**空白初始化窗口**，不知道出了什么事。
+// 兜底：样式加载失败也照样挂载（退回基础主题配色），错误打控制台。
 Promise.all([stylesReady, resolveLaunch()]).then(async ([, launch]) => {
   const app = createApp(Setup, { initialScreen: launch.screen, plan: launch.plan })
   const pinia = createPinia()
@@ -51,5 +55,12 @@ Promise.all([stylesReady, resolveLaunch()]).then(async ([, launch]) => {
   useThemeStore(pinia).applyTheme()
   // 等当前主题的按需样式就绪（applyTheme 已触发加载）后再挂载，避免闪一下基础主题配色。
   await loadThemeStyles(document.documentElement.dataset.theme, document.documentElement.dataset.mode)
+  app.mount('#setup-app')
+}).catch((err) => {
+  console.error('[setup] 初始化失败，按基础主题继续挂载', err)
+  const app = createApp(Setup, { initialScreen: 'welcome', plan: { warn: false } })
+  const pinia = createPinia()
+  app.use(pinia)
+  useThemeStore(pinia).applyTheme()
   app.mount('#setup-app')
 })

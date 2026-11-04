@@ -306,7 +306,7 @@ import { prefetch } from '../utils/dialogPrefetch.js'
 import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
-import { shiftDateStr } from '../utils/dateTime.js'
+import { shiftDateStr, localDateStr } from '../utils/dateTime.js'
 import { getSemesterStart } from '../utils/semesterStart.js'
 import GridView from '../components/tables/GridView/GridView.vue'
 import EmptySnapshot from '../components/base/EmptySnapshot.vue'
@@ -320,7 +320,7 @@ import { createRowReuseCache } from '../utils/rowReuse.js'
 import { useUndoShortcut, recordGridSnapshotUndo } from '../composables/useUndo.js'
 import { useNotification } from '../composables/useNotification.js'
 import { syncStudentNamesFromRows } from '../composables/useSyncStudentNames.js'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 import { weightHeatRgb, weightHeatFg } from '../utils/heatColor.js'
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk。loader 抽出为命名函数，
@@ -345,7 +345,7 @@ const API_BASE = '/api'
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 
 const activeTab = ref('seat')
 const tabItems = [
@@ -1091,8 +1091,7 @@ async function loadSeatIndex() {
 async function loadSeatLedger() {
   try {
     const y = new Date(); y.setDate(y.getDate() - 1)
-    const pad = n => String(n).padStart(2, '0')
-    const to = `${y.getFullYear()}-${pad(y.getMonth() + 1)}-${pad(y.getDate())}`
+    const to = localDateStr(y)
     let from = ''
     try {
       from = await getSemesterStart()

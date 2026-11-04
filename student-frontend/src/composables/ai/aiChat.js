@@ -152,6 +152,9 @@ export function useAiChat(ctx) {
             for (const id of p.undoIds.slice().reverse()) {
               const { data } = await undoById(id)
               if (!data || !data.ok) throw new Error((data && data.error) || '还原失败')
+              // 撤一条就从队列里划掉一条：整段失败时已成功的那些不能再撤第二次，
+              // 否则重试会对同一笔改动二次撤回（审查 v4 · B10-07）。
+              p.undoIds = p.undoIds.filter((x) => x !== id)
             }
             p.reverted = true
           }
@@ -336,6 +339,14 @@ export function useAiChat(ctx) {
               // AI 导出的排布图规格：同样等流结束后渲染 PNG 并弹保存对话框
               last.exportImage = evt.exportImage
             } else if (evt.type === 'err') {
+              // code='conversation_missing'：后端发现会话已被删除（前后端状态不一致）。
+              // 必须清掉失效的 conversationId，否则每次发送都用同一个死 id → 每次都失败，
+              // 用户被卡在「发不出消息」的状态里。清空后下次发送会自动新建会话。
+              if (evt.code === 'conversation_missing') {
+                ctx.conversationId.value = null
+                ctx.messages.value = ctx.messages.value.filter((m) => m.role !== 'assistant' || !m.loading)
+                try { await ctx.loadConversationList() } catch (_) { /* 列表刷新失败不阻塞 */ }
+              }
               last.content = (cont && last._baseContent ? last._baseContent + '\n\n' : '') + '⚠️ ' + (evt.message || '请求失败')
             } else if (evt.type === 'done') {
               last.reasoningStreaming = false
@@ -394,21 +405,28 @@ export function useAiChat(ctx) {
         }
       } finally {
         ctx.abortCtrl.value = null
-        ctx.busy.value = false
         if (last) { last.reasoningStreaming = false; last.processDone = true }
         // 用 stickBottom：流结束这一刻正文才刚变成 _blocks，里面的 AiRecordTable 还要异步取数、
         // 图片要加载、图表要绘制，高度会在之后继续长。只贴一次会停在半路，用户得自己往下滑。
         ctx.stickBottom()
         // 完全权限：写入提案不等用户确认，流一结束就自动执行。
-        // 放在 busy 复位之后，执行的收尾才能沿用既有链路（写回思维链 + 让 AI 续跑说明结果）；
-        // 用户主动中断的这一轮不自动执行，避免把没回复完的提案直接落库。
         // 例外：技能（md 指令文件）变更即使在全权限下也须老师确认，故不自动执行（走浮窗确认）。
+        //
+        // ⚠️ busy 必须在提案执行**之后**才复位：
+        //   executeProposal 是 async（要 POST 写库），原来这里没 await 就先把 busy 置 false，
+        //   用户在提案还没写完时就能发下一条消息 → 两轮同时写同一张表 → 数据竞态。
+        //   放在 busy 复位之后，执行的收尾才能沿用既有链路（写回思维链 + 让 AI 续跑说明结果）。
         if (ctx.permissionMode.value === AI_PERMISSION_FULL
           && last && last.proposal && last.proposal.kind !== 'skill'
           && !last.proposal.executed && !last.proposal.dismissed && !last.interrupted) {
-          ctx.executeProposal(last)
+          try {
+            await ctx.executeProposal(last)
+          } catch (e) {
+            // executeProposal 内部已 notifyError，这里只兜住它自己抛出来的异常
+            console.error('[aiChat] 自动执行提案失败', e)
+          }
         }
-        // 刷新会话列表（更新标题和消息数）
+        ctx.busy.value = false        // 刷新会话列表（更新标题和消息数）
         await ctx.loadConversationList()
       }
     },

@@ -22,7 +22,7 @@ const cases = [
   ['0.00', '0.00', 0],
   ['0.45', '0.45', 0.45],
   ['1', '1', 1],
-  ['', 0.6],
+  ['空串（写坏）', '', 0.6],
   ['abc（写坏）', 'abc', 0.6],
   ['null（未设置）', null, 0.6],
   ['没有这个 key', undefined, 0.6],
@@ -37,8 +37,16 @@ for (const [label, raw, expected] of cases) {
   const n = NEW(raw, 0.6)
   const same = Object.is(o, n)
   if (!same) bad++
-  // 新写法必须给出预期值，否则这个探针本身不可判定
-  const ok = expected === undefined ? true : Object.is(n, expected)
+  // 新写法必须给出预期值，否则这个探针本身不可判定。
+  // ⚠️ 「缺 expected」不能当成恒真 —— 那样这条用例等于没测任何东西
+  //   （历史上就有一行 `['', 0.6]` 少写一项，解构出 expected=undefined → 断言恒真，
+  //    空串边界根本没被覆盖）。
+  if (expected === undefined) {
+    fail++
+    console.log(label.padEnd(20), String(o).padEnd(12), String(n).padEnd(16), '✗ 用例缺少预期值（expected 不能为空）')
+    continue
+  }
+  const ok = Object.is(n, expected)
   if (!ok) fail++
   console.log(label.padEnd(20), String(o).padEnd(12), String(n).padEnd(16), ok ? (same ? '一致' : '← 旧写法错了') : '✗ 新写法不符合预期')
 }

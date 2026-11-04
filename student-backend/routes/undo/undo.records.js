@@ -6,6 +6,7 @@
 
 const { db } = require('../../db')
 const { executors } = require('./undo.executors')
+const { safeJson } = require('../../utils/json')
 
 const MAX_PER_KEY = 50
 
@@ -13,7 +14,11 @@ const MAX_PER_KEY = 50
 function getRecord(id) {
   const rec = db.prepare('SELECT * FROM undo_history WHERE id = ?').get(id)
   if (!rec) return null
-  rec.payload = JSON.parse(rec.payload || '{}')
+  // 用 safeJson 而不是裸 JSON.parse：注释写着「安全包裹」但实现是裸解析，
+  // 一条畸形 payload 会让整条 getRecord 抛 → 撤销面板 500（列表都打不开，
+  // 用户连别的记录都没法撤）。payload 解析不了就当空 payload：
+  // 执行器按「没有可回退的内容」处理，比整个面板打不开好。
+  rec.payload = safeJson(rec.payload, {}, 'undo_history.payload')
   return rec
 }
 

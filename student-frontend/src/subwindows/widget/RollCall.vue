@@ -48,7 +48,6 @@ function truncateStart(str, maxLen) {
 
 const students = ref([])
 const isRolling = ref(false)
-const result = ref(null)
 const error = ref('')
 const loading = ref(true)
 const hintText = ref('准备中...')
@@ -88,7 +87,6 @@ async function startRoll() {
 
   loading.value = false
   isRolling.value = true
-  result.value = null
   let count = 0
 
   // 开始滚动，学号姓名一起变
@@ -100,7 +98,6 @@ async function startRoll() {
       rollInterval = null
       const finalStudent = pickRandomStudent()
       currentStudent.value = finalStudent
-      result.value = finalStudent
       isRolling.value = false
       // 3秒后自动关闭回到图标
       autoCloseTimer = setTimeout(() => {

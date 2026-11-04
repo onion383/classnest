@@ -139,8 +139,11 @@ function onWorkerMessage(msg) {
           albumThumbs.rememberThumb(msg.slug, photoId, thumbPath, albumScan.THUMB_VERSION, null);
         }
         // 通知调用方（album.js）：这批 id 不用再排��了
+        // slug 必须一起传下去：各库的 album_photos.id 独立自增，只给 ids 的话
+        // 下游没法知道该清哪个库的待生成集合，只能退回「裸 id 全局 Map」（跨库串）。
+        // 协议里 thumbs 报文本来就带 slug，是这里转发时丢了，根因在这一行。
         if (thumbGeneratedListener) {
-          try { thumbGeneratedListener(msg.entries.map(e => e[0])); } catch (_) {}
+          try { thumbGeneratedListener(msg.slug, msg.entries.map(e => e[0])); } catch (_) {}
         }
       }
       break;

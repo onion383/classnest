@@ -245,16 +245,17 @@ async function doExport() {
         close();
       }
       // saved 为空串：用户在系统保存对话框中点了取消（或保存失败），保留弹窗便于重新导出
-    } catch (err) {
-      console.error('导出失败:', err);
-      notifyError('导出失败，请重试')
-      emit('export-error', err);
-    } finally {
-      exporting.value = false
-      exportProgress.value = 0
-    }
-    return;
+  } catch (err) {
+    console.error('导出失败:', err);
+    // 把具体原因带出来（写盘失败/权限不足等）：笼统的「请重试」对用户没有帮助
+    notifyError(err && err.message ? '导出失败：' + err.message : '导出失败，请重试')
+    emit('export-error', err);
+  } finally {
+    exporting.value = false
+    exportProgress.value = 0
   }
+  return;
+}
 
   // ---------- 普通表格导出 ----------
   // 隐藏选列区块时视为「全列 / 全部行」，不再做列与行的筛选
@@ -296,7 +297,8 @@ async function doExport() {
     // saved 为空串：用户在系统保存对话框中点了取消（或保存失败），保留弹窗便于重新导出
   } catch (err) {
     console.error('导出失败:', err);
-    notifyError('导出失败，请重试')
+    // 把具体原因带出来（写盘失败/权限不足等）：笼统的「请重试」对用户没有帮助
+    notifyError(err && err.message ? '导出失败：' + err.message : '导出失败，请重试')
     emit('export-error', err);
   } finally {
     exporting.value = false

@@ -7,6 +7,7 @@ import { listUndo, undoById, redoById, undoBatch, redoBatch, clearUndo } from '.
 import { pad2 } from '../../utils/dateTime.js'
 import { invalidateSemesterStart } from '../../utils/semesterStart.js'
 import { clearMediaToken } from '../../utils/apiUrl'
+import { AUTH_API } from '../../utils/apiPaths.js'
 
 // 把同一次动作的多条记录折成一行：同 origin、同方向的连续记录算「一次改动（N 项）」，
 // 无 origin 的单条记录仍是一行。这样设置页与 Ctrl+Z 的口径一致：一次动作 = 一步。
@@ -331,7 +332,7 @@ export function useSettingsData(ctx) {
     confirmLogout() {
       ctx.showConfirm('确认退出登录？', async () => {
         // 通知后端吊销本次会话：原 token 立即失效（先发请求再清本地，token 已清会 401）
-        try { await axios.post('/api/auth/logout') } catch (_) {}
+        try { await axios.post(AUTH_API.logout) } catch (_) {}
         clearAuth()
         clearMediaToken()
         ctx.router.push('/login')
@@ -400,7 +401,9 @@ export function useSettingsData(ctx) {
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
-        URL.revokeObjectURL(url)
+        // ⚠️ 必须延迟撤销：浏览器下载是**异步**读取 blob 的，
+        // 同步 revokeObjectURL 会让下载拿到 0 字节文件。
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
         ctx.closeModal()
         ctx.showAlert('导出成功。请保管好备份文件与本次使用的数据库密码（线上明文不保存）')
       } catch (err) {

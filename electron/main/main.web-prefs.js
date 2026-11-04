@@ -15,13 +15,25 @@ const { app } = require('electron')
 // 以字符串形式注入渲染进程 argv，preload 再从 process.argv 解析（见 preload.js）。
 const ipcChannels = require('../ipc-channels.json')
 
+// IPC 授权表（通道 → 允许的窗口角色）。与名单分开：名单是「有哪些通道」，
+// 授权表是「谁能调」。裁剪后的名单按角色注入 preload —— 渲染层拿不到越权通道，
+// 比等到主进程拒绝更早一步（审查 v4 · B01-01/02/03/04、C01-07 的根因修复）。
+const ipcAuth = require('./main.ipc-auth')
+
 // 统一构造 webPreferences。
 // devTools：是否允许开发者工具（默认随环境：生产关闭、开发开启）。
 // backgroundThrottling：传入时写入该项（浮窗类传 false 以保持后台绘帧）。
 // webviewTag：是否允许该窗口使用 <webview> 内嵌网页（仅主窗口的右侧网页抽屉需要，默认关闭，
 //             避免给其余窗口无谓地多开一项渲染能力）。
-function buildWebPreferences({ devTools, backgroundThrottling, webviewTag } = {}) {
+// ipcRole：该窗口的角色（main/widget/desktop-widget/setup/migration）——
+//          决定注入 preload 的 IPC 白名单范围；不传则给全量名单（不裁剪）。
+function buildWebPreferences({ devTools, backgroundThrottling, webviewTag, ipcRole } = {}) {
   const isDev = !app.isPackaged
+  // 按角色裁剪通道名单；角色未知时退回全量（不因裁剪把功能掐死），
+  // 但主进程侧的运行时校验仍然生效（fail-closed）。
+  const allowed = ipcRole
+    ? ipcAuth.channelsForRole(ipcRole, ipcChannels)
+    : { send: ipcChannels.send, invoke: ipcChannels.invoke, receive: ipcChannels.receive }
   const prefs = {
     preload: path.join(__dirname, '..', 'preload.js'),
     contextIsolation: true,
@@ -31,7 +43,7 @@ function buildWebPreferences({ devTools, backgroundThrottling, webviewTag } = {}
     sandbox: true,
     // 注入渲染进程 argv：--secure-channel 供 preload 暴露 window.__SECURE_CHANNEL__；
     // --ipc-channels 传 IPC 通道白名单（sandbox 下 preload 不能 require 本地文件，只能这样传）。
-    additionalArguments: ['--secure-channel', '--ipc-channels=' + JSON.stringify(ipcChannels)],
+    additionalArguments: ['--secure-channel', '--ipc-channels=' + JSON.stringify(allowed)],
     // webSecurity 仅开发模式关闭（用于加载自签名 https 的 Vite 服务）；
     // 生产环境必须保持开启，禁止在打包后关闭网页安全策略。
     webSecurity: !isDev,

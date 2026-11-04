@@ -18,7 +18,13 @@ export function useDutyArrangementDimension(ctx) {
         // 若当前默认方式是分组，同步其维度选项
         const g = ctx.tree.value.find(n => n.key === 'group')
         if (g && ctx.selectedDimId.value) g.option = ctx.selectedDimId.value
-      } catch (e) { console.error(e); ctx.rejectText.value = '加载分组维度失败' }
+      } catch (e) {
+        console.error(e);
+        ctx.rejectText.value = '加载分组维度失败';
+        // 必须调 showReject()：它负责起 2500ms 的清除定时器。
+        // 只写 rejectText 不调它 → 提示条永远留着，用户关不掉（其他 reject 分支都成对调用了这两步）。
+        ctx.showReject();
+      }
     },
     async onDimensionChange(id) {
       ctx.selectedDimId.value = id

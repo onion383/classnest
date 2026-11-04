@@ -10,6 +10,7 @@ classnest/
 └── testjs/
     └── smoke/
         ├── _isolated-backend.cjs  # 共用脚手架
+        ├── _tmpdir.cjs  # 临时目录脚手架：父进程建本次专属 SMOKE_TMP_ROOT 并整体删（Windows 上 sqlite 句柄在进程内不释放，子进程内删不掉是物理事实）
         ├── album-file-etag-test.cjs  # 无
         ├── album-photo-info-test.cjs  # 无
         ├── album-ruler-mapping-test.cjs  # 无
@@ -21,7 +22,7 @@ classnest/
         ├── font-subset-verify.mjs  # 需 pdf-subset-verify 产物
         ├── pdf-subset-verify.mjs  # 先生成子集
         ├── pptx-guard-test.cjs  # 无
-        ├── secure-channel-retry.js  # 需 Vite 开发服务器（dev-probes/ 页面，经 tools/electron-p…
+        ├── secure-channel-retry.js  # 需 Vite 开发服务器（testjs/probe/pages/ 断言页，经 tools/electron-p…
         ├── theme-setting-probe.mjs  # 无
         ├── thumbs-cache-test.cjs  # 无
         ├── undo-batch-test.cjs  # 临时 DATA_DIR + 真实撤销路由，不需要完整后端
@@ -76,10 +77,11 @@ classnest/
 | [`album-photo-info-test.cjs`](../../../testjs/smoke/album-photo-info-test.cjs) | 无 | 照片信息（EXIF 日期字段等） |
 | [`album-ruler-mapping-test.cjs`](../../../testjs/smoke/album-ruler-mapping-test.cjs) | 无 | 年份尺映射（宽 42、轴心 x=34） |
 | [`theme-setting-probe.mjs`](../../../testjs/smoke/theme-setting-probe.mjs) | 无 | 主题设置项读写 |
-| [`secure-channel-retry.js`](../../../testjs/smoke/secure-channel-retry.js) | 需 Vite 开发服务器（`dev-probes/` 页面，经 `tools/electron-page-probe.cjs`） | 安全信道 401 重试：会话过期/凭据降级/绑定失效时正确重发 |
+| [`secure-channel-retry.js`](../../../testjs/smoke/secure-channel-retry.js) | 需 Vite 开发服务器（`testjs/probe/pages/` 断言页，经 `tools/electron-page-probe.cjs`） | 安全信道 401 重试：会话过期/凭据降级/绑定失效时正确重发 |
 | [`pdf-subset-verify.mjs`](../../../testjs/smoke/pdf-subset-verify.mjs) | 先生成子集 | PDF 字体动态子集产出核对 |
 | [`font-subset-verify.mjs`](../../../testjs/smoke/font-subset-verify.mjs) | 需 `pdf-subset-verify` 产物 | 子集 cmap 覆盖实际绘制的全部字符（纯 Node 解析 TTF） |
 | [`_isolated-backend.cjs`](../../../testjs/smoke/_isolated-backend.cjs) | 共用脚手架 | 起隔离后端（独立端口/数据目录），供需要后端的脚本复用 |
+| [`_tmpdir.cjs`](../../../testjs/smoke/_tmpdir.cjs) | 共用脚手架 | `makeTempDir` / `removeDirWithRetry` / `tempRoot`：临时目录统一挂在父进程建的 `SMOKE_TMP_ROOT` 下，跑完由父进程整体删。Windows 上 sqlite 的 `index.db` 句柄在进程内一直开着 → 子进程内 `rmSync` 必失败 → 旧写法 `try { rmSync } catch {}` 把失败静默吞掉，实测在系统 temp 积压 94 个残留目录 |
 
 ### 示范：`auth-smoke.js` 的原理与局限
 
@@ -105,5 +107,6 @@ classnest/
 - 安全模式后端不能直接给纯 HTTP 冒烟脚本用（只认 `X-Auth-Proof`（安全通道的请求凭据头）），否则会连锁 `401`（未授权）。
 - 看到 `SKIP`（跳过标记，退出码 `3`）不等于通过；发布前要确认实际跑了多少、跳过了哪些。
 - 脚本串行执行，会占用端口与临时目录，不能并行跑。
+- **浏览器上下文的断言页放 `testjs/probe/pages/`，不放前端源码目录**：它们要跑 Vite 转译的 ESM、要用 `crypto.subtle`，纯 Node 跑不了，只能起真实 Electron 渲染进程（`tools/electron-page-probe.cjs`）。这些页在 Vite 的 root（`student-frontend/`）之外，靠 `vite.config.js` 已有的 `server.fs.allow`（含仓库根）用 `/@fs/<绝对路径>` 访问 —— 绝对路径运行时算出，换机器也正确。**断言页被删而脚本还在引用，是最难查的一类挂法**（Vite 会把请求兜底成 index.html，报出来的是「探针页没跑起来？」，看着像环境问题）→ 脚本里必须前置检查文件是否存在。
 
 ---

@@ -8,7 +8,7 @@
  *   ③ 总解压 120MB           → 拒绝（合计上限 100MB）
  *   ④ 10GB 级文件            → 交给 multer 的 20MB 限制拦（这里只验上限判定存在）
  *
- * 跑法：node testjs/pptx-guard-test.cjs
+ * 跑法：node testjs/smoke/pptx-guard-test.cjs
  */
 const fs = require('node:fs')
 const path = require('node:path')
@@ -37,7 +37,7 @@ function buildSamples() {
   fs.mkdirSync(TMP, { recursive: true })
   const code = `
 import zipfile, os
-d = r'${TMP.replace(/\\/g, '\\\\')}'
+d = r'${TMP.replace(/\\/g, '/')}'
 # ① 正常 60 页，每页几 KB
 with zipfile.ZipFile(os.path.join(d,'ok.pptx'),'w',zipfile.ZIP_DEFLATED) as z:
     for i in range(1, 61):

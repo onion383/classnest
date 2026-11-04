@@ -28,6 +28,7 @@ import DynamicTable from './DynamicTable/DynamicTable.vue'
 import AiGridPreview, { GRID_TABLES } from './AiGridPreview.vue'
 import { apiFetch } from '../../utils/apiUrl.js'
 import { ref, computed, watch } from 'vue'
+import { createLatest } from '../../utils/latestOnly.js'
 
 // AI 只指认「表名 + id」，这里取完整记录后交给列表页同一个表格组件渲染
 defineOptions({ name: 'AiRecordTable' })
@@ -41,6 +42,8 @@ const fields = ref([])
 const rows = ref([])
 const loading = ref(true)
 const error = ref('')
+// 「只认最后一次」的守卫：props.ids 变化会重新 load，快速切换记录时旧响应会覆盖新记录
+const loadGuard = createLatest()
 
 // 网格表交由 AiGridPreview 自行取数并还原成网格
 const isGrid = computed(() => GRID_TABLES.includes(props.table))
@@ -55,6 +58,7 @@ watch(() => props.ids, load)
 async function load() {
   loading.value = true
   error.value = ''
+  const token = loadGuard.begin()
   // 网格表由 AiGridPreview 自己取数并还原网格，这里不再按行取记录
   if (isGrid.value) { loading.value = false; return }
   if (!props.ids.length) {
@@ -66,15 +70,19 @@ async function load() {
     const r = await apiFetch(`/api/ai/records/${props.table}?ids=${props.ids.join(',')}`)
     const j = await r.json()
     if (!r.ok || !j.success) throw new Error(j.error || '读取失败')
+    // 已被更新的加载取代 → 丢弃本次结果
+    if (!loadGuard.isCurrent(token)) return
     // 列名直接用数据库字段名（本项目字段名本身就是界面上的显示名），与列表页表头一致
     fields.value = j.data.columns.map((name) => ({ name }))
     // 表格组件按 _rowKey 做行标识，这里用记录 id 补上
     rows.value = j.data.rows.map((row) => ({ ...row, _rowKey: row.id }))
     if (!rows.value.length) error.value = '未找到这条记录（可能已被删除）'
   } catch (e) {
+    if (!loadGuard.isCurrent(token)) return
     error.value = e.message || '读取数据失败'
   } finally {
-    loading.value = false
+    // 旧请求结束时不能把新请求的加载指示器关掉
+    if (loadGuard.isCurrent(token)) loading.value = false
   }
 }
 

@@ -21,13 +21,14 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const http = require('node:http')
+const { makeTempDir, removeDirWithRetry } = require('./_tmpdir.cjs')
 
 const ROOT = path.join(__dirname, '..', '..')
 const BACKEND = path.join(ROOT, 'student-backend')
 const BACKEND_MODULES = path.join(BACKEND, 'node_modules')
 
 // 隔离环境：必须在 require dbManager 之前设置（dbManager.base 在加载时校验主密钥）
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'banji-api-routes-'))
+const DATA_DIR = makeTempDir('banji-api-routes-')
 process.env.DB_MASTER_KEY = 'api-routes-smoke-master-key'
 process.env.DATA_DIR = DATA_DIR
 process.env.ALBUM_THUMBS_DIR = path.join(DATA_DIR, 'album-thumbs')
@@ -42,6 +43,8 @@ const albumRouter = require(path.join(BACKEND, 'routes', 'album'))
 const dutyRouter = require(path.join(BACKEND, 'routes', 'duty'))
 const seatsRouter = require(path.join(BACKEND, 'routes', 'seats'))
 const accountRouter = require(path.join(BACKEND, 'routes', 'account'))
+const authRouter = require(path.join(BACKEND, 'routes', 'auth'))
+const { createDynamicTableRouter } = require(path.join(BACKEND, 'routes', 'dynamicTable'))
 const { auth, SECRET } = require(path.join(BACKEND, 'middleware', 'auth'))
 const sessions = require(path.join(BACKEND, 'services', 'sessions'))
 const jwt = require(path.join(BACKEND_MODULES, 'jsonwebtoken'))
@@ -113,6 +116,16 @@ const bind = (req, res, next) => {
 app.use('/api/album', bind, albumRouter)
 app.use('/api/duty', bind, dutyRouter)
 app.use('/api/seats', bind, seatsRouter)
+// 认证路由：app.js 里就是 app.use('/api', authRoutes)，与下面 /api/auth 的 404 断言配套
+app.use('/api', authRouter)
+// 动态表路由：班费（收据多图）与学生（改名级联事务）都走真实 sanitize + tableService
+app.use('/api/fee-records', bind, createDynamicTableRouter('fee_records', {
+  minCount: 1,
+  fieldTypeOverrides: { '收支金额': '小数', '收支时间': '日期' },
+}))
+app.use('/api/students', bind, createDynamicTableRouter('students', {
+  protectedColumns: ['学号', '姓名'],
+}))
 // 账号路由自带 auth()，直接挂载（用真实 token 走鉴权，不用 bind 旁路）
 app.use('/api/account', accountRouter)
 // P0-01 探针：一个受 auth() 保护的普通业务接口，用来验证恢复态 token 不能越权
@@ -161,13 +174,24 @@ const listen = (handler) => {
 // 收尾必须覆盖正常与异常两条路径：异常时若只 exit(1)，server 与临时目录会残留
 let server = null
 let mock = null
+// 关服务不能直接 await server.close()：它要等所有连接自然断开，
+// 而这个脚本自己发过 keep-alive 请求，句柄可能一直挂着 —— 收尾就永远回不来。
+// 先 closeAllConnections()（Node 18.2+）再带超时兜底。
+function closeServer(s, timeoutMs = 2000) {
+  if (!s) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = () => resolve()
+    const t = setTimeout(done, timeoutMs)
+    try { s.closeAllConnections?.() } catch (_) { /* 老版本没有该方法 */ }
+    s.close(() => { clearTimeout(t); done() })
+  })
+}
+
 async function cleanup() {
-  await Promise.all([
-    server ? new Promise((resolve) => server.close(resolve)) : Promise.resolve(),
-    mock ? new Promise((resolve) => mock.close(resolve)) : Promise.resolve(),
-  ]).catch(() => { /* best-effort: 关闭失败不阻塞退出 */ })
+  await Promise.all([closeServer(server), closeServer(mock)])
   try { dbManager.evictConn(slug) } catch (_) { /* best-effort: 关闭库连接 */ }
-  try { fs.rmSync(DATA_DIR, { recursive: true, force: true }) } catch (_) { /* best-effort: 删除临时目录 */ }
+  // 单个 rmSync 在 Windows 上基本必失败（句柄未释放）且失败被吞，详见 _tmpdir.cjs
+  await removeDirWithRetry(DATA_DIR)
 }
 
 ;(async () => {
@@ -341,6 +365,89 @@ async function cleanup() {
   check('旧恢复态 token 立即失效（旧 sid 已吊销）', r.status === 401, r.json || r.text)
   r = await request(port, { path: '/api/recover-probe', headers: authHeader(freshToken) })
   check('新 token 可正常调用业务接口', r.status === 200 && !!r.json && r.json.ok === true, r.json || r.text)
+
+  // ===== P0：认证端点路径（前端曾打成 /api/auth/*，恒 404 且被 catch 吞掉）=====
+  console.log('\n== P0 认证端点路径 ==')
+  r = await request(port, { method: 'POST', path: '/api/logout' })
+  check('POST /api/logout 存在（未登录应 401，不是 404）', r.status === 401, r.status)
+  r = await request(port, { path: '/api/media-token' })
+  check('GET /api/media-token 存在（未登录应 401，不是 404）', r.status === 401, r.status)
+  r = await request(port, { method: 'POST', path: '/api/auth/logout' })
+  check('POST /api/auth/logout 仍是 404（authRoutes 挂在 /api 下，没有多一层 auth）', r.status === 404, r.status)
+  r = await request(port, { path: '/api/auth/media-token' })
+  check('GET /api/auth/media-token 仍是 404（不要靠加别名掩盖路径漂移）', r.status === 404, r.status)
+
+  // ===== P0：班费多收据必须能落库 =====
+  console.log('\n== P0 班费收据（多图路径数组）==')
+  r = await postJson(port, '/api/fee-records', {
+    收支编码: 'F-SMOKE', 收支类型: '收入', 收支金额: 12.5, 收支时间: '2026-11-04', 备注: '冒烟', 收据: '',
+  })
+  check('新建班费记录（收据传空串）→ 200', r.status === 200 && !!r.json && r.json.id > 0, r.json || r.text)
+  const feeId = r.json && r.json.id
+  const receiptUrls = ['/uploads/a.jpg', '/uploads/b.jpg']
+  r = await request(port, {
+    method: 'PUT',
+    path: `/api/fee-records/${feeId}`,
+    headers: { 'Content-Type': 'application/json' },
+    // 前端就是 JSON.stringify(数组) 后整串提交
+    body: JSON.stringify({ 收据: JSON.stringify(receiptUrls) }),
+  })
+  check('PUT 两张收据 → 200（改动前必 400「不是合法的路径」）', r.status === 200, r.json || r.text)
+  const feeRow = dbManager.withDb(slug, () => dbManager.current()
+    .prepare('SELECT 收据 FROM fee_records WHERE id = ?').get(feeId))
+  let storedReceipts = null
+  try { storedReceipts = JSON.parse(feeRow && feeRow.收据) } catch (_) { /* 非 JSON 即失败 */ }
+  check('落库是 JSON 数组文本且两张都在',
+    Array.isArray(storedReceipts) && storedReceipts.length === 2 && storedReceipts[0] === '/uploads/a.jpg',
+    feeRow)
+  r = await request(port, {
+    method: 'PUT',
+    path: `/api/fee-records/${feeId}`,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 收据: JSON.stringify(['/uploads/../etc/passwd']) }),
+  })
+  check('收据含「..」上跳 → 400 拒绝', r.status === 400, r.json || r.text)
+
+  // ===== P0：学生改名六处联写必须原子 =====
+  console.log('\n== P0 学生改名（事务原子性）==')
+  r = await postJson(port, '/api/students', { 姓名: '甲同学', 学号: 'S-SMOKE' })
+  check('新建学生', r.status === 200 && !!r.json && r.json.id > 0, r.json || r.text)
+  const stuId = r.json && r.json.id
+  dbManager.withDb(slug, () => {
+    dbManager.current().prepare('INSERT INTO score_records (姓名, 分值) VALUES (?, ?)').run('甲同学', 5)
+  })
+  const stuName = (id) => dbManager.withDb(slug, () => dbManager.current()
+    .prepare('SELECT 姓名 AS v FROM students WHERE id = ?').get(id))
+  const scoreName = () => dbManager.withDb(slug, () => dbManager.current()
+    .prepare('SELECT 姓名 AS v FROM score_records ORDER BY id DESC LIMIT 1').get())
+  // 人为让级联的第 5 步（group_members）失败：把表挪走，UPDATE 必然抛「no such table」
+  dbManager.withDb(slug, () => dbManager.current().exec('ALTER TABLE group_members RENAME TO group_members_bak'))
+  try {
+    r = await request(port, {
+      method: 'PUT',
+      path: `/api/students/${stuId}`,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 姓名: '乙同学' }),
+    })
+    check('级联中途失败 → 请求报错（400），不是静默半改', r.status === 400, r.json || r.text)
+    const stuAfter = stuName(stuId)
+    const scoreAfter = scoreName()
+    check('students.姓名 已回滚为「甲同学」', !!stuAfter && stuAfter.v === '甲同学', stuAfter)
+    check('score_records.姓名 已回滚为「甲同学」（不是半改状态）', !!scoreAfter && scoreAfter.v === '甲同学', scoreAfter)
+  } finally {
+    dbManager.withDb(slug, () => dbManager.current().exec('ALTER TABLE group_members_bak RENAME TO group_members'))
+  }
+  r = await request(port, {
+    method: 'PUT',
+    path: `/api/students/${stuId}`,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 姓名: '乙同学' }),
+  })
+  check('恢复后正常改名 → 200', r.status === 200, r.json || r.text)
+  const stuFinal = stuName(stuId)
+  const scoreFinal = scoreName()
+  check('改名后 students.姓名 = 乙同学', !!stuFinal && stuFinal.v === '乙同学', stuFinal)
+  check('改名后 score_records.姓名 同步为 乙同学', !!scoreFinal && scoreFinal.v === '乙同学', scoreFinal)
 
   // ---------- 收尾 ----------
   console.log(`\n${failed ? `${failed} 项断言失败` : '全部断言通过'}`)

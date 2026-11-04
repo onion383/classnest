@@ -10,7 +10,7 @@
  *
  * 不启动真实后端（那需要 DB_MASTER_KEY 和数据目录），只用一个最小 Express app。
  *
- * 跑法：node testjs/api-smoke.cjs
+ * 跑法：node testjs/smoke/api-smoke.cjs
  */
 const http = require('node:http')
 const zlib = require('node:zlib')

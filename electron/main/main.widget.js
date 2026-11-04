@@ -29,6 +29,8 @@ const path = require('path')
 const { app, BrowserWindow, ipcMain, Menu, screen } = require('electron')
 const startupTimer = require('./main.startup-timer')
 const { buildWebPreferences } = require('./main.web-prefs')
+// IPC 授权层：登记本模块创建的两个窗口（工具箱浮窗 / 桌面小组件）的角色。
+const ipcAuth = require('./main.ipc-auth')
 // Windows 置底：把组件窗口的 z 序插到「Progman 之上、所有可见窗口之下」
 const desktopLayer = require('./main.desktop-layer')
 
@@ -47,7 +49,31 @@ let desktopWidgetWindow = null
 
 // widget 窗口当前是否处于「点击穿透」态。Electron 只能 set 不能 get，
 // 所以凡是改动它的地方都要同步这个变量，否则临时流程（截屏）恢复不了原状态。
-let widgetIgnoreMouse = false
+//
+// ⚠️ 这个状态描述的是**某个窗口实例**，不是全局（审查 v4 · B01-08）：
+//   原先是模块级变量，而浮窗是「隐藏即销毁、启用时重建」的（hideWidgetWindow → createWidgetWindow）。
+//   销毁时变量不复位 → 重建后的新窗口**实际是不穿透的**（新窗口默认如此），
+//   但变量还留着旧值 true → 截屏流程读到 wasIgnoreMouse=true，
+//   截完屏把**新窗口** setIgnoreMouseEvents(true) → 浮窗变成点击穿透，图标点不动。
+//   根因：状态的生命周期比它所描述的对象长。
+// 改法：状态挂到窗口实例上（WeakMap），窗口销毁 → 状态随之消失，
+// 新窗口天然从「未穿透」开始，不可能继承上一个窗口的残留态。
+const widgetIgnoreMouseMap = new WeakMap()
+
+// 取当前浮窗的穿透态：窗口不存在 → false（没有窗口就谈不上穿透）
+function isWidgetIgnoreMouseNow() {
+  if (!widgetWindow || widgetWindow.isDestroyed()) return false
+  return widgetIgnoreMouseMap.get(widgetWindow) === true
+}
+
+// 设置当前浮窗的穿透态（同时真正作用到窗口上）
+function setWidgetIgnoreMouse(win, ignore) {
+  if (!win || win.isDestroyed()) return
+  widgetIgnoreMouseMap.set(win, !!ignore)
+  try {
+    win.setIgnoreMouseEvents(!!ignore, { forward: true })
+  } catch (_) { /* 忽略 */ }
+}
 
 // ===== 工具箱浮窗状态 =====
 // 上次浮窗位置：销毁前记下，重建时恢复，避免「关掉再打开」跳回屏幕左侧中间
@@ -85,6 +111,10 @@ const DESKTOP_READY_TIMEOUT_MS = 8000
 // 渲染层用同值 padding 让「视觉内容」贴回原位置，因此窗口比内容大 2*M，且窗口位置相对视觉位置偏移 -M。
 const WIDGET_SHADOW_MARGIN = 16
 
+// 等主窗口加载完成（navigateMainWhenReady）的最长等待：超时即放弃这次导航。
+// 正常情况是毫秒级（页面已就绪时立即发）；给 30s 覆盖「首次启动要加载整个应用」的慢场景。
+const NAVIGATE_WAIT_TIMEOUT_MS = 30000
+
 function createWidgetWindow() {
   widgetWindow = new BrowserWindow({
     width: 48 + WIDGET_SHADOW_MARGIN * 2,
@@ -100,8 +130,10 @@ function createWidgetWindow() {
     fullscreenable: false,
     // 渲染进程安全配置见 web-prefs.js。浮窗需持续重绘，关闭后台节流，
     // 避免失焦时亚克力/毛玻璃变灰
-    webPreferences: buildWebPreferences({ backgroundThrottling: false })
+    webPreferences: buildWebPreferences({ backgroundThrottling: false, ipcRole: ipcAuth.ROLE.WIDGET })
   })
+  // 登记窗口角色：浮窗只允许 widget 类通道（见 ipc-policy.json）
+  ipcAuth.registerWindowRole(widgetWindow, ipcAuth.ROLE.WIDGET)
 
   // 初始位置：屏幕左边缘中间（窗口相对视觉位置偏移 -M，让图标仍贴在左边缘）
   const { height: screenH } = screen.getPrimaryDisplay().workAreaSize
@@ -313,9 +345,11 @@ function createDesktopWidgetWindow() {
     // 不能用 focusable:false：Windows 下会加 WS_EX_NOACTIVATE，窗口收不到任何鼠标输入。
     // show:false + 内容就绪后再 show：先建好并加载完，避免闪出空窗。
     show: false,
-    webPreferences: buildWebPreferences({ backgroundThrottling: false }),
+    webPreferences: buildWebPreferences({ backgroundThrottling: false, ipcRole: ipcAuth.ROLE.DESKTOP_WIDGET }),
   })
   desktopWidgetWindow = win
+  // 登记窗口角色：桌面小组件只允许 desktop-widget 类通道（见 ipc-policy.json）
+  ipcAuth.registerWindowRole(win, ipcAuth.ROLE.DESKTOP_WIDGET)
   desktopContentReady = false
   logWidget('[widget] created pos=' + Math.round(startX) + ',' + Math.round(startY) +
     ' size=320x' + widgetHeight)
@@ -419,18 +453,51 @@ function openMainPage(page) {
 
 // 等主窗口加载到真实页面再发 from-main：开发模式的 data: 占位页和加载中的页面都不能接。
 // 主窗口已就绪时立即发；未就绪则挂到 did-finish-load，直到 URL 不再是 data: 为止。
+//
+// ⚠️ 监听器必须有必然的终点（审查 v4 · B01-12）：
+//   原实现只在「成功发出」时 removeListener，失败路径不清理：
+//     · URL 永远是 data:（开发模式 Vite 没起来）→ 每次调用都多挂一个监听，永远不移除；
+//     · 主窗口在等待期间被销毁 → 监听挂在已死的 webContents 上。
+//   桌面小组件每点一次面板就调一次 openMainPage → 监听无上限堆积，
+//   每次 did-finish-load 都要跑一遍全部旧回调（白发 IPC、且可能发重复的 navigate）。
+//
+// 改法：把「等一次加载完成」收成一个有始有终的等待 ——
+//   成功（URL 就绪）→ 发一次并收尾；
+//   失败（webContents 销毁）→ 收尾；
+//   超时 → 收尾（防止 Vite 一直没起来时无限等待）。
 function navigateMainWhenReady(mainWindow, page) {
   const wc = mainWindow.webContents
   let done = false
+  let timer = null
+  const cleanup = () => {
+    if (timer) { clearTimeout(timer); timer = null }
+    try { wc.removeListener('did-finish-load', send) } catch (_) { /* 已销毁 */ }
+    try { wc.removeListener('destroyed', onDestroyed) } catch (_) { /* 已销毁 */ }
+  }
   const send = () => {
     if (done || wc.isDestroyed()) return
     const url = wc.getURL()
     if (!url || url.startsWith('data:') || wc.isLoading()) return
     done = true
-    wc.removeListener('did-finish-load', send)
+    cleanup()
     wc.send('from-main', { type: 'navigate', path: page })
   }
+  // 主窗口在等待期间被销毁：不再等，直接收尾
+  const onDestroyed = () => {
+    if (done) return
+    done = true
+    cleanup()
+  }
   wc.on('did-finish-load', send)
+  wc.on('destroyed', onDestroyed)
+  // 超时兜底：主窗口迟迟加载不出来（Vite 没启动）时不再无限挂着监听
+  timer = setTimeout(() => {
+    if (done) return
+    done = true
+    cleanup()
+  }, NAVIGATE_WAIT_TIMEOUT_MS)
+  // unref：这个定时器只是「兜底收尾」，不该阻止进程退出（也避免单测等满 30s）
+  if (timer && typeof timer.unref === 'function') timer.unref()
   send()
 }
 
@@ -576,19 +643,6 @@ function registerWidgetIpc(opts = {}) {
     }
   })
 
-  // 将窗口移动到指定位置
-  ipcMain.on('widget-move-to', (event, position) => {
-    if (fromWidgetWindow(event)) {
-      const { height: screenH } = screen.getPrimaryDisplay().workAreaSize
-      const [, winHeight] = widgetWindow.getSize()
-      if (position === 'left-middle') {
-        const x = 0
-        const y = Math.round((screenH - winHeight) / 2)
-        widgetWindow.setPosition(x, y)
-      }
-    }
-  })
-
   // 将窗口居中显示（同时保存居中前的位置，以便关闭工具后恢复）
   ipcMain.on('widget-center', (event) => {
     if (fromWidgetWindow(event)) {
@@ -632,26 +686,16 @@ function registerWidgetIpc(opts = {}) {
     }
   })
 
-  // 设置窗口是否忽略鼠标事件（true=透明区域穿透，false=正常接收）
-  ipcMain.on('widget-set-ignore-mouse', (event, ignore) => {
-    if (fromWidgetWindow(event)) {
-      widgetIgnoreMouse = !!ignore
-      widgetWindow.setIgnoreMouseEvents(widgetIgnoreMouse, { forward: true })
-    }
-  })
-
   // 设置工具箱可见性
   ipcMain.on('widget-set-visible', (event, visible) => {
     if (fromWidgetWindow(event)) {
       if (visible) {
         widgetWindow.setOpacity(1)
-        widgetIgnoreMouse = false
-        widgetWindow.setIgnoreMouseEvents(false)
+        setWidgetIgnoreMouse(widgetWindow, false)
         widgetWindow.focus()
       } else {
         widgetWindow.setOpacity(0)
-        widgetIgnoreMouse = true
-        widgetWindow.setIgnoreMouseEvents(true, { forward: true })
+        setWidgetIgnoreMouse(widgetWindow, true)
       }
     }
   })
@@ -735,13 +779,9 @@ function registerWidgetIpc(opts = {}) {
     }
   })
 
-  // 小组件 -> 主应用
-  ipcMain.on('to-main', (event, data) => {
-    const mainWindow = getMainWindow()
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('from-widget', data)
-    }
-  })
+  // 「小组件 -> 主应用」通道（to-main / from-widget）已删除：
+  //   整条链路无生产者也无消费者 —— 前端没有任何一处发 to-main，也没有任何一处收 from-widget。
+  //   留着只是给人「浮窗能跟主窗口通信」的错觉，实际什么也传不过去（审查 v4 · B01-01）。
 }
 
 module.exports = {
@@ -758,7 +798,14 @@ module.exports = {
     if (!w) desktopLayerOn = false
   },
   isDesktopEnabled: () => desktopEnabled,
-  // Electron 没有读取穿透态的 API，只能自己记：截屏等临时改状态的流程靠它恢复原样
-  isWidgetIgnoreMouse: () => widgetIgnoreMouse,
+  // Electron 没有读取穿透态的 API，只能自己记：截屏等临时改状态的流程靠它恢复原样。
+  // 状态挂在窗口实例上（WeakMap），窗口重建后自动回到「未穿透」（B01-08）。
+  isWidgetIgnoreMouse: isWidgetIgnoreMouseNow,
+  // 写入器：截屏流程用它把窗口恢复成进入前的穿透态（同时更新记录状态）
+  setWidgetIgnoreMouse,
   isDesktopWidgetRunning: () => !!(desktopWidgetWindow && !desktopWidgetWindow.isDestroyed()),
+  // 导出给单测：这两个函数原先埋在模块内部，测不到
+  // （B01-12 的监听器终点、B01-08 的穿透态归属都需要直接跑真代码来验证）
+  navigateMainWhenReady,
+  NAVIGATE_WAIT_TIMEOUT_MS,
 }

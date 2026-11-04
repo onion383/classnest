@@ -61,7 +61,7 @@ const s = require('../../student-backend/services/sanitize')
 
 // ---- recoveryKey ----
 const {
-  normalizePhrase, formatPhrase, deriveRestoreHash, safeEqualHash, pickPhrase,
+  normalizePhrase, formatPhrase, deriveRestoreHash, safeEqualHash, pickPhrase, verifyRestoreHash,
 } = require('../../student-backend/services/recoveryKey')
 
 // ---- businessRules / utils/sql ----
@@ -91,7 +91,12 @@ test('播种：槽位行数与默认配置正确', () => {
   // 逻辑名读取（经视图）应拿到默认值
   const duty = conn.prepare('SELECT days, items FROM duty_settings').get()
   assert.equal(JSON.parse(duty.days).length, 5)
-  assert.equal(JSON.parse(duty.items).length, 3)
+  // items 必须是按模式分键的结构（{daily,big}）：services/dutyMode.unpackMode 只认这种，
+  // 播种成扁平数组时全新库的值日页一个项目都看不到。
+  const dutyItems = JSON.parse(duty.items)
+  assert.equal(dutyItems.daily.length, 3)
+  assert.equal(dutyItems.big.length, 3)
+  assert.equal(dutyItems.daily[0].name, '擦黑板')
 
   const seat = conn.prepare('SELECT mode, rows, cols FROM seat_layout').get()
   assert.deepEqual({ ...seat }, { mode: 'single', rows: 6, cols: 7 })
@@ -99,6 +104,47 @@ test('播种：槽位行数与默认配置正确', () => {
   const draft = conn.prepare('SELECT saved_at FROM duty_draft').get()
   assert.equal(draft.saved_at, '') // 无草稿
   conn.close()
+})
+
+// C04-03：列类型曾经有三层口径 —— DDL `年龄 INTEGER` / table_meta「文字」（种子省略了
+// data_type，全落默认值）/ 前端 DEFAULT_FIELDS「整数」。真正决定入库校验口径的是
+// table_meta，所以元数据说「文字」，年龄就永远不做整数校验。
+test('table_meta 的列类型必须与 DDL 亲和一致（年龄=整数、金额=小数）', () => {
+  const conn = fresh()
+  for (const table of ['students', 'fee_records']) {
+    const ddl = conn.prepare(`PRAGMA table_info(${table})`).all()
+    const meta = conn.prepare('SELECT column_name, data_type FROM table_meta WHERE table_name = ?').all(table)
+    assert.ok(meta.length > 0, `${table} 没有播种 table_meta`)
+    for (const m of meta) {
+      const col = ddl.find((c) => c.name === m.column_name)
+      assert.ok(col, `${table}.${m.column_name} 在 DDL 里不存在（元数据与表结构漂移）`)
+      const decl = String(col.type || '').toUpperCase()
+      if (decl.includes('INT')) {
+        assert.equal(m.data_type, '整数', `${table}.${m.column_name} 的 DDL 是 ${col.type}，元数据却是「${m.data_type}」`)
+      } else if (decl.includes('REAL') || decl.includes('NUMERIC')) {
+        assert.equal(m.data_type, '小数', `${table}.${m.column_name} 的 DDL 是 ${col.type}，元数据却是「${m.data_type}」`)
+      }
+    }
+  }
+  // 这两个列是这次修的具体项
+  const meta = conn.prepare('SELECT table_name, column_name, data_type FROM table_meta').all()
+  const typeOf = (t, c) => (meta.find((m) => m.table_name === t && m.column_name === c) || {}).data_type
+  assert.equal(typeOf('students', '年龄'), '整数')
+  assert.equal(typeOf('fee_records', '收支金额'), '小数')
+  assert.equal(typeOf('fee_records', '收支时间'), '日期')
+  conn.close()
+})
+
+// C04-03 的行为面：即便元数据播错（老库仍是「文字」），列级规则也必须挡住非整数
+test('sanitizeField：年龄只接受整数，空值归一为 null', () => {
+  assert.equal(s.sanitizeField('12', 'students', '年龄'), 12)
+  assert.equal(s.sanitizeField(12, 'students', '年龄'), 12)
+  assert.equal(s.sanitizeField('', 'students', '年龄'), null)
+  assert.equal(s.sanitizeField(null, 'students', '年龄'), null)
+  assert.throws(() => s.sanitizeField('abc', 'students', '年龄'), /需要数字|需要整数/)
+  assert.throws(() => s.sanitizeField('12.5', 'students', '年龄'), /需要整数/)
+  assert.throws(() => s.sanitizeField(-1, 'students', '年龄'), /不能小于/)
+  assert.throws(() => s.sanitizeField(999, 'students', '年龄'), /不能大于/)
 })
 
 test('students：is_provisional 列 + 临时同名唯一索引', () => {
@@ -169,6 +215,27 @@ test('domain_history：payload JSON 正确映射到三域历史视图', () => {
   conn.close()
 })
 
+test('initSchema 遇到「同名对象是表不是视图」的老库不抛错（B05-06）', () => {
+  // 老库里 schedule / seat_layout 这些名字曾经是**表**。SQLite 的 DROP VIEW IF EXISTS
+  // 只抑制「不存在」，不抑制「类型不对」——会直接抛 use DROP TABLE to delete table，
+  // 整个 initSchema 在批量 exec 里中断，库打不开且错误指不到具体名字。
+  const conn = new Database(':memory:')
+  // 造一个「名字占住但类型是表」的老库
+  conn.exec("CREATE TABLE schedule (id INTEGER PRIMARY KEY, junk TEXT)")
+  conn.exec("CREATE TABLE seat_layout (id INTEGER PRIMARY KEY, junk TEXT)")
+  conn.exec("CREATE TABLE duty_layout (id INTEGER PRIMARY KEY, junk TEXT)")
+  assert.doesNotThrow(() => initSchema(conn), 'initSchema 不该因为同名表而中断')
+  // 建完仍然是视图（老表被替换掉），且形状符合预期
+  const kinds = Object.fromEntries(
+    conn.prepare("SELECT name, type FROM sqlite_master WHERE name IN ('schedule','seat_layout','duty_layout')").all()
+      .map((r) => [r.name, r.type]),
+  )
+  assert.equal(kinds.schedule, 'view')
+  assert.equal(kinds.seat_layout, 'view')
+  assert.equal(kinds.duty_layout, 'view')
+  conn.close()
+})
+
 test('initSchema 幂等：二次执行不重复播种、不丢已有数据', () => {
   const conn = fresh()
   const cells = JSON.stringify([[{ course: '语文' }]])
@@ -218,6 +285,9 @@ test('normBool：true/1 → 1，false/0 → 0，非法报错', () => {
   assert.equal(s.normBool('0'), 0)
   assert.equal(s.normBool(''), 0)
   assert.equal(s.normBool(null), 0)
+  // 纯空白串 trim 后是 ''，此前和 'true' 一起落到 return 1 —— 一个空格就把开关打开了
+  assert.equal(s.normBool('   '), 0)
+  assert.equal(s.normBool('\t\n'), 0)
   assert.throws(() => s.normBool('maybe', 'x'))
 })
 
@@ -346,7 +416,11 @@ test('isRecoverScopeAllowed：只放行改密与登出，其余路径一律拒�
   const req = (method, originalUrl) => ({ method, originalUrl })
   assert.equal(isRecoverScopeAllowed(req('PUT', '/api/account/password')), true)
   assert.equal(isRecoverScopeAllowed(req('PUT', '/api/account/password?x=1')), true)
-  assert.equal(isRecoverScopeAllowed(req('POST', '/api/auth/logout')), true)
+  // 登出放行的必须是与 routes/auth.js 注册一致的路径。authRoutes 挂在 app.use('/api', ...) 下，
+  // 真实路径是 /api/logout；此前白名单写 /api/auth/logout，与前端同步写错，
+  // 导致这条放行规则从未生效过（请求先 404 了），本用例当时把错的当成了预期值。
+  assert.equal(isRecoverScopeAllowed(req('POST', '/api/logout')), true)
+  assert.equal(isRecoverScopeAllowed(req('POST', '/api/auth/logout')), false)
   assert.equal(isRecoverScopeAllowed(req('GET', '/api/students')), false)
   assert.equal(isRecoverScopeAllowed(req('POST', '/api/account/export')), false)
   // 尾斜杠要归一后再比：Express 默认非严格路由，`PUT /api/account/password/` 会命中**同一个**
@@ -422,10 +496,11 @@ test('formatPhrase 按「1.字  2.字」输出，与 normalize 结果对应', ()
   assert.equal(formatPhrase('1.山 2.水'), '1.山  2.水')
 })
 
-test('deriveRestoreHash 稳定、64 位 hex，且不同短语不同哈希', () => {
+test('deriveRestoreHash 稳定、带版本前缀，且不同短语不同哈希', () => {
   const h1 = deriveRestoreHash('山水风')
   const h2 = deriveRestoreHash('山水风')
-  assert.match(h1, /^[0-9a-f]{64}$/)
+  // 格式：'restore:<版本>:<64位hex>' —— 版本前缀让将来换算法时能识别旧值（批 16 / B04-07）
+  assert.match(h1, /^restore:v\d+:[0-9a-f]{64}$/)
   assert.equal(h1, h2)
   assert.notEqual(h1, deriveRestoreHash('山水雨'))
 })
@@ -436,6 +511,22 @@ test('safeEqualHash 常数时间比较：仅字符串相等才 true', () => {
   assert.equal(safeEqualHash(h, h.slice(0, -1) + '0'), false)
   assert.equal(safeEqualHash(h, null), false)
   assert.equal(safeEqualHash(undefined, h), false)
+})
+
+test('verifyRestoreHash：新格式与历史裸 hex 都能校验通过（旧恢复词不能失效）', () => {
+  const crypto = require('crypto')
+  const phrase = '山水风'
+  // 新格式：带版本前缀
+  assert.equal(verifyRestoreHash(phrase, deriveRestoreHash(phrase)), true)
+  // 历史格式：裸 sha256 hex（批 16 之前发出的恢复词就是这种）
+  const legacy = crypto.createHash('sha256').update('restore:' + phrase).digest('hex')
+  assert.equal(verifyRestoreHash(phrase, legacy), true)
+  // 错误短语一律拒绝
+  assert.equal(verifyRestoreHash('山水雨', deriveRestoreHash(phrase)), false)
+  assert.equal(verifyRestoreHash('山水雨', legacy), false)
+  // 脏输入不炸
+  assert.equal(verifyRestoreHash(phrase, null), false)
+  assert.equal(verifyRestoreHash(phrase, ''), false)
 })
 
 test('pickPhrase 生成 12 个汉字', () => {

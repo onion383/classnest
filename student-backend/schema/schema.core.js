@@ -45,9 +45,25 @@ function migrateCore(conn) {
   `);
 
   // ======================== 元数据默认列 ========================
-  const initMeta = conn.prepare(`INSERT OR IGNORE INTO table_meta (table_name, column_name, sort_order) VALUES (?, ?, ?)`);
-  ['学号','年级','班级','姓名','年龄','家长联系电话','学生联系电话','备注'].forEach((c, i) => initMeta.run('students', c, i + 1));
-  ['收支编码','收支类型','收支金额','收支时间','备注','收据'].forEach((c, i) => initMeta.run('fee_records', c, i + 1));
+  //
+  // data_type 必须显式写，且要与 DDL 的列亲和一致。
+  // 此前这里省略了 data_type（全落默认「文字」），于是「年龄」出现三层口径漂移：
+  //   DDL `年龄 INTEGER` / table_meta「文字」/ 前端 DEFAULT_FIELDS「整数」。
+  // 而真正决定「入库校验口径」的是 table_meta —— sanitize 的类型回退、AI 的表结构描述、
+  // Excel 导入的类型映射都读它。元数据说「文字」，年龄就永远不做整数校验。
+  const initMeta = conn.prepare(`INSERT OR IGNORE INTO table_meta (table_name, column_name, data_type, sort_order) VALUES (?, ?, ?, ?)`);
+  const STUDENT_COLUMNS = [
+    ['学号', '文字'], ['年级', '文字'], ['班级', '文字'], ['姓名', '文字'],
+    ['年龄', '整数'],
+    ['家长联系电话', '文字'], ['学生联系电话', '文字'], ['备注', '文字'],
+  ];
+  STUDENT_COLUMNS.forEach(([c, t], i) => initMeta.run('students', c, t, i + 1));
+  const FEE_COLUMNS = [
+    ['收支编码', '文字'], ['收支类型', '文字'],
+    ['收支金额', '小数'],
+    ['收支时间', '日期'], ['备注', '文字'], ['收据', '文字'],
+  ];
+  FEE_COLUMNS.forEach(([c, t], i) => initMeta.run('fee_records', c, t, i + 1));
 
   // ======================== 临时学生 ========================
   // is_provisional 是「成员状态」，不是第二套身份：临时学生与正式学生共用 students.id，

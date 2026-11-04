@@ -31,6 +31,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
+// 结束子进程树（只杀直接子进程会残留孙进程 → 端口占用 + 进程泄漏）
+const { killTree } = require('../tools/killTree.cjs')
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
 // 端口与 electron/main/main.js 的 INP_DEBUG 分支一致（那里 appendSwitch 写死 9222）
@@ -370,7 +372,7 @@ function stopVite() {
     if (process.platform === 'win32') spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
     else process.kill(-pid, 'SIGTERM')
   } catch (_) {
-    try { viteChild.kill() } catch (_) {}
+    try { killTree(viteChild) } catch (_) {}
   }
   viteChild = null
 }
@@ -447,7 +449,7 @@ async function main() {
 
   if (process.env.MODE_PROBE_ONESHOT) {
     cdp.close()
-    if (child) child.kill()
+    if (child) killTree(child)
     stopVite()
     process.exit(0)
   }

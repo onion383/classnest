@@ -330,9 +330,10 @@ import { prefetch } from '../utils/dialogPrefetch.js'
 import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
-import { shiftDateStr } from '../utils/dateTime.js'
+import { shiftDateStr, localDateStr } from '../utils/dateTime.js'
 import { getSemesterStart } from '../utils/semesterStart.js'
 import { createSerialSaver } from '../utils/serialSaver.js'
+import { createLatest } from '../utils/latestOnly.js'
 import Tabs from '../components/base/Tabs.vue'
 import ViewSwitch from '../components/base/ViewSwitch.vue'
 import EmptySnapshot from '../components/base/EmptySnapshot.vue'
@@ -344,7 +345,7 @@ import { useNotification } from '../composables/useNotification.js'
 import { useUndoShortcut, recordGridSnapshotUndo } from '../composables/useUndo.js'
 import { syncStudentNamesFromRows, syncStudentNames } from '../composables/useSyncStudentNames.js'
 import { createRowReuseCache } from '../utils/rowReuse.js'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 import { weightHeatRgb, weightHeatFg } from '../utils/heatColor.js'
 import { resolveHeader, matchCandidate } from '../utils/importSheet.js'
 
@@ -369,7 +370,7 @@ const API_BASE = '/api'
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 const { success: notifySuccess, error: notifyError } = useNotification()
 
 const activeTab = ref('manage')
@@ -595,13 +596,19 @@ const activeLoaded = ref(false)
 // 加载失败：驱动表格的「加载失败态」（告警 + 重试）。和 activeLoaded 分开 ——
 // 后者在 finally 里一律置 true（成功失败都算「试过了」），没法区分「空数据」和「加载失败」。
 const activeError = ref(false)
+// 读取侧的「只认最后一次」守卫：快速切模式（实行/一般）时，先发的请求后回来
+// 会把新模式的表覆盖成旧模式的内容 —— 界面上是「切了但没切」。
+const activeLoadGuard = createLatest()
 const loadActive = async () => {
+  const token = activeLoadGuard.begin()
   try {
     const res = await axios.get(`${API_BASE}/duty?mode=${dutyMode.value}`)
+    if (!activeLoadGuard.isCurrent(token)) return
     activeCells.value = res.data.cells || {}
     syncCellsNames(activeCells.value) // 加载后检测未收录姓名
     activeError.value = false
   } catch (e) {
+    if (!activeLoadGuard.isCurrent(token)) return
     console.error(e)
     activeError.value = true
   } finally { activeLoaded.value = true }
@@ -615,13 +622,17 @@ const dutyActiveRows = computed(() => reuseActiveRows(buildGridRows(activeCells.
 const masterCells = ref({})
 const masterLoaded = ref(false)
 const masterError = ref(false)
+const masterLoadGuard = createLatest()
 const loadMaster = async () => {
+  const token = masterLoadGuard.begin()
   try {
     const res = await axios.get(`${API_BASE}/duty/template?mode=${dutyMode.value}`)
+    if (!masterLoadGuard.isCurrent(token)) return
     masterCells.value = res.data.cells || {}
     syncCellsNames(masterCells.value) // 加载后检测未收录姓名
     masterError.value = false
   } catch (e) {
+    if (!masterLoadGuard.isCurrent(token)) return
     console.error(e)
     masterError.value = true
   } finally { masterLoaded.value = true }
@@ -1285,8 +1296,7 @@ const dutyLedger = ref({})
 async function loadDutyLedger() {
   try {
     const y = new Date(); y.setDate(y.getDate() - 1)
-    const pad = n => String(n).padStart(2, '0')
-    const to = `${y.getFullYear()}-${pad(y.getMonth() + 1)}-${pad(y.getDate())}`
+    const to = localDateStr(y)
     let from = ''
     try {
       from = await getSemesterStart()

@@ -458,10 +458,10 @@ import axios from 'axios'
 import { pushUndo } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
 import { reportError } from '../utils/reportError.js'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 import { useUndoShortcut } from '../composables/useUndo.js'
 import { useAlbumScan } from '../composables/useAlbumScan.js'
-import { useSeq } from '../composables/useSeq.js'
+import { createLatest } from '../utils/latestOnly.js'
 import { usePhotoTimeline } from '../composables/usePhotoTimeline.js'
 import { useThumbBatch } from '../composables/useThumbBatch.js'
 import VideoThumb from '../components/import-export/VideoThumb.vue'
@@ -600,8 +600,9 @@ const activeAlbum = computed(() => albums.value.find(a => a.id === activeAlbumId
 // 虚拟相册没有绑定文件夹，索引来自别的相册，刷新/重扫对它没有意义
 const activeAlbumIsVirtual = computed(() => activeAlbum.value?.kind === 'virtual')
 const viewerStyle = computed(() => {
-  const base = (viewer.value && viewer.value._rot) || 0
-  return { transform: `rotate(${base}deg) scale(${zoom.value})` }
+  // 旋转必须走 rotation 这个 ref：曾经把角度存在 viewer.value._rot 上（普通字段），
+  // computed 追踪不到它 → 点旋转按钮改完角度也不重渲染，按钮看起来像坏的。
+  return { transform: `rotate(${rotation.value}deg) scale(${zoom.value})` }
 })
 
 /* ===== 网格窗口化虚拟滚动 =====
@@ -686,15 +687,15 @@ const sizeParts = computed(() => {
 })
 
 // 照片列表请求序号：切换相册/刷新时先发的请求可能后到，旧相册的照片不能写进新相册（B06-07）
-const photosSeq = useSeq()
+const photosSeq = createLatest()
 
 async function loadPhotos(first = true) {
-  const my = photosSeq.take()
+  const my = photosSeq.begin()
   if (!activeAlbumId.value) { groups.value = []; return }
   try {
     const res = await axios.get(`/api/album/${activeAlbumId.value}/photos`, { headers: authHeaders() })
     // 期间已切到别的相册（或又刷新了一次）：这批照片已过期，丢弃
-    if (!photosSeq.isLatest(my)) return
+    if (!photosSeq.isCurrent(my)) return
     groups.value = res.data.data || []
     if (first) {
       // 切换相册/刷新后回到顶部并重新计量
@@ -705,7 +706,7 @@ async function loadPhotos(first = true) {
     refreshThumbBatch()
   } catch (e) {
     // 照片接口的失败在这里统一处理，避免被调用方误报成「相册列表加载失败」
-    if (!photosSeq.isLatest(my)) return
+    if (!photosSeq.isCurrent(my)) return
     reportError(e, { action: '加载照片' })
     console.error(e)
   }
@@ -749,7 +750,7 @@ watch(activeTab, async (v) => {
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 function applyFocus() {
   applyRouteRowFocus(rowFocusHost, {
     parse: (key) => {
@@ -1129,7 +1130,7 @@ function viewPhoto(p) {
   playing.value = false
   playbackRate.value = 1
   dragging.value = false
-  viewer.value = { ...p, _rot: 0 }
+  viewer.value = { ...p }
   mediaReady.value = reopening
   // 信息面板开着时跟着切到新照片（面板位置保持不动，只换内容）
   if (infoVisible.value) loadPhotoInfo(viewer.value)
@@ -1146,12 +1147,13 @@ function prevPhoto() { stepPhoto(-1) }
 function nextPhoto() { stepPhoto(1) }
 function rotate(dir) {
   if (!viewer.value) return
-  viewer.value._rot = ((viewer.value._rot + dir * 90) % 360 + 360) % 360
+  // +360 再取模：往回转（dir = -1）时不会得到负角度
+  rotation.value = ((rotation.value + dir * 90) % 360 + 360) % 360
 }
 function zoomIn() { zoom.value = Math.min(5, zoom.value + 0.25) }
 function zoomOut() { zoom.value = Math.max(0.2, zoom.value - 0.25) }
 function resetView() {
-  if (viewer.value) { viewer.value._rot = 0 }
+  rotation.value = 0
   zoom.value = 1
 }
 function onZoomWheel(e) {
@@ -1256,7 +1258,10 @@ async function saveAs(p) {
     a.href = url
     a.download = p.file_name
     a.click()
-    URL.revokeObjectURL(url)
+    // ⚠️ 必须延迟撤销：浏览器下载是**异步**读取 blob 的，
+    // 在 a.click() 之后同步 revokeObjectURL 会让下载拿到 0 字节文件。
+    // 延迟量与项目内其它下载点一致（见 subwindows/setup/Setup.vue）。
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
     useNotification().success('已开始另存')
   } catch (err) {
     reportError(err, { action: '另存' })

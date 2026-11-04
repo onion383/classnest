@@ -8,9 +8,11 @@ const { moveToTrash, deleteThumb } = require('../albumOps');
 const albumThumbs = require('../albumThumbs');
 const { readExifDetail } = require('../albumExif');
 const { now } = require('../utils/sql');
+const { cleanText } = require('../services/sanitize');
 // 扫描子进程管理器：主进程**不跑扫描**，只负责派活/收报活/转发补图需求。
 // 详见本文件末尾「后台扫描：委派给扫描子进程」段与 scanWorker.js 顶部注释。
 const scanWorker = require('../scanWorker');
+const slugScopes = require('../utils/slugScopes');
 
 // 缩略图缓存目录：统一放 DATA_DIR/album-thumbs（与数据库同层，随 userData 持久化）。
 // 打包后 __dirname 位于只读 asar 内，不能把写入目录建立在 __dirname 下。
@@ -76,11 +78,16 @@ let onDemandInflight = 0;
 //
 // 用 Map 而不是 Set：要记「转交时刻」。子进程补图**可能失败**（源文件被删、
 // 文件损坏），失败的 id 永远不会出现在子进程回报的 thumbs 列表里 —— 若无过期机制，
-// 它会永久留在集合里。而配额闸把 pendingInChild.size 算在内，于是攒够 8 个之后
+// 它会永久留在集合里。而配额闸把待生成数算在内，于是攒够 8 个之后
 // 主进程就再也不肯现场生成任何图，所有缩略图请求恒 404（功能被锁死）。
 // 故设 TTL：超过 PENDING_TTL_MS 还没出图的 id 视为失败，重新放行。
+//
+// **必须按 slug 分桶**：album_photos.id 各库独立自增，裸 id 做键会让库 A 的 id=5
+// 覆盖库 B 的 id=5，且 A 回报时会把 B 同号的待生成条目一起删掉（配额闸与去重守卫
+// 同时失效）。分桶本身交给 utils/slugScopes.js，别在这里另写一份全局 Map。
 const PENDING_TTL_MS = 60000;
-const pendingInChild = new Map();
+const PENDING_MAX_PER_SLUG = 2000;
+const pendingInChild = slugScopes.createSlugBuckets(() => new Map());
 
 // 申请现场生成配额。返回 false 表示本次拒绝（调用方应改为转交子进程 / 返回 404）。
 function claimOnDemand(count) {
@@ -88,7 +95,7 @@ function claimOnDemand(count) {
   if (!n) return true;
   // 先清掉过期的僵尸 id，否则它们会把配额闸占死（见 PENDING_TTL_MS 说明）
   sweepPendingInChild();
-  if (onDemandInflight + pendingInChild.size + n > ON_DEMAND_LIMIT) return false;
+  if (onDemandInflight + pendingInChild.totalSize() + n > ON_DEMAND_LIMIT) return false;
   onDemandInflight += n;
   return true;
 }
@@ -105,18 +112,23 @@ function releaseOnDemand(count) {
 function deferThumbDemand(slug, ids) {
   if (!ids || !ids.length) return;
   const nowTs = Date.now();
-  for (const id of ids) pendingInChild.set(id, nowTs);
+  const bucket = pendingInChild.forSlug(slug);
+  for (const id of ids) bucket.set(id, nowTs);
   // 兜底上限：极端情况下（子进程一直没出图）队列会一直攒，占内存。
+  // 按库各自限 2000 —— 全局一个上限会让「库 A 攒得多」把库 B 的待生成条目挤掉。
   // 超出后丢最旧的，它们下次被请求时会重新入队。
-  while (pendingInChild.size > 2000) {
-    pendingInChild.delete(pendingInChild.keys().next().value);
+  while (bucket.size > PENDING_MAX_PER_SLUG) {
+    bucket.delete(bucket.keys().next().value);
   }
   scanWorker.forwardDemand(slug, ids);
 }
 
-// 子进程回报「这批缩略图出好了」→ 从 pendingInChild 移除，主进程下次请求就能直接命中。
-function onChildThumbsGenerated(ids) {
-  for (const id of ids) pendingInChild.delete(id);
+// 子进程回报「这批缩略图出好了」→ 从**该库**的桶移除，主进程下次请求就能直接命中。
+// slug 由 scanWorker 从 thumbs 报文原样转下来（协议里本来就有，别再丢）。
+function onChildThumbsGenerated(slug, ids) {
+  const bucket = pendingInChild.peek(slug);
+  if (!bucket) return;
+  for (const id of ids) bucket.delete(id);
 }
 scanWorker.onThumbGenerated(onChildThumbsGenerated);
 
@@ -124,8 +136,10 @@ scanWorker.onThumbGenerated(onChildThumbsGenerated);
 // 不清的话，配额闸会被这些僵尸 id 慢慢占满，最终所有缩略图请求都拿不到图。
 function sweepPendingInChild() {
   const nowTs = Date.now();
-  for (const [id, ts] of pendingInChild) {
-    if (nowTs - ts >= PENDING_TTL_MS) pendingInChild.delete(id);
+  for (const [, bucket] of pendingInChild.entries()) {
+    for (const [id, ts] of bucket) {
+      if (nowTs - ts >= PENDING_TTL_MS) bucket.delete(id);
+    }
   }
 }
 
@@ -490,13 +504,24 @@ router.post('/tasks/resume', (req, res) => {
 
 // PATCH /api/album/:id 修改相册名称/路径
 router.patch('/:id', async (req, res) => {
+  try {
     const albumId = Number(req.params.id);
-  const album = db.prepare('SELECT * FROM albums WHERE id = ?').get(albumId);
-  if (!album) return res.status(404).json({ error: '相册不存在' });
-  const name = (req.body && req.body.name) || album.name;
-  const folder = (req.body && req.body.folder_path) || album.folder_path;
-  db.prepare('UPDATE albums SET name = ?, folder_path = ?, updated_at = ? WHERE id = ?').run(name, folder, now(), albumId);
-  res.json({ message: '相册已更新' });
+    const album = db.prepare('SELECT * FROM albums WHERE id = ?').get(albumId);
+    if (!album) return res.status(404).json({ error: '相册不存在' });
+    const name = (req.body && req.body.name) || album.name;
+    const folder = (req.body && req.body.folder_path) || album.folder_path;
+    // 名称与路径都过一遍文本清洗：零宽字符/控制字符/超长串原样落库后，
+    // 前端按名字展示会出乱码，按路径展示会指向一个不存在的目录。
+    // （相册表不在 dynamicTable 的 sanitizeField 覆盖范围内，得自己洗。）
+    const cleanName = cleanText(name);
+    const cleanFolder = cleanText(folder);
+    if (!cleanName) return res.status(400).json({ error: '相册名称不能为空' });
+    if (!cleanFolder) return res.status(400).json({ error: '文件夹路径不能为空' });
+    db.prepare('UPDATE albums SET name = ?, folder_path = ?, updated_at = ? WHERE id = ?').run(cleanName, cleanFolder, now(), albumId);
+    res.json({ message: '相册已更新' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // PUT /api/album/reorder 批量更新相册排序
@@ -510,22 +535,34 @@ router.put('/reorder', (req, res) => {
 
 // DELETE /api/album/:id 删除相册（仅删除索引，不删除磁盘照片）
 router.delete('/:id', async (req, res) => {
+  try {
     const albumId = Number(req.params.id);
-  const slug = dbManager.currentSlug();
-  // 删除相册时清理其所有照片的缩略图缓存
-  // 路径按库隔离推导（{THUMB_DIR}/{slug}/{photoId}.jpg）；
-  // 库里的 thumb_path 也一并清掉，避免索引删了但文件还在。
-  const thumbs = db.prepare('SELECT id, thumb_path FROM album_photos WHERE album_id = ?').all(albumId);
-  await Promise.all(thumbs.map(r => {
-    albumThumbs.forgetPhoto(slug, r.id);
-    const p = albumThumbs.thumbPathFor(slug, r.id);
-    return Promise.all([fsp.unlink(p).catch(() => {}), r.thumb_path ? fsp.unlink(r.thumb_path).catch(() => {}) : null]);
-  }));
-  db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(albumId);
-  db.prepare('DELETE FROM albums WHERE id = ?').run(albumId);
-  // 相册没了，正在跑的扫描也要停（子进程会在检查点发现相册已不存在而收工）
-  scanWorker.requestStop(slug, albumId);
-  res.json({ message: '相册已删除' });
+    const slug = dbManager.currentSlug();
+    // 删除相册时清理其所有照片的缩略图缓存
+    // 路径按库隔离推导（{THUMB_DIR}/{slug}/{photoId}.jpg）；
+    // 库里的 thumb_path 也一并清掉，避免索引删了但文件还在。
+    const thumbs = db.prepare('SELECT id, thumb_path FROM album_photos WHERE album_id = ?').all(albumId);
+    await Promise.all(thumbs.map(r => {
+      albumThumbs.forgetPhoto(slug, r.id);
+      const p = albumThumbs.thumbPathFor(slug, r.id);
+      return Promise.all([fsp.unlink(p).catch(() => {}), r.thumb_path ? fsp.unlink(r.thumb_path).catch(() => {}) : null]);
+    }));
+    // 两条 DELETE 必须原子：各自提交时中途失败会留下「照片索引已删、相册还在」
+    // 的半截状态 —— 界面上还看得到这个相册，点进去照片却全没了，且再删一次
+    // 也删不掉那批已失效的索引行。better-sqlite3 事务是同步的。
+    db.transaction(() => {
+      db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(albumId);
+      db.prepare('DELETE FROM albums WHERE id = ?').run(albumId);
+    })();
+    // 相册没了，正在跑的扫描也要停（子进程会在检查点发现相册已不存在而收工）
+    scanWorker.requestStop(slug, albumId);
+    res.json({ message: '相册已删除' });
+  } catch (err) {
+    // 局部 catch：与本文件其他路由口径一致（统一 { error } + 明确状态码）。
+    // 不靠全局错误中间件兜底 —— 那条路径返回的是 500 且会打全量现场，
+    // 而「相册不存在」这类业务错误应当是 404。
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ======================== 照片浏览 ========================

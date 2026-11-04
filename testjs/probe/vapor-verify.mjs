@@ -20,6 +20,12 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+// 结束子进程树：dev-vite.js 还会再起孙进程，只 kill 直接子进程会残留
+// → 端口被占（下次跑报 EADDRINUSE）+ 进程泄漏。
+const require = createRequire(import.meta.url)
+const { killTree } = require('../tools/killTree.cjs')
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SRC = path.join(ROOT, 'student-frontend', 'src')
@@ -100,5 +106,5 @@ async function main() {
 }
 
 main()
-  .then((code) => { if (child) child.kill(); process.exit(code) })
-  .catch((e) => { console.error('[vapor-verify]', e.message); if (child) child.kill(); process.exit(1) })
+  .then((code) => { if (child) killTree(child); process.exit(code) })
+  .catch((e) => { console.error('[vapor-verify]', e.message); if (child) killTree(child); process.exit(1) })

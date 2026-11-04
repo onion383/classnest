@@ -13,6 +13,8 @@
 // 输出是耗时数字，不做门限判定（机器不同绝对值不同），退出码恒为 0。
 // =========================================================================
 const path = require('path')
+// 关服务要强制断开存量 keep-alive 连接，否则事件循环仍有活 handle → 脚本永不退出
+const { closeServer } = require('../tools/closeServer.cjs')
 const http = require('http')
 
 const BACKEND = path.join(__dirname, '../../student-backend')
@@ -90,7 +92,7 @@ const stat = (arr) => {
 }
 
 async function main() {
-  const server = app.listen(0)
+  const server = app.listen(0, '127.0.0.1')
   await new Promise(r => server.once('listening', r))
 
   const QUERIES = [
@@ -154,7 +156,7 @@ async function main() {
   }
   console.log(`  新拼音：主列 distinct          p50 ${(ms(t0, process.hrtime.bigint()) / RUNS).toFixed(2)} ms  （去重后 ${vals.length} 个值）`)
 
-  server.close()
+  await closeServer(server)
   conn.close()
 }
 

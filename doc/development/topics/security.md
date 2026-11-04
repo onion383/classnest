@@ -90,7 +90,8 @@ classnest/
 | --- | --- | --- |
 | 进程 | 主进程 / 渲染进程 / 后端子进程分离；渲染层不直接拿 Node 能力 | [`electron/main/main.js`](../../../electron/main/main.js)、[`main.web-prefs.js`](../../../electron/main/main.web-prefs.js) |
 | 窗口 | 所有窗口 `sandbox:true`（沙箱开启）+ `contextIsolation:true`（上下文隔离开启）+ `nodeIntegration:false`（Node 集成关闭）；生产 `webSecurity:true`（网页安全策略开启） | [`main.web-prefs.js`](../../../electron/main/main.web-prefs.js) |
-| IPC | 三张白名单（`send`（发送）/ `invoke`（请求-响应）/ `receive`（接收））来自**单一来源** `electron/ipc-channels.json`，经 `additionalArguments`（附加启动参数）的 `--ipc-channels`（IPC 通道白名单参数）注入渲染进程（`sandbox`（沙箱）下 `preload`（预加载脚本）不能 `require`（加载）本地文件）；白名单外直接 `reject`（拒绝） | [`electron/preload.js`](../../../electron/preload.js)、[`electron/ipc-channels.json`](../../../electron/ipc-channels.json)、[`main.web-prefs.js`](../../../electron/main/main.web-prefs.js) |
+| IPC 名单 | 三张白名单（`send`（发送）/ `invoke`（请求-响应）/ `receive`（接收））来自**单一来源** `electron/ipc-channels.json`（有哪些通道），经 `additionalArguments`（附加启动参数）的 `--ipc-channels`（IPC 通道白名单参数）注入渲染进程（`sandbox`（沙箱）下 `preload`（预加载脚本）不能 `require`（加载）本地文件）；白名单外直接 `reject`（拒绝） | [`electron/preload.js`](../../../electron/preload.js)、[`electron/ipc-channels.json`](../../../electron/ipc-channels.json)、[`main.web-prefs.js`](../../../electron/main/main.web-prefs.js) |
+| IPC 授权 | **按窗口角色**裁剪：授权表 `electron/ipc-policy.json`（谁能调哪个通道，唯一事实来源，由静态 import 图推导）决定每个窗口拿到哪份白名单 —— 越权通道渲染层就调不到；主进程侧再由 `installIpcGuard()` 包装 `ipcMain.handle/on`，**每次注册**自动校验发送方角色，**表外通道 fail-closed**（默认拒绝） | [`electron/ipc-policy.json`](../../../electron/ipc-policy.json)、[`main.ipc-auth.js`](../../../electron/main/main.ipc-auth.js) |
 | 路径 | 所有「路径参数」IPC 走白名单判定（绝对路径、拒绝系统目录/可执行扩展名、`realpath`（真实路径解析）防 `junction`（目录联接）） | [`main.path-guard.js`](../../../electron/main/main.path-guard.js) |
 | 网络 | 后端只监听 `127.0.0.1`（本机回环地址）；Host 头白名单；`CORS`（跨域资源共享）白名单；安全通道加密 | [`student-backend/app.js`](../../../student-backend/app.js)、[`services/secureChannel.js`](../../../student-backend/services/secureChannel.js) |
 | 数据 | 每账号独立加密 `SQLite`（`SQLCipher`（加密 SQLite 扩展）），库钥匙由主密钥包裹；超级隐私模式由密码/恢复词包裹 | [`dbManager/`](../../../student-backend/dbManager/dbManager.js) |
@@ -291,7 +292,7 @@ sequenceDiagram
 | 主题 | 文件 |
 | --- | --- |
 | 窗口安全配置 | [`main.web-prefs.js`](../../../electron/main/main.web-prefs.js)（窗口安全选项集中配置） |
-| IPC 白名单 | [`preload.js`](../../../electron/preload.js)（预加载脚本）、[`ipc-channels.json`](../../../electron/ipc-channels.json)（IPC 通道清单） |
+| IPC 白名单 | [`preload.js`](../../../electron/preload.js)（预加载脚本）、[`ipc-channels.json`](../../../electron/ipc-channels.json)（IPC 通道清单）、[`ipc-policy.json`](../../../electron/ipc-policy.json)（IPC 授权表：通道 → 允许的窗口角色） |
 | 路径/URL 判定（含单测） | [`main.path-guard.js`](../../../electron/main/main.path-guard.js)（路径 / URL 判定）、[`testjs/units/pathGuard.test.js`](../../../testjs/units/pathGuard.test.js)（对应单元测试） |
 | 网页隔离 | [`main.webview-guard.js`](../../../electron/main/main.webview-guard.js)（网页隔离守卫） |
 | 协议与目录穿越防护 | [`main.protocol.js`](../../../electron/main/main.protocol.js)（自定义协议注册与目录穿越防护） |

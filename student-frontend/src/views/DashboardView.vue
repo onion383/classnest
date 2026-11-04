@@ -197,13 +197,14 @@ import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { ensureDashboardData } from '../composables/useDashboardData'
 import { reportError } from '../utils/reportError.js'
-import { useSeq } from '../composables/useSeq.js'
+import { createLatest } from '../utils/latestOnly.js'
 import IconGlyph from '../components/base/IconGlyph.vue'
 import AnimatedClock from '../components/AnimatedClock.vue'
 import ClippedText from '../components/ClippedText.vue'
 import ClassInfoDialog from '../components/dialogs/ClassInfoDialog.vue'
 import { useNotification } from '../composables/useNotification.js'
 import { pad2, formatDate } from '../utils/dateTime.js'
+import { leavesOn } from '../utils/leaveState.js'
 
 const router = useRouter()
 const { success: notifySuccess, error: notifyError } = useNotification()
@@ -233,7 +234,6 @@ const fees = ref([])
 const albumPhoto = ref('')
 const showFee = ref(localStorage.getItem('dashboard-fee-visible') === '1')
 
-const loading = ref(false)
 // 首次加载标记：为真时首页显示骨架屏（仅首页做骨架）。
 // 首次数据到位后置 false 并保持，切回首页的后台刷新只在后台进行，不再闪骨架。
 const initialLoading = ref(true)
@@ -281,9 +281,12 @@ async function saveClassInfo(data) {
 }
 
 // 出勤统计
+// 口径必须与下面的「今日请假」卡片一致：**今天在请假中**（跨天假今天仍在假内）。
+// 原来这里数的是「所有状态=请假中」的记录（不看日期），于是右上角「请假 3」
+// 而今日请假卡片空着 —— 同一屏两个数字互相矛盾。
 const attendance = computed(() => {
   const total = students.value.length
-  const onLeave = leaves.value.filter(l => l.状态 === '请假中').length
+  const onLeave = leavesOn(leaves.value, today.value).length
   return { total, onLeave, present: total - onLeave }
 })
 
@@ -350,9 +353,9 @@ const todayActivities = computed(() => {
 })
 
 // 当前请假列表（今日请假中）
-const currentLeaveList = computed(() => {
-  return leaves.value.filter(l => l.状态 === '请假中' && l.开始时间 && l.开始时间.startsWith(today.value))
-})
+// 与上面的 attendance.onLeave 共用 leavesOn —— 两处各写一份筛选条件，
+// 就是「数字和卡片对不上」的根源。
+const currentLeaveList = computed(() => leavesOn(leaves.value, today.value))
 
 // 今日课程列表（带时间段）
 const todayCourseList = computed(() => {
@@ -453,28 +456,28 @@ function replaceAlbumPhoto(blob) {
 // 随机取一张班级照片当首页配图。
 // 注意：调用方可能并发触发（首屏 onMounted 与切回页面的 onActivated 都会调），
 // 所以这里用请求序号守卫，只让最新一次写状态 —— 否则「慢的那次后到」会把新图换成旧图。
-const albumPhotoSeq = useSeq()
+const albumPhotoSeq = createLatest()
 async function loadRandomPhoto(albums) {
-  const my = albumPhotoSeq.take()
+  const my = albumPhotoSeq.begin()
   const list = Array.isArray(albums) ? albums : []
   for (const album of list) {
     try {
       const photosRes = await axios.get(`/api/album/${album.id}/photos`)
-      if (!albumPhotoSeq.isLatest(my)) return
+      if (!albumPhotoSeq.isCurrent(my)) return
       const groups = (photosRes.data && photosRes.data.data) || []
       const photos = (Array.isArray(groups) ? groups : []).flatMap(g => (g.photos || []))
       if (photos.length === 0) continue
       const pick = photos[Math.floor(Math.random() * photos.length)]
       const thumbRes = await axios.get(`/api/album/photo/${pick.id}/thumb`, { responseType: 'blob' })
       // 过期响应：不换图、也不释放当前图（那是另一次调用的成果）
-      if (!albumPhotoSeq.isLatest(my)) return
+      if (!albumPhotoSeq.isCurrent(my)) return
       replaceAlbumPhoto(thumbRes.data)
       return
     } catch (_) { /* 试下一个相册 */ }
   }
   // 一个相册都没取到图（无照片或全部失败）：只有仍是最新一次时才清空旧图，
   // 否则会把另一路调用刚显示出来的图清掉。
-  if (albumPhotoSeq.isLatest(my)) revokeAlbumPhoto()
+  if (albumPhotoSeq.isCurrent(my)) revokeAlbumPhoto()
 }
 function getStudentName(id) {
   const s = students.value.find(st => st.id === Number(id) || st.id === id)
@@ -490,7 +493,6 @@ function formatLeaveTime(leave) {
 // ========== 加载数据 ==========
 // 复用首屏预取缓存（请求已在路由导航进入首页时并发发起，见 useDashboardData）
 async function loadData(force = false) {
-  loading.value = true
   try {
     const d = await ensureDashboardData(force)
     schedule.value = d.schedule
@@ -508,7 +510,6 @@ async function loadData(force = false) {
     // 后端可达但返回错误才该让用户知道 —— 否则首屏看着「全是 0」像是数据没了。
     reportError(err, { action: '加载首页数据', level: err && err.response ? 'user' : 'log' })
   } finally {
-    loading.value = false
     initialLoading.value = false
   }
 }
@@ -529,6 +530,9 @@ onMounted(() => {
 onActivated(() => {
   if (firstActivate) { firstActivate = false; return }
   loadData(true)
+  // 班级信息（班名/班训/人数）也是用户可见数据，切回来必须一起重拉：
+  // 只刷数据不刷它的话，换号后欢迎卡还挂着上一个账号的班名（审查 v4 · B06-03）。
+  loadClassInfo()
   // 被 <KeepAlive> 缓存期间定时器是停的（见 onDeactivated），切回时恢复
   if (!timer) timer = setInterval(refreshNow, 60000)
 })

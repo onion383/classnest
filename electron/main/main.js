@@ -68,6 +68,10 @@ const { resolveCompileCacheDir, getMasterKey, saveAppConfig, resolveDataDir, res
 const { setupRendererCodeCache, setupAppProtocol } = _profReq('./main.protocol')
 const { applyBackgroundMaterial } = _profReq('./main.window-material')
 const { buildWebPreferences } = _profReq('./main.web-prefs')
+// IPC 授权层（通道 → 允许的窗口角色）。必须在任何 IPC 注册之前安装拦截，
+// 否则先注册的通道会绕过校验 —— 顺序是本文件里最要紧的一条约束。
+const ipcAuth = _profReq('./main.ipc-auth')
+ipcAuth.installIpcGuard()
 // ===== 非启动关键路径的主进程模块：惰性 require =====
 // 冷启动时这 6 个模块的 require 合计约 300ms（每个 40~85ms：asar 逐文件读盘 + 杀软扫描），
 // 热启动只要 1~4ms —— 实测中位 617ms vs 16ms（相差 38 倍），且全部发生在 app.whenReady 之前，
@@ -183,8 +187,10 @@ function registerDeferredIpc() {
   getDialogs().registerDialogsIpc({
     getMainWindow: () => mainWindow,
     getWidgetWindow: () => widget.getWidgetWindow(),
-    // 截屏临时隐藏 widget 后要还原穿透态：Electron 没有 getter，由 widget 模块自己记
+    // 截屏临时隐藏 widget 后要还原穿透态：Electron 没有 getter，由 widget 模块自己记。
+    // 读取器 + 写入器都要注入：只读不写会让「记录的状态」与「窗口实际状态」不一致。
     isWidgetIgnoreMouse: () => widget.isWidgetIgnoreMouse(),
+    setWidgetIgnoreMouse: (win, ignore) => widget.setWidgetIgnoreMouse(win, ignore),
   })
 
   // 常用软件（选择文件 + 启动）IPC
@@ -294,7 +300,9 @@ function createMainWindow() {
   mainWindowChrome = 'frameless'
   // webPreferences 提出对象字面量单独计时（仅 dev 打点用；打包版行为与内联写法完全一致）
   const _profWpT0 = Date.now()
-  const _webPrefs = buildWebPreferences({ devTools: true, webviewTag: true })
+  // devTools 不在这里写死：交给 buildWebPreferences 按环境决定（生产关闭、开发开启）。
+  // 原来硬传 true 会让打包版也留着开发者工具，等于给注入点常备一个执行面板。
+  const _webPrefs = buildWebPreferences({ webviewTag: true, ipcRole: ipcAuth.ROLE.MAIN })
   _profMark('【prof】buildWebPreferences 完成', _profWpT0)
   const win = new BrowserWindow({
     // 最小尺寸 1200×600（DIP）是「布局不散」的下限：再窄，顶部工具栏那排按钮会折成
@@ -328,6 +336,10 @@ function createMainWindow() {
   // 立即绑定全局（供 theme-chrome 重建等判断）；内部事件全部用局部 win 引用，
   // 避免重建时旧窗口的 'closed' 事件把 mainWindow 置空，影响到刚创建的新窗口。
   mainWindow = win
+
+  // 登记窗口角色：主窗口是唯一允许业务写操作的窗口（见 ipc-policy.json）。
+  // 必须登记，否则主进程侧的发送方校验会把它当「未登记窗口」全部拒绝。
+  ipcAuth.registerWindowRole(win, ipcAuth.ROLE.MAIN)
 
   // 所有主题统一（无边框 + 系统材质）：BrowserWindow 构造已带 backgroundMaterial: 'acrylic'，
   // 此处不再重复调 setBackgroundMaterial（省掉启动关键路径上一次 DWM 往返）。
@@ -793,9 +805,11 @@ function createMigrationWindow() {
     center: true,
     title: '迁移数据库',
     // 渲染进程安全配置见 web-prefs.js（各窗口统一）
-    webPreferences: buildWebPreferences(),
+    webPreferences: buildWebPreferences({ ipcRole: ipcAuth.ROLE.MIGRATION }),
   })
   migrationWindow = win
+  // 登记窗口角色：迁移窗只允许 migration 类通道（见 ipc-policy.json）
+  ipcAuth.registerWindowRole(win, ipcAuth.ROLE.MIGRATION)
 
   // 系统原生背景材质（亚克力）：与主窗口一致，窗口创建后确认应用一次（系统不支持时自动回退）
   if (process.platform === 'win32') applyBackgroundMaterial(win, 'acrylic')
@@ -1057,9 +1071,11 @@ function createSetupWindow(plan = launchPlan) {
     title: '班集',
     icon: APP_ICON_PATH,
     // 渲染进程安全配置见 web-prefs.js（各窗口统一）
-    webPreferences: buildWebPreferences(),
+    webPreferences: buildWebPreferences({ ipcRole: ipcAuth.ROLE.SETUP }),
   })
   setupWindow = win
+  // 登记窗口角色：引导窗只允许 setup 类通道（见 ipc-policy.json）
+  ipcAuth.registerWindowRole(win, ipcAuth.ROLE.SETUP)
   setupRunning = true
   // 记「引导未完成」：仅当本次确有引导流程（plan.setup）时写下，走完引导（setup-complete）才清除；
   // 中途关闭/退出后下次启动仍进入引导。纯低版本提示（warn-only）不写标记，避免把自己变成「需引导」。
@@ -1301,6 +1317,12 @@ ipcMain.handle('set-data-dir', async (event, dir) => {
 // 变更「数据库加密方式」：复用数据目录迁移那套流程——关闭全部其它窗口、只留独立进度窗口，
 // 完成后自动重开主窗口并经提示条反馈结果。实际转换由后端的 NDJSON 流接口执行
 // （只有后端加载 SQLCipher 原生模块，且 rekey 是同步阻塞操作），进度窗口渲染层承接进度并回报结果。
+//
+// 注意：这条 IPC 目前**前端无调用方** —— 后端 POST /api/account/db-encryption 与迁移窗的 crypt 模式
+// 都已就绪，但设置页没有「数据库加密切换」的入口（只有账号级安全等级，走另一条路）。
+// 所以它是「能力已备好、入口未接」而不是死代码：**保留通道 + 授权给主窗口**，
+// 将来补一个设置项即可直接用；真要删，得连后端接口与迁移窗的 crypt 分支一起删。
+// 审查 v4 · B01-01 把这条记为死通道，与代码事实不符，已在台账更正。
 ipcMain.handle('set-db-encryption', async (event, payload) => {
   if (migrationRunning) throw new Error('已有数据库任务正在进行，请稍候')
   const encrypt = !!(payload && payload.encrypt)

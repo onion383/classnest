@@ -769,8 +769,20 @@ onMounted(() => {
   api.send(SEND.SETUP_READY)
   loadWarmup()
   loadDirs()
-  // 同步当前主题（新装默认毛玻璃）
-  if (themeStore.currentTheme !== 'glass') themeStore.setTheme('glass')
+  // 同步当前主题（**仅当用户还没选过主题时**才落默认毛玻璃）。
+  //
+  // ⚠️ 原来写的是 `if (themeStore.currentTheme !== 'glass') setTheme('glass')` ——
+  // 但 currentTheme 在**没有**保存值时读出来也是 'glass'（见 stores/theme.js 的 readTheme），
+  // 所以这个条件实际等价于「用户选了非 glass 的主题」→ 正好把用户自己选的主题改掉。
+  // 二次进入引导窗口时尤其明显：用户刚选完主题，组件挂载就把选择抹了。
+  //
+  // 正确判据：看 localStorage 里**有没有**已保存的主题 id。
+  // 没有 → 全新安装，落默认；有 → 用户选过，尊重用户的选择。
+  let hasSavedTheme = false
+  try {
+    hasSavedTheme = !!localStorage.getItem('app-theme')
+  } catch (_) { /* 无 localStorage 环境：按没选过处理 */ }
+  if (!hasSavedTheme) themeStore.setTheme('glass')
 })
 onBeforeUnmount(() => {
   if (_onMain) window.electron.off(RECEIVE.FROM_MAIN, _onMain)

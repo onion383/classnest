@@ -6,9 +6,11 @@ import { useNotification } from './useNotification'
 import { createRowReuseCache } from '../utils/rowReuse.js'
 import { filterRowsByKeyword, isSearchNoResult } from '../utils/tableSearch.js'
 import { zhCollator } from '../utils/collator.js'
+import { createLatest } from '../utils/latestOnly.js'
+import { readRenameOutcome } from '../utils/renameOutcome.js'
 
 export function useTableCRUD(apiBase, defaultFields, options = {}) {
-  const { error: notifyError, success: notifySuccess } = useNotification()
+  const { error: notifyError, success: notifySuccess, warning: notifyWarning } = useNotification()
   const {
     requiredField = null,
     protectedColumns = [],
@@ -28,6 +30,8 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   // 全量刷新时按行内容复用行对象：内容没变的行沿用旧引用，
   // 让 Vue 只重渲染真正变化的行（普通表格无 cells 字段，比对退化到浅比较字段）
   const reuseRows = createRowReuseCache()
+  // 「只认最后一次」的守卫：连续刷新时，先发的请求后回来会把整表覆盖成旧数据
+  const fetchGuard = createLatest()
   const newRow = ref(null)
   const editingCell = ref(null)
   const contextMenu = ref({ visible: false, x: 0, y: 0, items: [] })
@@ -171,9 +175,13 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   // 返回 boolean：调用方（尤其是「刷新」按钮）据此判断是否该提示成功。
   // 原实现失败时只置 loadError，调用方拿不到结果，于是刷新失败也弹「已刷新」。
   async function fetchRows() {
+    const token = fetchGuard.begin()
     try {
       const res = await axios.get(`${apiBase}?_t=${Date.now()}`)
       const result = res.data
+      // 已被更新的请求取代 → 丢弃本次结果（否则旧表会覆盖新表）。
+      // 返回 true 而非 false：这次刷新动作已由更新的一次接管，调用方不该弹「刷新失败」。
+      if (!fetchGuard.isCurrent(token)) return true
       if (Array.isArray(result.data)) {
         // 行对象自带展示字段（_rowKey/_isNew）：字段随行对象长期存在，
         // 使派生列表可以复用行对象引用，单行变化时只重渲染那一行。
@@ -194,6 +202,8 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       loadError.value = false
       return true
     } catch (err) {
+      // 旧请求失败也不能把 loadError 打成 true（新请求可能已经成功）
+      if (!fetchGuard.isCurrent(token)) return true
       console.error(err)
       // 不再弹 alert：表格内会显示「加载失败 + 重试」，比一次性弹窗更持久、也更明确
       loadError.value = true
@@ -258,7 +268,14 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     const snap = rowsSnapshot.value.find(r => r.id === row.id)
     const oldVal = snap ? snap[field.name] : undefined
     try {
-      await axios.put(`${apiBase}/${row.id}`, { [field.name]: val })
+      const res = await axios.put(`${apiBase}/${row.id}`, { [field.name]: val })
+      // 学生改名时后端会一并级联「只存姓名」的关联表；旧名有同名学生时会跳过级联
+      // （宁可不同步也不能改错人）。此前这里完全不看响应 → 用户以为改名全部生效，
+      // 实际值日表/座位表还挂着旧名，历史值日指数从此归不到他名下，且界面不报错。
+      const outcome = readRenameOutcome(res)
+      if (outcome.skipped) {
+        notifyWarning(outcome.message)
+      }
       // 单格保存成功后只就地更新这一行 + 同步快照，不再整表重拉：
       // 全量重拉会为所有行重建对象、触发整表重画，而这次写入只影响本行本字段。
       const live = rows.value.find(r => r.id === row.id)
@@ -270,6 +287,16 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
         recordUndo(row.id, field.name, oldVal, val)
       }
     } catch {
+      // 失败要把本地值回滚到旧值：v-model 已经把新值写进了行对象，
+      // 不回滚的话界面显示的是没存上的值，用户以为改好了（刷新才变回去）。
+      const live = rows.value.find(r => r.id === row.id)
+      if (live) {
+        // 旧值来自快照的浅拷贝；快照里没这个字段时 oldVal 为 undefined，
+        // 直接写 undefined 会让「本来没这个字段」变成「有字段但值为 undefined」，
+        // 导出/比较时是两种结果 → 这种情况删掉字段更贴近原状。
+        if (oldVal === undefined) delete live[field.name]
+        else live[field.name] = oldVal
+      }
       notifyError('修改失败')
     }
     editingCell.value = null
@@ -700,8 +727,26 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   }
 
   function saveCurrentOrder() {
+    // 搜索/过滤态下 displayRows 只是可见子集，直接拿它当全量 ids 提交会把库里的
+    // position 按子集重排 —— 看不见的行与可见行交错，退出搜索后顺序全乱（审查 v4 · B10-06）。
+    // 正确语义：只改「可见行之间的相对顺序」，隐藏行留在原来的槽位上。
+    const all = rows.value.filter(r => !r._isNew)
     const display = displayRows.value.filter(r => !r._isNew)
-    const ids = display.map(r => r.id)
+    const byId = new Map(all.map(r => [r.id, r]))
+    const visibleIds = display.map(r => r.id).filter(id => byId.has(id))
+    const visibleSet = new Set(visibleIds)
+    let ordered = all
+    if (visibleSet.size && visibleSet.size < all.length) {
+      // 把可见行按新顺序逐个填回「原本属于可见行的位置」
+      const slots = []
+      all.forEach((r, i) => { if (visibleSet.has(r.id)) slots.push(i) })
+      ordered = [...all]
+      slots.forEach((slotIdx, k) => { ordered[slotIdx] = byId.get(visibleIds[k]) })
+    } else {
+      // 没有过滤时 displayRows 就是全量顺序，直接用
+      ordered = visibleIds.map(id => byId.get(id))
+    }
+    const ids = ordered.map(r => r.id)
     if (ids.length > 0) {
       // 排序保存失败必须可感知：界面已按新顺序显示，库里没改，静默会让用户以为已保存
       axios.post(`${apiBase}/reorder`, { ids }).catch((e) => {

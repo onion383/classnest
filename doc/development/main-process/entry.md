@@ -112,7 +112,7 @@ classnest/
 - **迁移流程先建进度窗口再关其它窗口**：否则窗口数归零会触发 `window-all-closed` 提前退出；同时 `tray.beginCloseWithoutMenu()` 放行主窗口关闭。
 - **失败语义要保住**：数据目录/加密转换失败一律保留旧目录与旧配置；重启后端，避免用户回主界面后连不上。
 - **引导预热轮询写死 `localhost:3000`**：`waitBackendReady()` 的地址是硬编码，改后端端口时要同步这里。
-- **新增入口级通道要三处同步**：本文件注册、`electron/ipc-channels.json`、`electron/preload.js` 白名单。
+- **新增入口级通道要三处同步**：本文件注册、`electron/ipc-channels.json`（通道名单）、`electron/ipc-policy.json`（授权表）。
 - **`get-master-key` 不校验来源窗口**：当前对任何渲染进程返回安全通道主密钥，新增窗口时需确认其信任边界（见 [security.md](../topics/security.md)）。
 - **`content-protection` 与剪贴板清理有平台差异**：前者依赖 Windows `SetWindowDisplayAffinity`（窗口防截屏 API）；后者默认 60s、只清「仍是这段文本」的剪贴板。
 

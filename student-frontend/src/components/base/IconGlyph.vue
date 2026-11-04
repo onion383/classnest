@@ -29,6 +29,106 @@
   <span v-else class="icon-emoji" :class="{ 'icon-loading': isLoading }" :style="{ fontSize: size + 'px', lineHeight: 1 }">{{ entry.emoji }}</span>
 </template>
 
+<script>
+// 模块级常量：**只在模块求值时构建一次**，不随组件实例重建。
+//
+// 为什么不能放在 <script setup> 里：setup() 每实例化一个组件就执行一遍，
+//   84 项的 MAP 会被重建 N 次（N = 页面上 IconGlyph 的个数，几十上百）——
+//   纯浪费（这些数据是常量，本该只有一份）。
+  const MAP = {
+    // ---- 页面主标题 ----
+    students: { lucide: 'Users', emoji: '📚', color: '#60a5fa' },
+    group: { lucide: 'Network', emoji: '👥', color: '#818cf8' },
+    schedule: { lucide: 'CalendarDays', emoji: '📅', color: '#22d3ee' },
+    fee: { lucide: 'Coins', emoji: '💰', color: '#fbbf24' },
+    seat: { lucide: 'Armchair', emoji: '🪑', color: '#fb923c' },
+    duty: { lucide: 'Broom', emoji: '🧹', color: '#34d399' },
+    leave: { lucide: 'BedDouble', emoji: '🛌', color: '#a78bfa' },
+    score: { lucide: 'Medal', emoji: '🏅', color: '#f87171' },
+    album: { lucide: 'Images', emoji: '📷', color: '#f472b6' },
+    activity: { lucide: 'PartyPopper', emoji: '🎉', color: '#fb7185' },
+    ai: { lucide: 'Bot', emoji: '🤖', color: '#38bdf8' },
+    settings: { lucide: 'Settings', emoji: '⚙️', color: '#94a3b8' },
+    edit: { lucide: 'SquarePen', emoji: '✏️', color: '#3b82f6' },
+    about: { lucide: 'Info', emoji: 'ℹ️', color: '#94a3b8' },
+
+    // ---- 通用（按钮多为 tint=current 继承文字色）----
+    refresh: { lucide: 'RefreshCw', emoji: '🔄', color: '#64748b' },
+    download: { lucide: 'Download', emoji: '📥', color: '#f97316' },
+    upload: { lucide: 'Upload', emoji: '📥', color: '#f97316' },
+    trash: { lucide: 'Trash2', emoji: '🗑️', color: '#ef4444' },
+    search: { lucide: 'Search', emoji: '🔍', color: '#38bdf8' },
+    clipboard: { lucide: 'ClipboardList', emoji: '📋', color: '#6366f1' },
+    folder: { lucide: 'Folder', emoji: '📁', color: '#f59e0b' },
+    box: { lucide: 'FolderOpen', emoji: '🗂️', color: '#f59e0b' },
+    undo: { lucide: 'Undo2', emoji: '↩️', color: '#94a3b8' },
+    image: { lucide: 'Image', emoji: '🖼️', color: '#a78bfa' },
+    sliders: { lucide: 'SlidersHorizontal', emoji: '🎚️', color: '#94a3b8' },
+    check: { lucide: 'Check', emoji: '✅', color: '#22c55e' },
+    wrench: { lucide: 'Wrench', emoji: '🛠️', color: '#64748b' },
+    paperclip: { lucide: 'Paperclip', emoji: '📎', color: '#64748b' },
+    clock: { lucide: 'Clock', emoji: '⏳', color: '#0ea5e9' },
+    calendar: { lucide: 'CalendarDays', emoji: '🗓️', color: '#0ea5e9' },
+    chart: { lucide: 'BarChart3', emoji: '📊', color: '#6366f1' },
+    users: { lucide: 'Users', emoji: '👥', color: '#60a5fa' },
+    // 分组空态：男生/女生宿舍分区
+    male: { lucide: 'Mars', emoji: '👦', color: '#60a5fa' },
+    female: { lucide: 'Venus', emoji: '👧', color: '#f472b6' },
+    toolbox: { lucide: 'Toolbox', emoji: '🧰', color: '#64748b' },
+    user: { lucide: 'User', emoji: '👤', color: '#60a5fa' },
+    palette: { lucide: 'Palette', emoji: '🎨', color: '#ec4899' },
+    brain: { lucide: 'Brain', emoji: '🧠', color: '#a78bfa' },
+    loading: { lucide: 'Loader2', emoji: '🔄', color: '#64748b' },
+    home: { lucide: 'Home', emoji: '🏠', color: '#10b981' },
+    zap: { lucide: 'Zap', emoji: '⚡', color: '#f59e0b' },
+    camera: { lucide: 'Camera', emoji: '📸', color: '#64748b' },
+    rollback: { lucide: 'RotateCcw', emoji: '↺', color: '#f59e0b' },
+    // 金额显示/隐藏切换：eye=显示（睁眼）｜eyeOff=隐藏（捂脸）
+    eye: { lucide: 'Eye', emoji: '👁️', color: '#64748b' },
+    eyeOff: { lucide: 'EyeOff', emoji: '🙈', color: '#64748b' },
+
+    // ---- 工具箱（浮窗图标 / 工具菜单 / 四个小工具）----
+    timer: { lucide: 'Timer', emoji: '⏱️', color: '#0ea5e9' },
+    rollcall: { lucide: 'Dices', emoji: '🎲', color: '#818cf8' },
+    screenshot: { lucide: 'Camera', emoji: '📷', color: '#64748b' },
+    note: { lucide: 'NotebookPen', emoji: '📝', color: '#f59e0b' },
+    brush: { lucide: 'PenLine', emoji: '🖊️', color: '#3b82f6' },
+    eraser: { lucide: 'Eraser', emoji: '🧹', color: '#64748b' },
+    save: { lucide: 'Save', emoji: '💾', color: '#3b82f6' },
+    close: { lucide: 'X', emoji: '✕',  color: '#64748b' },
+    ballpoint: { lucide: 'Pen', emoji: '🖊️', color: '#3b82f6' },
+    pen: { lucide: 'PenTool', emoji: '✒️', color: '#1e293b' },
+    highlighter: { lucide: 'Highlighter', emoji: '🖍️', color: '#f59e0b' },
+    error: { lucide: 'XCircle', emoji: '❌', color: '#ef4444' },
+    developing: { lucide: 'Construction', emoji: '🚧', color: '#f59e0b' },
+
+    // ---- 工具型图标（按钮/箭头/窗口控件）----
+    // 从 @lucide/vue 直连收口而来：这些不是「语义图标」（不代表某个页面/功能），
+    // 所以用 tint="current" + glyph 使用，emoji 档也保持 SVG —— 见模板里 v-if 的第三个条件。
+    // emoji 字段只是兜底：万一将来有人不带 glyph 用它，至少不会渲染成空白。
+    arrowDown: { lucide: 'ArrowDown', emoji: '↓', color: '#94a3b8' },
+    arrowUp: { lucide: 'ArrowUp', emoji: '↑', color: '#94a3b8' },
+    chevronDown: { lucide: 'ChevronDown', emoji: '▾', color: '#94a3b8' },
+    plus: { lucide: 'Plus', emoji: '➕', color: '#94a3b8' },
+    minus: { lucide: 'Minus', emoji: '➖', color: '#94a3b8' },
+    square: { lucide: 'Square', emoji: '⬜', color: '#94a3b8' },
+    database: { lucide: 'Database', emoji: '🗄️', color: '#94a3b8' },
+    filter: { lucide: 'Filter', emoji: '🔽', color: '#94a3b8' },
+    globe: { lucide: 'Globe', emoji: '🌐', color: '#94a3b8' },
+    layoutGrid: { lucide: 'LayoutGrid', emoji: '🔡', color: '#94a3b8' },
+    monitor: { lucide: 'Monitor', emoji: '🖥️', color: '#94a3b8' },
+    moon: { lucide: 'Moon', emoji: '🌙', color: '#94a3b8' },
+    sun: { lucide: 'Sun', emoji: '☀️', color: '#94a3b8' },
+    power: { lucide: 'Power', emoji: '⏻', color: '#94a3b8' },
+    redo: { lucide: 'Redo2', emoji: '↪️', color: '#94a3b8' },
+    shieldAlert: { lucide: 'ShieldAlert', emoji: '🛡️', color: '#94a3b8' },
+    shieldCheck: { lucide: 'ShieldCheck', emoji: '✅', color: '#94a3b8' },
+    panelLeft: { lucide: 'PanelLeft', emoji: '▤', color: '#94a3b8' },
+    panelLeftClose: { lucide: 'PanelLeftClose', emoji: '◧', color: '#94a3b8' },
+    panelLeftOpen: { lucide: 'PanelLeftOpen', emoji: '◨', color: '#94a3b8' },
+    panelsTopLeft: { lucide: 'PanelsTopLeft', emoji: '⊞', color: '#94a3b8' },
+  }
+</script>
 <script setup vapor>
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -52,99 +152,6 @@ const props = defineProps({
 })
 
 // 页面/小节标题语义配色（与侧边栏导航一一对应）+ 通用图标
-const MAP = {
-  // ---- 页面主标题 ----
-  students: { lucide: 'Users', emoji: '📚', color: '#60a5fa' },
-  group: { lucide: 'Network', emoji: '👥', color: '#818cf8' },
-  schedule: { lucide: 'CalendarDays', emoji: '📅', color: '#22d3ee' },
-  fee: { lucide: 'Coins', emoji: '💰', color: '#fbbf24' },
-  seat: { lucide: 'Armchair', emoji: '🪑', color: '#fb923c' },
-  duty: { lucide: 'Broom', emoji: '🧹', color: '#34d399' },
-  leave: { lucide: 'BedDouble', emoji: '🛌', color: '#a78bfa' },
-  score: { lucide: 'Medal', emoji: '🏅', color: '#f87171' },
-  album: { lucide: 'Images', emoji: '📷', color: '#f472b6' },
-  activity: { lucide: 'PartyPopper', emoji: '🎉', color: '#fb7185' },
-  ai: { lucide: 'Bot', emoji: '🤖', color: '#38bdf8' },
-  settings: { lucide: 'Settings', emoji: '⚙️', color: '#94a3b8' },
-  edit: { lucide: 'SquarePen', emoji: '✏️', color: '#3b82f6' },
-  about: { lucide: 'Info', emoji: 'ℹ️', color: '#94a3b8' },
-
-  // ---- 通用（按钮多为 tint=current 继承文字色）----
-  refresh: { lucide: 'RefreshCw', emoji: '🔄', color: '#64748b' },
-  download: { lucide: 'Download', emoji: '📥', color: '#f97316' },
-  upload: { lucide: 'Upload', emoji: '📥', color: '#f97316' },
-  trash: { lucide: 'Trash2', emoji: '🗑️', color: '#ef4444' },
-  search: { lucide: 'Search', emoji: '🔍', color: '#38bdf8' },
-  clipboard: { lucide: 'ClipboardList', emoji: '📋', color: '#6366f1' },
-  folder: { lucide: 'Folder', emoji: '📁', color: '#f59e0b' },
-  box: { lucide: 'FolderOpen', emoji: '🗂️', color: '#f59e0b' },
-  undo: { lucide: 'Undo2', emoji: '↩️', color: '#94a3b8' },
-  image: { lucide: 'Image', emoji: '🖼️', color: '#a78bfa' },
-  sliders: { lucide: 'SlidersHorizontal', emoji: '🎚️', color: '#94a3b8' },
-  check: { lucide: 'Check', emoji: '✅', color: '#22c55e' },
-  wrench: { lucide: 'Wrench', emoji: '🛠️', color: '#64748b' },
-  paperclip: { lucide: 'Paperclip', emoji: '📎', color: '#64748b' },
-  clock: { lucide: 'Clock', emoji: '⏳', color: '#0ea5e9' },
-  calendar: { lucide: 'CalendarDays', emoji: '🗓️', color: '#0ea5e9' },
-  chart: { lucide: 'BarChart3', emoji: '📊', color: '#6366f1' },
-  users: { lucide: 'Users', emoji: '👥', color: '#60a5fa' },
-  // 分组空态：男生/女生宿舍分区
-  male: { lucide: 'Mars', emoji: '👦', color: '#60a5fa' },
-  female: { lucide: 'Venus', emoji: '👧', color: '#f472b6' },
-  toolbox: { lucide: 'Toolbox', emoji: '🧰', color: '#64748b' },
-  user: { lucide: 'User', emoji: '👤', color: '#60a5fa' },
-  palette: { lucide: 'Palette', emoji: '🎨', color: '#ec4899' },
-  brain: { lucide: 'Brain', emoji: '🧠', color: '#a78bfa' },
-  loading: { lucide: 'Loader2', emoji: '🔄', color: '#64748b' },
-  home: { lucide: 'Home', emoji: '🏠', color: '#10b981' },
-  zap: { lucide: 'Zap', emoji: '⚡', color: '#f59e0b' },
-  camera: { lucide: 'Camera', emoji: '📸', color: '#64748b' },
-  rollback: { lucide: 'RotateCcw', emoji: '↺', color: '#f59e0b' },
-  // 金额显示/隐藏切换：eye=显示（睁眼）｜eyeOff=隐藏（捂脸）
-  eye: { lucide: 'Eye', emoji: '👁️', color: '#64748b' },
-  eyeOff: { lucide: 'EyeOff', emoji: '🙈', color: '#64748b' },
-
-  // ---- 工具箱（浮窗图标 / 工具菜单 / 四个小工具）----
-  timer: { lucide: 'Timer', emoji: '⏱️', color: '#0ea5e9' },
-  rollcall: { lucide: 'Dices', emoji: '🎲', color: '#818cf8' },
-  screenshot: { lucide: 'Camera', emoji: '📷', color: '#64748b' },
-  note: { lucide: 'NotebookPen', emoji: '📝', color: '#f59e0b' },
-  brush: { lucide: 'PenLine', emoji: '🖊️', color: '#3b82f6' },
-  eraser: { lucide: 'Eraser', emoji: '🧹', color: '#64748b' },
-  save: { lucide: 'Save', emoji: '💾', color: '#3b82f6' },
-  close: { lucide: 'X', emoji: '✕',  color: '#64748b' },
-  ballpoint: { lucide: 'Pen', emoji: '🖊️', color: '#3b82f6' },
-  pen: { lucide: 'PenTool', emoji: '✒️', color: '#1e293b' },
-  highlighter: { lucide: 'Highlighter', emoji: '🖍️', color: '#f59e0b' },
-  error: { lucide: 'XCircle', emoji: '❌', color: '#ef4444' },
-  developing: { lucide: 'Construction', emoji: '🚧', color: '#f59e0b' },
-
-  // ---- 工具型图标（按钮/箭头/窗口控件）----
-  // 从 @lucide/vue 直连收口而来：这些不是「语义图标」（不代表某个页面/功能），
-  // 所以用 tint="current" + glyph 使用，emoji 档也保持 SVG —— 见模板里 v-if 的第三个条件。
-  // emoji 字段只是兜底：万一将来有人不带 glyph 用它，至少不会渲染成空白。
-  arrowDown: { lucide: 'ArrowDown', emoji: '↓', color: '#94a3b8' },
-  arrowUp: { lucide: 'ArrowUp', emoji: '↑', color: '#94a3b8' },
-  chevronDown: { lucide: 'ChevronDown', emoji: '▾', color: '#94a3b8' },
-  plus: { lucide: 'Plus', emoji: '➕', color: '#94a3b8' },
-  minus: { lucide: 'Minus', emoji: '➖', color: '#94a3b8' },
-  square: { lucide: 'Square', emoji: '⬜', color: '#94a3b8' },
-  database: { lucide: 'Database', emoji: '🗄️', color: '#94a3b8' },
-  filter: { lucide: 'Filter', emoji: '🔽', color: '#94a3b8' },
-  globe: { lucide: 'Globe', emoji: '🌐', color: '#94a3b8' },
-  layoutGrid: { lucide: 'LayoutGrid', emoji: '🔡', color: '#94a3b8' },
-  monitor: { lucide: 'Monitor', emoji: '🖥️', color: '#94a3b8' },
-  moon: { lucide: 'Moon', emoji: '🌙', color: '#94a3b8' },
-  sun: { lucide: 'Sun', emoji: '☀️', color: '#94a3b8' },
-  power: { lucide: 'Power', emoji: '⏻', color: '#94a3b8' },
-  redo: { lucide: 'Redo2', emoji: '↪️', color: '#94a3b8' },
-  shieldAlert: { lucide: 'ShieldAlert', emoji: '🛡️', color: '#94a3b8' },
-  shieldCheck: { lucide: 'ShieldCheck', emoji: '✅', color: '#94a3b8' },
-  panelLeft: { lucide: 'PanelLeft', emoji: '▤', color: '#94a3b8' },
-  panelLeftClose: { lucide: 'PanelLeftClose', emoji: '◧', color: '#94a3b8' },
-  panelLeftOpen: { lucide: 'PanelLeftOpen', emoji: '◨', color: '#94a3b8' },
-  panelsTopLeft: { lucide: 'PanelsTopLeft', emoji: '⊞', color: '#94a3b8' },
-}
 
 const { iconStyle } = storeToRefs(useThemeStore())
 const entry = computed(() => {
@@ -163,8 +170,16 @@ const isLoading = computed(() => props.name === 'loading')
   display: inline-block;
   flex-shrink: 0;
 }
-/* loading 时旋转 */
-.icon-loading :deep(svg) {
+/* loading 时旋转
+   注意选择器：icon-loading 这个类打在 <svg> 根元素上（见模板里的 :class），
+   所以要用 `.icon-loading:deep(svg)` —— 写成 `.icon-loading :deep(svg)`
+   （中间有空格）要求 svg 是 .icon-loading 的**后代**，而 svg 自己就带着这个类，
+   永远匹配不上 → 旋转动画从来不生效。 */
+.icon-loading:deep(svg) {
+  animation: icon-spin 1s linear infinite;
+}
+/* emoji 分支：类打在 <span> 上，直接旋转 span 自身 */
+.icon-loading {
   animation: icon-spin 1s linear infinite;
 }
 @keyframes icon-spin {

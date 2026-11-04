@@ -5,17 +5,14 @@
     "widget-drag-start",
     "widget-drag-move",
     "widget-drag-end",
-    "widget-move-to",
     "widget-center",
     "widget-restore-position",
     "widget-fullscreen",
     "widget-restore",
-    "widget-set-ignore-mouse",
     "widget-set-visible",
     "widget-set-session-visible",
     "widget-context-menu",
     "widget-exit",
-    "to-main",
     "to-widget",
     "win-minimize",
     "win-maximize-toggle",
@@ -44,7 +41,6 @@
   ],
   "invoke": [
     "select-folder",
-    "select-image-file",
     "save-background-image",
     "save-file",
     "screenshot-capture",
@@ -89,7 +85,6 @@
     "copy-sensitive-text"
   ],
   "receive": [
-    "from-main",
-    "from-widget"
+    "from-main"
   ]
 }

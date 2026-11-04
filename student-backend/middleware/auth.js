@@ -146,7 +146,10 @@ function slideSession(req, res, user, source) {
 // 白名单按「方法 + 完整路径」精确匹配；登出也放行，便于用户放弃本次恢复。
 const RECOVER_ALLOWED = new Set([
   'PUT /api/account/password',
-  'POST /api/auth/logout',
+  // 必须是 routes/auth.js 实际注册的路径：authRoutes 挂在 app.use('/api', ...) 下，
+  // 没有 /api/auth 这一层。此前后端写 /api/auth/logout、前端也打这个错路径，
+  // 两边同时错所以"看起来一致"，实际请求 404、这条放行规则从未生效过。
+  'POST /api/logout',
 ]);
 function isRecoverScopeAllowed(req) {
   const raw = String(req.originalUrl || req.url || '').split('?')[0];

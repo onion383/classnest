@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { registerUserScopedReset } from '../utils/userScopedCache.js'
 
 // ===========================================================================
 // 首屏数据预取：Dashboard 首页所需的 9 份数据，改由后端聚合接口 /api/dashboard
@@ -11,6 +12,10 @@ import axios from 'axios'
 
 let dataCache = null // 最近一次成功的数据快照
 let pending = null   // 进行中的请求 Promise（共享）
+
+// 登出/换号必须丢掉这份快照：它是整个库的数据（成绩/班费/学生名册），
+// 留着就等于把上一个账号的班级数据展示给下一个人（审查 v4 · B06-02）。
+registerUserScopedReset(() => { dataCache = null; pending = null })
 
 // 兜底归一：聚合接口已按约定返回各键，这里只补缺省值，保证调用方拿到的形状稳定。
 function normalize(d) {

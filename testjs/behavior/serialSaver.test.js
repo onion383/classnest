@@ -46,22 +46,41 @@ test('serialSaver：失败后不自动重试（本批只跑一次）', async () 
   assert.equal(calls, 1)
 })
 
-test('serialSaver：在途期间的追加请求合并成一轮，两个调用拿到同一结果', async () => {
+test('serialSaver：saveFn 执行期间的追加请求合并成一轮，两个调用拿到同一结果', async () => {
   const createSerialSaver = await loadSaver()
   let calls = 0
   let release
+  let entered
   const gate = new Promise((r) => { release = r })
+  const enteredGate = new Promise((r) => { entered = r })
   const saver = createSerialSaver(async () => {
     calls++
-    if (calls === 1) await gate // 第一轮挂起，制造并发窗口
+    if (calls === 1) { entered(); await gate } // 第一轮挂起，制造并发窗口
   })
   const p1 = saver.request()
-  const p2 = saver.request() // 在途期间追加：应合并，不并发发起
+  // 等第一轮**真正进入 saveFn**（静默期已过）再追加请求 ——
+  // 这才是「保存途中用户又改了」的真实场景。
+  // ⚠️ 不能靠固定 sleep 猜：静默期有 300ms，sleep 20ms 时 p1 还在静默期里，
+  //   p2 也会落在静默期内 → 被合并成**一次**保存（那是 B11-05 要的效果，不是本例要测的）。
+  await enteredGate
+  const p2 = saver.request()
   release()
   const [ok1, ok2] = await Promise.all([p1, p2])
   assert.equal(ok1, true)
   assert.equal(ok2, true)
   assert.equal(calls, 2, '第一轮 + 合并后补存一轮，共 2 次（而不是 2 个并发请求各自跑）')
+})
+
+test('serialSaver：静默期内的连续请求合并成一次保存（连打 10 字只 PUT 1 次）', async () => {
+  const createSerialSaver = await loadSaver()
+  let calls = 0
+  const saver = createSerialSaver(async () => { calls++ })
+  // 模拟「连打 10 个字」：10 次 request 都落在静默期内
+  const ps = []
+  for (let i = 0; i < 10; i++) ps.push(saver.request())
+  const oks = await Promise.all(ps)
+  assert.ok(oks.every((o) => o === true), '所有调用都拿到成功结果')
+  assert.equal(calls, 1, '静默期内的 10 次请求应合并成 1 次保存（原先是 2 次整表 PUT）')
 })
 
 test('serialSaver：失败后不再补存合并轮（不把旧状态又写一遍）', async () => {
@@ -75,7 +94,8 @@ test('serialSaver：失败后不再补存合并轮（不把旧状态又写一遍
     throw new Error('写库失败')
   })
   const p1 = saver.request()
-  const p2 = saver.request() // 在途期间追加
+  await new Promise((r) => setTimeout(r, 20))
+  const p2 = saver.request() // 第一轮已在途（保存途中追加）
   release()
   const [ok1, ok2] = await Promise.all([p1, p2])
   assert.equal(ok1, false)
@@ -88,12 +108,15 @@ test('serialSaver：成功后合并轮用的是最新状态（saveFn 每轮现�
   let state = '旧'
   const saved = []
   let release
+  let entered
   const gate = new Promise((r) => { release = r })
+  const enteredGate = new Promise((r) => { entered = r })
   const saver = createSerialSaver(async () => {
     saved.push(state)
-    if (saved.length === 1) await gate
+    if (saved.length === 1) { entered(); await gate }
   })
   const p1 = saver.request()
+  await enteredGate // 等第一轮进入 saveFn
   state = '新' // 在途期间状态又变了（模拟连续编辑）
   const p2 = saver.request()
   release()

@@ -265,10 +265,12 @@ import EmptySnapshot from '../../components/base/EmptySnapshot.vue';
 import GridView from '../../components/tables/GridView/GridView.vue';
 import Tabs from '../../components/base/Tabs.vue';
 import WeekSwitcher from '../../components/base/WeekSwitcher.vue';
-import { shiftDateStr } from '../../utils/dateTime.js';
+import { shiftDateStr, diffDays, localDateStr } from '../../utils/dateTime.js';
 import { useNotification } from '../../composables/useNotification.js';
 import { useUndoShortcut, recordGridSnapshotUndo } from '../../composables/useUndo.js';
 import { createRowReuseCache } from '../../utils/rowReuse.js';
+import { createLatest } from '../../utils/latestOnly.js';
+import { createRowFocusHost } from '../../composables/useRowFocus.js';
 import { useScheduleCommon } from './ScheduleView.common.js';
 import { useScheduleMaster } from './ScheduleView.master.js';
 import { useScheduleActive } from './ScheduleView.active.js';
@@ -305,7 +307,7 @@ const COURSE_CANDIDATES = [
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 const { success: notifySuccess, error: notifyError, info: notifyInfo } = useNotification()
 
 // 行对象复用缓存（非响应式）：编辑一格时只重建真正变化的那一行，避免整表重画
@@ -391,6 +393,11 @@ const ctx = {
   _masterSaver: null,
   _activeSaveErrorShown: false,
   _masterSaveErrorShown: false,
+  // 历史快照的「只认最后一次」守卫：快速切周时，先发的请求后回来会覆盖新周快照。
+  // 周列表与周快照是两条独立的数据链，用两张守卫 —— 共用一张会让
+  // fetchHistoryWeeks 内部调 loadHistorySnapshot 时把外层令牌作废。
+  _historyWeeksGuard: createLatest(),
+  _historySnapshotGuard: createLatest(),
   masterRowReuse, activeRowReuse,
   notifySuccess, notifyError, notifyInfo,
   host: rowFocusHost,
@@ -600,11 +607,12 @@ async function onImportData({ fields, rows }) {
 
 const weekNumber = computed(() => {
   if (!semesterStart.value) return '';
-  const start = new Date(semesterStart.value);
-  const now = new Date();
-  const diff = now - start;
-  if (diff < 0) return '未开始';
-  return Math.floor(diff / (7 * 24 * 60 * 60 * 1000)) + 1;
+  // 必须按**本地自然日**算。裸 new Date('2026-09-01') 会被当成 UTC 零点，
+  // 在 UTC+8 就是当地 08:00 —— 于是开学日 0~8 点显示「未开始」，每周也到 08:00 才翻页
+  // （审查 v4 · B06-01）。diffDays 内部用 `${date}T00:00:00`（无时区后缀 = 本地）并按自然日取整。
+  const days = diffDays(semesterStart.value, localDateStr());
+  if (days < 0) return '未开始';
+  return Math.floor(days / 7) + 1;
 });
 const activeTitle = computed(() =>
   semesterStart.value ? `第 ${weekNumber.value} 周 课程表` : '课程表');

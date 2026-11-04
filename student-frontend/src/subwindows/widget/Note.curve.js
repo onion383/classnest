@@ -49,16 +49,33 @@ export function catmullRom(p0, p1, p2, p3, t) {
   return { x: cx, y: cy, w: p1.w + (p2.w - p1.w) * st }
 }
 
+// 一条线段最多切成几次 stroke。
+// 逐点 stroke 才是恢复笔锋的正确做法，但插值点数随距离放大（dist/3，长笔画可达上百个），
+// 每个点都 stroke 一次在指针事件里太贵。按「点数 / 12」分组，宽变化仍然细腻。
+const MAX_SUB_STROKES = 12
+
 // 根据两点距离自适应调整插值步数，保证平滑
 export function drawCurveSegment(ctx, p0, p1, p2, p3) {
   const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
   const steps = Math.max(8, Math.ceil(dist / 3))
-  ctx.beginPath()
-  ctx.moveTo(p1.x, p1.y)
-  for (let i = 1; i <= steps; i++) {
-    const pt = catmullRom(p0, p1, p2, p3, i / steps)
-    ctx.lineWidth = pt.w
-    ctx.lineTo(pt.x, pt.y)
+
+  const pts = [{ x: p1.x, y: p1.y, w: p1.w }]
+  for (let i = 1; i <= steps; i++) pts.push(catmullRom(p0, p1, p2, p3, i / steps))
+
+  // 为什么必须分段 stroke：lineWidth 是**描边那一刻**读取的上下文状态。
+  // 整条路径只 stroke() 一次时，循环里逐点设的 lineWidth 会被最后一次覆盖，
+  // 于是「起笔细、压笔粗」的笔锋被压平成末端宽度 —— 曲线形状是对的，粗细是死的。
+  // 分段后每段用自己那一段的平均宽度（round cap 保证接缝看不出）。
+  const chunk = Math.max(1, Math.ceil(pts.length / MAX_SUB_STROKES))
+  for (let i = 0; i + 1 < pts.length; i += chunk) {
+    const end = Math.min(i + chunk, pts.length - 1)
+    let sum = 0
+    for (let k = i; k <= end; k++) sum += pts[k].w
+    // 0 宽在部分浏览器会被当作 1px，且 erase 的 destination-out 也不该出现 0 宽
+    ctx.lineWidth = Math.max(0.1, sum / (end - i + 1))
+    ctx.beginPath()
+    ctx.moveTo(pts[i].x, pts[i].y)
+    for (let k = i + 1; k <= end; k++) ctx.lineTo(pts[k].x, pts[k].y)
+    ctx.stroke()
   }
-  ctx.stroke()
 }

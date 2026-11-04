@@ -78,7 +78,18 @@ export function useDutyArrangementOptions(ctx, OPTIONS) {
     },
     startArrange() {
       ctx.generatePreview()
-      ctx.arranged.value = true
+      // 预览确实排出了内容才算「已排好」：条件互相矛盾（如每天每项都要人但人数不够）
+      // 时 generatePreview 会产出空 cells，此时置 arranged=true 就等于允许点「确定」
+      // 把空表写进值日表，把原有安排清空（审查 v4 · B07-03）。
+      const cells = ctx.previewCells.value
+      const hasAny = !!cells && Object.values(cells).some((days) => (
+        days && Object.values(days).some((names) => Array.isArray(names) && names.length)
+      ))
+      ctx.arranged.value = hasAny
+      if (!hasAny) {
+        ctx.rejectText.value = '当前条件下没有可安排的名单，请检查人数与每天要求'
+        ctx.showReject()
+      }
     },
     showReject() {
       clearTimeout(ctx._rejectTimer)

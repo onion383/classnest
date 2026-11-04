@@ -84,10 +84,38 @@ contextBridge.exposeInMainWorld('electron', {
   },
 
   // 一次性监听（仅白名单内通道启用）
+  //
+  // ⚠️ 必须与 on() 走同一套登记（审查 v4 · B01-13）：
+  //   原实现直接 ipcRenderer.once(channel, 匿名 wrapper)，
+  //   那个 wrapper **不进 listenerMap** → off() 根本找不到它 → 事件不触发时
+  //   （通道永不来的场景）监听常驻渲染进程，且上层拿不到句柄、无法解绑。
+  //
+  // 现在：wrapper 登记进 listenerMap（与 on 同构），并返回句柄供上层 off；
+  // 事件真的触发时，ipcRenderer.once 会自动摘掉监听，此时同步把登记也清掉，
+  // 避免映射表里留下指向已死监听的条目。
   once: (channel, callback) => {
-    if (validReceiveChannels.includes(channel) && typeof callback === 'function') {
-      ipcRenderer.once(channel, (event, ...args) => callback(...args))
+    if (!validReceiveChannels.includes(channel) || typeof callback !== 'function') return null
+    if (!listenerMap.has(channel)) listenerMap.set(channel, new Map())
+    const m = listenerMap.get(channel)
+    // 同一 callback 重复 once() 时先摘掉旧 wrapper：
+    // 否则 ipcRenderer.once 会累积两个监听 → 回调触发两次，
+    // 且旧的 wrapper 已不在映射表里 → 永远 off 不掉（与 on() 的同一类问题）。
+    const prev = m.get(callback)
+    if (prev) {
+      try { ipcRenderer.removeListener(channel, prev) } catch (_) { /* 已结束 */ }
     }
+    const wrapper = (event, ...args) => {
+      // 先摘登记再回调：回调里可能再 off 同一个句柄
+      try {
+        ipcRenderer.removeListener(channel, wrapper)
+        m.delete(callback)
+        if (m.size === 0) listenerMap.delete(channel)
+      } catch (_) { /* 已结束 */ }
+      callback(...args)
+    }
+    m.set(callback, wrapper)
+    ipcRenderer.once(channel, wrapper)
+    return wrapper
   },
 
   // 请求-响应式 IPC（对应 ipcMain.handle）。白名单外的通道一律拒绝调用。

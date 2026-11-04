@@ -343,6 +343,11 @@ export default defineConfig({
     // 小资源内联阈值：本地 file:// 加载，请求数收益很小，此处仅为减少碎片文件。
     // 注：src 下当前没有被 Vite 处理的图片/字体资源，此项暂无实际产物变化。
     assetsInlineLimit: 8192,
+    // 把 .gz 当作普通资源处理（走 asset 管线 → 产物名带 content hash）。
+    // 用途：PDF 中文字体是手动预压缩的 .ttf.gz（构建期不压缩），
+    // 放在 src/assets/ 下由 Vite 改名加 hash —— 内容变了文件名就变，
+    // 不会让浏览器缓存住旧字体（public/ 下的资源是原样拷贝、不加 hash）。
+    assetsInclude: ['**/*.gz'],
     // 大 chunk 警告阈值：xlsx / exceljs / jspdf / html2canvas 本就是按需加载的独立 chunk，
     // 不占首屏，警告属噪音，调高阈值避免误导。
     chunkSizeWarningLimit: 1000,

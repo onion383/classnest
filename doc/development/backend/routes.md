@@ -23,9 +23,10 @@ classnest/
     │   │   │   ├── tools.js  # 工具注册表与 runTool 分发（query / propose_* / 图表 / 体检 …
     │   │   │   ├── tools.schema.js  # 各工具的 JSON schema（入参 / 出参定义）与枚举（CHART_TYPES（图表类…
     │   │   │   └── tools.subagent.js  # 子代理（子模型）执行入口：复用只读白名单并在执行前校验
+    │   │   ├── ai.budget.js  # AI 调用预算闸门：主对话与子助手共用的用量记账与限额
     │   │   ├── ai.config.js  # GET/PUT /config（读取/保存配置）、GET /models（模型列表）、POS…
     │   │   ├── ai.constants.js  # 读写表白名单
-    │   │   ├── ai.conversations.js  # POST /chat（对话）、POST /chat/stream（流式对话，SSE（服务器推…
+    │   │   ├── ai.conversations.js  # POST /chat/stream（流式对话，SSE（服务器推送））、会话与消…
     │   │   ├── ai.dataRoutes.js  # GET /records/:table（读表）、POST /doc（生成文档）、POST /…
     │   │   ├── ai.helpers.js  # 列元数据归一
     │   │   ├── ai.js  # AI 接口聚合
@@ -270,7 +271,7 @@ flowchart TD
 | 文件 | 主要接口 |
 | --- | --- |
 | [`ai.config.js`](../../../student-backend/routes/ai/ai.config.js)（模型配置接口） | `GET/PUT /config`（读取/保存配置）、`GET /models`（模型列表）、`POST /models`（新增模型）、`PUT /models/:id/active`（启用模型）、`DELETE /models/:id`（删除模型）、`POST /models/discover`（发现模型）、`GET /models/:id/models`（模型清单）、`PUT /models/:id`（更新模型）、`PUT /models/:id/reasoning`（推理参数）、`POST /config/test`（连通测试） |
-| [`ai.conversations.js`](../../../student-backend/routes/ai/ai.conversations.js)（对话与 SSE 接口） | `POST /chat`（对话）、`POST /chat/stream`（流式对话，`SSE`（服务器推送））、`POST /conversations`（新建会话）、`GET /conversations`（会话列表）、`DELETE /conversations/:id`（删除会话）、`GET /conversations/:id/messages`（消息列表）、`POST /conversations/:id/messages`（新增消息）、`PUT /conversations/:id/messages/:mid`（更新消息）、`DELETE /conversations/:id/messages/last-assistant`（删最后一条助手消息）、`POST /conversations/:id/messages/delete`（批量删消息） |
+| [`ai.conversations.js`](../../../student-backend/routes/ai/ai.conversations.js)（对话与 SSE 接口） | `POST /chat/stream`（流式对话，`SSE`（服务器推送））、`POST /conversations`（新建会话）、`GET /conversations`（会话列表）、`DELETE /conversations/:id`（删除会话）、`GET /conversations/:id/messages`（消息列表）、`POST /conversations/:id/messages`（新增消息）、`PUT /conversations/:id/messages/:mid`（更新消息）、`DELETE /conversations/:id/messages/last-assistant`（删最后一条助手消息）、`POST /conversations/:id/messages/delete`（批量删消息） |
 | [`ai.dataRoutes.js`](../../../student-backend/routes/ai/ai.dataRoutes.js)（数据与快照接口） | `GET /records/:table`（读表）、`POST /doc`（生成文档）、`POST /apply-batch`（批量落库）、`POST /snapshot`（创建快照）、`GET /snapshots`（快照列表）、`POST /snapshot/restore`（恢复快照） |
 | [`ai.memory.js`](../../../student-backend/routes/ai/ai.memory.js)（记忆接口） | `GET/PUT /memory`（读取/保存长期记忆） |
 | [`ai.skills.js`](../../../student-backend/routes/ai/ai.skills.js)（技能接口） | `GET /skills`（技能列表）、`GET /skills/:name`（技能详情）、`POST /skills`（新增技能）、`PUT/DELETE /skills/:name`（更新/删除技能） |
@@ -279,7 +280,7 @@ flowchart TD
 
 其余 AI 文件（无 `router.get/post` 或只做内部能力，不单独挂接口）：
 
-- [`ai.js`](../../../student-backend/routes/ai/ai.js)（聚合挂载）、[`ai.constants.js`](../../../student-backend/routes/ai/ai.constants.js)（读写表白名单）、[`ai.helpers.js`](../../../student-backend/routes/ai/ai.helpers.js)（列元数据归一）、[`ai.llm.js`](../../../student-backend/routes/ai/ai.llm.js)（LLM 调用与工具集）、[`ai.subagent-tools.js`](../../../student-backend/routes/ai/ai.subagent-tools.js)（子代理只读白名单）。
+- [`ai.js`](../../../student-backend/routes/ai/ai.js)（聚合挂载）、[`ai.budget.js`](../../../student-backend/routes/ai/ai.budget.js)（AI 调用预算闸门：主对话与子助手共用的用量记账与限额）、[`ai.constants.js`](../../../student-backend/routes/ai/ai.constants.js)（读写表白名单）、[`ai.helpers.js`](../../../student-backend/routes/ai/ai.helpers.js)（列元数据归一）、[`ai.llm.js`](../../../student-backend/routes/ai/ai.llm.js)（LLM 调用与工具集）、[`ai.subagent-tools.js`](../../../student-backend/routes/ai/ai.subagent-tools.js)（子代理只读白名单）。
 - 工具定义与执行（由 `tools.js`（工具门面）装配）：
 
 | 文件 | 职责 |

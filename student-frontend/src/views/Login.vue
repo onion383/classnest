@@ -213,7 +213,6 @@ const recoveredAccount = ref('');      // 本机恢复成功后的账号（只�
 const recoveredUser = ref(null);       // 本机恢复签发的登录用户信息
 // 注册成功后的恢复密钥展示
 const recoveryPhrase = ref('');
-const recoveryHash = ref('');
 const draftId = ref('');             // 待确认注册草稿 id（抄写通过后真正建库）
 const restoredUsername = ref('');
 const copyWords = ref('');
@@ -339,7 +338,6 @@ function register() {
       // 仅超级隐私模式：先展示恢复词，抄写通过后再确认建库
       draftId.value = res.data.draftId;
       recoveryPhrase.value = res.data.recovery.phrase;
-      recoveryHash.value = res.data.recovery.hash;
       mode.value = 'recovery';
     } else {
       // 其余等级：建库即签发登录态，直接进入系统

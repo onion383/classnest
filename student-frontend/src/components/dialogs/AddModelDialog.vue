@@ -74,6 +74,7 @@ import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
 import { INVOKE } from '../../electronChannels.js'
 import { ref, computed, watch } from 'vue'
+import { createLatest } from '../../utils/latestOnly.js'
 
 defineOptions({ name: 'AddModelDialog' })
 
@@ -91,6 +92,8 @@ const mode = ref('input')
 const discovering = ref(false)
 const discoverError = ref('')
 const discovered = ref([])
+// 「只认最后一次」的守卫：识别按钮可连点，慢的那次响应后到会把用户手填的模型名覆盖掉
+const discoverGuard = createLatest()
 const form = ref({
   name: '',
   provider: 'deepseek',
@@ -180,12 +183,15 @@ function openDocs(event) {
 async function discover() {
   discoverError.value = ''
   discovering.value = true
+  const token = discoverGuard.begin()
   try {
     const res = await axios.post('/api/ai/models/discover', {
       provider: form.value.provider,
       base_url: form.value.base_url,
       api_key: form.value.api_key,
     })
+    // 已被更新的请求取代 → 丢弃本次结果，别覆盖用户手填/更新的内容
+    if (!discoverGuard.isCurrent(token)) return
     if (res.data && res.data.success) {
       // models 可能是空数组：直接取 [0] 会得到 undefined，切到 select 模式后
       // 点保存时 form.model.trim() 就抛 TypeError。空列表应退回手动填写。
@@ -203,10 +209,12 @@ async function discover() {
       discoverError.value = (res.data && res.data.error) || '识别失败'
     }
   } catch (err) {
+    if (!discoverGuard.isCurrent(token)) return
     mode.value = 'input'
     discoverError.value = (err.response && err.response.data && err.response.data.error) || '识别失败，请检查 Key'
   } finally {
-    discovering.value = false
+    // 旧请求结束时不能把「正在识别」的指示器关掉（新请求还在飞）
+    if (discoverGuard.isCurrent(token)) discovering.value = false
   }
 }
 async function submit() {

@@ -13,11 +13,15 @@
 </template>
 
 <script setup vapor>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
-defineProps({
+const props = defineProps({
   src: { type: String, required: true },
 })
 
 const ok = ref(true)
+
+// src 换了要复位 ok：否则上一张图加载失败（ok=false）后，
+// 复用同一个组件显示新图时会一直走 v-if="ok && src" 的假分支 → 永久只显播放图标。
+watch(() => props.src, () => { ok.value = true })
 </script>

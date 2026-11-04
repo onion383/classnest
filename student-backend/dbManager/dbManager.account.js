@@ -100,7 +100,8 @@ function createTeacher(username, passwordHash, role, encrypted = true) {
 // 注意：uploads / 相册缩略图等为多账号共享资源，不属于单个账号，不在此清理。
 function deleteTeacher(slug) {
   if (!slug || slug === 'default') throw new Error('无效的账号标识');
-  evictConn(slug);
+  // 要删文件，必须强制关连接（守卫会跳过在用的连接，文件就删不掉）
+  evictConn(slug, { force: true });
   const base = path.join(dataDir, `${slug}.db`);
   fs.rmSync(base, { force: true });
   fs.rmSync(`${base}-wal`, { force: true });

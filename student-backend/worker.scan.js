@@ -30,6 +30,7 @@
 
 const dbManager = require('./dbManager/dbManager');
 const albumScan = require('./albumScan');
+const slugScopes = require('./utils/slugScopes');
 
 // slug → conn：每个库在本进程里各开一个独立连接。
 // 不用 withDb —— 那是给「请求上下文 ALS」用的（靠 auth 中间件写入 slug），子进程没有请求。
@@ -57,17 +58,23 @@ function send(msg) {
   try { if (process.send) process.send(msg); } catch (_) { /* 父进程已断开 */ }
 }
 
-// 已生成的缩略图攒一批就报给主进程（让它预热内存索引，避免首屏走磁盘读）
+// 已生成的缩略图攒一批就报给主进程（让它预热内存索引，避免首屏走磁盘读）。
+//
+// **必须按 slug 分桶**：各库的 album_photos.id 独立自增，且 demand 与 scan 两路
+// 在 process.on('message') 里可以交错执行（async handler + await genThumb 会让出事件循环）。
+// 用一份全局数组 + 「flush 那一刻的 slug」整批上报，会把 A 库攒的条目挂到 B 库名下：
+// 主进程 rememberThumb(B, A的id, A的磁盘路径) → A 库再请求该 id 时读到 B 库的图（串图）。
+// 分桶后每次 flush 只带同一个库的条目，且 slug 来自条目入桶时的那个库，与谁触发 flush 无关。
 const THUMB_REPORT_BATCH = 50;
-let thumbReport = [];
+const thumbReport = slugScopes.createSlugBatch({
+  limit: THUMB_REPORT_BATCH,
+  flush: (slug, entries) => send({ type: 'thumbs', slug, entries }),
+});
 function reportThumb(slug, photoId, thumbPath) {
-  thumbReport.push([photoId, thumbPath]);
-  if (thumbReport.length >= THUMB_REPORT_BATCH) flushThumbs(slug);
+  thumbReport.push(slug, [photoId, thumbPath]);
 }
 function flushThumbs(slug) {
-  if (!thumbReport.length) return;
-  send({ type: 'thumbs', slug, entries: thumbReport });
-  thumbReport = [];
+  thumbReport.flush(slug);
 }
 
 // 正在跑的任务：albumId → task（本地标志，用于快速响应 stop 指令）
@@ -117,6 +124,9 @@ async function runDemand() {
       send({ type: 'demand-done', slug, count: batch.length });
     }
   } catch (err) {
+    // 异常时把各库已攒的条目按各自 slug 发干净：留在桶里会等下一次别的库 flush
+    // 时被顺带发走（分桶后不会串库，但会白等一趟 / 锁库后丢掉）
+    thumbReport.flushAll();
     send({ type: 'error', slug: '', albumId: 0, message: err && err.message });
   } finally {
     demandBusy = false;
@@ -213,9 +223,14 @@ process.on('message', async (msg) => {
       const conn = openConns.get(msg.slug);
       if (conn) { try { conn.close(); } catch (_) { /* 忽略 */ } openConns.delete(msg.slug); }
       keyCache.delete(msg.slug);
+      // 先按各自 slug 发干净（否则残留条目会一直等到下一次别的库 flush），再清该库状态
+      thumbReport.flushAll();
+      slugScopes.clearAllForSlug(msg.slug);
       break;
     }
     case 'shutdown':
+      // 空闲退出前把没发完的批次按各自 slug 发出去；发不出去也只损失内存索引预热
+      thumbReport.flushAll();
       process.exit(0);
       break;
   }

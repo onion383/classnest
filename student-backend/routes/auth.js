@@ -12,12 +12,14 @@ const { hash: bcryptHash, compare: bcryptCompare } = require('../services/bcrypt
 const { SECRET, auth, TOKEN_SIGN_OPTS, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middleware/auth');
 const secureChannel = require('../services/secureChannel');
 const sessions = require('../services/sessions');
-const { pickPhrase, deriveRestoreHash, normalizePhrase, formatPhrase, safeEqualHash } = require('../services/recoveryKey');
+const { pickPhrase, deriveRestoreHash, normalizePhrase, formatPhrase, safeEqualHash, verifyRestoreHash } = require('../services/recoveryKey');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
 // 待确认注册草稿：有密码账号先生成恢复密钥，用户「抄写前 3 词」通过后才真正建库。
 // 未确认的草稿不会占用账号，TTL 后自动失效；容量与淘汰策略见 services/pendingRegs.js。
 const pendingRegs = require('../services/pendingRegs');
 const dbManager = require('../dbManager/dbManager');
+const slugScopes = require('../utils/slugScopes');
+const albumThumbs = require('../albumThumbs');
 
 // 签发登录态：登录 token + 媒体凭据，并把 token 绑定到本次加密信道会话。
 // 绑定后前端后续请求只需发送不含 token 的信道凭据，登录 token 不再随每次请求上线；
@@ -67,9 +69,16 @@ router.post('/logout', auth(), (req, res) => {
   // 解绑信道会话：换号登录后同一信道不会继续沿用上一个账号的 token
   secureChannel.unbindAuth(req.sessionId);
   // 超级隐私模式：登出即关闭库连接并丢弃内存里的库钥匙，下次使用必须重新输入密码/恢复词
-  dbManager.lockDb(req.user && req.user.dbSlug);
+  const slug = req.user && req.user.dbSlug;
+  dbManager.lockDb(slug);
+  // 清掉该库所有按 slug 分桶的进程内状态（待生成缩略图集合等）与缩略图内存索引：
+  // 不清的话，上一个人的待生成条目会继续占着现场生成配额闸（最长 60s TTL），
+  // 而缩略图索引虽已有界，换号后仍带着上一库的内容。清理项由各状态自己登记，
+  // 这里不点名（见 utils/slugScopes.js）。子进程那半由 lock 消息自己处理。
+  slugScopes.clearAllForSlug(slug);
+  albumThumbs.forgetAlbum(slug);
   // 扫描子进程也可能持有该库连接，一并关闭
-  try { require('../scanWorker').lockDb(req.user && req.user.dbSlug); } catch (_) { /* 子进程未启动 */ }
+  try { require('../scanWorker').lockDb(slug); } catch (_) { /* 子进程未启动 */ }
   res.clearCookie('token', { path: '/' });
   res.json({ ok: true });
 });
@@ -283,7 +292,7 @@ router.post('/register/confirm', async (req, res) => {
     if (!pwOk) {
       return res.status(400).json({ error: '密码不正确' });
     }
-    if (!phrase || !safeEqualHash(deriveRestoreHash(normalizePhrase(phrase)), draft.restoreHash)) {
+    if (!phrase || !verifyRestoreHash(normalizePhrase(phrase), draft.restoreHash)) {
       return res.status(400).json({ error: '恢复词不正确' });
     }
   }
@@ -341,7 +350,7 @@ router.post('/register/confirm', async (req, res) => {
 // 按恢复词在本机已登记账号中定位：恢复词本身就是凭证，所以忘记账号时可以只凭恢复词恢复。
 // 隐私库用恢复词直接试解锁（词不对会抛错）；非隐私库打开后比对 users.recovery_hash。
 function findAccountsByPhrase(phrase) {
-  const inputHash = deriveRestoreHash(normalizePhrase(phrase));
+  const normalized = normalizePhrase(phrase);
   const hits = [];
   for (const rec of dbManager.registryList()) {
     try {
@@ -352,7 +361,7 @@ function findAccountsByPhrase(phrase) {
       const resolved = dbManager.resolveByUsername(rec.username);
       if (!resolved) continue;
       const row = resolved.conn.prepare('SELECT recovery_hash FROM users WHERE username = ?').get(rec.username);
-      if (row && row.recovery_hash && safeEqualHash(inputHash, row.recovery_hash)) hits.push(rec.username);
+      if (row && row.recovery_hash && verifyRestoreHash(normalized, row.recovery_hash)) hits.push(rec.username);
     } catch (_) { /* 打不开 / 词不匹配：跳过 */ }
   }
   return hits;
@@ -407,8 +416,7 @@ router.post('/recover-password', async (req, res) => {
   if (!user || !user.recovery_hash) return res.status(404).json({ error: '该账号未设置恢复密钥' });
 
   // 归一化输入：仅保留汉字，兼容用户粘贴带序号（1.水 …）或带空格的格式
-  const inputHash = deriveRestoreHash(normalizePhrase(phrase));
-  if (!safeEqualHash(inputHash, user.recovery_hash)) {
+  if (!verifyRestoreHash(normalizePhrase(phrase), user.recovery_hash)) {
     return res.status(403).json({ error: '恢复密钥错误' });
   }
 

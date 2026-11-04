@@ -1,8 +1,8 @@
 // OCR 探针：用 sharp 生成一张带中文文字的 PNG，验证 Windows OCR 服务能否正确识别。
 // 用法：
-//   node testjs/ocr-probe.mjs                  # 默认两行示例文字
-//   node testjs/ocr-probe.mjs "班费支出 500 元"  # 自定义单行文字
-//   OCR_TEXT="第一行|第二行" node testjs/ocr-probe.mjs   # 用 | 分隔多行
+//   node testjs/probe/ocr-probe.mjs                  # 默认两行示例文字
+//   node testjs/probe/ocr-probe.mjs "班费支出 500 元"  # 自定义单行文字
+//   OCR_TEXT="第一行|第二行" node testjs/probe/ocr-probe.mjs   # 用 | 分隔多行
 // 说明：仅 Windows 有效（底层调用系统 OCR 能力）；路径全部相对仓库根目录解析，可在任意 cwd 下执行。
 import { createRequire } from 'node:module'
 import path from 'node:path'

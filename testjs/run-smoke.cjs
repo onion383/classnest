@@ -16,29 +16,46 @@
 // 设计说明：
 //   · **串行**执行。冒烟脚本会各占端口、临时目录（testjs/tmp/…），并行会互相干扰。
 //   · stdio 直接透传，脚本自己的彩色输出/断言信息原样可见，不做二次包装。
-//   · 需要后端在跑的脚本（见 NEEDS_BACKEND）在后端未就绪时判为 SKIP 而非失败——
-//     这类脚本测的是完整业务链路，没有后端本来就没法跑。
-//     启动后端：npm run electron:dev，或 node student-backend/app.js。
-//     注意：**安全模式的后端不能用来跑这类脚本**（只认 X-Auth-Proof，Bearer 会被判 401），
-//     所以需要后端的脚本应自己起隔离后端（参考 smoke/auth-smoke.js）。
 //   · 退出码 3 = 脚本自己判定「环境不具备，跳过」（如缺产物文件），不计失败。
+//   · 需要真后端的脚本一律自起隔离后端（见 smoke/_isolated-backend.cjs），
+//     本运行器不再探测外部端口、也不会替脚本判 SKIP。
 // =========================================================================
 
 const fs = require('node:fs')
 const path = require('node:path')
-const net = require('node:net')
 const { spawn } = require('node:child_process')
+const os = require('node:os')
+
+// 本次运行专属的临时根目录：所有冒烟脚本的数据目录都建在它下面，
+// 由**本进程**在全部子脚本退出后整体删除。
+// 为什么不由子脚本自己删：sqlite 的 index.db 连接在子进程内一直开着，
+// Windows 上 rmSync 必然 EBUSY（重试也删不掉），所以「谁创建谁删」在进程内做不到，
+// 只能交给生命周期更长的父进程。实测旧做法每跑一次漏一个目录：
+// api-routes 49 个 / cadre-undo 13 个 / undo-batch 11 个。
+const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'classnest-smoke-run-'))
+
+async function removeTmpRoot() {
+  for (let i = 0; i < 8; i++) {
+    try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); return } catch (_) {
+      // 最后一个子进程刚退出时句柄可能还差一点释放，等一下再试
+      await new Promise((r) => setTimeout(r, 150))
+    }
+  }
+  console.error(`[run-smoke] 临时根目录未能删除：${TMP_ROOT}`)
+}
 
 const SMOKE_DIR = path.join(__dirname, 'smoke')
 const NODE_EXT = new Set(['.cjs', '.mjs', '.js'])
-// 必须「外部已有后端在跑」的脚本（文件名 → 说明）。启动方式见文件头。
-// 目前为空：auth-smoke.js 已改为**自己起一个隔离后端**（随机端口 + 临时数据目录 +
-// 不注入 SECURE_MASTER），不再依赖外部 3000 端口。
-// 原因：安全模式下后端只认 X-Auth-Proof 信道凭据，纯 HTTP 客户端带 Bearer 会被
-// 直接判 401，对着 Electron fork 的后端跑必然全红 —— 那不是产品 bug，是测试环境错配。
-const NEEDS_BACKEND = new Set()
+// 传给子脚本的 PORT（脚本可忽略）。原先还维护一份 NEEDS_BACKEND 集合 + 一次 backendAlive()
+// 探测，用来把「依赖外部后端」的脚本判成 SKIP；auth-smoke 早已改成自起隔离后端，
+// 集合空了以后那套逻辑只剩副作用：**每次跑都白探一次 3000 端口**（不通时白等 600ms），
+// 外加一条永远走不到的 SKIP 分支。现已整段删除。
+// 新脚本需要真后端时请自己起隔离后端（smoke/_isolated-backend.cjs），别再引入外部依赖判定。
 const BACKEND_PORT = Number(process.env.PORT) || 3000
-const BACKEND_HOST = '127.0.0.1'
+// 单个冒烟脚本的超时上限（ms）。
+// 正常脚本 1~30 秒；给 180 秒是为了容忍慢机器上启 Electron 的那几个。
+// 超时按**失败**计入（不能当成通过）—— 否则「脚本卡死了」会被算成「跑过了」。
+const SMOKE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS) || 180000
 // 有产物依赖的脚本必须按顺序跑：pdf-subset-verify.mjs 先生成 subset-out*.ttf，
 // font-subset-verify.mjs 再读取产物校验。只按文件名字典序会反过来，干净检出必假失败。
 const ORDER_HINT = new Map([
@@ -85,20 +102,6 @@ function collect() {
     })
 }
 
-// 探测后端是否在监听（连不上就算没起）
-function backendAlive() {
-  return new Promise((resolve) => {
-    const sock = net.connect({ host: BACKEND_HOST, port: BACKEND_PORT })
-    const done = (ok) => {
-      sock.destroy()
-      resolve(ok)
-    }
-    sock.setTimeout(600, () => done(false))
-    sock.on('connect', () => done(true))
-    sock.on('error', () => done(false))
-  })
-}
-
 function runOne(file) {
   const full = path.join(SMOKE_DIR, file)
   return new Promise((resolve) => {
@@ -106,10 +109,26 @@ function runOne(file) {
     const child = spawn(process.execPath, [full], {
       cwd: path.join(__dirname, '..'),
       stdio: 'inherit',
-      env: { ...process.env, PORT: String(BACKEND_PORT) },
+      env: { ...process.env, PORT: String(BACKEND_PORT), SMOKE_TMP_ROOT: TMP_ROOT },
     })
-    child.on('error', (e) => resolve({ file, code: -1, ms: Date.now() - t0, err: e.message }))
-    child.on('exit', (code, signal) => resolve({ file, code: code ?? (signal ? -1 : 0), ms: Date.now() - t0 }))
+    // ⚠️ 必须有超时：单个冒烟脚本 hang（等端口 / 等锁 / 子进程不退出）时，
+    //   没有超时 = 整个冒烟批次**永久挂起**，CI/本地都只能强杀 —— 看不到任何失败信息。
+    // 超时后主动 kill 并按失败计入（不能当成通过）。
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      console.error(`\n[run-smoke] ${file} 超时（${SMOKE_TIMEOUT_MS}ms），强制结束`)
+      try { child.kill('SIGKILL') } catch (_) { /* 已退出 */ }
+    }, SMOKE_TIMEOUT_MS)
+    const done = (code, signal) => {
+      clearTimeout(timer)
+      resolve({ file, code, ms: Date.now() - t0, timedOut })
+    }
+    child.on('error', (e) => done(-1, null))
+    child.on('exit', (code, signal) => {
+      if (timedOut) { done(-1, null); return }
+      done(code ?? (signal ? -1 : 0), signal)
+    })
   })
 }
 
@@ -117,28 +136,19 @@ function runOne(file) {
   const files = collect()
   if (!files.length) {
     console.error('没有匹配到任何冒烟脚本（检查 --only/--skip）')
+    await removeTmpRoot()
     process.exit(2)
   }
 
   if (opt.list) {
     console.log(`smoke/ 下共 ${files.length} 个脚本：`)
-    files.forEach((f) => console.log(`  ${f}${NEEDS_BACKEND.has(f) ? '   [需后端]' : ''}`))
+    files.forEach((f) => console.log(`  ${f}`))
+    await removeTmpRoot()
     process.exit(0)
-  }
-
-  const alive = await backendAlive()
-  if (!alive && files.some((f) => NEEDS_BACKEND.has(f))) {
-    console.log(`\n⚠ 后端未在 ${BACKEND_HOST}:${BACKEND_PORT} 监听，依赖后端的脚本会跳过。`)
-    console.log('  需要时先启动：npm run electron:dev\n')
   }
 
   const results = []
   for (const f of files) {
-    if (NEEDS_BACKEND.has(f) && !alive) {
-      console.log(`\n── SKIP  ${f}（后端未启动）`)
-      results.push({ file: f, code: null, ms: 0 })
-      continue
-    }
     console.log(`\n── RUN   ${f}`)
     const r = await runOne(f)
     if (r.code === 3) {
@@ -166,8 +176,9 @@ function runOne(file) {
   }
   if (skip.length) {
     console.log('\n跳过项：')
-    skip.forEach((r) => console.log(`  - ${r.file}  ${r.reason || (NEEDS_BACKEND.has(r.file) ? '后端未启动' : '缺少运行时')}`))
+    skip.forEach((r) => console.log(`  - ${r.file}  ${r.reason || '缺少运行时'}`))
   }
   console.log('='.repeat(56))
+  await removeTmpRoot()
   process.exit(fail.length ? 1 : 0)
 })()

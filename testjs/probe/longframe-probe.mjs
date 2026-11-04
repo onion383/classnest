@@ -24,6 +24,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
+// 结束子进程树（Electron / vite 都会再起孙进程，只杀直接子进程会残留）
+const { killTree } = require('../tools/killTree.cjs')
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
 const CDP_PORT = 9222   // 主进程写死（main.js 用 INP_DEBUG=1 开 remote-debugging-port 9222）
@@ -343,8 +345,11 @@ async function main() {
 }
 
 function cleanup() {
-  if (electronChild) { try { electronChild.kill() } catch { /* ignore */ } }
-  if (viteChild) { try { viteChild.kill() } catch { /* ignore */ } }
+  // 用 killTree 而不是 child.kill()：Electron 与 vite 都会再起孙进程
+  // （渲染进程 / GPU 进程 / vite 子进程），只杀直接子进程会**残留**它们
+  // → 端口被占（下次跑 EADDRINUSE）+ 进程泄漏。
+  if (electronChild) killTree(electronChild)
+  if (viteChild) killTree(viteChild)
 }
 
 main()

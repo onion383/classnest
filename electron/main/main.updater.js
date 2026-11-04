@@ -15,7 +15,7 @@
 const { app, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const { assertHttpsUrl, verifyDownloadedFile } = require('./main.update-integrity')
+const { assertHttpsUrl, verifyDownloadedFile, sha256File } = require('./main.update-integrity')
 
 // GitHub 仓库信息（原先在 electron-builder.json 的 publish 里，现仅保留在代码常量中）
 const UPDATE_REPO = { owner: 'onion383', repo: 'classnest' }
@@ -36,6 +36,14 @@ let updateState = {
 
 // 已下载到本地的安装包绝对路径（供 update-install 使用）
 let downloadedInstallerPath = null
+// 该安装包的**校验凭据**（下载时算出的 sha256 与字节数）。
+// 为什么要留着：下载时校验过 ≠ 安装时文件还是那个文件。
+// 两次之间存在可利用的时间窗 —— 同一台机器上的另一个进程可以替换 update-cache 里的 exe，
+// 而安装动作是「以 /SILENT 静默参数直接执行它」。原先 update-install 只查 existsSync 就 spawn，
+// 等于把「下载时验证过」当成了「运行时仍然可信」（TOCTOU）。
+// 所以安装前必须拿同一份凭据**再算一遍哈希**，对不上就拒绝安装。
+let downloadedInstallerDigest = null
+let downloadedInstallerSize = 0
 // 流程互斥：避免重复检查 / 并发下载
 let updateFlowRunning = false
 
@@ -121,14 +129,42 @@ async function checkUpdateViaGitHub() {
   }
 }
 
+// 把发布资产的原始文件名归一化成「可安全落盘的文件名」（审查 v4 · B01-11）
+//
+// 资产名来自 GitHub API（外部输入），必须归一化：
+//   原先直接 path.join(dir, asset.name)，而 asset.name 里若带 '../' 或 'a/b'，
+//   path.join 会**归一化出 update-cache 之外的路径** → 安装包写到缓存目录外，
+//   随后 update-install 又以 /SILENT 参数执行那个路径。
+//   即便下载侧有 HTTPS + sha256 校验（main.update-integrity.js），
+//   那校验的是**内容**不是**落盘位置** —— 位置逃逸是另一条独立的缺口。
+//
+// 两个坑（都踩过）：
+//   1. path.basename('..') 返回 '..'（**不是空串**）→ 只用 `|| 兜底名` 拦不住，
+//      path.join(dir, '..') 会指向缓存目录的**父目录**。
+//   2. Windows 路径分隔符是 '\'，basename 不认 → 先统一成 '/' 再取 basename。
+//
+// 抽成独立函数是为了能单测（原先这段逻辑埋在 downloadInstaller 里，测不到）。
+function normalizeAssetFileName(rawName, fallback) {
+  let fileName = path.basename(String(rawName || '').replace(/\\/g, '/'))
+  if (!fileName || fileName === '.' || fileName === '..' || fileName.includes('/')) {
+    fileName = fallback
+  }
+  return fileName
+}
+
 // 下载安装包到 userData/update-cache 并推送 downloading 进度；失败时清理半成品并抛出
 async function downloadInstaller(asset, version) {
   const { Readable } = require('stream')
   const { pipeline } = require('stream/promises')
   const dir = path.join(app.getPath('userData'), 'update-cache')
   fs.mkdirSync(dir, { recursive: true })
-  const fileName = String((asset && asset.name) || `ClassNest-Setup-${version}.exe`)
+  const fileName = normalizeAssetFileName((asset && asset.name) || '', `ClassNest-Setup-${version}.exe`)
   const target = path.join(dir, fileName)
+  // 兜底再确认一次：归一化后的路径必须仍在缓存目录内（纵深防御，双保险）
+  const cacheRoot = path.resolve(dir) + path.sep
+  if (!path.resolve(target).startsWith(cacheRoot)) {
+    throw new Error('更新包文件名非法')
+  }
   try { fs.rmSync(target, { force: true }) } catch (_) { /* 清理旧文件失败忽略 */ }
 
   const controller = new AbortController()
@@ -169,9 +205,14 @@ async function downloadInstaller(asset, version) {
       console.warn('[update] 发布资产未提供 digest，本次仅按大小校验：', fileName)
     }
     downloadedInstallerPath = target
+    // 记下本次算出的哈希：安装前要拿它再算一遍，防止「下载后本地被替换」的 TOCTOU。
+    downloadedInstallerDigest = verified.sha256 || null
+    downloadedInstallerSize = expectedSize
   } catch (err) {
     try { fs.rmSync(target, { force: true }) } catch (_) { /* 忽略 */ }
     downloadedInstallerPath = null
+    downloadedInstallerDigest = null
+    downloadedInstallerSize = 0
     throw err
   } finally {
     clearTimeout(timer)
@@ -248,10 +289,47 @@ function registerUpdateIpc(send) {
   })
 
   // 用户确认后：以 Inno 静默参数启动已下载的安装包，随后退出本进程（安装器装完会自动重启）
-  ipcMain.on('update-install', () => {
+  //
+  // 安装前必须**复核**安装包，不能只查 existsSync：
+  //   下载时校验过 sha256 ≠ 此刻文件还是那个文件。两次之间存在可利用的窗口 ——
+  //   同一台机器上的另一个进程可以把 update-cache 里的 exe 换掉，
+  //   而这里是**以 /SILENT 参数直接执行它**（TOCTOU）。
+  //   所以：重算哈希，与下载时记下的凭据比对；对不上就拒绝安装（宁可让用户重新下载）。
+  //   路径也要确认仍位于 update-cache 目录内 —— downloadedInstallerPath 只由下载流程写入，
+  //   这里再兜一次，防止将来有人把别处的路径塞进来。
+  ipcMain.on('update-install', async () => {
     if (!app.isPackaged) return
     if (!downloadedInstallerPath || !fs.existsSync(downloadedInstallerPath)) {
       setUpdateState({ status: 'error', error: '安装包尚未下载完成' })
+      return
+    }
+    // 路径必须仍在本次的 update-cache 目录里
+    const cacheDir = path.join(app.getPath('userData'), 'update-cache')
+    const resolved = path.resolve(downloadedInstallerPath)
+    if (!resolved.startsWith(path.resolve(cacheDir) + path.sep)) {
+      setUpdateState({ status: 'error', error: '安装包路径异常，已取消安装' })
+      return
+    }
+    // 复核哈希（安装包上百 MB，这里流式算，不整file读进内存）
+    try {
+      const actual = await sha256File(resolved)
+      if (!downloadedInstallerDigest || actual !== downloadedInstallerDigest) {
+        // 顺手清掉可疑文件，避免下次还拿它去装
+        try { fs.rmSync(resolved, { force: true }) } catch (_) { /* 忽略 */ }
+        downloadedInstallerPath = null
+        downloadedInstallerDigest = null
+        setUpdateState({ status: 'error', error: '安装包校验失败（文件已改变），请重新下载' })
+        return
+      }
+      if (downloadedInstallerSize > 0 && fs.statSync(resolved).size !== downloadedInstallerSize) {
+        try { fs.rmSync(resolved, { force: true }) } catch (_) { /* 忽略 */ }
+        downloadedInstallerPath = null
+        downloadedInstallerDigest = null
+        setUpdateState({ status: 'error', error: '安装包校验失败（大小不符），请重新下载' })
+        return
+      }
+    } catch (err) {
+      setUpdateState({ status: 'error', error: '安装包校验失败：' + (err?.message || String(err)) })
       return
     }
     try {
@@ -260,7 +338,7 @@ function registerUpdateIpc(send) {
       //   /SILENT             无界面安装
       //   /CLOSEAPPLICATIONS  自动关闭占用目标文件的旧进程
       //   /RESTARTAPPLICATIONS 安装完成后自动重启被关闭的应用
-      const child = spawn(downloadedInstallerPath, ['/SILENT', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS'], {
+      const child = spawn(resolved, ['/SILENT', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS'], {
         detached: true,
         stdio: 'ignore',
       })
@@ -274,4 +352,4 @@ function registerUpdateIpc(send) {
   })
 }
 
-module.exports = { registerUpdateIpc, runUpdateFlow }
+module.exports = { registerUpdateIpc, runUpdateFlow, normalizeAssetFileName }

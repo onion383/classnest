@@ -35,7 +35,7 @@
           <template v-if="settingsSearchResults.length">
             <div
               v-for="(item, idx) in settingsSearchResults"
-              :key="settingsSearch + '#' + item.id"
+              :key="item.id"
               @mousedown.prevent="goToSettingsSection(item)"
               @mouseenter="searchActiveIndex = idx"
               class="settings-search-row px-3 py-2 text-sm text-text cursor-pointer truncate"

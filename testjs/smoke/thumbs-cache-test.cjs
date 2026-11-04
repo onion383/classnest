@@ -10,7 +10,7 @@
  *   · 覆盖写入不能重复计数
  *   · forgetPhoto / forgetAlbum 必须把计数扣回去
  *
- * 跑法：node testjs/thumbs-cache-test.cjs
+ * 跑法：node testjs/smoke/thumbs-cache-test.cjs
  */
 const crypto = require('node:crypto')
 const path = require('node:path')

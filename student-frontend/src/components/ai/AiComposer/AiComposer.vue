@@ -628,6 +628,10 @@ function onComposerInput(e) {
 }
 // 键盘：技能候选展开时接管上下键/回车/ESC；否则回车照常发送（Shift+Enter 换行）
 function onComposerKeydown(e) {
+  // 输入法组词状态下的回车是「上屏选字」，不是「发送」。
+  // 不判的话中文打「今天」按回车选词，半截拼音就被当成提问发出去（审查 v4 · B09-01）。
+  // keyCode 229 是老浏览器/部分输入法在组词期间给的值，两个都挡。
+  if (e.isComposing || e.keyCode === 229) return
   if (skillMenuOpen.value) {
     if (e.key === 'Escape') { e.preventDefault(); skillMenuOpen.value = false; return }
     if (skillList.value.length) {
@@ -686,7 +690,14 @@ async function onFileSelected(e) {
   const file = e.target.files && e.target.files[0]
   if (!file) return
   e.target.value = ''
-  emit('attach', await readFile(file))
+  // readFile 在读盘失败时会 reject：不接住就是未处理的 Promise 拒绝，
+  // 用户点了「选择文件」却什么都没发生（连报错都没有）。
+  try {
+    emit('attach', await readFile(file))
+  } catch (err) {
+    console.error('[composer] 读取附件失败', err)
+    useNotification().error('读取文件失败，请重试')
+  }
 }
 // 粘贴：剪贴板里的图片/文件都作为附件（图片直出 dataURL，其余文件复用既有上传解析链路）
 async function onPaste(e) {
@@ -723,7 +734,13 @@ async function onPaste(e) {
       useNotification().error('读取剪贴板图片失败，请重试')
     }
   } else {
-    emit('attach', await readFile(file))
+    // 同上：readFile 失败必须接住，否则用户粘贴了一个读不出来的文件，什么都不会发生
+    try {
+      emit('attach', await readFile(file))
+    } catch (err) {
+      console.error('[composer] 读取粘贴文件失败', err)
+      useNotification().error('读取剪贴板文件失败，请重试')
+    }
   }
 }
 

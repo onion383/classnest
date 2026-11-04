@@ -3,6 +3,7 @@ const router = express.Router()
 const { db } = require('../db')
 // 值日数据「按模式拆分」的唯一实现（此前本文件自己抄了一份 toModeMap）
 const { unpackMode } = require('../services/dutyMode')
+const { safeJson } = require('../utils/json')
 
 // 标题栏「全局搜索」的服务端数据源：对若干业务表的文本列做 LIKE 匹配，分组返回。
 // 表名/列名全部来自本文件的白名单常量（不接受请求参数拼接），杜绝注入。
@@ -419,7 +420,9 @@ router.get('/', (req, res) => {
       if (!row) continue
       let cells = []
       let settings = {}
-      try { cells = JSON.parse(row.cells || '[]'); settings = JSON.parse(row.settings || '{}') } catch (_) { continue }
+      // 统一走 safeJson（解析失败给默认值并告警），不再各自内联 try/catch 样板
+      cells = safeJson(row.cells, [], `${sc.table}.cells`)
+      settings = safeJson(row.settings, {}, `${sc.table}.settings`)
       if (!Array.isArray(cells) || !cells.length) continue
       const days = Array.isArray(settings.days) && settings.days.length ? settings.days : DEFAULT_DAYS
       const items = []
@@ -459,7 +462,7 @@ router.get('/', (req, res) => {
       try { row = db.prepare(`SELECT seats FROM ${st.table} WHERE id = 1`).get() } catch (_) { continue }
       if (!row) continue
       let seats = []
-      try { seats = JSON.parse(row.seats || '[]') } catch (_) { continue }
+      seats = safeJson(row.seats, [], `${st.table}.seats`)
       if (!Array.isArray(seats) || !seats.length) continue
       const items = []
       for (let r = 0; r < seats.length && items.length < PER_GROUP; r++) {
@@ -479,7 +482,8 @@ router.get('/', (req, res) => {
     try {
       const g = db.prepare('SELECT days, items FROM duty_settings WHERE id = 1').get()
       if (g) {
-        try { const d = JSON.parse(g.days || '[]'); if (Array.isArray(d) && d.length) dutyDays = d } catch (_) {}
+        const d = safeJson(g.days, [], 'duty_settings.days')
+        if (Array.isArray(d) && d.length) dutyDays = d
         dutyItemsField = g.items
       }
     } catch (_) {}

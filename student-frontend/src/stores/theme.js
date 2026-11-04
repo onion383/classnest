@@ -181,6 +181,10 @@ export const useThemeStore = defineStore('theme', () => {
       if (isCustomBg && !localStorage.getItem('mediaToken')) {
         ensureMediaToken().then((t) => {
           if (t) document.documentElement.style.setProperty('--bg-image', `url('${resourceUrl(bg)}')`)
+        }).catch((e) => {
+          // 补发媒体凭据失败 → 背景图会一直 401。这里不抛：主题本身已经应用完了，
+          // 抛出去只会变成 unhandled rejection（用户看不到任何提示）。
+          console.warn('[theme] 补发媒体凭据失败，背景图可能加载失败', e)
         })
       }
     } else {

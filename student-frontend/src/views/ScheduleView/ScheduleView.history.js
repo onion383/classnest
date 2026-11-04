@@ -3,12 +3,25 @@
 import axios from 'axios'
 import { localDateStr } from '../../utils/dateTime.js'
 
+// 清空历史快照视图状态：周列表为空时用，避免刷新后列表已空却仍显示上一周。
+// 抽成独立函数（而不是内联在 fetchHistoryWeeks 的 else 分支里）：
+// 内联时它位于 await 之后，静态检查分不清「await 之后写入」与「互斥分支的写入」。
+function clearHistorySnapshot(ctx) {
+  ctx.historySnapshot.value = null;
+  ctx.historyCells.value = [];
+  ctx.historySettings.value = { sections: null, periods: [], days: ['周一', '周二', '周三', '周四', '周五'] };
+  ctx.historyColHeaders.value = ['周一', '周二', '周三', '周四', '周五'];
+}
+
 export function useScheduleHistory(ctx, API_BASE) {
   return {
     // 获取所有快照周列表
     async fetchHistoryWeeks() {
+      const token = ctx._historyWeeksGuard.begin();
       try {
         const res = await axios.get(`${API_BASE}/schedule/history`);
+        // 已被更新的加载取代 → 丢弃本次结果
+        if (!ctx._historyWeeksGuard.isCurrent(token)) return;
         ctx.historyWeeks.value = res.data || [];
 
         // 如果已有选中的周，检查是否仍在列表中
@@ -26,12 +39,10 @@ export function useScheduleHistory(ctx, API_BASE) {
         if (ctx.historyCurrentWeek.value) {
           await ctx.loadHistorySnapshot();
         } else {
-          ctx.historySnapshot.value = null;
-          ctx.historyCells.value = [];
-          ctx.historySettings.value = { sections: null, periods: [], days: ['周一', '周二', '周三', '周四', '周五'] };
-          ctx.historyColHeaders.value = ['周一', '周二', '周三', '周四', '周五'];
+          clearHistorySnapshot(ctx);
         }
       } catch (e) {
+        if (!ctx._historyWeeksGuard.isCurrent(token)) return;
         console.error('获取历史周列表失败', e);
       }
     },
@@ -40,8 +51,15 @@ export function useScheduleHistory(ctx, API_BASE) {
     async loadHistorySnapshot() {
       if (!ctx.historyCurrentWeek.value) return;
       ctx.historyLoading.value = true;
+      // 记录本次请求的是哪一周：响应回来时若当前周已变，这份快照属于旧周，不能写进当前视图
+      const week = ctx.historyCurrentWeek.value;
+      const token = ctx._historySnapshotGuard.begin();
       try {
-        const res = await axios.get(`${API_BASE}/schedule/history/${ctx.historyCurrentWeek.value}`);
+        const res = await axios.get(`${API_BASE}/schedule/history/${week}`);
+        // 已被更新的加载取代 → 丢弃本次结果
+        if (!ctx._historySnapshotGuard.isCurrent(token)) return;
+        // 请求的是别的周（切周发生在飞行途中）→ 丢弃
+        if (ctx.historyCurrentWeek.value !== week) return;
         ctx.historySnapshot.value = res.data;
         if (ctx.historySnapshot.value) {
           ctx.historyCells.value = Array.isArray(ctx.historySnapshot.value.cells) ? ctx.historySnapshot.value.cells : [];
@@ -53,12 +71,16 @@ export function useScheduleHistory(ctx, API_BASE) {
           };
           ctx.historyColHeaders.value = ctx.historySettings.value.days;
         } else {
-          ctx.historyCells.value = [];
-          ctx.historySettings.value = { sections: null, periods: [], days: ['周一','周二','周三','周四','周五'] };
-          ctx.historyColHeaders.value = ['周一','周二','周三','周四','周五'];
+          clearHistorySnapshot(ctx);
         }
-      } catch (e) { console.error(e); }
-      finally { ctx.historyLoading.value = false; }
+      } catch (e) {
+        if (!ctx._historySnapshotGuard.isCurrent(token)) return;
+        console.error(e);
+      }
+      finally {
+        // 旧请求结束时不能把新请求的加载指示器关掉
+        if (ctx._historySnapshotGuard.isCurrent(token)) ctx.historyLoading.value = false;
+      }
     },
 
     // 获取本周一的日期

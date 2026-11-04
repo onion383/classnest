@@ -138,20 +138,40 @@ function applyGender(ctx, st, roster, members, target, G) {
   const boyIdx = [], girlIdx = [], otherIdx = []
   roster.forEach((s, i) => { if (isBoy(s)) boyIdx.push(i); else if (isGirl(s)) girlIdx.push(i); else otherIdx.push(i) })
   const totalBoy = boyIdx.length
-  const totalGirl = girlIdx.length
 
   if (st.mode === 'single') {
-    // 每组都放同一性别：男生组 + 女生组 按人数比例拆分
+    // 每组都放同一性别：男生组 + 女生组 按人数比例拆分。
+    //
+    // 容量必须按「本池人数 / 本池组数」单独算，不能沿用全局 target=ceil(total/G)：
+    // 学生被拆成两个独立子池后，每组容量之和必须分别覆盖各自的池。
+    // 旧实现用全局 target，子池组数少的那一侧装不下就静默丢弃——
+    // 例如 4 男 4 女分 3 组：女生只有 1 个组、容量 3 < 4，凭空少 1 人；
+    // 10 男 1 女分 3 组：男生 2 个组、容量 8 < 10，凭空少 2 人。
+    const girls = girlIdx.concat(otherIdx)
+
+    // 只有 1 个组时根本分不开（或压根没建组）：全部放进唯一那组，绝不能因为「没组可去」丢人。
+    // 满足率按「是否只有一种性别」记 —— 混性别时这条条件本身就是不可满足的。
+    if (G < 2) {
+      for (let g = 0; g < G; g++) members[g] = new Set()
+      if (G === 1) for (let si = 0; si < total; si++) members[0].add(si)
+      const mixed = totalBoy > 0 && girls.length > 0
+      ctx.trackSatisfaction(st.key, mixed || G === 0 ? 0 : total, total)
+      return
+    }
+
     let boyGroups = 0
     if (totalBoy > 0) {
-      boyGroups = Math.max(1, Math.min(G - (totalGirl > 0 ? 1 : 0), Math.round(G * totalBoy / total)))
+      // 有女生时至少留 1 个组给女生（G≥2 已保证留得下）
+      boyGroups = girls.length > 0
+        ? Math.max(1, Math.min(G - 1, Math.round(G * totalBoy / total)))
+        : G
     }
     const boyGroupIdxs = Array.from({ length: boyGroups }, (_, i) => i)
     const girlGroupIdxs = Array.from({ length: G - boyGroups }, (_, i) => boyGroups + i)
     // 清空现有分配
     for (let g = 0; g < G; g++) members[g] = new Set()
-    distributeInto(members, boyIdx, boyGroupIdxs, target)
-    distributeInto(members, girlIdx.concat(otherIdx), girlGroupIdxs, target)
+    distributeInto(members, boyIdx, boyGroupIdxs, poolCapacity(boyIdx.length, boyGroupIdxs.length))
+    distributeInto(members, girls, girlGroupIdxs, poolCapacity(girls.length, girlGroupIdxs.length))
     // 满足率：男生进男生组、女生/其他进女生组
     let done = 0
     const inBoyGroups = new Set(boyGroupIdxs)
@@ -192,15 +212,28 @@ function applyGender(ctx, st, roster, members, target, G) {
   ctx.trackSatisfaction(st.key, done, totalBoy || 1)
 }
 
-// 把一组学生均匀填入某些小组（循环放入，超过 target 则跳到下一组）
-function distributeInto(members, studentIdxList, groupIdxs, target) {
+// 本池每组的容量：让池内学生均匀落到池内各组，且容量之和必然覆盖整池。
+// 空组列表（该池无组可去）返回 0，由 distributeInto 的兜底处理。
+function poolCapacity(poolSize, groupCount) {
+  if (!groupCount) return 0
+  return Math.max(1, Math.ceil(poolSize / groupCount))
+}
+
+// 把一组学生均匀填入某些小组。
+//
+// 不变量：**pool 里每个学生都必须落进某个组，绝不静默丢弃**。
+// 这里刻意不写 break —— 旧实现「所有组都到容量就 break」正是学生凭空消失的原因。
+// cap 由 poolCapacity 按池算出来，正常一定有位置；万一没有（将来加了新条件往池里塞人），
+// 就退回轮转起点直接放入，宁可某一组多一个人，也不能让名册上的人不出现在任何组里。
+function distributeInto(members, studentIdxList, groupIdxs, cap) {
   if (groupIdxs.length === 0) return
   let gi = 0
   for (const si of studentIdxList) {
-    let guard = 0
-    while (guard < groupIdxs.length && members[groupIdxs[gi % groupIdxs.length]].size >= target) { gi++; guard++ }
-    if (guard >= groupIdxs.length) break // 无空位
-    members[groupIdxs[gi % groupIdxs.length]].add(si)
-    gi++
+    let target = groupIdxs[gi % groupIdxs.length]
+    for (let k = 0; k < groupIdxs.length; k++) {
+      const cand = groupIdxs[(gi + k) % groupIdxs.length]
+      if (members[cand].size < cap) { target = cand; gi += k + 1; break }
+    }
+    members[target].add(si)
   }
 }

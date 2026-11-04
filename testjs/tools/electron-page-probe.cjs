@@ -38,16 +38,27 @@ app.whenReady().then(async () => {
     app.exit(3)
     return
   }
-  // 等页面里的断言跑完（页面自己会在 #out 里写结果）
-  await new Promise((r) => setTimeout(r, 5000))
-  try {
-    const text = await win.webContents.executeJavaScript(
-      "document.getElementById('out') ? document.getElementById('out').textContent : '(no #out element)'")
-    console.log('---PAGE---')
-    console.log(text)
-  } catch (e) {
-    console.log('PROBE_EVAL_FAIL ' + (e && e.message))
+  // 等页面里的断言跑完（页面自己会在 #out 里写结果）。
+  // ⚠️ 必须**轮询**而不是固定死等 5 秒：
+  //   死等 = 每次都白等满 5 秒（页面 0.2 秒就跑完了也照等），
+  //   而且页面若在 5 秒内没写完（慢机器 / 慢断言），读到的就是半截结果 —— flaky。
+  //   轮询：写完立刻走；到上限还没写才算超时（保留原有的超时兜底语义）。
+  const READ_OUT = "document.getElementById('out') ? document.getElementById('out').textContent : ''"
+  let text = ''
+  const deadline = Date.now() + 5000
+  for (;;) {
+    try {
+      text = await win.webContents.executeJavaScript(READ_OUT)
+    } catch (e) {
+      console.log('PROBE_EVAL_FAIL ' + (e && e.message))
+      break
+    }
+    if (text) break // 页面已写入结果 → 早退出
+    if (Date.now() >= deadline) break // 到上限仍未写 → 读到的就是空串
+    await new Promise((r) => setTimeout(r, 100))
   }
+  console.log('---PAGE---')
+  console.log(text || '(no #out element)')
   console.log('PROBE_DONE')
   app.exit(0)
 }).catch((e) => {

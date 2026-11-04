@@ -1,7 +1,8 @@
 <template>
-  <Teleport to="body">
-  <Transition name="dialog">
-  <div v-if="visible" class="fixed inset-0 bg-black/30 z-50 flex items-center justify-center">
+  <!-- 与同族的智能排表一样走 DialogShell：遮罩 / 过渡 / Esc 层次判断统一由外壳管，
+       z-index 沿用原来的 z-50，视觉零变化。
+       @overlay 走「取消」——点遮罩和按 Esc 与点「取消」按钮同义，不会把预览结果写进小组。 -->
+  <DialogShell :visible="visible" :z-index="50" overlay-class="bg-black/30" @overlay="cancel">
     <div class="bg-surface rounded-xl p-5 shadow-card dialog-card flex flex-col overflow-hidden" style="width: 860px; height: 620px; max-width: 90vw;">
       <h3 class="text-lg font-bold mb-4">🧠 智能分组</h3>
 
@@ -127,14 +128,13 @@
         <button @click="confirm" class="bg-info text-text-inverse px-4 py-2 rounded border-none">确定</button>
       </div>
     </div>
-  </div>
-  </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
 import { ref, computed, watch, nextTick, onBeforeUnmount, toRef } from 'vue'
 import '../../../styles/dialog-transition.css'
+import DialogShell from '../../base/DialogShell.vue'
 import NewComerConfirm from '../NewComerConfirm.vue'
 import AppSelect from '../../base/AppSelect.vue'
 import { useSmartGroupPipeline } from './SmartGroupDialog.pipeline.js'

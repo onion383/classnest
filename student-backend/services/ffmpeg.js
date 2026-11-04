@@ -202,12 +202,25 @@ async function ensureFfmpeg() {
   }
 }
 
-function download(url, dest) {
+// 单次下载允许的最大重定向跳数。
+// 上游（BtbN/FFmpeg-Builds 的 GitHub Releases）正常只会跳 1~2 次；给到 5 次足够宽裕。
+// 没有上限时，一个「A → B → A」的重定向环会无限递归 → 爆栈（RangeError），
+// 而且每次递归都新建一个 https 连接，服务端也会被拖住。
+const MAX_REDIRECTS = 5;
+
+// 传输层可注入（生产用 https；单测用 http 起本地假服务器复现重定向环）。
+// 不注入时行为与原来完全一致。
+let transport = https;
+
+function download(url, dest, redirectsLeft = MAX_REDIRECTS) {
   return new Promise((resolve, reject) => {
-    https.get(url, res => {
+    transport.get(url, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        return download(res.headers.location, dest).then(resolve, reject);
+        if (redirectsLeft <= 0) {
+          return reject(new Error(`重定向次数超过上限 ${MAX_REDIRECTS} 次：${url}`));
+        }
+        return download(res.headers.location, dest, redirectsLeft - 1).then(resolve, reject);
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -219,4 +232,8 @@ function download(url, dest) {
   });
 }
 
-module.exports = { resolveFfmpegPath, ensureFfmpeg };
+module.exports = {
+  resolveFfmpegPath, ensureFfmpeg, download, MAX_REDIRECTS,
+  // 仅供单元测试注入本地 http 假服务器，生产代码不要用
+  __setTransport: (t) => { transport = t || https; },
+};

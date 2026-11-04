@@ -142,6 +142,13 @@ import axios from 'axios'
 import AnimatedClock from '../../components/AnimatedClock.vue'
 import { INVOKE, SEND } from '../../electronChannels.js'
 import { useThemeStore } from '../../stores/theme'
+import { AUTH_CHANGED_EVENT } from '../../utils/authStorage.js'
+import { useDisposables } from '../../utils/disposables.js'
+import { leavesOn } from '../../utils/leaveState.js'
+
+// 资源登记表：窗口级事件监听、深浅色监听、周期/一次性定时器全部登记在这里，
+// 组件卸载时统一释放（原先调试监听器写成匿名函数，结构上就不可能被移除）。
+const disposables = useDisposables()
 
 // ========== 主题 ==========
 // 组件需要知道当前主题/日夜间，才能套用对应配色（文字颜色、卡片底色等）。
@@ -227,9 +234,11 @@ const todayDuties = computed(() => {
 })
 
 // 出勤统计
+// 口径与首页一致：**今天在请假中**（跨天假今天仍在假内），见 utils/leaveState.js。
+// 原来数的是「所有状态=请假中」的记录（不看日期），挂了半个月没销假的记录也会算进来。
 const attendance = computed(() => {
   const total = students.value.length
-  const onLeave = leaves.value.filter(l => l.状态 === '请假中').length
+  const onLeave = leavesOn(leaves.value, now.value).length
   return { total, onLeave, present: total - onLeave }
 })
 
@@ -393,7 +402,6 @@ const attendanceRows = computed(() => {
 })
 
 // ========== 数据加载 ==========
-let refreshTimer = null
 
 // ========== 常用软件 ==========
 // 固定 8 个槽位（4 列 × 2 行）：默认就展示 8 个空位，逐个添加；
@@ -411,7 +419,9 @@ const notLoggedIn = ref(false)
 const appsHintText = computed(() => (
   notLoggedIn.value ? '未登录，请在主窗口登录' : '正在加载常用软件…'
 ))
-let appsLoadTimer = null
+// 常用软件的重试定时器（可替换）：登记到资源表，卸载时自动清掉
+const appsReloadTimer = disposables.defer()
+
 // 首次失败已打日志的标记：避免 3 秒重试循环把渲染层 console 刷爆（host 侧另有 30s 去重）
 let appsLoadLogged = false
 // 首次成功读到数据的打点标记（只打一次）
@@ -421,7 +431,8 @@ const editing = ref(false)
 const dragActive = ref(false)
 // 上限/去重提示：短暂浮在面板底部，不占布局
 const limitHint = ref('')
-let hintTimer = null
+// 提示自动消失的定时器（可替换）：连着提示时自动改期
+const scheduleHintClear = disposables.defer()
 // 内部排序拖拽：无边框常驻窗口里原生 HTML5 draggable 不可靠，改用 Pointer Events 自实现
 const gridRef = ref(null)
 const dragIndex = ref(null) // 拖拽源索引
@@ -456,8 +467,8 @@ function newAppId() {
 
 function showHint(text) {
   limitHint.value = text
-  if (hintTimer) clearTimeout(hintTimer)
-  hintTimer = setTimeout(() => { limitHint.value = '' }, 2200)
+  // 可替换的防抖定时器：连着提示时自动改期，卸载时自动清掉
+  scheduleHintClear(() => { limitHint.value = '' }, 2200)
 }
 
 async function loadApps() {
@@ -469,7 +480,7 @@ async function loadApps() {
     appsLoaded.value = true
     appsLoadLogged = false
     notLoggedIn.value = false
-    if (appsLoadTimer) { clearTimeout(appsLoadTimer); appsLoadTimer = null }
+    appsReloadTimer.cancel()
     // 首次成功读到数据时打一个耗时打点（仅开发模式：正式打包版不产出这些埋点，
     // 由 import.meta.env.DEV 在构建期直接摇掉，不留任何运行时代码）
     if (import.meta.env.DEV && !appsTimingLogged) {
@@ -518,9 +529,8 @@ function notifyContentReady() {
 // 组件常驻且会先于后端/登录态启动：首次读失败就退避重试，直到成功一次为止。
 // 这样登录完成后（storage 里的 token 更新）无需重启组件也能自动恢复。
 function scheduleAppsReload() {
-  if (appsLoaded.value || appsLoadTimer) return
-  appsLoadTimer = setTimeout(async () => {
-    appsLoadTimer = null
+  if (appsLoaded.value || appsReloadTimer.pending) return
+  appsReloadTimer(async () => {
     if (appsLoaded.value) return
     const ok = await loadApps()
     if (!ok) scheduleAppsReload()
@@ -1009,7 +1019,12 @@ function saveApps(attempt = 0) {
   })
 }
 
+// 上一轮是否还在飞。后端卡住时 axios 没有超时，Promise.all 可能长时间不返回，
+// 5 分钟一轮的定时器若照常发，请求会一层层叠加（每层 5 个接口）。
+let loadingAll = false
 async function loadAll() {
+  if (loadingAll) return
+  loadingAll = true
   try {
     const [scheduleRes, dutyRes, countdownsRes, leavesRes, studentsRes] = await Promise.all([
       axios.get('/api/schedule').catch(() => ({ data: { cells: [], settings: {} } })),
@@ -1033,7 +1048,31 @@ async function loadAll() {
     students.value = Array.isArray(studentsRes.data) ? studentsRes.data : (studentsRes.data.data || [])
   } catch (_) {
     // 静默失败，保留旧数据
+  } finally {
+    loadingAll = false
   }
+}
+
+// 登录态变了（别的窗口登出/换号）：**旧用户的业务数据必须立刻作废**。
+// 原来这里只清了 token 缓存，屏上的课表/值日/倒计时/请假/学生/常用软件
+// 仍是上一个用户的，最长要等 5 分钟后的轮询才刷新 → 旧数据外露。
+function resetBusinessState() {
+  schedule.value = { cells: [], settings: { periods: [], days: ['周一', '周二', '周三', '周四', '周五'] } }
+  duty.value = { cells: {}, settings: { days: ['周一', '周二', '周三', '周四', '周五'], items: [] } }
+  countdowns.value = []
+  leaves.value = []
+  students.value = []
+  apps.value = []
+  appsLoaded.value = false
+  appsLoadLogged = false
+  notLoggedIn.value = false
+}
+
+function onAuthChanged() {
+  resetBusinessState()
+  // 重拉：登出后会拿到 401 → 显示「未登录」；换号则直接是新用户的数据
+  loadAll()
+  loadApps().then((ok) => { if (!ok) scheduleAppsReload() })
 }
 
 // ========== 窗口拖动 ==========
@@ -1076,7 +1115,6 @@ function onWindowDragEnd() {
 }
 
 // ========== 生命周期 ==========
-let refreshClock = null
 
 onMounted(() => {
   loadAll()
@@ -1089,9 +1127,10 @@ onMounted(() => {
   darkMedia = window.matchMedia('(prefers-color-scheme: dark)')
   syncSystemDark()
   darkMedia.addEventListener('change', syncSystemDark)
+  disposables.add(() => { if (darkMedia) darkMedia.removeEventListener('change', syncSystemDark) })
   // 兜底：请求长时间不返回（例如后端还没起来）时也要把窗口放出来，
   // 否则用户看到的是「什么都没有」——组件内已有骨架与时钟，先显示比一直空着好。
-  setTimeout(() => notifyContentReady(), 4000)
+  disposables.timeout(() => notifyContentReady(), 4000)
   // 询问主进程当前是否已置底（只用于日志与手柄样式；拖动路径两种情况下都一样）
   Promise.resolve(window.electron?.invoke?.(INVOKE.GET_DESKTOP_LAYER_STATE))
     .then((st) => {
@@ -1100,36 +1139,34 @@ onMounted(() => {
     })
     .catch(() => {})
   // 拖动/松手都在窗口级监听：指针可能被甩出窗口（捕获失败时），窗口级监听负责收尾
-  window.addEventListener('pointermove', onWindowDragMove)
-  window.addEventListener('pointerup', onWindowDragEnd)
-  window.addEventListener('pointercancel', onWindowDragEnd)
+  disposables.listen(window, 'pointermove', onWindowDragMove)
+  disposables.listen(window, 'pointerup', onWindowDragEnd)
+  disposables.listen(window, 'pointercancel', onWindowDragEnd)
   if (import.meta.env.DEV) {
-    document.addEventListener('lostpointercapture', () => console.info('[dw-timing] lostcapture'), true)
-    window.addEventListener('pointercancel', () => console.info('[dw-timing] pointercancel'), true)
-    window.addEventListener('pointerup', (ev) => console.info('[dw-timing] pointerup buttons=' + ev.buttons), true)
+    // 调试监听器必须用具名函数：原先写成匿名箭头函数，结构上就**不可能**被移除，
+    // 浮窗重建后旧的监听器会一直挂在 window/document 上。
+    const onLostPointerCapture = () => console.info('[dw-timing] lostcapture')
+    const onDevPointerCancel = () => console.info('[dw-timing] pointercancel')
+    const onDevPointerUp = (ev) => console.info('[dw-timing] pointerup buttons=' + ev.buttons)
+    disposables.listen(document, 'lostpointercapture', onLostPointerCapture, true)
+    disposables.listen(window, 'pointercancel', onDevPointerCancel, true)
+    disposables.listen(window, 'pointerup', onDevPointerUp, true)
   }
   // 常用软件排序：即使指针捕获失败/拖出窗口，窗口级监听也能兜底收尾
-  window.addEventListener('pointermove', onAppDragMove)
-  window.addEventListener('pointerup', onAppDragEnd)
-  window.addEventListener('pointercancel', onAppDragEnd)
+  disposables.listen(window, 'pointermove', onAppDragMove)
+  disposables.listen(window, 'pointerup', onAppDragEnd)
+  disposables.listen(window, 'pointercancel', onAppDragEnd)
+  // 登录态变化（别的窗口登出/换号）→ 立刻作废业务数据并重拉
+  disposables.listen(window, AUTH_CHANGED_EVENT, onAuthChanged)
   // every 5 分钟刷新数据；now 仅驱动倒计时/课程等分钟级状态，秒级走 AnimatedClock
-  refreshTimer = setInterval(loadAll, 5 * 60 * 1000)
-  refreshClock = setInterval(() => { now.value = new Date() }, 60000)
+  disposables.interval(loadAll, 5 * 60 * 1000)
+  disposables.interval(() => { now.value = new Date() }, 60000)
 })
 
 onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
-  if (refreshClock) clearInterval(refreshClock)
-  if (hintTimer) clearTimeout(hintTimer)
-  if (appsLoadTimer) clearTimeout(appsLoadTimer)
-  if (darkMedia) darkMedia.removeEventListener('change', syncSystemDark)
+  // 拖动/松手监听器、深浅色监听、两个周期定时器、提示与重试定时器
+  // 已全部登记到资源表，卸载时统一释放
   destroyDragArtifacts()
-  window.removeEventListener('pointermove', onWindowDragMove)
-  window.removeEventListener('pointerup', onWindowDragEnd)
-  window.removeEventListener('pointercancel', onWindowDragEnd)
-  window.removeEventListener('pointermove', onAppDragMove)
-  window.removeEventListener('pointerup', onAppDragEnd)
-  window.removeEventListener('pointercancel', onAppDragEnd)
 })
 </script>
 

@@ -2,11 +2,12 @@ const express = require('express');
 const { db } = require('../../db');
 const dbManager = require('../../dbManager/dbManager');
 const { currentSettings } = require('./ai.config');
-const { buildSystemPrompt, callLLM, consumeStream, getMainTools } = require('./ai.llm');
+const { buildSystemPrompt, consumeStream, getMainTools } = require('./ai.llm');
 const { toolResultContent } = require('./ai.helpers');
 // 工具执行器惰性加载：仅在执行工具/取工具信息时才 require
 const tools = () => require('./ai.tools/tools');
 const { loadConversationContext, compressConversation, CONTEXT_COMPRESS_AT, compressingConvs } = require('./ai.memory');
+const { createBudget } = require('./ai.budget');
 // 安全通道：SSE 逐帧封包（仅在加密会话下生效，否则明文直通）
 const { encodeStreamEvent } = require('../../services/secureChannel');
 
@@ -18,83 +19,6 @@ const router = express.Router();
 function conversationExists(id) {
   return !!db.prepare('SELECT 1 FROM ai_conversations WHERE id = ?').get(id);
 }
-
-// POST /api/ai/chat —— body: { messages: [{ role, content }] }
-router.post('/chat', async (req, res) => {
-  try {
-    const s = currentSettings();
-    if (!s.enabled || !s.api_key) {
-      return res.status(400).json({ error: '尚未启用 / 配置 AI，请先在【系统设置 → AI 助手设置】填写并启用' });
-    }
-    const { messages } = req.body;
-    if (!Array.isArray(messages)) return res.status(400).json({ error: '缺少消息' });
-
-    // 本轮附件：前端上传时已解析成文本，随请求带给后端，供 read_document 按需读取
-    const attachments = Array.isArray(req.body.attachments) ? req.body.attachments : [];
-    // 本轮启用的技能（md 指令文件）：前端按「/」选中的技能名，读取内容注入系统提示
-    const skills = dbManager.readSkills(req.user && req.user.dbSlug, req.body.skills);
-    const history = [{ role: 'system', content: buildSystemPrompt(req.user && req.user.dbSlug, attachments, undefined, skills) }, ...messages];
-    let proposal = null;
-    let exportFile = null;
-    let exportImage = null;
-    // 工具返回的「反问用户」选项。**必须在这里声明**：漏了声明时，下面 `ask = out.ask`
-    // 会写成隐式全局变量（CJS 非严格模式不报错），并发请求之间会互相覆盖，
-    // 表现为 A 用户收到 B 用户的提问、或某请求误判为「有待确认提问」提前返回。
-    let ask = null;
-    const blocks = [];
-    const ctx = { blocks, slug: req.user && req.user.dbSlug, images: tools().latestUserImages(messages), attachments, cfg: s };
-    // 联网搜索开关：仅当请求未显式关闭（webSearch === false）时下发 web_search 工具
-    const webSearchOn = !!(req.body && req.body.webSearch !== false);
-
-    for (let i = 0; i < 6; i++) {
-      const completion = await callLLM(s, history, getMainTools(s, webSearchOn));
-      const msg = completion.choices && completion.choices[0] && completion.choices[0].message;
-      if (!msg) throw new Error('模型未返回内容');
-
-      if (msg.tool_calls && msg.tool_calls.length) {
-        history.push({
-          role: 'assistant',
-          content: msg.content || '',
-          ...(msg.reasoning_content ? { reasoning_content: msg.reasoning_content } : {}),
-          tool_calls: msg.tool_calls.map((t) => ({
-            id: t.id,
-            type: 'function',
-            function: { name: t.function.name, arguments: t.function.arguments },
-          })),
-        });
-        for (const tc of msg.tool_calls) {
-          let args = {};
-          try { args = JSON.parse(tc.function.arguments || '{}'); } catch (_) { /* 参数解析失败则视为空 */ }
-          const out = await tools().runTool(tc.function.name, args, ctx);
-          if (out.proposal) proposal = out.proposal;
-          if (out.ask) ask = out.ask;
-          if (out.exportFile) exportFile = out.exportFile;
-          if (out.exportImage) exportImage = out.exportImage;
-          history.push({ role: 'tool', tool_call_id: tc.id, content: toolResultContent(out.result) });
-        }
-        // 一旦出现写提案，立即返回给前端确认，不再继续让模型渲染
-        if (proposal) {
-          const last = history[history.length - 1];
-          res.json({ reply: tools().appendBlocks(last.role === 'assistant' ? last.content || '' : msg.content || '', blocks), proposal });
-          return;
-        }
-        // 出现提问：返回给前端展示选项，等用户点选后作为新一轮消息继续
-        if (ask) {
-          res.json({ reply: tools().appendBlocks(msg.content || '', blocks), ask });
-          return;
-        }
-        continue;
-      }
-
-      res.json({ reply: tools().appendBlocks(msg.content || '', blocks), proposal: proposal || null, exportFile: exportFile || null, exportImage: exportImage || null });
-      return;
-    }
-
-    res.json({ reply: tools().appendBlocks('已超过最大推理轮数，请换一种问法。', blocks), proposal: proposal || null, exportFile: exportFile || null, exportImage: exportImage || null });
-  } catch (err) {
-    res.status(502).json({ error: err.message || 'AI 请求失败' });
-  }
-});
 
 // ---------------------------------------------------------------------------
 // 对话记录持久化
@@ -260,6 +184,15 @@ router.post('/chat/stream', async (req, res) => {
   res.flushHeaders && res.flushHeaders();
   const send = (obj) => { try { res.write(`data: ${JSON.stringify(encodeStreamEvent(req, obj))}\n\n`); } catch (_) {} };
 
+  // 心跳帧：上游模型停顿、或工具执行很久时，网关/代理会把「没有字节流动」的连接
+  // 判成空闲并断开，前端只能干等且分不清「还在算」和「已经死了」。
+  // SSE 里以 ':' 开头的是注释帧，客户端会忽略，不影响协议（审查 v4 · B03-02）。
+  const heartbeat = setInterval(() => { try { res.write(': ping\n\n') } catch (_) {} }, 15000);
+  if (heartbeat.unref) heartbeat.unref();
+  const stopHeartbeat = () => clearInterval(heartbeat);
+  res.on('close', stopHeartbeat);
+  res.on('finish', stopHeartbeat);
+
   // 客户端断开（用户点「中断」或关闭页面）时 res 会触发 close：
   //   - 标记 clientGone，让下方循环及时停止、不再调用模型
   //   - 该信号传给 consumeStream，同步 abort 上游 fetch，避免白跑
@@ -276,9 +209,21 @@ router.post('/chat/stream', async (req, res) => {
   }
 
   // 完整上下文：优先按会话从数据库重建（含全量历史消息与历史附件），并用已有摘要裁剪较早部分；
-  // 无有效会话 id 时回退到前端本次带来的消息与附件。
+  // 无会话（conversationId 为 0）时回退到前端本次带来的消息与附件。
+  //
+  // 审查 v4 · B03-08：原先只要 loadConversationContext 返回 null 就回退到请求体消息，
+  // 而它返回 null 的**唯一**含义是「会话不存在」（ai.memory.js:75）。
+  // 于是「会话已被删除 / id 传错」被静默当成「新建会话」处理 —— 前端拿到回复却
+  // 写不回任何会话（persistMessage 对不存在的会话会 404 被吞掉），用户看到的是
+  // 「这轮对话凭空消失」。这里改成显式区分两种语义。
   const conversationId = Number(req.body && req.body.conversationId) || 0;
   let convCtx = conversationId ? loadConversationContext(conversationId) : null;
+  if (conversationId && !convCtx) {
+    // 传了会话 id 但库里查不到 → 会话已被删除或 id 无效，明确报错而不是静默降级。
+    // code 让前端能识别并自愈（清掉失效的 conversationId，下次发送自动新建会话）。
+    send({ type: 'err', code: 'conversation_missing', message: '当前对话已被删除或不存在，请新建对话后重试' });
+    return res.end();
+  }
   let messages = convCtx ? convCtx.messages : req.body.messages;
   if (!Array.isArray(messages)) { send({ type: 'err', message: '缺少消息' }); return res.end(); }
   let attachments = convCtx
@@ -310,6 +255,10 @@ router.post('/chat/stream', async (req, res) => {
   // 联网搜索开关：仅当请求未显式关闭（webSearch === false）时下发 web_search 工具
   const webSearchOn = !!(req.body && req.body.webSearch !== false);
   const ctx = { blocks, slug: req.user && req.user.dbSlug, images: tools().latestUserImages(messages), attachments, signal: clientGone.signal, cfg: s };
+  // 预算闸门：主对话与子助手共用同一本账（审查 v4 · B03-10）。
+  // 超限后不再继续调用模型，把已有信息收尾成最终回答，避免「模型自己无限循环调工具」。
+  const budget = createBudget();
+  ctx.budget = budget;
   const steps = [];    // 过程块：本轮所有步骤（过程文本 / 工具调用）
   let stepSeq = 0;
   const startedAt = Date.now();
@@ -320,7 +269,9 @@ router.post('/chat/stream', async (req, res) => {
     afterRound();
     return {
       reply: tools().appendBlocks(answerText, blocks), steps, ms: Date.now() - startedAt,
-      tokens: tokenTotal.total, promptTokens: tokenTotal.prompt, completionTokens: tokenTotal.completion,
+      // tokens 取统一预算闸门的累计值（含子助手消耗）——原先只统计主对话自己那几轮
+      tokens: budget.total() || tokenTotal.total,
+      promptTokens: tokenTotal.prompt, completionTokens: tokenTotal.completion,
     };
   };
 
@@ -346,6 +297,17 @@ router.post('/chat/stream', async (req, res) => {
     // 工具链轮次上限：只要模型持续调用工具就继续，直到模型自己给出最终回答；上限仅作防死循环兜底
     for (let r = 0; r < 12; r++) {
       if (clientGone.signal.aborted) return res.end();
+      // 预算闸门：累计用量超限就不再调模型（再调一次也是超限），
+      // 直接把已有信息收尾，并告知模型/用户已达上限（B03-10）
+      if (budget.exceeded()) {
+        const note = budget.note();
+        send({ type: 'note', text: note });
+        // 让模型看到「已达上限」这条约束，好让它在下一句给出收尾结论
+        history.push({ role: 'system', content: note });
+        answerText = answerText || '';
+        send({ type: 'done', ...donePayload() });
+        return res.end();
+      }
       const { text, toolCalls, reasoning, usage } = await consumeStream(
         s,
         history,
@@ -359,6 +321,8 @@ router.post('/chat/stream', async (req, res) => {
         tokenTotal.prompt += usage.prompt_tokens || 0;
         tokenTotal.completion += usage.completion_tokens || 0;
         tokenTotal.total += usage.total_tokens || (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
+        // 记入统一预算闸门（含子助手消耗的那部分，见 ai.budget.js）
+        budget.add(usage, 'main');
       }
 
       // 思考（思维链）作为时间轴上的一个步骤：插在本轮的工具/文本步骤之前，

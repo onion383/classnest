@@ -12,20 +12,32 @@ classnest/
         ├── _sample-big.cjs  # 大样张数据生成（供相册/表格探针复用）
         ├── bundle-diff.mjs  # 构建产物体积差异
         ├── etag-revalidate-probe.cjs  # ETag 重新校验行为
+        ├── export-format-probe.cjs  # 导出格式清单对账：主进程白名单 / 前端扩展名 / 后端枚举 / schema 枚举 四处互校
         ├── gdi-shot-bench.cjs  # GDI 截图性能基准
         ├── glyph-render-check.mjs  # 图标字形渲染核对
         ├── grid-row-drag-probe.cjs  # 网格行拖拽让位
         ├── inject-drag.ps1  # SetCursorPos + mouse_event 合成一次真实左键拖动（配合其它探针）
         ├── inp-compare.mjs  # 两组配置的 INP 对比（如 3.5 / 3.6、VDOM / Vapor）
         ├── inp-probe.mjs  # 交互延迟（INP）：自动起 Vite + 带调试口的 Electron，CDP 派发真实输入…
+        ├── ipc-guard-probe.cjs  # IPC 授权拦截层：授权内放行 / 越权 handler 不被调用 / 表外 fail-closed / 安装幂等
+        ├── ipc-policy-gen.mjs  # IPC 授权表生成器：从渲染层静态 import 图推导「通道 → 允许的窗口角色」
+        ├── ipc-policy-probe.cjs  # IPC 授权表回归：名单与授权表一一对应、授权覆盖真实调用方、敏感通道仅主窗口
+        ├── lifecycle-dispose-probe.cjs  # 资源随作用域释放：定时器/监听器/AbortController 走 disposables 底座、登录态变化业务数据作废
+        ├── race-guard-probe.cjs  # 异步响应序号守卫回归：竞态调用点必须有守卫、await 后的写入前必须有 isCurrent 判定、createLatest 语义不被改歪
+        ├── rollback-probe.cjs  # 失败后 UI 必须回滚：乐观更新失败要恢复旧值、失败不能 emit('saved')、回滚要覆盖全部被改状态、提示条文案与清除成对
+        ├── safe-json-probe.cjs  # 读库 JSON 列必须走 safeJson/readDocJson；写路径豁免（保持裸解析防覆盖数据）；全库无遗留裸解析
+        ├── slug-scope-probe.cjs  # 跨库状态按 slug 分桶：thumbs 回报必须带 slug、pendingInChild/thumbReport 必须由底座创建、登出统一清桶；--self-test 反向验证
+        ├── pattern-sweep-probe.cjs  # 模式扫描：按「代码模式」而非条目编号扫全仓，抓同类漏网；白名单为空即纯回归资产
         ├── keepalive-album-probe.cjs  # KeepAlive 下相册页状态恢复
         ├── keepalive-restore-probe.cjs  # KeepAlive 通用恢复
         ├── keepalive-table-restore-probe.cjs  # KeepAlive 表格页滚动/编辑态恢复
         ├── longframe-probe.mjs  # 长帧定位（主线程阻塞点）
+        ├── main-ipc-contract-probe.cjs  # 主进程 IPC 结果契约：三态互斥、handler 走契约层、状态归属与必然终点、前端那一半
         ├── measure-startup.mjs  # 启动耗时；--backend-only / --dev / --json / --runs …
         ├── mode-probe.mjs  # 日/夜模式切换开销
         ├── night-btn-hover-probe.cjs  # 夜间主题按钮悬停配色
         ├── ocr-probe.mjs  # OCR 可用性（仅 Windows）
+        ├── pages/  # 浏览器上下文的断言页（HTML）：跑 Vite 转译的 ESM + crypto.subtle，被 smoke/ 引用
         ├── pdf-leak-probe.mjs  # PDF 导出内存泄漏（看 V8 external，不看 rss）
         ├── refresh-warm-check.cjs  # 刷新/预热后的缓存命中
         ├── screenshot-bench.cjs  # 应用内截图性能基准
@@ -39,7 +51,9 @@ classnest/
         ├── viewer-load-probe.cjs  # 查看器图片加载
         ├── viewer-open-probe.cjs  # 照片查看器打开耗时
         ├── widget-bottom-regression.ps1  # 置底回归：-Drags N 次合成拖动，校验位移正确、尺寸不变、松手仍在 Progman 之…
-        └── widget-shot.ps1  # 把组件窗口临时提到最前截图（-Out 指定路径，截完压回）
+        ├── widget-shot.ps1  # 把组件窗口临时提到最前截图（-Out 指定路径，截完压回）
+        ├── ipc-usage-probe.cjs  # IPC 通道「有登记但没人调用」的真实清单：按 INVOKE.KEY/SEND.KEY 调用点判，不看名字出现过
+        └── write-only-ref-probe.cjs  # 「只写不读」的响应式变量：ESLint no-unused-vars 的盲区（result.value = x 算引用）
 ```
 <!-- doc-tree:end -->
 
@@ -49,7 +63,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：过程探针层（`testjs/probe/`），30 个脚本（29 个探针 + 1 个样例），需要手动传参、耗时较长或拉起完整应用。
+- **定位**：过程探针层（`testjs/probe/`），46 个脚本（45 个探针 + 1 个样例），需要手动传参、耗时较长或拉起完整应用。
 - **公共逻辑**：多数自行启动 `Vite`（前端开发服务器）/ 带调试口的 `Electron`，或复用 `_sample-big.cjs`（大样张生成脚本）生成样张；输出是数据/报告，结论写到本页或 `doc/开发文档/`。
 - **局限**：**不是回归测试**，不能当判据、也不进冒烟；可信范围见 [testing/README.md](./README.md)。
 
@@ -61,6 +75,14 @@ classnest/
 
 | 脚本 | 用途 / 参数 |
 | --- | --- |
+| [`pattern-sweep-probe.cjs`](../../../testjs/probe/pattern-sweep-probe.cjs) | **模式扫描（全仓同类漏网）**：把「同一个代码模式的所有出现点」一次性捞出来，而不是按条目编号逐条找。8 个模式：内联拼 `YYYY-MM-DD`（应走 `localDateStr`）、下载后同步 `revokeObjectURL`（→ 0 字节文件）、`await` 的 I/O 结果被丢弃、`promise` 链结果被丢弃且无 `catch`（→ unhandled rejection）、组件状态上的 `new Map()` 无 `delete`/`clear`（→ 无界增长）、`:key` 含动态表达式（→ 全量重挂载）、起子进程无 `timeout`（→ hang 拖死整体）、测试建临时目录未清。白名单式对账：**命中不在白名单 = 新漏网（失败）**、**白名单项已不存在 = 该清白名单了（失败）**；修完全部后白名单为空 → 自动升级为纯回归资产。⚠️ 判据只做静态形态检查（动态问题抓不到）；`--report` 只出报告不判成败，`--mode=xxx` 只看单个模式 |
+| [`safe-json-probe.cjs`](../../../testjs/probe/safe-json-probe.cjs) | 读库 JSON 列必须走统一兜底：① `seats.js` 的 snapshot/backfill 与 history/week、`undo.records.js` 的 payload、`search.js` 的 cells/settings/seats/days 都走 `safeJson` / `readDocJson`；② **写路径反向豁免**：`seats.js` 的 `updateSingleCell` 必须保持裸 `JSON.parse`（解析失败要显式抛错 —— 降级成空座位会把整张表覆盖成只剩一格）；③ 全库扫描无「读库列的裸 JSON.parse 且无兜底」；④ `safeJson` 语义不被改歪。判据已做反向验证 |\n| [`rollback-probe.cjs`](../../../testjs/probe/rollback-probe.cjs) | 失败后 UI 必须回滚（「乐观更新」类 bug）：① 失败路径必须有回滚动作（写回旧值 / 恢复可见性 / 条件化 `emit('saved')`）；② 回滚要覆盖**全部**被改动的本地状态（只回滚一半 → 界面半新半旧）；③ 回滚本身不引入新问题（旧值为 `undefined` 时删字段而非写 `undefined`）；④ 提示条失败路径必须成对（写文案 + 调 `showReject()` 启动清除定时器，否则提示条永驻）。判据已做反向验证：抽掉任一回滚后探针报警 |\n| [`race-guard-probe.cjs`](../../../testjs/probe/race-guard-probe.cjs) | 异步响应序号守卫回归（「只认最后一次」类 bug）：① 竞态调用点（历史快照/AI 模型识别/分组维度/每日回填×2/AI 记录表/表格刷新）必须用 `createLatest()`；② **await 之后的状态写入之前必须有 `isCurrent` 判定**（按函数作用域判定，同步写入不算）；③ `createLatest` 语义不被改歪（`isCurrent` 必须严格相等，写成 `>=` 会让旧令牌重新生效）。判据已做反向验证：抽掉任一守卫后探针精确报出该行 |\n| [`ipc-policy-probe.cjs`](../../../testjs/probe/ipc-policy-probe.cjs) | IPC 授权表回归：`ipc-channels.json` 与 `ipc-policy.json` 一一对应；授权必须覆盖静态 import 图算出的真实调用方（漏授权=功能被拦、多授权=权限过宽）；敏感通道（改数据目录/加密/拿密钥/装更新/退应用）仅主窗口；表外通道 fail-closed；裁剪后的 preload 白名单不含越权通道，且**每个窗口实际调用的通道都在其白名单内**（正向保证不误伤功能） |
+| [`slug-scope-probe.cjs`](../../../testjs/probe/slug-scope-probe.cjs) | 跨库状态分桶接线回归（「裸 id / 全局攒批」类 bug）：① `scanWorker.js` 转发 thumbs 必须带 `msg.slug`（协议本来就有，根因就是这一行丢了）；② `album.js` 的 `pendingInChild`、`worker.scan.js` 的 `thumbReport` 必须走 `utils/slugScopes.js`；③ 回报只删该库、配额用各桶之和、flush 只发自己库；④ 异常/lock/shutdown 三处 `flushAll`、登出 `clearAllForSlug` + `forgetAlbum`；⑤ `safeSlug` 与 `albumThumbs.js` 同口径；⑥ 同类裸 id 状态清单防新增漏网。`--self-test` 把新写法逐条改回旧写法，11 条变异都被精确抓到 |
+| [`lifecycle-dispose-probe.cjs`](../../../testjs/probe/lifecycle-dispose-probe.cjs) | 「资源随作用域释放」回归（定时器/监听器/AbortController 与销毁处不相邻 → 漏一处永久泄漏）：① 底座存在且导出 `createDisposables`/`useDisposables`，不得使用组件实例代理；② 搜索弹窗的防抖与在途请求随关闭/卸载撤掉；③ 便签窗口的拖拽监听器与截屏/保存异步链有卸载守卫；④ 迁移窗的完成定时器、桌面挂件的监听器都走底座且**不得有匿名监听器**（结构上无法移除）；⑤ 行定位宿主走 `createRowFocusHost`（11 个页面全覆盖）、重试链可取消；⑥ 用户作用域：信道会话与网格预览学生名映射都登记了用户级清理。判据已做反向验证：9 处变异（退回裸 setTimeout / 匿名监听器 / 取消登记 / 宿主退回字面量）全部被精确抓到 |
+| [`ipc-guard-probe.cjs`](../../../testjs/probe/ipc-guard-probe.cjs) | IPC 授权拦截层：授权内角色放行、越权时 handler **根本不被调用**、表外通道拒绝、安装幂等（不套两层校验） |
+| [`main-ipc-contract-probe.cjs`](../../../testjs/probe/main-ipc-contract-probe.cjs) | 主进程 IPC 结果契约（批 13 根因修复的静态护栏）：① 契约层三态互斥（`ok`/`fail`/`canceled` 不得同时成立）；② `save-file` / `screenshot-capture` / `note-save` 等 handler 必须走契约层，不得各写各的返回形态；③ **模块级可变状态必须有归属与必然终点**（穿透态挂窗口实例而非全局变量、选区会话带看门狗与窗口关闭兜底、导航等待带超时）；④ 前端 `saveFile.js` 必须把「失败」抛给调用方、「取消」安静吞掉。判据已做反向验证：抽掉任一守卫后探针精确报出该行 |
+| [`export-format-probe.cjs`](../../../testjs/probe/export-format-probe.cjs) | 导出格式清单对账（批 13）：导出格式在**四处独立维护**（主进程 `ALLOWED_SAVE_EXTS` / 后端 `EXPORT_FORMATS` / 后端 schema enum / 前端 `FORMAT_OPTIONS` 与实际扩展名），任一处漏改就出现「前端能导出、主进程拒收」的静默失败。本探针四处互校：白名单 ⊇ 前端在用扩展名、白名单 ⊇ 后端枚举、后端枚举 ↔ schema 枚举双向一致、`FORMAT_OPTIONS` 每项都有实现分支，且白名单不得比已知能力更宽 |
+| [`ipc-policy-gen.mjs`](../../../testjs/probe/ipc-policy-gen.mjs) | IPC 授权表**生成器**：从渲染层静态 import 图推导「通道 → 允许的窗口角色」，输出 `electron/ipc-policy.json`。公共模块按「能 import 到它的入口集合」判角色；`OVERRIDE` 记人工覆盖（如 `set-db-encryption`：能力已备好、只差设置页入口） |
 | [`measure-startup.mjs`](../../../testjs/probe/measure-startup.mjs) | 启动耗时；`--backend-only` / `--dev` / `--json` / `--runs` / `--exe`；数据隔离在 `%LOCALAPPDATA%\ClassNestStartupMeasure` |
 | [`longframe-probe.mjs`](../../../testjs/probe/longframe-probe.mjs) | 长帧定位（主线程阻塞点） |
 | [`inp-probe.mjs`](../../../testjs/probe/inp-probe.mjs) | 交互延迟（INP）：自动起 Vite + 带调试口的 Electron，CDP 派发真实输入（`npm run inp`） |
@@ -104,6 +126,8 @@ classnest/
 | --- | --- |
 | [`search-sources-probe.cjs`](../../../testjs/probe/search-sources-probe.cjs) | 全局搜索（`GET /api/search`）各数据源能否命中、排序/多词/字段限定/`focus` 串是否正确；内存库 + `require.cache` 替换 `../db`，22 条断言，失败退出码 1。无需桌面、毫秒级 |
 | [`search-bench.cjs`](../../../testjs/probe/search-bench.cjs) | 全局搜索接口耗时：灌 2 万条加扣分、3 万张照片的内存库，测端到端 p50/p90，并对照旧实现「拉 1000 行 + 逐格拼音」的成本；`--runs=N` 控制轮次，不做门限判定 |
+| [`table-service-probe.cjs`](../../../testjs/probe/table-service-probe.cjs) | 动态表服务的三条数据契约：删字段后加回同名列能找回旧值、导入行显式写 `position`（否则 NULL 排到表头）、导入的建列与插行同事务回滚；8 条断言，失败退出码 1 |
+| [`data-write-guards-probe.cjs`](../../../testjs/probe/data-write-guards-probe.cjs) | 写入守卫：小组件设置补丁式更新、请假只改结束时间仍校验窗口、跨职务移动守 `max_count`、宿舍组数量不变不清空分配、值日 `items` 分键播种；15 条断言，失败退出码 1 |
 
 ### Vapor
 
@@ -119,9 +143,12 @@ classnest/
 | --- | --- |
 | [`mode-probe.mjs`](../../../testjs/probe/mode-probe.mjs) | 日/夜模式切换开销 |
 | [`ocr-probe.mjs`](../../../testjs/probe/ocr-probe.mjs) | OCR 可用性（仅 Windows） |
+| [`write-only-ref-probe.cjs`](../../../testjs/probe/write-only-ref-probe.cjs) | **「只写不读」的响应式变量**：ESLint 的 `no-unused-vars` 只抓「从未被引用」，而 `result.value = x` 这种赋值算引用 —— 于是「存了但永远没人读」的 ref 一路活下来（`RollCall.vue` 的 `result` 存了三次、一次没读）。判据分两层：`<script>` 内的出现（排除赋值左边）+ `<template>` 的**表达式**（只认 `{{ }}` 和 `:x=` / `v-x=` / `@x=` / `#x=` 的值）。⚠️ 两个坑都踩过：①把定义处那个名字当读取（`m.index === defIndex` 拿 `const` 的位置比名字的位置，永不相等 → 假阴性）；②`class="result-card"` 里的子串被当读取（→ 必须把 class/style 排除在模板判据外）。`--file=` 扫单文件，`--json` 出机器可读结果 | `node testjs/probe/write-only-ref-probe.cjs`；退出码 0 = 全仓没有只写不读 |
 | [`widget-shot.ps1`](../../../testjs/probe/widget-shot.ps1) | 把组件窗口临时提到最前截图（`-Out` 指定路径，截完压回） |
 | [`widget-bottom-regression.ps1`](../../../testjs/probe/widget-bottom-regression.ps1) | 置底回归：`-Drags N` 次合成拖动，校验位移正确、尺寸不变、松手仍在 `Progman` 之上、无 `Application Error` |
+| [`ipc-usage-probe.cjs`](../../../testjs/probe/ipc-usage-probe.cjs) | **「通道有登记、但没人调用」的真实清单**。审查 v4 · C01-08 报「6 条死通道」，实际只有 1 条真没调用方，其余早删干净或是「能力已备好、入口未接」的有意保留。误判根源是判据太糙：**通道名在任意文件里出现过就算有人用**，而 `student-frontend/src/electronChannels.js` 本身就是从 `ipc-channels.json` 生成常量表的，于是「出现在常量表里」被当成了「有人在调用」。本探针按**调用点**判：`INVOKE.KEY` / `SEND.KEY` / `RECEIVE.KEY`（KEY 推导规则与 `electronChannels.js` 一致），或直接写字符串的调用，并排除常量表自身。⚠️ 还必须把 `electron/main/main.dev-loader.js` 算进渲染层范围 —— 它住在 `electron/` 下，但是**注入到页面**的脚本（`boot-status` 就是它调用的），漏了就会误报。有意保留的通道写在文件顶部的 `KEEP` 里并要求写明理由 | `node testjs/probe/ipc-usage-probe.cjs`；退出码 0 = 没有未登记的无人调用通道 |
 | [`_sample-big.cjs`](../../../testjs/probe/_sample-big.cjs) | 大样张数据生成（供相册/表格探针复用） |
+| [`pages/secure-channel-retry.html`](../../../testjs/probe/pages/secure-channel-retry.html) | **断言页**（不是独立探针）：用假的 axios 驱动 `secureAxios` 的 401 处理分支，逐条验证「会话过期 / 凭据降级 / 绑定失效会重建会话并重发」。这类页要跑 Vite 转译的 ESM、要用 `crypto.subtle`，纯 Node 跑不了 → 由 `smoke/secure-channel-retry.js` 起真实 Electron 渲染进程驱动（经 `tools/electron-page-probe.cjs`），页面在 Vite root 之外，靠 `server.fs.allow` 用 `/@fs/<绝对路径>` 访问。**别再放前端源码目录**：放那儿一旦被重构顺手删掉，冒烟只会报「探针页没跑起来？」，看着像环境问题 |
 
 > 已删除的 `pipe-*` 评估脚本：命名管道 + ACL 方案实测收益约 1ms，且 axios fetch adapter 对 204 误判导致页面闪跳，已全量回退；结论见 `doc/开发文档/通信层方案评估-命名管道与ACL.md`（不入库）。
 

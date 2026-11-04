@@ -570,7 +570,7 @@
 | 393 | widget.html | 17 | 20 | 714 | .html | student-frontend | student-frontend/widget.html |
 | 394 | migration.html | 17 | 21 | 768 | .html | student-frontend | student-frontend/migration.html |
 | 395 | schema.undo.js | 17 | 23 | 764 | .js | student-backend | student-backend/schema/schema.undo.js |
-| 396 | useSeq.js | 17 | 58 | 1621 | .js | student-frontend | student-frontend/src/composables/useSeq.js |
+| 396 | latestOnly.js | 47 | 68 | 2688 | .js | student-frontend | student-frontend/src/utils/latestOnly.js |
 | 397 | schema.fee.js | 16 | 20 | 442 | .js | student-backend | student-backend/schema/schema.fee.js |
 | 398 | schema.widget.js | 16 | 18 | 579 | .js | student-backend | student-backend/schema/schema.widget.js |
 | 399 | main.window-material.js | 16 | 31 | 1293 | .js | electron | electron/main/main.window-material.js |

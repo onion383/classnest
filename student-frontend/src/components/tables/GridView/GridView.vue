@@ -555,7 +555,10 @@ const methods = {
     },
     onCellDoubleClick(event, rowIdx, colIdx) {
       const row = ctx.rows.value[rowIdx]; if (!row || row._isSeparator || row._mergeCells || row._isReadonly || row._isPodium) return;
-      if (ctx.editingCell.value) requestAnimationFrame(() => ctx.saveEditCell());
+      // 必须先存再切：原先把保存排进 requestAnimationFrame，而紧接着几行就把
+      // editingCell 指向了新格 —— 回调真正执行时读到的已经是新格，旧格刚敲的内容直接丢
+      // （审查 v4 · B09-04）。saveEditCell 只读 ctx 状态、同步 emit，没有必须延后的理由。
+      if (ctx.editingCell.value) ctx.saveEditCell();
       emit('cell-dblclick', { rowIdx, colIdx, row, cell: row.cells[colIdx] });
       ctx.clearLongPress(); ctx.selectionStart.value = null; ctx.selectionEnd.value = null;
       ctx.editingCell.value = { row: rowIdx, col: colIdx }; ctx.editingCellData.value = { ...row.cells[colIdx] };

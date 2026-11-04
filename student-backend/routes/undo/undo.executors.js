@@ -354,14 +354,51 @@ const executors = {
       return null
     },
     async undo({ photo }) {
-      await restoreToOriginal(photo)
-      db.prepare('INSERT INTO album_photos (id, album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(photo.id, photo.album_id || 0, photo.file_path, photo.file_name || '', photo.file_size || 0, photo.mtime || '', photo.photo_date || '', photo.exif_date || '', photo.date_src || '', '')
+      // 文件搬移与索引插入必须同生共死：
+      //   · 先搬文件、后插索引 → 索引插入失败时文件已归位，但库里没这条记录
+      //     → 照片躺在磁盘上，界面里看不到也清不掉（用户以为删了，其实还在）。
+      //   · 先插索引、后搬文件 → 搬文件失败时索引已恢复，但文件还在回收站
+      //     → 界面里能看到这张照片，点开却是坏的（文件打不开）。
+      //
+      // 文件操作是 async，进不了 SQLite 事务，所以只能「先做不可逆的那步 + 失败时回退」。
+      // 这里选「先搬文件」：搬文件成功后再插索引，插索引失败就把文件搬回收站退回去。
+      const restored = await restoreToOriginal(photo);
+      // 文件不在回收站（已被手动删掉 / 回收站被清空）→ 恢复不了。
+      // 这时插索引等于造一条指向不存在文件的记录（点开会坏），
+      // 所以按「恢复失败」处理，抛错让 flip 把 dir 改回去（记录仍可重试）。
+      if (!restored) {
+        throw new Error('照片文件不在回收站，无法恢复');
+      }
+      try {
+        db.prepare('INSERT INTO album_photos (id, album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(photo.id, photo.album_id || 0, photo.file_path, photo.file_name || '', photo.file_size || 0, photo.mtime || '', photo.photo_date || '', photo.exif_date || '', photo.date_src || '', '')
+      } catch (err) {
+        // 索引没插进去 → 把已归位的文件搬回收站，退回「文件在回收站、索引没有」的原状态
+        if (restored) {
+          try { await moveToTrash(photo); } catch (rollbackErr) {
+            console.error('[undo] 照片索引插入失败后回退文件失败:', rollbackErr.message);
+          }
+        }
+        throw err;
+      }
     },
     async redo({ photo }) {
-      await moveToTrash(photo)
+      // 同理：先删索引（DB），再搬文件；搬文件失败时把索引插回去。
+      // 顺序与 undo 相反但同样要求「要么都做、要么都不做」。
+      const del = db.prepare('DELETE FROM album_photos WHERE id = ?');
+      db.transaction(() => { del.run(photo.id); })();
+      try {
+        await moveToTrash(photo);
+      } catch (err) {
+        try {
+          db.prepare('INSERT INTO album_photos (id, album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .run(photo.id, photo.album_id || 0, photo.file_path, photo.file_name || '', photo.file_size || 0, photo.mtime || '', photo.photo_date || '', photo.exif_date || '', photo.date_src || '', '')
+        } catch (rollbackErr) {
+          console.error('[undo] 照片移入回收站失败后回退索引失败:', rollbackErr.message);
+        }
+        throw err;
+      }
       await deleteThumb(photo, dbManager.currentSlug()).catch(() => {})
-      db.prepare('DELETE FROM album_photos WHERE id = ?').run(photo.id)
     },
     describe(p, mode) {
       const name = p.photo ? (p.photo.file_name || `#${p.photo.id}`) : ''

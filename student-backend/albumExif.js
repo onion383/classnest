@@ -34,6 +34,12 @@ function normalizeExifDate(str) {
   if (year < MIN_YEAR) return ''
   const dt = new Date(year, mon - 1, day, +h, +mi, +s)
   if (isNaN(dt.getTime())) return ''
+  // ⚠️ 必须校验「日期是否真实存在」，不能只查 day<=31：
+  //   2024-02-31 这种不存在的日期会被 new Date(2024, 1, 31) **静默滚到 3-02**
+  //   （JavaScript 的 Date 会进位），结果就是「照片被归到 3 月 2 日」——
+  //   非法串被原样吐出，用户看到的时间线凭空错开一个月。
+  //   做法：构造后把月/日读回来，与输入不一致即说明发生了进位 → 判非法。
+  if (dt.getMonth() !== mon - 1 || dt.getDate() !== day) return ''
   if (dt.getTime() - Date.now() > MAX_SKEW_DAYS * 86400000) return ''
   const p = (n) => String(n).padStart(2, '0')
   return `${year}-${p(mon)}-${p(day)}T${p(+h)}:${p(+mi)}:${p(+s)}`

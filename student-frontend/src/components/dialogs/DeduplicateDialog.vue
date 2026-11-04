@@ -125,7 +125,25 @@ const groupedRows = computed(() => {
   for (const group of map.values()) {
     if (group.length > 1) groups.push(group);
   }
-  groups.sort((a, b) => a[0].id - b[0].id);
+  // 排序必须真的作用在这里：sortField/sortOrder 原先只被 toggleSort 更新，
+  // 没有一个读取点，于是点表头箭头/筛选项毫无反应（审查 v4 · B07-05）。
+  // 分组是「同值成组」，所以按每组首行的字段值比较；组内顺序保持不变。
+  const dir = sortOrder.value === 'desc' ? -1 : 1;
+  const field = sortField.value;
+  const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+  groups.sort((a, b) => {
+    if (field) {
+      const va = a[0] ? a[0][field] : '';
+      const vb = b[0] ? b[0][field] : '';
+      const na = Number(va);
+      const nb = Number(vb);
+      const bothNum = va !== '' && vb !== '' && Number.isFinite(na) && Number.isFinite(nb);
+      const r = bothNum ? na - nb : collator.compare(String(va ?? ''), String(vb ?? ''));
+      if (r) return r * dir;
+    }
+    // 同值（或未指定列）时按 id 稳定排列，保证两次渲染顺序一致
+    return a[0].id - b[0].id;
+  });
   return groups;
 })
 const flatRows = computed(() => {

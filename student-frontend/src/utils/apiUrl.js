@@ -1,6 +1,7 @@
 import { getToken, setToken } from './authStorage.js'
 import { safe, applyAuthHeader, encryptBody, decryptBody, resetAuthBinding } from '../composables/secureChannel'
 import { decodeJwtPayload } from './jwt'
+import { AUTH_API } from './apiPaths.js'
 
 // 生产模式打包后以 file:// 协议运行，/api/... 会被解析到磁盘根目录导致 404（ERR_FILE_NOT_FOUND）。
 // 因此 img / CSS 背景里直接拼 API 路径的地方，需显式补上完整后端地址；开发模式走 Vite 代理，保持相对路径即可。
@@ -106,7 +107,7 @@ export function refreshMediaToken() {
     try {
       const headers = {}
       await applyAuthHeader(headers, token, { forceToken: false })
-      const res = await fetch(apiUrl('/api/auth/media-token'), { headers })
+      const res = await fetch(apiUrl(AUTH_API.mediaToken), { headers })
       if (!res.ok) return null
       let data = await res.json()
       if (data && typeof data === 'object' && typeof data.d === 'string') {
@@ -133,15 +134,23 @@ export async function ensureMediaToken() {
 
 // 资源 URL：<img> / CSS url() 等请求无法携带 Authorization 头，且打包版页面为 file:// 协议，
 // 跨源也不会自动带上 Lax Cookie，故把凭据追加为查询参数。
-// data:/blob: 无需鉴权，直接返回；安全模式用受限媒体凭据，明文模式沿用登录 token。
+// data:/blob: 无需鉴权，直接返回。
+//
+// ⚠️ 明文模式（safe() 为 false）**不再把登录 JWT 拼进 URL**：
+//   查询参数会出现在浏览器历史、服务器访问日志、Referer 头里 —— 完整登录态凭据
+//   泄露出去等于把会话交出去（对比：受限媒体凭据只能读静态资源，权限小得多）。
+//   明文模式下后端本来就能从 Cookie 取到凭据（见后端 middleware/auth.js 的 plainToken：
+//   Authorization → Cookie → 查询参数），而登录时已经种了 httpOnly Cookie
+//   （后端 routes/auth.js 的 setAuthCookie），同源请求会自动带上 —— 不需要拼 URL。
+//   安全模式下 Cookie 不参与鉴权（见后端 resolveAuth），那才必须带受限媒体凭据。
 export function resourceUrl(path) {
   if (!path) return ''
   if (path.startsWith('data:') || path.startsWith('blob:')) return path
   const url = apiUrl(path)
   if (!url) return ''
-  const token = safe()
-    ? localStorage.getItem(MEDIA_KEY)
-    : getToken()
+  // 明文模式：靠 httpOnly Cookie（同源自动带），不暴露凭据
+  if (!safe()) return url
+  const token = localStorage.getItem(MEDIA_KEY)
   if (!token) return url
   const sep = url.includes('?') ? '&' : '?'
   return `${url}${sep}token=${encodeURIComponent(token)}`

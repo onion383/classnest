@@ -72,9 +72,13 @@
 import { SEND, INVOKE, RECEIVE } from '../../electronChannels.js'
 import { apiUrl } from '../../utils/apiUrl'
 import { applyAuthHeader } from '../../composables/secureChannel'
+import { useDisposables } from '../../utils/disposables.js'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 
 defineOptions({ name: 'Migration' })
+
+// 资源登记表：流控 AbortController、完成后的 dismiss 定时器都登记在这里，卸载时统一释放
+const disposables = useDisposables()
 
 const state = ref('running') // running | done | error
 const mode = ref('move') // move=数据目录搬迁 | crypt=数据库加密转换
@@ -87,6 +91,13 @@ const percent = ref(0)
 const errorMessage = ref('')
 const targetDir = ref('')
 let _onMain = null
+
+// NDJSON 流式转换的「停顿超时」：后端每秒都会吐进度，连续 45s 没有任何新数据
+// 基本只能是卡死（或连接被中间层挂住）。此前没有任何超时/中断手段，
+// 界面就永久停在「正在转换」，用户只能强杀进程 —— 而这正是提示条里最怕的操作。
+const STREAM_IDLE_TIMEOUT_MS = 45000
+let _streamAbort = null
+let _idleTimer = 0
 
 const title = computed(() => {
   if (mode.value === 'crypt') return encrypt.value ? '启用数据库加密' : '关闭数据库加密'
@@ -124,14 +135,27 @@ function onMain(payload) {
 }
 // 调用后端加密转换接口（NDJSON 流）：逐步读取进度并刷新界面；结束后回报主进程
 async function startCrypt(token) {
+  // 每次转换一个独立的 AbortController：停顿超时与窗口卸载都通过它断开，
+  // 而不是让一个永远不返回的 reader.read() 把界面钉死。
+  const ac = new AbortController()
+  _streamAbort = ac
+  // 流控与收尾资源统一登记到资源表：窗口卸载时一并断开/清掉，
+  // 不再散落在 onBeforeUnmount 里靠人记着配对。
+  disposables.abort(ac)
+  const armIdleTimer = () => {
+    if (_idleTimer) clearTimeout(_idleTimer)
+    _idleTimer = setTimeout(() => ac.abort(), STREAM_IDLE_TIMEOUT_MS)
+  }
   try {
     // 凭据统一走信道：安全模式下明文 Authorization 会被后端拒绝（NDJSON 流式响应不受响应加密影响）
     const headers = { 'Content-Type': 'application/json' }
     await applyAuthHeader(headers, token)
+    armIdleTimer()
     const resp = await fetch(apiUrl('/api/account/db-encryption'), {
       method: 'POST',
       headers,
       body: JSON.stringify({ encrypt: encrypt.value }),
+      signal: ac.signal,
     })
     if (!resp.ok || !resp.body) throw new Error(`请求后端失败（${resp.status}）`)
     const reader = resp.body.getReader()
@@ -140,6 +164,9 @@ async function startCrypt(token) {
     let ok = false
     let failMsg = ''
     for (;;) {
+      // 每次读之前重置：只有「连续 45s 一个字节都没来」才算卡死，
+      // 大库转换慢但一直在出进度时不会误杀。
+      armIdleTimer()
       const { done, value } = await reader.read()
       if (done) break
       buf += decoder.decode(value, { stream: true })
@@ -173,7 +200,8 @@ async function startCrypt(token) {
       state.value = 'done'
       percent.value = 100
       // 短暂停留展示「完成」后回报主进程，由其设置提示条并重开主窗口
-      setTimeout(() => window.electron?.send(SEND.MIGRATION_DISMISS, { ok: true }), 700)
+      // 登记到资源表：窗口在 700ms 内被关掉时不再发这条 IPC（卸载后不该再有副作用）
+      disposables.timeout(() => window.electron?.send(SEND.MIGRATION_DISMISS, { ok: true }), 700)
     } else {
       state.value = 'error'
       // 没收到 done（进程提前退出/输出被截断）时 failMsg 为空，必须给可读兜底文案
@@ -181,7 +209,15 @@ async function startCrypt(token) {
     }
   } catch (err) {
     state.value = 'error'
-    errorMessage.value = err?.message || String(err)
+    if (err && err.name === 'AbortError') {
+      // 超时中止要说清「已复制的文件还在」，否则用户不敢重试
+      errorMessage.value = `转换停顿超过 ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)} 秒，已中止等待。目标目录里已复制/已转换的部分会保留，可重新发起；若反复出现请查看日志`
+    } else {
+      errorMessage.value = err?.message || String(err)
+    }
+  } finally {
+    if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = 0 }
+    if (_streamAbort === ac) _streamAbort = null
   }
 }
 // 打开已复制内容所在的目标文件夹，供用户自行确认
@@ -202,6 +238,9 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (_onMain) window.electron.off(RECEIVE.FROM_MAIN, _onMain)
+  // 窗口被关掉时别把流和定时器留给后台：转换进程本身由主进程管，这里只负责断开监听
+  if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = 0 }
+  if (_streamAbort) { try { _streamAbort.abort() } catch (_) { /* 已结束 */ } _streamAbort = null }
 })
 </script>
 

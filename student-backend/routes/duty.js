@@ -5,6 +5,10 @@ const store = require('../services/slotStore');
 const { validateRow } = require('../services/businessRules');
 const { readDocJson, safeJson } = require('../utils/json');
 const { isDateStr } = require('../utils/sql');
+// 日期口径统一走 utils/date（本地时区）。此前本文件自己复制了一份
+// localDateStr/parseDateStr/shiftDateStr/mondayOf，与 seats.js 逐字重复 ——
+// 同一语义散在多处，改一处不改另一处就是改坏。
+const { localDateStr, localDateTimeStr, shiftDateStr, mondayOf } = require('../utils/date');
 
 // cells 结构：{ 劳动项目名: { 星期几: [学生姓名,...] } }
 // settings 结构：{ days: ['周一',...], items: [{name, difficulty, count}, ...] }
@@ -85,14 +89,25 @@ router.put('/', (req, res) => {
     return res.status(400).json({ error: '参数格式错误' });
   }
   // 依赖既有数据的一致性校验：项目/星期须已配置、名单里的姓名须是班级学生
-  validateRow('duty_layout', { cells });
-  const row = db.prepare('SELECT cells, settings FROM duty_layout WHERE id = 1').get();
-  const mergedCells = packMode(row ? row.cells : null, mode, cells);
-  const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
-  store.setDoc('duty_layout', {
-    cells: JSON.stringify(mergedCells),
-    settings: JSON.stringify(mergedSettings),
-  });
+  //
+  // ⚠️ 校验 + 写入必须在**同一个事务**里：validateRow → assertDutyRefs 会把
+  // 「名册外的姓名」直接建档（写库，这是有意的副作用 —— 值日表存的是姓名而不是 id，
+  // 建了档值日指数、候选框、改名级联才认得到这个人）。
+  // 而 resolveNames 自带事务、无外层事务时**提前提交** → 后续 setDoc 失败（磁盘满/
+  // 库忙）时，值日表没存进去、名册里却凭空多出一个学生（孤儿，用户在名册里看得见）。
+  //
+  // better-sqlite3 的嵌套事务用 SAVEPOINT：内层 resolveNames 的事务在这里自动降级，
+  // 外层失败时一并回滚 → 建档与写值日表同生共死。
+  db.transaction(() => {
+    validateRow('duty_layout', { cells });
+    const row = db.prepare('SELECT cells, settings FROM duty_layout WHERE id = 1').get();
+    const mergedCells = packMode(row ? row.cells : null, mode, cells);
+    const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
+    store.setDoc('duty_layout', {
+      cells: JSON.stringify(mergedCells),
+      settings: JSON.stringify(mergedSettings),
+    });
+  })();
   res.json({ message: '保存成功' });
 });
 
@@ -113,15 +128,17 @@ router.put('/template', (req, res) => {
   if (!cells || typeof cells !== 'object') {
     return res.status(400).json({ error: '参数格式错误' });
   }
-  // 依赖既有数据的一致性校验
-  validateRow('duty_template', { cells });
-  const row = db.prepare('SELECT cells, settings FROM duty_template WHERE id = 1').get();
-  const mergedCells = packMode(row ? row.cells : null, mode, cells);
-  const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
-  store.setDoc('duty_template', {
-    cells: JSON.stringify(mergedCells),
-    settings: JSON.stringify(mergedSettings),
-  });
+  // 依赖既有数据的一致性校验（同 PUT / ：校验阶段的建档副作用必须与写入同事务）
+  db.transaction(() => {
+    validateRow('duty_template', { cells });
+    const row = db.prepare('SELECT cells, settings FROM duty_template WHERE id = 1').get();
+    const mergedCells = packMode(row ? row.cells : null, mode, cells);
+    const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
+    store.setDoc('duty_template', {
+      cells: JSON.stringify(mergedCells),
+      settings: JSON.stringify(mergedSettings),
+    });
+  })();
   res.json({ message: '模板保存成功' });
 });
 
@@ -244,7 +261,9 @@ router.put('/draft', (req, res) => {
   const row = db.prepare('SELECT cells, settings FROM duty_draft WHERE id = 1').get();
   const mergedCells = packMode(row ? row.cells : null, mode, cells);
   const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
-  const savedAt = new Date().toISOString();
+  // 本地时间口径（与全库一致）。原来用 toISOString() 是 UTC，
+  // 东八区 00:00–08:00 之间存进去的时间戳「日期部分」是昨天。
+  const savedAt = localDateTimeStr();
   store.setDoc('duty_draft', {
     cells: JSON.stringify(mergedCells),
     settings: JSON.stringify(mergedSettings),
@@ -263,28 +282,7 @@ router.delete('/draft', (req, res) => {
 // ======================== 历史快照（按天） ========================
 // 快照按天保存：每行代表某一天（snap_date）某一模式（daily/big）的值日表；
 // week_start 为由该天推导的周一，历史下拉按 week_start 聚合，回看时取该周最后一天的快照。
-function localDateStr(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-}
-function parseDateStr(s) {
-  const [y, m, d] = String(s).split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-function shiftDateStr(s, days) {
-  const d = parseDateStr(s);
-  d.setDate(d.getDate() + days);
-  return localDateStr(d);
-}
-function mondayOf(s) {
-  const d = parseDateStr(s);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  d.setDate(diff);
-  return localDateStr(d);
-}
+// localDateStr / shiftDateStr / mondayOf 见 utils/date.js（全库唯一实现）。
 function snapshotRow(rec) {
   const p = rec.payload || {};
   return {
@@ -356,25 +354,32 @@ router.post('/snapshot/backfill', (req, res) => {
       settings: layout ? unpackMode(layout.settings, mode) : {},
     };
 
+    // 写循环整体放进一个事务：逐日 INSERT 各自提交时，中途失败会留下半截快照
+    // （前几天已落库、后几天没有），用户看到的是「补了 37 天」这种半吊子结果，
+    // 而且得再点一次才知道到底补了哪些。整批要么全成、要么全不成。
+    // 循环体全是同步调用（没有 await），可以安全地放进 better-sqlite3 的同步事务。
     let inserted = 0;
-    let cur = start;
-    while (cur <= upper) {
-      const isToday = cur === today;
-      const exists = store.histFind('duty', cur, mode);
-      if (isToday && includeToday) {
-        // 今天：总是覆盖为当前值日表
-        if (exists) store.histUpdateByDate('duty', cur, mode, layoutPayload);
-        else store.histInsert('duty', { weekStart: mondayOf(cur), snapDate: cur, mode, payload: layoutPayload });
-        inserted++;
-      } else if (!exists) {
-        // 过去日期：缺失才补，沿用最近一天该模式的值日表；没有更早快照则用当前值日表
-        const src = store.histPrev('duty', cur, mode);
-        const payload = src ? { cells: src.payload.cells || {}, settings: src.payload.settings || {} } : layoutPayload;
-        store.histInsert('duty', { weekStart: mondayOf(cur), snapDate: cur, mode, payload });
-        inserted++;
+    const tx = db.transaction(() => {
+      let cur = start;
+      while (cur <= upper) {
+        const isToday = cur === today;
+        const exists = store.histFind('duty', cur, mode);
+        if (isToday && includeToday) {
+          // 今天：总是覆盖为当前值日表
+          if (exists) store.histUpdateByDate('duty', cur, mode, layoutPayload);
+          else store.histInsert('duty', { weekStart: mondayOf(cur), snapDate: cur, mode, payload: layoutPayload });
+          inserted++;
+        } else if (!exists) {
+          // 过去日期：缺失才补，沿用最近一天该模式的值日表；没有更早快照则用当前值日表
+          const src = store.histPrev('duty', cur, mode);
+          const payload = src ? { cells: src.payload.cells || {}, settings: src.payload.settings || {} } : layoutPayload;
+          store.histInsert('duty', { weekStart: mondayOf(cur), snapDate: cur, mode, payload });
+          inserted++;
+        }
+        cur = shiftDateStr(cur, 1);
       }
-      cur = shiftDateStr(cur, 1);
-    }
+    });
+    tx();
     res.json({ message: `已补存 ${inserted} 天`, inserted });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -40,7 +40,7 @@ import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 import AppSelect from '../base/AppSelect.vue'
 import ExportExcel from './ExportExcel/ExportExcel.vue'
-import { useSeq } from '../../composables/useSeq.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import { INDEX_FIELDS, buildIndexRows } from './ExportAlbumIndex.builder.js'
 
 const props = defineProps({
@@ -99,10 +99,10 @@ async function fetchPhotos(id) {
 function clearCache() { photoCache.clear() }
 
 // 重建序号：切换相册/分组方式/排序时旧请求可能后到，旧结果不能覆盖新结果（B11-04）
-const rebuildSeq = useSeq()
+const rebuildSeq = createLatest()
 
 async function rebuild() {
-  const my = rebuildSeq.take()
+  const my = rebuildSeq.begin()
   const targets = albumId.value === 'all' ? props.albums : props.albums.filter(a => a.id === albumId.value)
   if (!targets.length) { rows.value = []; loading.value = false; return }
   loading.value = true
@@ -114,15 +114,15 @@ async function rebuild() {
       data.push({ id: a.id, name: a.name, photos: await fetchPhotos(a.id) })
     }
     // 期间又触发了重建（切相册/改分组/改排序）：丢弃这一批，避免旧结果覆盖
-    if (!rebuildSeq.isLatest(my)) return
+    if (!rebuildSeq.isCurrent(my)) return
     rows.value = buildIndexRows(data, groupMode.value, order.value)
   } catch (err) {
-    if (!rebuildSeq.isLatest(my)) return
+    if (!rebuildSeq.isCurrent(my)) return
     rows.value = []
     reportError(err, { action: '读取照片索引' })
   } finally {
     // 只由最新一次重建关闭 loading
-    if (rebuildSeq.isLatest(my)) loading.value = false
+    if (rebuildSeq.isCurrent(my)) loading.value = false
   }
 }
 

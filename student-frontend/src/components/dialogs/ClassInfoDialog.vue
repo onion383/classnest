@@ -66,7 +66,12 @@ watch(() => props.visible, (v) => {
 // 回车确定：textarea 内回车用于换行、输入法合成态回车不上屏，均不触发保存
 function onKeydown(e) {
   if (e.key !== 'Enter' || e.isComposing) return
-  if (e.target && e.target.tagName === 'TEXTAREA') return
+  const tag = e.target && e.target.tagName
+  if (tag === 'TEXTAREA') return
+  // 焦点在按钮上时，回车是「按这个按钮」，不是「提交表单」。
+  // 之前不排除按钮，焦点停在「取消」上按回车会 preventDefault 掉按钮自己的激活、
+  // 转而执行 submit —— 用户想取消，结果保存了（审查 v4 · B07-01）。
+  if (tag === 'BUTTON' || tag === 'A') return
   e.preventDefault()
   submit()
 }

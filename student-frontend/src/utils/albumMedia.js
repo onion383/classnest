@@ -62,7 +62,14 @@ export function parseThumbBatch(buffer, idsHeader) {
 }
 
 // 批量取缩略图，返回 Map<photoId, blob>
-// 失败时返回空 Map（调用方回落到单张请求，不影响功能）
+//
+// 三种结果必须能分辨，别再把它们塌成一种：
+//   Map（可能为空） → 请求成功。空 Map 表示「服务端确实没有这些缩略图」，
+//                     调用方可以永久放弃批量、回落单张 /thumb。
+//   null            → 这次**没拿到**（网络断、后端 5xx、响应解析失败）。
+//                     这不代表服务端没图，必须允许重试 —— 原先四种失败全塌成空 Map，
+//                     一次抖动就把这些 id 永久判成「没有」，批量预取对它们彻底失效，
+//                     只能逐张回落，10 倍性能优化静默没了。
 export async function fetchThumbBatch(photoIds) {
   const ids = (photoIds || []).filter(v => Number.isInteger(v) && v > 0).slice(0, BATCH_MAX)
   if (!ids.length) return new Map()
@@ -73,13 +80,13 @@ export async function fetchThumbBatch(photoIds) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
     })
-    if (!res.ok) return new Map()
+    if (!res.ok) return null
     const buf = await res.arrayBuffer()
     const list = parseThumbBatch(buf, res.headers.get('X-Thumb-Ids'))
     const map = new Map()
     for (const { id, blob } of list) map.set(id, blob)
     return map
   } catch (_) {
-    return new Map()
+    return null
   }
 }

@@ -20,6 +20,16 @@ function assertValidTable(name) {
   if (!ALLOWED_TABLES.has(name)) throw new Error('表名不合法');
 }
 
+// sanitizeField 的 json 类规则（如班费「收据」多图）产出的是**数组/对象**，
+// 而 SQLite 只能绑定原始类型，直接 .run(数组) 会抛「只支持数字/字符串/BigInt/Buffer/null」。
+// 动态表列都是 TEXT，约定就是「JSON 文本」，所以在这里统一序列化 ——
+// 这是「列级规则可以声明结构化值」这条通路的落地点，缺了它 json 规则在动态表上根本用不了。
+function bindable(v) {
+  if (v === undefined) return null;
+  if (v !== null && typeof v === 'object') return JSON.stringify(v);
+  return v;
+}
+
 // 列名 → 类型 映射（取自 table_meta；缺省按「文字」处理），供写入时按类型清洗
 function fieldTypeMap(tableName) {
   const map = {};
@@ -52,24 +62,29 @@ function insertRow(tableName, data) {
     cleaned[k] = sanitizeField(data[k], tableName, k, typeMap[k]);
   });
 
-  const maxPos = db.prepare(`SELECT MAX(position) AS maxPos FROM ${tableName}`).get().maxPos || 0;
-  let insertPos;
+  let insertId;
 
-  if (atPosition && atPosition <= maxPos) {
-    insertPos = atPosition;
-    db.prepare(`UPDATE ${tableName} SET position = position + 1 WHERE position >= ?`).run(atPosition);
-  } else {
-    insertPos = maxPos + 1;
-  }
+  // 让位 + 插入 + 重排必须是一个原子动作：中间失败会留下 position 空洞（后续 renumber 只是事后补救）。
+  db.transaction(() => {
+    const basePos = db.prepare(`SELECT MAX(position) AS maxPos FROM ${tableName}`).get().maxPos || 0;
+    let insertPos;
+    if (atPosition && atPosition <= basePos) {
+      insertPos = atPosition;
+      db.prepare(`UPDATE ${tableName} SET position = position + 1 WHERE position >= ?`).run(atPosition);
+    } else {
+      insertPos = basePos + 1;
+    }
 
-  cleaned.position = insertPos;
-  const columns = Object.keys(cleaned).map(c => `"${c}"`).join(',');
-  const placeholders = Object.keys(cleaned).map(() => '?').join(',');
-  const values = Object.values(cleaned);
+    cleaned.position = insertPos;
+    const columns = Object.keys(cleaned).map(c => `"${c}"`).join(',');
+    const placeholders = Object.keys(cleaned).map(() => '?').join(',');
+    const values = Object.values(cleaned).map(bindable);
 
-  const result = db.prepare(`INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`).run(...values);
-  renumber(tableName);
-  return { id: result.lastInsertRowid };
+    insertId = db.prepare(`INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`).run(...values).lastInsertRowid;
+    renumber(tableName);
+  })();
+
+  return { id: insertId };
 }
 
 function updateRow(tableName, id, data) {
@@ -85,7 +100,7 @@ function updateRow(tableName, id, data) {
   });
 
   const setClause = Object.keys(cleaned).map(k => `"${k}" = ?`).join(', ');
-  const values = Object.values(cleaned);
+  const values = Object.values(cleaned).map(bindable);
   values.push(id);
 
   db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE id = ?`).run(...values);
@@ -140,7 +155,19 @@ function addColumn(tableName, columnName, dataType, after) {
   else if (dataType === '小数') sqlType = 'REAL';
   else if (dataType === '日期') sqlType = 'TEXT';
 
-  db.prepare(`ALTER TABLE ${tableName} ADD COLUMN "${columnName}" ${sqlType}`).run();
+  // 物理列可能已经存在：deleteColumn 只删 table_meta 登记、保留物理列（隐形列），
+  // 所以「删掉字段再加回同名列」时不能无脑 ALTER —— 那会抛 duplicate column name，
+  // 与 deleteColumn 注释承诺的「误删字段可通过重新加同名列找回数据」正好相反。
+  // 三种情况：已登记 → 明确报重复；未登记但物理列在 → 只补登记（旧值即找回）；都没有 → 建列 + 登记。
+  const registered = db.prepare('SELECT 1 AS hit FROM table_meta WHERE table_name = ? AND column_name = ?')
+    .get(tableName, columnName);
+  if (registered) throw new Error('字段已存在');
+
+  const physicalExists = db.prepare(`PRAGMA table_info("${tableName}")`).all()
+    .some((c) => c.name === columnName);
+  if (!physicalExists) {
+    db.prepare(`ALTER TABLE ${tableName} ADD COLUMN "${columnName}" ${sqlType}`).run();
+  }
 
   const metas = db.prepare('SELECT column_name, sort_order FROM table_meta WHERE table_name = ? ORDER BY sort_order').all(tableName);
   let sortOrder;
@@ -228,31 +255,41 @@ function importRows(tableName, fields, rows) {
   const typeMap = {};
   fieldMeta.forEach(f => { typeMap[f.name] = f.type || '文字'; });
 
-  for (const f of fields) {
-    assertValidColumn(f);
-    if (!existingFields.includes(f)) {
-      db.prepare(`ALTER TABLE ${tableName} ADD COLUMN "${f}" TEXT`).run();
-      const maxSort = db.prepare(`SELECT MAX(sort_order) AS max FROM table_meta WHERE table_name = ?`).get(tableName).max || 0;
-      db.prepare(`INSERT INTO table_meta (table_name, column_name, data_type, sort_order) VALUES (?, ?, '文字', ?)`)
-        .run(tableName, f, maxSort + 1);
-      existingFields.push(f);
-      typeMap[f] = '文字';
-    }
-  }
+  if (fields.length === 0) throw new Error('缺少有效的字段');
 
-  const placeholders = fields.map(() => '?').join(',');
-  const columnNames = fields.map(f => `"${f}"`).join(',');
-  const insertStmt = db.prepare(`INSERT INTO ${tableName} (${columnNames}) VALUES (${placeholders})`);
-
+  // 建列（DDL）+ 插行 + 重排收进同一个事务：SQLite 的 DDL 可回滚，
+  // 插入阶段失败不会留下刚加的空列与 table_meta 登记。原实现建列在事务外，脏数据会留半套空列。
   const insertMany = db.transaction((dataRows) => {
-    for (const row of dataRows) {
-      const filledRow = fields.map((f, idx) => sanitizeField(row[idx], tableName, f, typeMap[f] || '文字'));
-      insertStmt.run(...filledRow);
+    for (const f of fields) {
+      assertValidColumn(f);
+      if (!existingFields.includes(f)) {
+        db.prepare(`ALTER TABLE ${tableName} ADD COLUMN "${f}" TEXT`).run();
+        const maxSort = db.prepare(`SELECT MAX(sort_order) AS max FROM table_meta WHERE table_name = ?`).get(tableName).max || 0;
+        db.prepare(`INSERT INTO table_meta (table_name, column_name, data_type, sort_order) VALUES (?, ?, '文字', ?)`)
+          .run(tableName, f, maxSort + 1);
+        existingFields.push(f);
+        typeMap[f] = '文字';
+      }
     }
+
+    // 必须显式写 position：漏掉时新行 position 为 NULL，而 SQLite 的 NULL 在
+    // `ORDER BY position, id`（db.js renumber / queryAll 都这么排）里最小 ——
+    // 导入的几百行会整块排到表头，与「追加到末尾」的直觉相反。
+    const placeholders = fields.map(() => '?').join(',');
+    const columnNames = fields.map(f => `"${f}"`).join(',');
+    const insertStmt = db.prepare(`INSERT INTO ${tableName} (${columnNames}, "position") VALUES (${placeholders}, ?)`);
+    const maxPos = db.prepare(`SELECT MAX(position) AS maxPos FROM ${tableName}`).get().maxPos || 0;
+
+    dataRows.forEach((row, i) => {
+      const filledRow = fields.map((f, idx) => bindable(sanitizeField(row[idx], tableName, f, typeMap[f] || '文字')));
+      filledRow.push(maxPos + i + 1);
+      insertStmt.run(...filledRow);
+    });
+
+    renumber(tableName);
   });
 
   insertMany(rows);
-  renumber(tableName);
 
   return rows.length;
 }

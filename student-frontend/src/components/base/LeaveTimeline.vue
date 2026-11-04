@@ -145,6 +145,36 @@ const filterTypeOptions = computed(() => {
 const filterNodeOptions = computed(() => {
   return [{ value: '', label: '全部事件' }, ...props.nodeTypes];
 });
+
+// 节点类型索引：value → 类型项。
+// 为什么建索引：原来 nodeTypeLabel / nodeColor / badgeClass 每次调用都**线性 find**，
+//   而 visibleNodes 的过滤里还有一次 → 每击一键就在 O(节点数 × 类型数) 上打转。
+//   类型列表是 prop（很少变），建一次 Map 即可 O(1) 查。
+const nodeTypeIndex = computed(() => {
+  const m = new Map();
+  for (const n of props.nodeTypes) m.set(n.value, n);
+  return m;
+});
+
+// 每个节点的可搜索文本（haystack）缓存：节点对象 → 小写拼接串。
+// 为什么缓存：原来每击一键都对**每个节点**重建一次
+//   `Object.values(n).map(...).join(' ').toLowerCase()` —— 纯重复劳动。
+//   节点对象引用不变时（列表数据没变），缓存直接命中。
+//   值变了要失效：缓存里同时存「参与拼接的原值快照」，对不上就重算。
+const haystackCache = new WeakMap();
+function haystackOf(n) {
+  const values = Object.values(n);
+  const hit = haystackCache.get(n);
+  // 原值快照逐项比对：任何一项变了就重算（不能只看引用，节点内容可能被就地改）
+  if (hit && hit.values.length === values.length
+    && hit.values.every((v, i) => v === values[i])) {
+    return hit.text;
+  }
+  const text = values.map(v => String(v || '')).join(' ').toLowerCase();
+  haystackCache.set(n, { values: values.slice(), text });
+  return text;
+}
+
 const visibleNodes = computed(() => {
   const kw = keyword.value.toLowerCase();
   const type = filterType.value;
@@ -152,8 +182,7 @@ const visibleNodes = computed(() => {
   return props.nodes
     .filter(n => {
       if (kw) {
-        const haystack = Object.values(n).map(v => String(v || '')).join(' ').toLowerCase();
-        if (!haystack.includes(kw)) return false;
+        if (!haystackOf(n).includes(kw)) return false;
       }
       if (type && n.category !== type) return false;
       if (node && n.type !== node) return false;
@@ -168,11 +197,11 @@ const visibleNodes = computed(() => {
 const filteredOut = computed(() => props.nodes.length > 0);
 
 function nodeTypeLabel(type) {
-  const t = props.nodeTypes.find(n => n.value === type);
+  const t = nodeTypeIndex.value.get(type);
   return t ? t.label : type;
 }
 function nodeColor(node) {
-  const t = props.nodeTypes.find(n => n.value === node.type);
+  const t = nodeTypeIndex.value.get(node.type);
   return t ? t.color : '#9ca3af';
 }
 function markerStyle(node) {
@@ -183,7 +212,7 @@ function itemStyle(node) {
   return { borderLeftColor: nodeColor(node) };
 }
 function badgeClass(node) {
-  const t = props.nodeTypes.find(n => n.value === node.type);
+  const t = nodeTypeIndex.value.get(node.type);
   const map = { info: 'bg-info/10 text-info', success: 'bg-success/10 text-success', danger: 'bg-danger/10 text-danger', muted: 'bg-surface-hover text-text-secondary border border-border' };
   return map[t && t.colorKey] || map.info;
 }

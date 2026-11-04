@@ -36,7 +36,10 @@ const subagentTool = {
 };
 
 const MAX_SUBAGENT_TASKS = 4;      // 一次最多并行几个子任务（控制成本与延迟）
-const MAX_SUBAGENT_ROUNDS = 6;     // 单个子任务最多几轮推理（防死循环，与主循环口径一致）
+// 单个子任务最多几轮推理（防死循环，与主循环口径一致）：
+// 实际取值走统一预算闸门（ai.budget.js 的 BUDGET_LIMITS.maxSubagentRounds），
+// 这里保留常量仅作兜底默认值，避免两处数字各写一份。
+const MAX_SUBAGENT_ROUNDS = 6;
 
 // 解析子助手返回的正文为契约对象：容错剥离 ```json 围栏，取首个 '{' 到最后一个 '}' 的片段；
 // 解析失败则兜底成「未按契约返回」，避免把整段自然语言当成结果结构。
@@ -75,9 +78,28 @@ async function runOneSubagent(cfg, item, ctx) {
   ];
   // 独立 blocks：子助手即便用到块类工具也不污染主对话正文
   const subCtx = { ...ctx, blocks: [] };
-  for (let i = 0; i < MAX_SUBAGENT_ROUNDS; i++) {
-    const { text, toolCalls, reasoning } = await consumeStream(cfg, history, null, null, ctx && ctx.signal, subTools);
-    if (!toolCalls || !toolCalls.length) return parseSubagentResult(text, task);
+  // 统一预算闸门：与主对话共用同一本账（ctx.budget 由主对话注入）。
+  // 子助手原先把 consumeStream 的 usage 直接丢弃 → 烧了多少 token 主对话完全不知道，
+  // 既没法限、也没法报（审查 v4 · B03-10）。
+  const budget = ctx && ctx.budget;
+  // 轮数上限取自统一预算闸门（limits() 是方法，必须调用它拿值）
+  const maxRounds = (budget && budget.limits && budget.limits().maxSubagentRounds) || MAX_SUBAGENT_ROUNDS;
+  let usedTokens = 0;
+  for (let i = 0; i < maxRounds; i++) {
+    if (budget && budget.exceeded()) {
+      return { task, result: null, basis: '', count: 0, samples: [], error: budget.note(), needs_user_decision: [] };
+    }
+    const { text, toolCalls, reasoning, usage } = await consumeStream(cfg, history, null, null, ctx && ctx.signal, subTools);
+    // usage 记账：子助手的消耗必须计入同一本账，否则主对话的统计是残缺的
+    if (usage) {
+      if (budget) budget.add(usage, 'subagent');
+      usedTokens += (usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)));
+    }
+    if (!toolCalls || !toolCalls.length) {
+      const parsed = parseSubagentResult(text, task);
+      parsed.tokens = usedTokens;
+      return parsed;
+    }
     history.push({
       role: 'assistant',
       content: text || '',
@@ -101,7 +123,7 @@ async function runOneSubagent(cfg, item, ctx) {
       history.push({ role: 'tool', tool_call_id: tc.id, content: toolResultContent(result) });
     }
   }
-  return { task, result: null, basis: '', count: 0, samples: [], error: '子助手超过最大轮数仍未给出结论', needs_user_decision: [] };
+  return { task, result: null, basis: '', count: 0, samples: [], error: '子助手超过最大轮数仍未给出结论', needs_user_decision: [], tokens: usedTokens };
 }
 
 // run_subagent：并行启动若干只读子助手，各自返回契约对象
@@ -113,14 +135,29 @@ async function runSubagent(args, ctx) {
   if (!list.length) return { results: [], error: '缺少子任务（tasks 不能为空，每项含 name/task）' };
   const cfg = currentSettings();
   if (!cfg || !cfg.api_key) return { results: [], error: '尚未启用 / 配置 AI，子助手无法运行' };
-  const tasks = list.slice(0, MAX_SUBAGENT_TASKS);
+  // 预算闸门：与主对话共用（ctx.budget）。超限则不再启动子助手 —— 「上限」必须
+  // 在**发起前**拦，否则并行启动的 4 个子助手会先把钱花掉（B03-10）。
+  const budget = ctx && ctx.budget;
+  if (budget && !budget.allowSubagent()) {
+    return { results: [], count: 0, error: budget.note() };
+  }
+  let tasks = list.slice(0, MAX_SUBAGENT_TASKS);
+  if (budget) {
+    budget.countSubagent();
+    // 本次允许的子任务数受「子助手调用次数」剩余额度约束
+    const remain = Math.max(0, budget.limits().maxSubagentCalls - budget.subagentCalls());
+    tasks = tasks.slice(0, remain);
+    if (!tasks.length) return { results: [], count: 0, error: budget.note() };
+  }
   const results = await Promise.all(tasks.map((t) =>
     runOneSubagent(cfg, t, ctx).catch((e) => ({
       task: String((t && t.task) || ''), result: null, basis: '', count: 0, samples: [],
       error: e.message || '子助手运行失败', needs_user_decision: [],
     }))
   ));
-  return { results, count: results.length };
+  // 用量汇总回传：主对话据此知道子助手烧了多少（原先完全不可见）
+  const tokens = results.reduce((sum, r) => sum + ((r && r.tokens) || 0), 0);
+  return { results, count: results.length, tokens };
 }
 
-module.exports = { subagentTool, runSubagent, isSubagentToolAllowed };
+module.exports = { subagentTool, runSubagent, runOneSubagent, isSubagentToolAllowed };

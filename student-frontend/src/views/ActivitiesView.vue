@@ -176,7 +176,7 @@ import LeaveTimeline from '../components/base/LeaveTimeline.vue'
 import { useNotification } from '../composables/useNotification.js'
 import { reportError } from '../utils/reportError.js'
 import { recordRowInsert, recordRowUpdate, recordRowDelete, useUndoShortcut } from '../composables/useUndo.js'
-import { applyRouteRowFocus } from '../composables/useRowFocus.js'
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
 defineOptions({ name: 'ActivitiesView' })
 
@@ -227,10 +227,9 @@ function countdownDays(deadline, includeDay) {
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 
 const activeTab = ref('daily')
-const loading = ref(false)
 // 活动
 const activities = ref([])
 const editingActivity = ref(null)
@@ -386,28 +385,23 @@ function _applyRowFocus() {
   })
 }
 async function loadAll() {
-  loading.value = true
-  try {
-    // 两个接口互不依赖：用 allSettled，避免「倒计时失败」把已经拿到的
-    // 「活动列表」一起丢掉（原来 Promise.all 一处 reject 整批作废）。
-    const [actRes, cntRes] = await Promise.allSettled([
-      axios.get(`${API}/activities`),
-      axios.get(`${API}/countdowns`)
-    ])
-    if (actRes.status === 'fulfilled') activities.value = actRes.value.data.data || []
-    if (cntRes.status === 'fulfilled') countdowns.value = cntRes.value.data.data || []
+  // 两个接口互不依赖：用 allSettled，避免「倒计时失败」把已经拿到的
+  // 「活动列表」一起丢掉（原来 Promise.all 一处 reject 整批作废）。
+  const [actRes, cntRes] = await Promise.allSettled([
+    axios.get(`${API}/activities`),
+    axios.get(`${API}/countdowns`)
+  ])
+  if (actRes.status === 'fulfilled') activities.value = actRes.value.data.data || []
+  if (cntRes.status === 'fulfilled') countdowns.value = cntRes.value.data.data || []
 
-    const failed = []
-    if (actRes.status === 'rejected') failed.push('活动')
-    if (cntRes.status === 'rejected') failed.push('倒计时')
-    if (!failed.length) return true
-    // 两处都失败只弹一条，文案带上失败范围，避免刷两条提示
-    const reason = (actRes.status === 'rejected' ? actRes : cntRes).reason
-    reportError(reason, { action: `加载${failed.join('与')}` })
-    return false
-  } finally {
-    loading.value = false
-  }
+  const failed = []
+  if (actRes.status === 'rejected') failed.push('活动')
+  if (cntRes.status === 'rejected') failed.push('倒计时')
+  if (!failed.length) return true
+  // 两处都失败只弹一条，文案带上失败范围，避免刷两条提示
+  const reason = (actRes.status === 'rejected' ? actRes : cntRes).reason
+  reportError(reason, { action: `加载${failed.join('与')}` })
+  return false
 }
 async function refreshActivities() {
   // 按返回值判断：loadAll 内部吞错时无条件提示成功，会让用户以为数据已是最新

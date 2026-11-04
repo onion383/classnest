@@ -472,7 +472,8 @@ import AppSelect from '../components/base/AppSelect.vue';
 import EmptySnapshot from '../components/base/EmptySnapshot.vue';
 import { useNotification } from '../composables/useNotification';
 import { useUndoShortcut } from '../composables/useUndo.js';
-import { applyRouteRowFocus } from '../composables/useRowFocus.js';
+import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js';
+import { useDisposables } from '../utils/disposables.js';
 import { apiFetch } from '../utils/apiUrl.js';
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
@@ -623,7 +624,10 @@ async function fetchStudents() {
   } catch (e) { /* 学生列表不可用时不阻塞分组功能 */ }
 }
 const suggestState = reactive({ visible: false, member: null, top: 0, left: 0, width: 0, index: 0, keyword: '' });
-let suggestTimer = null;
+// 资源登记表：防抖与动画收尾定时器都登记在这里，页面卸载时统一清掉
+const disposables = useDisposables();
+// 候选框防抖（可替换）：连着击键时自动改期
+const scheduleSuggest = disposables.defer();
 const MAX_SUGGEST = 50;
 const suggestedStudents = computed(() => {
   const raw = (suggestState.keyword || '').trim();
@@ -666,20 +670,20 @@ function onMemberInput(m, e) {
   suggestState.index = 0;
   if (!wasShown) {
     // 首次打开：同步应用关键字，且只定位一次（输入框位置在打字过程中不变，无需每次读布局）
-    clearTimeout(suggestTimer);
+    scheduleSuggest.cancel();
     suggestState.keyword = value;
     suggestState.visible = true;
     nextTick(() => positionSuggest(el));
   } else {
     // 已打开：关键字防抖，避免每次击键全量过滤学生列表
-    clearTimeout(suggestTimer);
-    suggestTimer = setTimeout(() => { suggestState.keyword = value; }, 120);
+    scheduleSuggest.cancel();
+    scheduleSuggest(() => { suggestState.keyword = value; }, 120);
   }
 }
 // 按键时按输入框里的**当前值**重算候选，别用防抖后的 keyword：
 // 打完最后一个字立刻回车时，keyword 可能还停在 120ms 前的旧值，会选中一个不相关的人。
 function refreshSuggestKeyword() {
-  clearTimeout(suggestTimer);
+  scheduleSuggest.cancel();
   suggestState.keyword = suggestState.member ? String(suggestState.member.member_name || '') : '';
   return suggestedStudents.value;
 }
@@ -719,7 +723,7 @@ function fillCandidate(s) {
   commitMember(m);
 }
 function closeSuggest() {
-  clearTimeout(suggestTimer);
+  scheduleSuggest.cancel();
   suggestState.visible = false;
   suggestState.member = null;
   suggestState.keyword = '';
@@ -1017,7 +1021,7 @@ function playMemberFlip(prev) {
       tr.style.transition = `opacity 180ms ease, transform 180ms ${MEMBER_EASE}`
       tr.style.opacity = '1'
       tr.style.transform = ''
-      setTimeout(() => { tr.style.transition = ''; tr.style.opacity = ''; tr.style.transform = '' }, 240)
+      disposables.timeout(() => { tr.style.transition = ''; tr.style.opacity = ''; tr.style.transform = '' }, 240)
       continue
     }
     const dy = oldTop - Math.round(tr.getBoundingClientRect().top)
@@ -1027,7 +1031,7 @@ function playMemberFlip(prev) {
     void tr.offsetHeight // 提交起点，否则「设/清 transform」会被合并成一次，动画不播
     tr.style.transition = `transform 180ms ${MEMBER_EASE}`
     tr.style.transform = ''
-    setTimeout(() => { tr.style.transition = ''; tr.style.transform = '' }, 240)
+    disposables.timeout(() => { tr.style.transition = ''; tr.style.transform = '' }, 240)
   }
 }
 
@@ -1040,7 +1044,6 @@ function addMember(g) {
   const m = { _local: Date.now() + Math.random(), _groupId: g.id, member_name: '', remark: '' };
   const prev = captureMemberRows();
   g.members.push(m);
-  lastAdded.value = m;
   nextTick(() => {
     playMemberFlip(prev);
     focusMemberInput(m);
@@ -1091,7 +1094,6 @@ function findScrollParent(el) {
 
 // ============ 成员拖拽排序 / 跨组移动 ============
 const memberInputs = new Map();
-const lastAdded = ref(null);
 // 非响应式：dragover 高频写入，若为响应式会触发整块分组卡片重渲染，故用普通对象
 const dragState = { fromMemberId: null, fromGid: null, overGid: null, overIndex: null, pos: 'at' };
 // 拖拽落点高亮：命令式增删 class，避免 dropRowClass 进入模板响应式依赖
@@ -1398,7 +1400,8 @@ function finishMemberDrag() {
   ghost.style.transition = 'transform 200ms cubic-bezier(0.22, 0.61, 0.36, 1)';
   ghost.style.transform = 'translate(' + target.left + 'px, ' + target.top + 'px)';
   _memDrag = null;
-  setTimeout(() => {
+  // 收尾定时器登记到资源表：页面卸载后不再动已销毁的行元素
+  disposables.timeout(() => {
     // 先摘掉源行的「被拿起」半透明，否则重排时元素被移动、类还留在上面
     if (d.fromEl) d.fromEl.classList.remove('mem-dragging');
     Promise.resolve(commitMemberMove(snap)).finally(() => {
@@ -1649,7 +1652,7 @@ async function onImportData({ fields, rows }) {
 const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
-const rowFocusHost = { route, router }
+const rowFocusHost = createRowFocusHost(route, router)
 ;
 let pendingDim = null;
 function applyFocus() {

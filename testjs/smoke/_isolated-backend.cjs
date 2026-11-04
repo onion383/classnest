@@ -20,12 +20,13 @@
 //
 // 失败时 h.log() 里是后端自己的 stdout/stderr，便于定位「起不来」的原因。
 // =========================================================================
-const { spawn } = require('node:child_process')
+const { spawn, spawnSync } = require('node:child_process')
 const net = require('node:net')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const crypto = require('node:crypto')
+const { removeDirWithRetry, makeTempDir } = require('./_tmpdir.cjs')
 
 const ROOT = path.join(__dirname, '..', '..')
 const APP_ENTRY = path.join(ROOT, 'student-backend', 'app.js')
@@ -34,6 +35,10 @@ const LOG_LIMIT = 8192
 // 所有活跃实例：进程异常退出时兜底 kill，避免留下孤儿后端
 const live = new Set()
 
+// 先探一个空闲端口、释放，再让子进程去 bind —— 中间确实有窗口（TOCTOU）。
+// 但「端口被抢」已经不会变成假绿：waitReady 认的是子进程自己的启动行，
+// 抢到了端口它也打不出「服务器已启动：…本端口」。真要做到底得让后端接受继承来的
+// socket（SERVER_FD），那是后端接口改动，测试侧不擅自加。
 function freePort() {
   return new Promise((resolve, reject) => {
     const s = net.createServer()
@@ -45,48 +50,57 @@ function freePort() {
   })
 }
 
-function waitPort(port, timeoutMs, isDead) {
+// 就绪判据：**我们起的这个进程**在 stdout 打出了本端口的启动行。
+//
+// 为什么不能只看「端口能连上」：app.js 遇到 EADDRINUSE 时不会退出，而是
+// 「端口 X 被占用，等待 1s 后重试」（app.js:339）。此时端口上应答的是**别人**，
+// TCP 能连上，于是被判成「后端已就绪」——一次假绿，后面每条断言都在测一个来历不明的进程。
+// 这是个比「启动超时」更坏的结果：超时会红，假绿不会。
+function waitReady(port, timeoutMs, isDead, getLog) {
+  const needle = `服务器已启动：http://127.0.0.1:${port}`
   return new Promise((resolve, reject) => {
     const t0 = Date.now()
     const tick = () => {
-      // 子进程已经退出：不必等满超时，直接失败（日志由调用方带出）
+      if (getLog().includes(needle)) return resolve()
       if (isDead && isDead()) return reject(new Error('后端进程提前退出'))
-      const s = net.connect(port, '127.0.0.1')
-      s.once('connect', () => { s.destroy(); resolve() })
-      s.once('error', () => {
-        s.destroy()
-        if (Date.now() - t0 > timeoutMs) return reject(new Error(`后端启动超时（${timeoutMs}ms）`))
-        setTimeout(tick, 250)
-      })
+      if (Date.now() - t0 > timeoutMs) {
+        return reject(new Error(`后端启动超时（${timeoutMs}ms）：未等到端口 ${port} 的启动行`))
+      }
+      setTimeout(tick, 100)
     }
     tick()
   })
 }
 
-function killTree(child) {
-  if (!child || child.exitCode !== null) return
-  try { child.kill() } catch (_) { /* 已退出 */ }
+// 杀进程树，而不是只杀直接子进程：后端若干路径会 fork 子进程（解压、缩略图批量、
+// ffmpeg），只 child.kill() 会把它们留成孤儿；它们的句柄还会让临时数据目录删不掉，
+// 下次 freePort 也可能撞上被孤儿占用的端口。
+// 进程是否已退出。注意必须同时看 signalCode：被信号杀死时 exitCode 永远是 null，
+// 只判 exitCode 会把「已经死了」当成「还活着」（第一版就踩了这个坑，误报强杀失败）。
+function hasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null
 }
 
-// 等子进程真正退出，再删数据目录。
-// 只靠 process.on('exit') 里删是不行的：那时后端可能仍持有 index.db 句柄，
-// rmSync 会失败并被吞掉，于是在系统临时目录留下一堆残留目录（实测踩过）。
-async function removeDirWithRetry(dir) {
-  if (!dir) return
-  for (let i = 0; i < 6; i++) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true })
-      return
-    } catch (_) {
-      await new Promise((r) => setTimeout(r, 200))
-    }
+function killTree(child, force = false) {
+  if (!child || child.pid === undefined) return
+  if (hasExited(child)) return
+  if (process.platform === 'win32') {
+    // Windows 没有进程组信号，taskkill /T 是唯一可靠的「连同子孙一起杀」
+    const r = spawnSync('taskkill', ['/pid', String(child.pid), '/T', ...(force ? ['/F'] : [])], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    if (r.status === 0) return
   }
+  try { child.kill(force ? 'SIGKILL' : 'SIGTERM') } catch (_) { /* 已退出 */ }
 }
 
+// 等子进程真正退出，再删数据目录（重试逻辑见 _tmpdir.cjs）。
+// 只靠 process.on('exit') 里删是不行的：那时后端可能仍持有 index.db 句柄。
 async function startIsolatedBackend(opts = {}) {
   const timeoutMs = opts.timeoutMs || 30000
   const port = opts.port || await freePort()
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), (opts.prefix || 'smoke') + '-'))
+  const dataDir = makeTempDir((opts.prefix || 'smoke') + '-')
 
   const env = {
     ...process.env,
@@ -121,17 +135,27 @@ async function startIsolatedBackend(opts = {}) {
     async stop() {
       live.delete(handle)
       killTree(child)
-      if (child.exitCode === null) {
+      if (!hasExited(child)) {
         const exited = new Promise((r) => child.once('exit', r))
         await Promise.race([exited, new Promise((r) => setTimeout(r, 3000))])
       }
-      if (!opts.keepData) await removeDirWithRetry(dataDir)
+      if (!hasExited(child)) {
+        // 3s 没退：升一级强杀。原先这里直接往下走、静默放弃，
+        // 结果是孤儿进程继续占着 PORT、临时目录也删不掉，而调用方什么都看不到。
+        killTree(child, true)
+        await Promise.race([new Promise((r) => child.once('exit', r)), new Promise((r) => setTimeout(r, 2000))])
+      }
+      const stillAlive = !hasExited(child)
+      if (stillAlive) {
+        console.error(`[isolated-backend] 警告：子进程 ${child.pid} 强杀后仍未退出，端口 ${port} 可能被占；临时目录保留在 ${dataDir}`)
+      }
+      if (!opts.keepData && !stillAlive) await removeDirWithRetry(dataDir)
     },
   }
   live.add(handle)
 
   try {
-    await waitPort(port, timeoutMs, () => child.exitCode !== null)
+    await waitReady(port, timeoutMs, () => hasExited(child), () => log)
   } catch (err) {
     // 起不来时把后端日志一起抛出去，否则调用方只看到「超时」无从下手
     await handle.stop().catch(() => {})

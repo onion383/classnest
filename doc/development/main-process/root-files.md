@@ -23,7 +23,7 @@ classnest/
 ## 综合概述
 
 - **定位**：`electron/` 根目录下不参与运行时模块拆分的文件（预加载、占位页、打包钩子、IPC 通道清单、图标），以及 `inno/`、`installer-assets/` 里的安装器与素材；入口 `main.js` 与 21 个模块分别见 [entry.md](./entry.md)、[modules.md](./modules.md)。
-- **公共逻辑**：`preload.js`（预加载脚本）是所有窗口的安全边界；`ipc-channels.json`（通道清单）是通道白名单的单一来源；`afterPack.js`（打包后钩子）与 `inno/compile.mjs`（安装器编译脚本）只在打包期执行，运行时不参与。
+- **公共逻辑**：`preload.js`（预加载脚本）是所有窗口的安全边界；`ipc-channels.json`（通道清单）是「有哪些通道」的单一来源，`ipc-policy.json`（授权表）是「谁能调」的单一来源；`afterPack.js`（打包后钩子）与 `inno/compile.mjs`（安装器编译脚本）只在打包期执行，运行时不参与。
 - **局限**：本页只列文件职责、导出与依赖；打包流程、剔除清单、Vue 3.6 / 3.5 双分支见 [build-and-branches.md](../topics/build-and-branches.md)，安装包参数细节见该专题第 5 节。
 
 ---
@@ -35,7 +35,8 @@ classnest/
 | 文件 | 职责 | 关键导出 / IPC 通道 | 依赖与被依赖 |
 | --- | --- | --- | --- |
 | [`preload.js`](../../../electron/preload.js) | 预加载脚本。用 `contextBridge` 暴露 `window.electron`（`send/on/off/once/invoke`）与 `window.__SECURE_CHANNEL__`，通过白名单约束收发通道 | `window.electron`、`window.__SECURE_CHANNEL__`；白名单：`validSendChannels`、`validInvokeChannels`、`validReceiveChannels` | 依赖 electron(contextBridge/ipcRenderer)；被各窗口 `webPreferences.preload` 引用 |
-| [`ipc-channels.json`](../../../electron/ipc-channels.json) | IPC 通道白名单单一来源：`send` / `invoke` / `receive` 三组通道名，打包时经 `additionalArguments` 注入渲染进程 | 无模块导出（JSON 数据） | 被 `preload.js` 读取校验；新增通道必须同步这里 |
+| [`ipc-channels.json`](../../../electron/ipc-channels.json) | IPC 通道名单单一来源：`send` / `invoke` / `receive` 三组通道名，打包时经 `additionalArguments` 注入渲染进程 | 无模块导出（JSON 数据） | 被 `preload.js` 读取校验；新增通道必须同步这里 |
+| [`ipc-policy.json`](../../../electron/ipc-policy.json) | IPC 授权表单一来源：通道 → 允许的窗口角色（`main`/`widget`/`desktop-widget`/`setup`/`migration`），由 `testjs/probe/ipc-policy-gen.mjs` 从渲染层静态 import 图推导 | 无模块导出（JSON 数据，**生成物**，勿手改） | 被 `main.ipc-auth.js` 读取；主进程据此裁剪 preload 白名单并做运行时校验 |
 | [`startup.html`](../../../electron/startup.html) | 打包模式下引导窗口的静态占位页（纯内联 HTML/CSS，展示「班集 启动中…」，不依赖 JS，保证「秒出画面」） | 无 | 被 `main.js` 的 `createSetupWindow` 经 `app://local/setup.html` 使用（同源占位） |
 | [`afterPack.js`](../../../electron/afterPack.js) | electron-builder `afterPack` 钩子（仅 win32）：剔除运行时用不到的 Chromium 组件、把 `LICENSES.chromium.html` 压缩为 `third-party-licenses.zip` | `module.exports = async function(context)` | 依赖 fs/path/zlib；被 electron-builder 打包流程调用 |
 | [`app-icon.png`](../../../electron/app-icon.png) | 应用窗口/任务栏图标（`main.js` 的 `APP_ICON_PATH`），也被安装器自绘界面复用 | 无 | 被 `main.js`、`inno/setup.iss` 引用 |
@@ -63,6 +64,7 @@ classnest/
 
 - **`afterPack.js` 仅 win32 生效**：它按白名单剔 Chromium 组件并压缩 `LICENSES.chromium.html`；许可压缩包不能删，组件名单改动要同步打包专题的剔除清单。
 - **`preload.js` 与 `ipc-channels.json` 必须同步**：新增通道不同步这两个文件，渲染层调用会被直接拒绝；通道清单的完整断言由 `docs:verify` 覆盖。
+- **`ipc-policy.json` 是生成物**：要改授权就改生成器 `testjs/probe/ipc-policy-gen.mjs`（含 `OVERRIDE` 的人工覆盖），手改 JSON 会被下次重跑覆盖。
 - **图标类文件被多处引用**：`app-icon.png` 同时是窗口图标、exe 图标与安装器素材；替换时要同步 `inno/setup.iss` 和打包配置，否则安装后图标不一致。
 - **安装器素材改名要全局搜索**：`installer.ico`、`uninstaller.ico`、`license.txt`、`field-bg.png` 都被 `setup.iss` 的 `[Files]` / `[Code]` 段按文件名引用。
 

@@ -6,12 +6,13 @@
 //
 // 用法：
 //   host 传稳定的宿主描述对象（setup 里创建一次即可）：
-//     const rowFocusHost = { route, router }   // route/router 来自 useRoute()/useRouter()
+//     const rowFocusHost = createRowFocusHost(route, router)  // route/router 来自 useRoute()/useRouter()
 //   watch/onActivated/onMounted 里调用 applyRouteRowFocus(rowFocusHost, options)
 // 需要先切页签/展开等预处理时，通过 options.parse(key) 返回定位 id
 // （返回 null/undefined 表示时机未到，跳过本次，等待下次触发）。
 // 契约不走实例代理（getCurrentInstance）：Vapor 模式下实例代理不存在，
 // 宿主身份稳定（内部按 host 记签名去重）即可，字段显式传递。
+import { useDisposables } from '../utils/disposables.js'
 
 // 闪动样式：沿用设置页搜索跳转的「圆角荧光边框呼吸」（内描边 + 内发光）。
 // 用 box-shadow 实现：主题对 <td> 底色是 !important，会盖掉 background 动画，
@@ -31,6 +32,27 @@ const retryMap = new WeakMap()
 const RETRY_TRIES = 25
 const RETRY_INTERVAL = 80
 
+// 创建定位宿主：组件 setup 里调一次即可，身份稳定（内部按 host 记签名去重）。
+//
+// 为什么不用 { route, router } 字面量：定位重试是一条定时器链（最长 25×80ms），
+// 没人能取消它 → 组件卸载后它还在跑，还把 host（连同路由对象）拽着不放。
+// 这里给宿主挂一份资源表，**组件卸载时自动把重试链与滚动监听撤掉**。
+// 契约不走实例代理（getCurrentInstance）：Vapor 模式下实例代理不存在。
+export function createRowFocusHost(route, router) {
+  const host = { route, router }
+  const cancels = new Set()
+  const d = useDisposables()
+  d.add(() => {
+    // 「时机未到」的内部重试定时器也要撤：否则它会继续跑 applyRouteRowFocus
+    clearRetry(host)
+    for (const c of cancels) { try { c() } catch (_) { /* 已结束 */ } }
+    cancels.clear()
+  })
+  // 内部登记一个「可取消的清理动作」。宿主不是本函数造的（旧写法）时安全降级。
+  host._register = (cancel) => { if (typeof cancel === 'function') cancels.add(cancel) }
+  return host
+}
+
 // CSS 属性选择器值转义：避免 id 内特殊字符破坏选择器
 function cssQuote(v) {
   return String(v).replace(/["\\]/g, '\\$&')
@@ -38,7 +60,8 @@ function cssQuote(v) {
 
 // 在容器内按 [data-row-id] 找到目标行，滚动到可视区，等滚动停下后再播放高亮闪动。
 // 命中返回 true；容器/元素缺失返回 false。
-export function flashRowById(container, id) {
+// register：可选的「登记清理动作」回调（组件卸载时用来拆掉滚动监听）。
+export function flashRowById(container, id, register) {
   if (!container || id == null || id === '') return false
   let el = null
   try {
@@ -51,7 +74,10 @@ export function flashRowById(container, id) {
   // background 动画；box-shadow 未被强制，且内阴影绘制在底色之上、文字之下，能稳定显示。
   // 先滚到位置，等滚动停下后再闪动：否则闪动会被滚动过程消耗掉，滚到时已经闪完了。
   el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  runAfterScroll(el, () => playBlink(el))
+  // 滚动监听由 runAfterScroll 自己限时拆（≤1s），但组件可能在它拆之前就卸载了——
+  // 把取消函数交给调用方登记，卸载时能立即拆掉。
+  const cancel = runAfterScroll(el, () => playBlink(el))
+  if (typeof register === 'function') register(cancel)
   return true
 }
 
@@ -99,9 +125,11 @@ function cellEdgeFrames(isFirst, isLast) {
 
 // 等目标元素滚动到位后再回调（避免闪动被平滑滚动过程吃掉）。
 // 优先用 scrollend；不支持时用「scroll 事件静止 120ms」兜底；元素本就可见时立即回调。
+// 返回取消函数：调用后拆掉监听与定时器（组件卸载时用）。
 function runAfterScroll(el, cb) {
   const win = (el.ownerDocument && el.ownerDocument.defaultView) || window
   let started = false
+  let settled = false
   let settleTimer = null
   let noScrollTimer = null
   let maxTimer = null
@@ -109,6 +137,7 @@ function runAfterScroll(el, cb) {
     if (settleTimer) clearTimeout(settleTimer)
     if (noScrollTimer) clearTimeout(noScrollTimer)
     if (maxTimer) clearTimeout(maxTimer)
+    settleTimer = noScrollTimer = maxTimer = null
     win.removeEventListener('scrollend', start, true)
     win.removeEventListener('scroll', onScroll, true)
   }
@@ -129,18 +158,33 @@ function runAfterScroll(el, cb) {
   noScrollTimer = setTimeout(start, 100)
   // 兜底：无论如何 1s 后开始
   maxTimer = setTimeout(start, 1000)
+  return () => {
+    if (settled) return
+    settled = true
+    cleanup()
+  }
 }
 
 // 目标行可能因数据异步加载/页签切换而尚未渲染：按固定间隔重试，直到命中或超时。
-export function focusRowWhenReady(containerGetter, id, { tries = 25, interval = 80 } = {}) {
-  if (id == null || id === '') return
+// 返回取消函数：组件卸载时调用，停止这条定时器链（否则最长再跑 25×80ms，
+// 而且链上的闭包会把容器元素一直拽住不释放）。
+export function focusRowWhenReady(containerGetter, id, { tries = 25, interval = 80, register } = {}) {
+  const noop = () => {}
+  if (id == null || id === '') return noop
   let n = 0
+  let timer = null
+  let cancelled = false
   const attempt = () => {
+    if (cancelled) return
     const c = typeof containerGetter === 'function' ? containerGetter() : containerGetter
-    if (c && flashRowById(c, id)) return
-    if (++n < tries) setTimeout(attempt, interval)
+    if (c && flashRowById(c, id, register)) { cancelled = true; return }
+    if (++n < tries) timer = setTimeout(attempt, interval)
   }
   attempt()
+  return () => {
+    cancelled = true
+    if (timer) { clearTimeout(timer); timer = null }
+  }
 }
 
 // 读取路由 query.focus 并执行定位。
@@ -173,7 +217,9 @@ export function applyRouteRowFocus(host, options = {}) {
   host.router.replace({ path: route.path })
   const c = options.container ? options.container() : host.container
   const container = typeof c === 'function' ? c() : (c || document)
-  focusRowWhenReady(container, id)
+  // 重试链与滚动监听都登记到宿主：组件卸载时由宿主统一拆掉
+  const cancel = focusRowWhenReady(container, id, { register: host._register })
+  if (typeof host._register === 'function') host._register(cancel)
 }
 
 // 内部重试：parse 依赖的数据/页签尚未就绪时，按固定间隔重跑 applyRouteRowFocus，直到命中或超时。

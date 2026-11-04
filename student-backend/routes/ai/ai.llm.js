@@ -131,6 +131,11 @@ function buildSubagentPrompt({ name, task, returns, context } = {}) {
   return lines.join('\n');
 }
 
+// 非流式模型调用：一次拿回完整 JSON。
+// 当前**没有路由在用它** —— 原先的非流式 POST /api/ai/chat 已于审查 v4 批 17 删除
+// （全仓零调用方，是与流式版重复且已漂移的实现，见 §2.14）。
+// 保留本函数是为了给「一次性拿全量回复」的场景留一个可复用入口
+// （如将来的脚本调用）；新写对话流程请直接用 consumeStream。
 async function callLLM(cfg, messages, tools) {
   const { url, model } = resolveEndpoint(cfg);
   const r = await fetch(url, {
@@ -154,18 +159,35 @@ async function callLLM(cfg, messages, tools) {
 // 读取 OpenAI 兼容服务的 SSE 流，逐块累积并回调文本增量
 //   toolsOverride：可选，指定本次下发给模型的工具清单（子助手用受限只读子集）；
 //                  不传则用全局 getTools()（主对话行为不变）
+// 空闲超时控制器：**连续** ms 没有新数据才掐断。
+// 原来用 AbortSignal.timeout(120s) 是总墙钟 —— 长回答（逐字输出几百字）叠加多轮工具
+// 很容易超过 120s，正经回答会被当成卡死掐掉；而真卡死时又必须等满 120s 才断
+// （审查 v4 · B03-03）。
+function createIdleAbort(externalSignal, ms) {
+  const ctrl = new AbortController();
+  let timer = 0;
+  const touch = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(new Error(`上游模型连续 ${Math.round(ms / 1000)}s 无响应，已超时`)), ms);
+    // 不要让一个挂着的超时把进程钉住（后端退出时不受影响）
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  };
+  touch();
+  const signal = externalSignal ? AbortSignal.any([ctrl.signal, externalSignal]) : ctrl.signal;
+  return { signal, touch, dispose: () => { if (timer) { clearTimeout(timer); timer = 0 } } };
+}
+
 async function consumeStream(cfg, history, onDelta, onReasoning, clientSignal, toolsOverride) {
   const { url, model } = resolveEndpoint(cfg);
   const body = { model, messages: history, tools: toolsOverride || getTools(), tool_choice: 'auto', temperature: 0.2, stream: true, stream_options: { include_usage: true }, ...reasoningParams(cfg.provider, cfg.reasoning) };
   // 客户端中途「中断」时 clientSignal 会 abort，同步掐断上游模型请求，避免白跑；
-  // 未传时只保留 120s 超时兜底
-  const timeoutSignal = AbortSignal.timeout(120000);
-  const signal = clientSignal ? AbortSignal.any([timeoutSignal, clientSignal]) : timeoutSignal;
+  // 没有客户端信号时也要有兜底，但兜底必须是**空闲**超时（见 createIdleAbort）
+  const idle = createIdleAbort(clientSignal, 120000);
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.api_key}` },
     body: JSON.stringify(body),
-    signal,
+    signal: idle.signal,
   });
   if (!r.ok) {
     const text = await r.text();
@@ -205,13 +227,23 @@ async function consumeStream(cfg, history, onDelta, onReasoning, clientSignal, t
         const slot = toolCalls[tc.index] || (toolCalls[tc.index] = { id: '', name: '', args: '' });
         if (tc.id) slot.id = tc.id;
         if (tc.function) {
-          if (tc.function.name) slot.name += tc.function.name;
+          // function 名的累积要同时扛住两种下发方式：
+          //   ① 分片下发（"que" + "ry" → "query"）→ 必须累加；
+          //   ② 整名重复下发（"query" + "query"）→ 必须去重，否则拼成 "queryquery"。
+          // 判据：新片段与已累积名**完全相同**时视为重复（跳过），
+          // 否则按分片追加。两者都不是时（服务把名字拆成三片）也能正确拼回。
+          if (tc.function.name) {
+            if (!slot.name) slot.name = tc.function.name;
+            else if (slot.name !== tc.function.name) slot.name += tc.function.name;
+          }
           if (tc.function.arguments) slot.args += tc.function.arguments;
         }
       }
     }
   };
   while (true) {
+    // 每读一次就重置空闲计时：只要还有数据在来，就不算卡死
+    idle.touch();
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
@@ -223,9 +255,34 @@ async function consumeStream(cfg, history, onDelta, onReasoning, clientSignal, t
   }
   // 流结束时缓冲区可能还剩最后一帧（服务端未以换行结尾）：补解析一次，避免丢失尾块
   if (buf.trim()) handleLine(buf);
-  const toolCallList = Object.values(toolCalls).map((t) => ({ id: t.id, name: t.name, arguments: t.args }));
+  idle.dispose();
+  const toolCallList = normalizeToolCalls(Object.values(toolCalls));
   return { text, toolCalls: toolCallList, reasoning, usage };
 }
 
+// tool_call 边界收口：把「上游给得不干净」的 tool_call 变成「下游能安全回传」的形态。
+// 背景（审查 v4 · B03-06）：累积阶段允许空 id / 空 name 一路过关，随后
+//   history.push({ role: 'tool', tool_call_id: tc.id }) 把空串 tool_call_id 发给上游
+//   → 上游以 400 拒绝，整轮对话直接失败；而模型其实是想调用某个工具。
+// 收口规则：
+//   1) 空 name → 该条根本没有可执行的工具，丢掉（留着只会让上游收到非法 tool_calls）。
+//   2) 空 id   → 合成一个稳定 id（形如 call_0），保证 tool_call_id 非空。
+//   3) id 重复 → 追加序号去重，避免上游按 id 配对时错乱。
+// 同时把「过滤」这件事集中在这里，下游（主对话 / 子助手）不再各自判断。
+function normalizeToolCalls(list) {
+  const out = [];
+  const usedIds = new Set();
+  for (const t of list || []) {
+    const name = String((t && t.name) || '').trim();
+    if (!name) continue;                       // 空工具名：丢弃
+    let id = String((t && t.id) || '').trim();
+    if (!id) id = `call_${out.length}`;         // 空 id：合成
+    while (usedIds.has(id)) id = `${id}_dup${usedIds.size}`;
+    usedIds.add(id);
+    out.push({ id, name, arguments: String((t && t.args) || '') });
+  }
+  return out;
+}
 
-module.exports = { SYSTEM_PROMPT, getTools, getMainTools, getSubagentTools, SUBAGENT_TOOL_NAMES, buildSubagentPrompt, callLLM, consumeStream, buildSystemPrompt };
+
+module.exports = { SYSTEM_PROMPT, getTools, getMainTools, getSubagentTools, SUBAGENT_TOOL_NAMES, buildSubagentPrompt, callLLM, consumeStream, buildSystemPrompt, normalizeToolCalls };

@@ -15,7 +15,17 @@
 
 import { subsetTtf } from './hbSubset.js'
 
-const FONT_GZ_URL = '/NotoSansSC-6.ttf.gz'
+// 字体资源（.ttf.gz，8.0MB）。
+//
+// ⚠️ 必须走 `new URL(..., import.meta.url)` 引入，**不能写裸路径 '/NotoSansSC-6.ttf.gz'**：
+//   裸路径指的是 public/ 下的文件 —— Vite 对 public/ 的资源**原样拷贝，不加 content hash**，
+//   文件名永远不变 → 浏览器 / 磁盘缓存住旧字体 → 重新生成字体后用户拿到的还是旧的。
+//   放进 src/assets/ 后由 Vite 作为 asset 处理，产物名带 hash → 内容变了文件名就变。
+//   （同款做法见 utils/hbSubset.js 的 wasm。）
+//
+// ⚠️ 手动预压缩：仓库里存的是 .ttf.gz（构建期不压缩，产物里也保持 .gz）。
+//   运行时按 gzip 魔数判断要不要解压（dev 下 Vite 可能已透明解压）。
+const FONT_GZ_URL = new URL('../assets/fonts/NotoSansSC-6.ttf.gz', import.meta.url).href
 
 // 兜底字符：标点、数字、单位，以及表格里由代码拼出来的固定词（如「讲台」「星期」）。
 // 这些文本不一定出现在入参数据里（是渲染时拼的），漏了就会在 PDF 里变成空白，

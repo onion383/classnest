@@ -16,6 +16,7 @@ const secureChannel = require('../services/secureChannel');
 const { pickPhrase, deriveRestoreHash, formatPhrase } = require('../services/recoveryKey');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
 const sessions = require('../services/sessions');
+const { renameUsernameWithCompensation } = require('../services/accountRename');
 // 备份恢复会用备份包里的整库文件覆盖当前库，表结构可能与恢复前不同：
 // 恢复后必须让 AI 的列名缓存失效（否则后续 AI 写入/查询仍按旧列集合校验）。
 const aiHelpers = require('./ai/ai.helpers');
@@ -255,11 +256,33 @@ router.put('/username', auth(), async (req, res) => {
   // 顺序理由：registry 决定「能不能用这个名字登录」，是权威侧；
   // 万一业务库更新失败，registry 已改而 users 未改的状态下一致性由下次改名修正，
   // 反过来（先改 users）则会出现「库里是新名、登记表是旧名」→ 新名永远登不进去。
-  const changed = dbManager.registryRename(req.user.dbSlug, newName);
-  if (!changed) {
-    return res.status(500).json({ error: '账号登记表更新失败，请重试' });
+  //
+  // ⚠️ 但「由下次改名修正」并不成立：registry 已改而 users 未改时，
+  // **新旧两个名字都登不进去**（registry 里的新名对不上 users 的旧名，
+  // registry 里的旧名又已被覆盖）→ 用户被锁在门外，只能靠恢复密钥重置。
+  // 所以这里显式做补偿：业务库写失败就把 registry 改回旧名，让「旧名仍可登录」重新成立。
+  // 补偿实现见 services/accountRename.js（跨库无法用事务，只能显式回滚）。
+  const renameResult = renameUsernameWithCompensation({
+    registry: {
+      findBySlug: (s) => dbManager.registryFindBySlug(s),
+      rename: (s, name) => dbManager.registryRename(s, name),
+    },
+    slug: req.user.dbSlug,
+    newName,
+    fallbackOldName: user.username,
+    applyUsersUpdate: () => db.prepare('UPDATE users SET username = ? WHERE id = ?').run(newName, req.user.userId),
+  });
+  if (!renameResult.ok) {
+    if (renameResult.reason === 'registry-update-failed') {
+      return res.status(500).json({ error: '账号登记表更新失败，请重试' });
+    }
+    // 业务库写失败：已尽力把 registry 改回旧名（补偿成功与否见 compensated）。
+    const msg = renameResult.compensated
+      ? '用户名修改失败，已还原为原用户名，请重试'
+      : '用户名修改失败且未能还原，请用恢复密钥重置用户名';
+    console.error('[account] 改用户名失败:', renameResult.error && renameResult.error.message);
+    return res.status(500).json({ error: msg });
   }
-  db.prepare('UPDATE users SET username = ? WHERE id = ?').run(newName, req.user.userId);
 
   // 登录态里带的是旧用户名：重新签发一份含新用户名的 token，并同步换发媒体凭据。
   // （sid 沿用原会话，登出/会话名单机制不受影响）

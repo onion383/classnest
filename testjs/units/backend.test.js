@@ -89,8 +89,21 @@ test('播种：槽位行数与默认配置正确', () => {
   assert.equal(count(conn, 'SELECT COUNT(*) c FROM semesters'), 0)
 
   // 逻辑名读取（经视图）应拿到默认值
-  const duty = conn.prepare('SELECT days, items FROM duty_settings').get()
-  assert.equal(JSON.parse(duty.days).length, 5)
+  const duty = conn.prepare('SELECT days, items, settings FROM duty_settings').get()
+  // days 必须按模式分键（{daily,big}）：日常值日的列名是星期几，大扫除的列名是分组名，
+  // 共用一份数组时大扫除没法表达「第一大组负责扫地」。读入口见 services/dutyConfig.js。
+  const dutyDays = JSON.parse(duty.days)
+  assert.equal(dutyDays.daily.length, 5)
+  assert.deepEqual(dutyDays.daily, ['周一', '周二', '周三', '周四', '周五'])
+  assert.ok(Array.isArray(dutyDays.big), 'days.big 应是数组')
+  // 大扫除的列名是派生的（组数的纯函数）→ big 分键不存列名
+  assert.deepEqual(dutyDays.big, [], 'days.big 不应存列名（列名由配置派生）')
+  // settings 是按模式分键的模式配置（大扫除的周期/星期几/任务分组/数量）
+  const dutySettings = JSON.parse(duty.settings)
+  assert.equal(typeof dutySettings.daily, 'object')
+  assert.equal(typeof dutySettings.big, 'object')
+  assert.equal(dutySettings.big.groupType, 'big')
+  assert.equal(dutySettings.big.groupCount, 3)
   // items 必须是按模式分键的结构（{daily,big}）：services/dutyMode.unpackMode 只认这种，
   // 播种成扁平数组时全新库的值日页一个项目都看不到。
   const dutyItems = JSON.parse(duty.items)

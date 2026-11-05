@@ -12,10 +12,21 @@
           </button>
         </div>
 
-        <!-- 时间（星期几） -->
+        <!-- 星期权重开关：与「值日项目权重算法」弹窗里的开关是同一个状态，改一处两处同步 -->
         <div class="mb-5">
-          <p class="font-semibold mb-2 text-text">时间</p>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex items-center justify-between gap-3">
+            <span class="font-semibold text-text">开启星期权重</span>
+            <AppSwitch :model-value="weekdayWeighted" @update:model-value="onWeekdayWeightedToggle" aria-label="开启星期权重" />
+          </div>
+          <p class="text-xs text-text-muted mt-1">开启后，值日项目权重表按「劳动项目 × 星期」分别计权重</p>
+        </div>
+
+        <!-- 时间（星期几）：日常值日勾星期；大扫除是「周期 + 星期几」 -->
+        <div class="mb-5">
+          <p class="font-semibold mb-2 text-text">{{ isBigMode ? '时间设置' : '时间' }}</p>
+
+          <!-- 日常值日：勾选星期几 -->
+          <div v-if="!isBigMode" class="flex flex-wrap gap-2">
             <label
               v-for="d in weekDays"
               :key="d"
@@ -25,6 +36,69 @@
               <input type="checkbox" class="accent-info" :value="d" v-model="localDays" />
               {{ d }}
             </label>
+          </div>
+
+          <!-- 大扫除：周期 + 星期几（决定大扫除多久发生一次） -->
+          <div v-else class="space-y-3">
+            <div class="flex flex-wrap items-center gap-3">
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-text-secondary">周期</span>
+                <div class="flex gap-1.5">
+                  <button
+                    v-for="c in cycleOptions"
+                    :key="c.value"
+                    class="px-3 py-1.5 rounded-lg border text-sm transition-theme"
+                    :class="localConfig.cycle === c.value
+                      ? 'bg-info/15 border-info text-info'
+                      : 'bg-surface-hover border-border text-text-secondary'"
+                    @click="localConfig.cycle = c.value"
+                  >{{ c.label }}</button>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-text-secondary">时间</span>
+                <AppSelect
+                  v-model="localConfig.weekday"
+                  :options="weekDays"
+                  class="w-28"
+                />
+              </div>
+            </div>
+            <p class="text-xs text-text-muted">
+              大扫除按此设置发生：{{ cycleLabel(localConfig.cycle) }}的{{ localConfig.weekday }}。<span v-if="nextBigDate">下一次：{{ nextBigDate }}</span>
+            </p>
+          </div>
+        </div>
+
+        <!-- 大扫除的任务分组：列 = 第X大组 / 第X小组 + 内置的「全部」 -->
+        <div v-if="isBigMode" class="mb-5">
+          <p class="font-semibold mb-2 text-text">任务分组</p>
+          <div class="space-y-3">
+            <div class="flex flex-wrap items-center gap-4">
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-text-secondary">分组</span>
+                <AppSelect
+                  v-model="localConfig.groupType"
+                  :options="groupTypeOptions"
+                  class="w-24"
+                />
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-text-secondary">数量</span>
+                <input
+                  v-model.number="localConfig.groupCount"
+                  type="number"
+                  min="0"
+                  :max="maxGroups"
+                  class="w-20 border rounded px-2 py-1.5 text-sm bg-surface"
+                />
+                <span class="text-xs text-text-muted">个（第1{{ groupTypeLabel }} ~ 第{{ localConfig.groupCount || 0 }}{{ groupTypeLabel }}）</span>
+              </div>
+            </div>
+            <p class="text-xs text-text-muted">
+              每个人负责一块{{ groupTypeLabel }}区域，任务按区域划分（如「扫地」由每个{{ groupTypeLabel }}各出 1 人）；
+              另有内置的「{{ allColumn }}」列，可从全体学生中选人（如倒垃圾全校一人）。
+            </p>
           </div>
         </div>
 
@@ -129,19 +203,38 @@
           @cancel="importVisible = false"
         />
       </div>
+
+      <!-- 人数不足：总槽位 < 班级学生数时提示 -->
+      <ConfirmDialog
+        :visible="slotWarningVisible"
+        title="人数不足提示"
+        message="您设置的值日人数小于学生人数，会导致部分同学排不上值日表，确定保存吗？"
+        confirm-text="确定保存"
+        cancel-text="取消"
+        :show-cancel="true"
+        @confirm="confirmSave"
+        @cancel="slotWarningVisible = false"
+      />
   </DialogShell>
 </template>
 
 <script setup vapor>
 import { ref, computed, watch, nextTick, defineAsyncComponent } from 'vue'
+import axios from 'axios'
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
 import IconGlyph from '../base/IconGlyph.vue'
+import AppSwitch from '../base/AppSwitch.vue'
+import AppSelect from '../base/AppSelect.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { resolveHeader, normalizeLoose } from '../../utils/importSheet.js'
+// 值日列名的前端唯一来源（内置列 / 周期选项 / 任务分组 / 派生规则）
+import { ALL_COLUMN, CYCLES, GROUP_TYPES, GROUP_TYPE_LABELS, MAX_GROUPS, bigColumnNames } from '../../utils/dutyColumns.js'
 
 const loadImportExcel = () => import('../import-export/ImportExcel.vue')
 const ImportExcel = defineAsyncComponent(loadImportExcel)
+const loadConfirmDialog = () => import('../base/ConfirmDialog.vue')
+const ConfirmDialog = defineAsyncComponent(loadConfirmDialog)
 
 const WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const DEFAULT_POOL = ['擦黑板', '倒垃圾', '拖地', '扫地', '摆桌子']
@@ -151,9 +244,28 @@ defineOptions({ name: 'DutySettingsDialog' })
 const props = defineProps({
   visible: Boolean,
   days: { type: Array, default: () => ['周一', '周二', '周三', '周四', '周五'] },
-  items: { type: Array, default: () => [] }
+  items: { type: Array, default: () => [] },
+  // 班级学生数：用于保存时判断「总槽位是否小于学生数」
+  studentCount: { type: Number, default: 0 },
+  // 星期权重开关当前值（父组件持有，保存时回传）
+  weekdayWeighted: { type: Boolean, default: false },
+  // 当前模式：daily=日常值日（列=星期几）/ big=大扫除（列=分组名+全部）
+  mode: { type: String, default: 'daily' },
+  // 大扫除的模式配置（周期 / 星期几 / 分组维度 id），保存时回传
+  config: { type: Object, default: () => ({}) },
 })
-const emit = defineEmits(['save', 'cancel'])
+const emit = defineEmits(['save', 'cancel', 'update:weekdayWeighted'])
+
+// 星期权重开关：直通父组件（父组件持有唯一状态），两个弹窗改一处两处同步。
+// 注意：这是显示维度的偏好（存 localStorage），不随「保存设置」落库，
+// 所以这里走 write-through —— 点了立刻生效，取消也不会把它退回去。
+const weekdayWeighted = computed({
+  get: () => props.weekdayWeighted,
+  set: (v) => emit('update:weekdayWeighted', v),
+})
+function onWeekdayWeightedToggle(v) {
+  weekdayWeighted.value = v
+}
 
 // 组件内部使用本地副本，避免直接修改父传入的 props/响应式数据
 const localDays = ref([])
@@ -165,6 +277,26 @@ const overIndex = ref(-1)
 const adding = ref(false)
 const newPoolName = ref('')
 const newInput = ref(null)
+const slotWarningVisible = ref(false)
+
+// —— 大扫除模式：任务分组 + 时间设置 ——
+// 列名由「任务分组（大组/小组）+ 数量」派生：第1大组…第N大组 + 内置的「全部」列。
+// 组数存后端（settings.big），列名是它的纯函数，前后端都不单独存一份列名。
+const localConfig = ref({ cycle: 'week', weekday: '周三', groupType: 'big', groupCount: 3 })
+const nextBigDate = ref('')
+
+const isBigMode = computed(() => props.mode === 'big')
+const allColumn = ALL_COLUMN
+const cycleOptions = CYCLES
+const groupTypeOptions = GROUP_TYPES
+const maxGroups = MAX_GROUPS
+// 当前分组类型的显示名（大组 / 小组）
+const groupTypeLabel = computed(() => GROUP_TYPE_LABELS[localConfig.value.groupType] || GROUP_TYPE_LABELS.big)
+
+function cycleLabel(cycle) {
+  const c = CYCLES.find((x) => x.value === cycle)
+  return c ? c.label : '一周'
+}
 
 const poolChips = computed(() => [...DEFAULT_POOL, ...customPool.value])
 const isInList = computed(() => (name) => localItems.value.some(it => it.name === name))
@@ -178,8 +310,29 @@ watch(() => props.visible, (val) => {
     newPoolName.value = ''
     dragSource.value = null
     overIndex.value = -1
+    slotWarningVisible.value = false
+    // 大扫除：本地副本 = 父组件传来的配置（周期 / 星期几 / 任务分组 / 数量）
+    const c = props.config || {}
+    localConfig.value = {
+      cycle: c.cycle || 'week',
+      weekday: c.weekday || '周三',
+      groupType: GROUP_TYPE_LABELS[c.groupType] ? c.groupType : 'big',
+      groupCount: Number(c.groupCount) || 0,
+    }
+    nextBigDate.value = ''
+    if (isBigMode.value) {
+      loadNextBigDate()
+    }
   }
 })
+
+// 下一次大扫除日期：由后端算（命中日计算必须单源，前端再算一份必然对不上）
+async function loadNextBigDate() {
+  try {
+    const res = await axios.get('/api/duty/big-dates?mode=big')
+    nextBigDate.value = (res.data && res.data.next) || ''
+  } catch (e) { console.error(e) }
+}
 
 function isDayOn(d) { return localDays.value.includes(d) }
 function removeItem(i) { localItems.value.splice(i, 1) }
@@ -314,14 +467,44 @@ function onImportData({ fields, rows }) {
   localItems.value = next
   useNotification().success(`已导入 ${next.length} 个劳动项目，请确认后点「保存设置」`)
 }
-function save() {
+function buildPayload() {
   // 过滤空姓名
   const items = localItems.value
     .filter(it => (it.name || '').trim())
     .map(it => ({ name: it.name.trim(), difficulty: Number(it.difficulty) || 0, count: Math.max(1, Math.round(Number(it.count)) || 1) }))
-  // 天数按 周一到周日 固定顺序输出，避免因勾选顺序导致列乱序
-  const days = WEEK.filter(d => localDays.value.includes(d))
-  emit('save', { days, items })
+  // 日常值日：天数按 周一到周日 固定顺序输出，避免因勾选顺序导致列乱序
+  // 大扫除：列名由「组数」派生（后端算），前端不传列名，只传配置
+  const payload = { items }
+  if (isBigMode.value) {
+    payload.config = {
+      cycle: localConfig.value.cycle,
+      weekday: localConfig.value.weekday,
+      groupType: localConfig.value.groupType,
+      groupCount: Math.max(0, Math.min(MAX_GROUPS, Math.round(Number(localConfig.value.groupCount)) || 0)),
+    }
+  } else {
+    payload.days = WEEK.filter(d => localDays.value.includes(d))
+  }
+  return payload
+}
+function save() {
+  const payload = buildPayload()
+  const perDay = payload.items.reduce((t, it) => t + it.count, 0)
+  // 总槽位 = 列数 × 每列人数。大扫除的列名是派生的（前端不传 days），
+  // 列数按派生的列名数量算 —— 与后端 dutyConfig.bigColumnNames 同一规则。
+  const columnCount = isBigMode.value
+    ? bigColumnNames(payload.config.groupType, payload.config.groupCount).length
+    : payload.days.length
+  const total = columnCount * perDay
+  if (props.studentCount > 0 && total > 0 && total < props.studentCount) {
+    slotWarningVisible.value = true
+    return
+  }
+  emit('save', payload)
+}
+function confirmSave() {
+  slotWarningVisible.value = false
+  emit('save', buildPayload())
 }
 function cancel() { emit('cancel') }
 </script>

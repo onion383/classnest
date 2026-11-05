@@ -64,12 +64,21 @@
             <th
               v-for="(col, colIdx) in displayHeaders"
               :key="colIdx"
-              :class="['bg-primary text-text-inverse border border-border px-2 py-1 text-center', col !== '走廊' ? 'cursor-pointer' : 'cursor-default bg-text-muted', { 'dt-col-src-hidden': colDragIdx === colIdx }]"
+              :class="['bg-primary text-text-inverse border border-border px-2 py-1 text-center', col !== '走廊' ? 'cursor-pointer' : 'cursor-default bg-text-muted', { 'dt-col-src-hidden': colDragIdx === colIdx }, colIdx === todayColIdx ? 'grid-col-today' : '']"
               :style="col === '走廊' ? 'width: 60px;' : ''"
             >
-              <div v-if="col !== '走廊'" class="flex items-center justify-center gap-1">
-                <span class="drag-handle cursor-grab text-text-inverse/70 hover:text-text-inverse" title="按住拖动列" @mousedown.prevent.stop="onColHandleDown($event, colIdx)" @contextmenu.stop.prevent>⠿</span>
-                <span>{{ col }}</span>
+              <div v-if="col !== '走廊'" class="grid-col-head">
+                <div class="flex items-center justify-center gap-1">
+                  <span class="drag-handle cursor-grab text-text-inverse/70 hover:text-text-inverse" title="按住拖动列" @mousedown.prevent.stop="onColHandleDown($event, colIdx)" @contextmenu.stop.prevent>⠿</span>
+                  <span class="grid-col-label">{{ col }}</span>
+                </div>
+                <!--
+                  日期副行：课表/值日表在星期名下面标出这一周的具体日期。
+                  按**显示出来的表头文字**取日期，不按列下标取 —— 列可以被拖走，
+                  表头文字随之临时改变，日期跟着文字走才不会张冠李戴。
+                  没传 colDates（如座位表的「列1/走廊」）就不渲染这行。
+                -->
+                <span v-if="colDateOf(col)" class="grid-col-date">{{ colDateOf(col) }}</span>
               </div>
               <span v-else class="text-base text-text">走廊</span>
             </th>
@@ -147,7 +156,7 @@
                     :data-row-id="anchorPrefix && row._lessonIdx != null ? anchorPrefix + ':' + row._lessonIdx + ':' + colIdx : undefined"
                     data-data-cell
                     :ref="el => setCellRef(rowIdx, colIdx, el)"
-                    :class="['border border-border px-2 py-2 text-center transition-colors relative', colDragIdx === colIdx ? 'dt-col-src-hidden' : '', isDragTarget(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isCellSelected(rowIdx, colIdx) && !isEditing(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isEditing(rowIdx, colIdx) ? 'ring-2 ring-info ring-inset' : '', row._isReadonly ? '' : 'cursor-pointer', cell._bg != null ? 'cell-heat' : '', isEditing(rowIdx, colIdx) ? 'cell-editing' : '']"
+                    :class="['border border-border px-2 py-2 text-center transition-colors relative', colDragIdx === colIdx ? 'dt-col-src-hidden' : '', colIdx === todayColIdx ? 'grid-cell-today' : '', isDragTarget(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isCellSelected(rowIdx, colIdx) && !isEditing(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isEditing(rowIdx, colIdx) ? 'ring-2 ring-info ring-inset' : '', row._isReadonly ? '' : 'cursor-pointer', cell._bg != null ? 'cell-heat' : '', isEditing(rowIdx, colIdx) ? 'cell-editing' : '']"
                     :style="{
                       '--cell-heat-bg': cell._bg != null ? cell._bg : undefined,
                       '--cell-heat-fg': cell._fg != null ? cell._fg : undefined,
@@ -268,6 +277,15 @@ const COURSE_COLORS = {
 const props = defineProps({
     colHeaders: { type: Array, required: true },
     rows: { type: Array, required: true },
+    // 列头下方的日期副行：{ 表头文字: '2026.3.1' }。
+    // 按**表头文字**索引而不是列下标 —— 列可拖拽、表头文字会临时改变，
+    // 按文字取日期才不会在拖动过程中出现「周二配着周一日期」的错位。
+    // 不传 = 不显示日期（座位表的「列1/走廊」等无日期概念的表）。
+    colDates: { type: Object, default: () => ({}) },
+    // 「今天」所在列的表头文字（如 '周四'）。传了就给这一列加蓝色高亮，
+    // 不传就不高亮（模板表、权重表没有「今天」的概念）。
+    // 同样按**表头文字**判定，不按列下标 —— 与 colDates 同一口径。
+    todayCol: { type: String, default: '' },
     showPeriodColumn: { type: Boolean, default: false },
     // 单元格锚点前缀：为空时不给单元格输出 data-row-id（其它页面零影响）；
     // 传值时输出 `${anchorPrefix}:${节次索引}:${列索引}`（如 s:0:0），供全局搜索按记录定位。
@@ -339,6 +357,22 @@ const displayHeaders = computed(() => {
   for (let i = 0; i < out.length; i++) if (ov[i] != null) out[i] = ov[i]
   return out
 })
+// 某列的日期副行文本（没有则空串）。
+// 按**表头文字**取值：列拖拽时表头文字会被临时改写（colLabelOverride），
+// 日期跟着文字走，拖动过程中也不会出现「文字是周二、日期却是周一」的错位。
+const colDateOf = (col) => (col && props.colDates[col]) || ''
+// 「今天」所在列的**列下标**（-1 = 不高亮）。
+// 为什么按原始表头（props.colHeaders）而不是显示文字找：
+// 拖拽列的过程中表头文字会被临时改写（colLabelOverride 预览落点），
+// 按显示文字定位会让高亮在拖动时来回跳。按原始表头定位则全程稳定 ——
+// 课表/值日的列头本来就是固定的（换列是「数据搬家、表头不动」）。
+const todayColIdx = computed(() => {
+  const name = props.todayCol;
+  if (!name) return -1;
+  const list = props.colHeaders || [];
+  for (let i = 0; i < list.length; i++) if (list[i] === name) return i;
+  return -1;
+});
 const firstActivate = ref(true)
 // 行过渡容器是否启用（见模板说明）：只在行集合真正变化的短窗口内为 true，
 // 日常编辑/键入/框选时退化成 Fragment，避免 TransitionGroup 每次更新的强制同步布局。
@@ -365,6 +399,7 @@ const ctx = {
   firstActivate, rowsAnimEnabled, vScroll, editingCell, editingCellData,
   candidateHighlightIndex, showCandidatePopup, candidatePopupX, candidatePopupY, cellRefs,
   colHeaders: toRef(props, 'colHeaders'),
+  colDates: toRef(props, 'colDates'),
   rows: toRef(props, 'rows'),
   showPeriodColumn: toRef(props, 'showPeriodColumn'),
   anchorPrefix: toRef(props, 'anchorPrefix'),
@@ -758,6 +793,39 @@ onBeforeUnmount(() => {
 <style scoped>
 .drag-handle { font-size: 14px; user-select: none; opacity: 0.6; }
 .drag-handle:hover { opacity: 1; }
+/* ---- 列头里的日期副行 ----
+   星期名在上、具体日期（2026.3.1）在下，两行叠在一个表头格子里。
+   日期用半透明的主文字色：同一格里第二行不该比主信息更抢眼。 */
+.grid-col-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  line-height: 1.25;
+}
+.grid-col-date {
+  font-size: 11px;
+  font-weight: normal;
+  letter-spacing: 0.2px;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+/* ---- 「今天」这一列的高亮 ----
+   表头用内描边（box-shadow）而不是改背景色：表头底色在各主题里都被
+   !important 覆盖过（base 是深玉、glass 是半透明白），改 background-color
+   要跟每个主题打架，描边则各主题都没碰。
+   数据格用 background-image 叠一层半透明蓝：单元格自己的底色（课程色 /
+   热力色）是内联 background-color，叠在它上面既不改原色又能看出整列。 */
+.grid-col-today {
+  box-shadow: inset 0 0 0 2px var(--color-info, #3b82f6);
+}
+.grid-col-today .grid-col-date {
+  font-weight: 600;
+  opacity: 1;
+}
+.grid-cell-today {
+  background-image: linear-gradient(rgba(59, 130, 246, 0.10), rgba(59, 130, 246, 0.10));
+}
 /* 列拖拽的源列（表头与数据格）：整列直接留空（visibility 保留占位宽度与列宽），
    不留下半透明副本，避免原位置看起来还有一层影子 */
 .dt-col-src-hidden { visibility: hidden; }

@@ -11,6 +11,36 @@ export function shuffle(arr) {
   return a
 }
 
+// ===== 数据源：本次分组用哪些人 =====
+// dataSource:
+//   'table' = 只把当前分组表里已有的人重新分组（名册能对上 id 的取名册对象，对不上的算临时同学）
+//   'all'   = 学生表里的全班同学；includeNew 为真时再带上分组表里的陌生同学
+// includeNew: 用户在「发现有新同学」弹窗里选了「参与」才为真（只影响 'all'）
+export function buildRoster({ dataSource, students = [], groups = [], includeNew = false }) {
+  const named = s => String((s && s.姓名) || '').trim()
+  const rosterStudents = (students || []).filter(s => named(s))
+  // 分组表里的成员名（按出现顺序去重）
+  const memberNames = []
+  const seen = new Set()
+  for (const g of groups || []) {
+    for (const m of (g.members || [])) {
+      const n = String((m && m.member_name) || '').trim()
+      if (n && !seen.has(n)) { seen.add(n); memberNames.push(n) }
+    }
+  }
+  const known = new Set(rosterStudents.map(named))
+  if (dataSource === 'table') {
+    // 只重排已经在表里的人：能对上名册的取名册对象（带 id / 性别），对不上的用临时对象
+    // 表里的人一律带上（含名册外的新同学）——「现有分组表格」就是以表里的内容为准
+    return memberNames.map(n => rosterStudents.find(s => named(s) === n) || { 姓名: n })
+  }
+  // 全部同学：名册全员（带 id / 性别）
+  if (!includeNew) return rosterStudents
+  // 名册外的新同学按用户选择附在后面
+  const extras = memberNames.filter(n => !known.has(n)).map(n => ({ 姓名: n }))
+  return extras.length ? rosterStudents.concat(extras) : rosterStudents
+}
+
 export function useSmartGroupPipeline(ctx) {
   return {
     // ==================== 流水线分组算法（核心） ====================

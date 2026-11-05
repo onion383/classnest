@@ -132,7 +132,8 @@ function seedDutySettings(conn, items, days) {
 
 test('值日保存失败时不能留下孤儿临时学生（校验阶段建档的副作用必须与写库同生共死）', async () => {
   const conn = freshDb()
-  seedDutySettings(conn, { 扫地: { 1: 1 } }, { 1: '周一' })
+  // 值日设置：新结构 —— days 按模式分键的星期数组，items 按模式分键的项目数组
+  seedDutySettings(conn, { daily: [{ name: '扫地', count: 1 }] }, { daily: ['周一'] })
   active.conn = conn
   // 建临时学生（students 表）成功后，让「值日表落库」这一步失败 —— 按 SQL 锁定注入点，
   // 不依赖「第 2 次写」这种会被新增写操作改掉的序号
@@ -142,7 +143,7 @@ test('值日保存失败时不能留下孤儿临时学生（校验阶段建档�
     [['/api/duty', dutyRouter]],
     'PUT', '/api/duty', {
       mode: 'daily',
-      cells: { 扫地: { 1: ['新来的同学'] } },
+      cells: { 扫地: { 周一: ['新来的同学'] } },
     }
   )
   assert.ok(r.status >= 400, '值日表写失败应报错（实际 ' + r.status + '：' + r.text.slice(0, 200) + '）')
@@ -156,7 +157,8 @@ test('值日保存失败时不能留下孤儿临时学生（校验阶段建档�
 
 test('值日保存成功时，名册外的姓名必须照常建档（不能为了修副作用把功能改没了）', async () => {
   const conn = freshDb()
-  seedDutySettings(conn, { 扫地: { 1: 1 } }, { 1: '周一' })
+  // 值日设置：新结构 —— days 按模式分键的星期数组，items 按模式分键的项目数组
+  seedDutySettings(conn, { daily: [{ name: '扫地', count: 1 }] }, { daily: ['周一'] })
   active.conn = conn
   active.state = { writes: 0, failAt: 0 }
 
@@ -164,7 +166,7 @@ test('值日保存成功时，名册外的姓名必须照常建档（不能为�
     [['/api/duty', dutyRouter]],
     'PUT', '/api/duty', {
       mode: 'daily',
-      cells: { 扫地: { 1: ['新来的同学'] } },
+      cells: { 扫地: { 周一: ['新来的同学'] } },
     }
   )
   assert.equal(r.status, 200, '保存应成功（实际 ' + r.status + '：' + r.text.slice(0, 200) + '）')

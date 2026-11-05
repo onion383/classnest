@@ -59,4 +59,28 @@ function mondayOf(s) {
   return localDateStr(d);
 }
 
-module.exports = { pad2, localDateStr, localDateTimeStr, todayStr, parseDateStr, shiftDateStr, mondayOf };
+// 两个日期字符串相差的天数（to - from，按自然日算）。
+// 入参可以是 YYYY-MM-DD 或 Date；非法输入返回 0（调用方按「没差」处理）。
+// 走本地时区的零点，不用 toISOString（UTC 口径会让东八区凌晨少一天）。
+function diffDays(from, to) {
+  const a = toLocalMidnight(from);
+  const b = toLocalMidnight(to);
+  if (!a || !b) return 0;
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+// YYYY-MM-DD / Date → 本地零点的 Date；非法输入返回 null
+function toLocalMidnight(s) {
+  let d;
+  if (s instanceof Date) {
+    if (isNaN(s.getTime())) return null;
+    d = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+  } else {
+    const str = String(s == null ? '' : s).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
+    d = parseDateStr(str);
+  }
+  return isNaN(d.getTime()) ? null : d;
+}
+
+module.exports = { pad2, localDateStr, localDateTimeStr, todayStr, parseDateStr, shiftDateStr, mondayOf, diffDays };

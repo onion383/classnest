@@ -51,6 +51,8 @@
                 v-else
                 :anchor-prefix="'duty:' + dutyMode"
                 :col-headers="settingsDays"
+                :col-dates="dutyColDates"
+                :today-col="todayName"
                 :rows="activeLoaded ? dutyActiveRows : []"
                 :hide-meta-columns="true"
                 :show-row-number="true"
@@ -93,6 +95,8 @@
                 v-else
                 :anchor-prefix="'dutyt:' + dutyMode"
                 :col-headers="settingsDays"
+                :col-dates="dutyColDates"
+                :today-col="todayName"
                 :rows="masterLoaded ? dutyMasterRows : []"
                 :hide-meta-columns="true"
                 :show-row-number="true"
@@ -128,7 +132,7 @@
             />
           </section>
 
-          <!-- 值日项目权重表：与值日表同构（项目×星期），格内填数字权重，热力图展示 -->
+          <!-- 值日项目权重表：一维按项目（单列“权重”）/ 二维按项目×星期，格内填数字权重，热力图展示 -->
           <section class="mb-4">
             <div class="mb-4 flex items-center gap-3">
               <h2 class="text-xl font-semibold text-text flex items-center gap-2 min-h-7"><IconGlyph name="chart" :size="20" /> 值日项目权重表</h2>
@@ -155,7 +159,7 @@
             <GridView
               v-else
               :anchor-prefix="'dutyw:' + dutyMode"
-              :col-headers="settingsDays"
+              :col-headers="weightColHeaders"
               :rows="weightLoaded ? weightDisplayRows : []"
               :hide-meta-columns="true"
               :show-row-number="true"
@@ -171,7 +175,7 @@
               @swap-columns="onWeightSwapColumns"
               @retry="loadWeight"
             />
-            <ExportExcel v-if="weightExportMounted" :is-visible="weightExportVisible" :rows="weightExportRows" :fields="exportFields" defaultFilename="值日项目权重表" @update:is-visible="weightExportVisible = $event" />
+            <ExportExcel v-if="weightExportMounted" :is-visible="weightExportVisible" :rows="weightExportRows" :fields="weightExportFields" defaultFilename="值日项目权重表" @update:is-visible="weightExportVisible = $event" />
           </section>
         </div>
 
@@ -212,6 +216,7 @@
                 <GridView
                   v-else
                   :col-headers="historyDays.length ? historyDays : settingsDays"
+                  :col-dates="historyColDates"
                   :rows="historySnapshot ? historyRows : []"
                   :hide-meta-columns="true"
                   :show-row-number="true"
@@ -277,6 +282,11 @@
       :visible="settingsVisible"
       :days="settingsDays"
       :items="settingsItems"
+      :student-count="allStudents.length"
+      :weekday-weighted="isWeekdayWeighted"
+      :mode="dutyMode"
+      :config="settingsConfig"
+      @update:weekday-weighted="onWeekdayWeightedChange"
       @save="saveSettings"
       @cancel="settingsVisible = false"
     />
@@ -290,11 +300,15 @@
       :students="allStudents"
       :weights="dutyWeights"
       :ledger="dutyLedger"
+      :big-cleanup="dutyMode === 'big'"
       :draft="arrangeDraft"
+      :base-cells="arrangeTarget === 'master' ? masterCells : activeCells"
+      :seat="arrangeSeat"
       @cancel="arrangeVisible = false"
       @confirm="onArrangeConfirm"
       @save-draft="onSaveArrangeDraft"
       @clear-draft="onClearArrangeDraft"
+      @open-settings="onOpenSettingsFromArrange"
     />
 
     <!-- 值日项目权重算法弹窗 -->
@@ -303,6 +317,8 @@
       :visible="weightAlgoVisible"
       :days="settingsDays"
       :items="settingsItems"
+      :dimension="weightDimension"
+      @update:dimension="onWeightAlgoDimensionChange"
       @cancel="weightAlgoVisible = false"
       @apply="onApplyWeightAlgorithm"
     />
@@ -331,6 +347,8 @@ import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } fr
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { shiftDateStr, localDateStr } from '../utils/dateTime.js'
+import { buildWeekDateMap } from '../utils/weekDates.js'
+import { useWeekDates } from '../composables/useWeekDates.js'
 import { getSemesterStart } from '../utils/semesterStart.js'
 import { createSerialSaver } from '../utils/serialSaver.js'
 import { createLatest } from '../utils/latestOnly.js'
@@ -347,6 +365,9 @@ import { syncStudentNamesFromRows, syncStudentNames } from '../composables/useSy
 import { createRowReuseCache } from '../utils/rowReuse.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 import { weightHeatRgb, weightHeatFg } from '../utils/heatColor.js'
+import { resolveWeightGroups } from '../utils/dutyWeightGroups.js'
+// 大扫除的列名由「任务分组 + 数量」派生（规则与后端 dutyConfig.bigColumnNames 一致）
+import { bigColumnNames } from '../utils/dutyColumns.js'
 import { resolveHeader, matchCandidate } from '../utils/importSheet.js'
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk。loader 抽出为命名函数，
@@ -379,10 +400,20 @@ const arrangeVisible = ref(false)
 // 智能排表目标：'active' 当前值日 / 'master' 值日模板
 const arrangeTarget = ref('active')
 const arrangeDraft = ref({ exists: false })
+// 智能排表用的座位表快照：用于从座位几何抽取同桌/六位/一列等学生分组
+const arrangeSeat = ref({ rows: 0, cols: 0, mode: 'single', seats: [] })
+// 排表弹窗里提示人数不足 → 关掉排表并打开值日设置
+function onOpenSettingsFromArrange() {
+  arrangeVisible.value = false
+  settingsVisible.value = true
+}
 async function openArrange(target) {
   arrangeTarget.value = target
-  // 先加载账本（公平算法需要）和草稿
-  await Promise.all([loadDutyLedger(), loadArrangeDraft()])
+  // 账本（公平算法需要）、草稿、座位表分组数据一起准备
+  const seatTask = axios.get(`${API_BASE}/seats`)
+    .then(res => { arrangeSeat.value = res.data || { rows: 0, cols: 0, mode: 'single', seats: [] } })
+    .catch(() => { arrangeSeat.value = { rows: 0, cols: 0, mode: 'single', seats: [] } })
+  await Promise.all([loadDutyLedger(), loadArrangeDraft(), seatTask])
   arrangeVisible.value = true
 }
 async function loadArrangeDraft() {
@@ -438,7 +469,15 @@ const dutyViewOptions = [
 
 // ==================== 全局设置（时间 + 劳动项目） ====================
 const settingsDays = ref(['周一', '周二', '周三', '周四', '周五'])
+// ---- 列头的日期副行（星期名下面标出这一周的具体日期）----
+// 当前值日 / 值日模板：按「今天所在的自然周」（值日表是循环排的，问「这一栏是几号」
+//   只能对自然周，对不上学期周次）。
+// 值日项目权重表不加 —— 它是「项目 × 权重」的对照表，不是某一周的日程。
+const { monday, todayName } = useWeekDates()
+const dutyColDates = computed(() => buildWeekDateMap(monday.value, settingsDays.value))
 const settingsItems = ref([])
+// 大扫除的模式配置（周期 / 星期几 / 所用的分组维度 id）。日常值日没有这个配置。
+const settingsConfig = ref({})
 // 设置是否「确实读到了」。只有为真时才允许把「项目为空」判成「没配置」并显示引导页 ——
 // 首次进入若 settings 请求失败，settingsItems 会停留在初始的 []，不设这道闸就会误报「没配项目」。
 const settingsLoaded = ref(false)
@@ -490,9 +529,13 @@ function reconstructCells(newRows, dayList) {
 async function fetchSettings() {
   try {
     const res = await axios.get(`${API_BASE}/duty/settings?mode=${dutyMode.value}`)
+    // 列名按模式不同：日常值日=星期几，大扫除=分组名+全部。
+    // 大扫除的列名由后端返回（后端保证内置的「全部」列在末尾），这里原样采用。
     settingsDays.value = (res.data.days && res.data.days.length) ? res.data.days : ['周一', '周二', '周三', '周四', '周五']
     // 只接受数组：items 契约是 [{name,difficulty,count}]，形状异常时不覆盖现有设置（避免 {} 把 forEach 带崩）
     settingsItems.value = Array.isArray(res.data.items) ? res.data.items : []
+    // 大扫除的模式配置（周期 / 星期几 / 分组维度）
+    settingsConfig.value = (res.data.config && typeof res.data.config === 'object') ? res.data.config : {}
     settingsLoaded.value = true
   } catch (e) { console.error(e) }
 }
@@ -746,7 +789,11 @@ async function persistMaster(action = '保存') {
 function persistSettings(extra) {
   // 单请求：后端 /duty/save 用一个事务依次写 duty_settings / duty_layout / duty_template，
   // 省去原先 3 个并发请求的往返与重复提交；active/master 仅在需要时附加。
-  const payload = { days: settingsDays.value, items: settingsItems.value, mode: dutyMode.value }
+  const payload = { items: settingsItems.value, mode: dutyMode.value }
+  // 日常值日：传勾选的星期；大扫除：列名由后端按组数派生，不传 days
+  if (dutyMode.value === 'daily') payload.days = settingsDays.value
+  // 大扫除的模式配置（周期 / 星期几 / 两组数量）一并带上
+  if (dutyMode.value === 'big') payload.config = settingsConfig.value
   if (extra && extra.active !== undefined) payload.active = activeCells.value
   if (extra && extra.master !== undefined) payload.master = masterCells.value
   return axios.put(`${API_BASE}/duty/save`, payload)
@@ -810,9 +857,15 @@ function swapDays(oldIndex, newIndex) {
 }
 
 // ==================== 保存设置 ====================
-async function saveSettings({ days, items }) {
-  settingsDays.value = days
+async function saveSettings({ days, items, config }) {
   settingsItems.value = items
+  // 大扫除：列名由「任务分组 + 数量」派生（前端不传 days）—— 派生规则与后端 dutyConfig.bigColumnNames 一致
+  if (config) {
+    settingsConfig.value = { ...config }
+    settingsDays.value = bigColumnNames(config.groupType, config.groupCount)
+  } else {
+    settingsDays.value = days
+  }
   // 注意：下面这步会就地删掉「不在 items / days 里」的格子数据。
   // 因此保存失败时必须整体回滚，否则这些删除会留在界面里，用户继续编辑就把丢数据的状态存进库了。
   pruneCells(activeCells.value)
@@ -1049,6 +1102,13 @@ const historySnapDate = computed(() => {
 })
 
 const historyRows = computed(() => buildGridRows(historyCells.value, historyItems.value, historyDays.value, true))
+// 历史记录的日期副行：按所选那一周算。
+// historyCurrentWeek 就是那一周的周一（后端按 week_start 聚合，取该周最后一天的快照），
+// 直接当基准即可。列头未就绪时先按当前周算，列头到位后自动跟着变。
+const historyColDates = computed(() => buildWeekDateMap(
+  historyCurrentWeek.value || monday.value,
+  historyDays.value.length ? historyDays.value : settingsDays.value
+))
 
 // ==================== 值日项目权重表 ====================
 // 结构：{ 项目名: { 星期几: 权重值 } }。与值日表同构，供指数与权重公平算法使用。
@@ -1057,6 +1117,29 @@ const weightLoaded = ref(false)
 const weightError = ref(false)
 const WEIGHT_MIN = 0
 const WEIGHT_MAX = 1
+// 权重维度：一维按项目（默认，所有天同权重）/ 二维按项目×星期。按模式分别记忆。
+const WEIGHT_DIM_KEY_PREFIX = 'class-duty-weight-dim-'
+function readWeightDimension(mode) {
+  return localStorage.getItem(WEIGHT_DIM_KEY_PREFIX + mode) === '2d' ? '2d' : '1d'
+}
+const weightDimension = ref(readWeightDimension(dutyMode.value))
+const isWeekdayWeighted = computed({
+  get: () => weightDimension.value === '2d',
+  set: (v) => {
+    weightDimension.value = v ? '2d' : '1d'
+    localStorage.setItem(WEIGHT_DIM_KEY_PREFIX + dutyMode.value, weightDimension.value)
+  }
+})
+// 切换日常/大扫除时，各自沿用自己上次的维度选择
+watch(dutyMode, (mode) => { weightDimension.value = readWeightDimension(mode) })
+// 权重算法弹窗里的「开启星期权重」开关 → 与值日设置弹窗里的开关是同一个状态
+function onWeightAlgoDimensionChange(v) {
+  isWeekdayWeighted.value = v === '2d'
+}
+// 值日设置弹窗里的「开启星期权重」开关 → 同一个状态（write-through，点了立刻生效）
+function onWeekdayWeightedChange(v) {
+  isWeekdayWeighted.value = v
+}
 async function loadWeight() {
   try {
     const res = await axios.get(`${API_BASE}/duty/weight?mode=${dutyMode.value}`)
@@ -1090,8 +1173,25 @@ async function saveWeight() {
   try { await loadWeight() } catch (_) { /* 回滚也失败时保持提示，不叠加错误 */ }
   return false
 }
+// 一维模式下每个项目的代表权重：多天取平均（二维数据切到一维时只用于展示，不写回）
+function weightItemValue(name) {
+  const days = dutyWeights.value[name] || {}
+  const nums = settingsDays.value
+    .map(day => days[day])
+    .filter(v => typeof v === 'number' && Number.isFinite(v))
+  if (!nums.length) return null
+  return nums.reduce((a, b) => a + b, 0) / nums.length
+}
 // 表内最大值：热力图按「当前表内最大值」做相对映射（表内最高值最深蓝）
 const weightMax = computed(() => {
+  if (!isWeekdayWeighted.value) {
+    let m = 0
+    settingsItems.value.forEach(it => {
+      const v = weightItemValue(it.name)
+      if (v != null && v > m) m = v
+    })
+    return m
+  }
   let m = 0
   for (const item of Object.keys(dutyWeights.value)) {
     const days = dutyWeights.value[item] || {}
@@ -1102,10 +1202,24 @@ const weightMax = computed(() => {
   }
   return m
 })
+// 权重表表头：一维只有「权重」一列，二维按星期展开
+const weightColHeaders = computed(() => (isWeekdayWeighted.value ? settingsDays.value : ['权重']))
 
-
+// 单元格：数字才做热力图，空值/非数字保持纯文本。
+// 注意：热力图色值必须**直接摊在 cell 上**（_bg/_fg），不能塞进 cell.extra ——
+// GridView 读的是 cell._bg / cell._fg（座位表靠 useSeatGrid 摊平 extra，值日表没有这一步，
+// 塞进 extra 就等于没设色 → 输入数字保存后格子不变色）。
+function weightCell(raw) {
+  const val = (raw == null || raw === '') ? '' : String(raw)
+  const num = val === '' ? null : Number(val)
+  if (num == null || !Number.isFinite(num)) return { course: val }
+  const t = weightMax.value > 0 ? num / weightMax.value : 0
+  return { course: val, _bg: `rgb(${weightHeatRgb(t).join(', ')})`, _fg: weightHeatFg(t) }
+}
 // 权重表的 GridView 行：与值日表同构（项目按 count 拆多子行），首子行跨行合并，
-// 同一项目的所有子行共用相同权重值（count>1 时视觉上是一行大单元格）
+// 同一项目的所有子行共用相同权重值（count>1 时视觉上是一行大单元格）。
+// 联动机制：子行各自独立建 cells，编辑任一子行后 dutyWeights 变化 → 本 computed 重算
+// → 所有子行都拿到新值 → 界面上多个子行同步更新。
 const weightDisplayRows = computed(() => {
   const items = settingsItems.value
   const days = settingsDays.value
@@ -1114,14 +1228,13 @@ const weightDisplayRows = computed(() => {
   items.forEach(it => {
     const n = Math.max(1, Number(it.count) || 1)
     for (let k = 0; k < n; k++) {
-      const cells = days.map(day => {
-        const raw = w[it.name]?.[day]
-        const val = (raw == null || raw === '') ? '' : String(raw)
-        const num = val === '' ? null : Number(val)
-        if (num == null || !Number.isFinite(num)) return { course: val }
-        const t = weightMax.value > 0 ? num / weightMax.value : 0
-        return { course: val, extra: { _bg: `rgb(${weightHeatRgb(t).join(', ')})`, _fg: weightHeatFg(t) } }
-      })
+      let cells
+      if (isWeekdayWeighted.value) {
+        cells = days.map(day => weightCell(w[it.name]?.[day]))
+      } else {
+        const v = weightItemValue(it.name)
+        cells = [weightCell(v == null ? '' : Math.round(v * 1000) / 1000)]
+      }
       rows.push({
         _lessonIdx: rows.length,
         _rowKey: `w_${it.name}_${k}`,
@@ -1134,7 +1247,11 @@ const weightDisplayRows = computed(() => {
   })
   return rows
 })
-// 编辑权重：把 GridView 的行还原回 {项目:{星期:数值}}，非数字/超范围做容错
+// 编辑权重：把 GridView 的行还原回 {项目:{星期:数值}}，非数字/超范围做容错。
+// 同一项目的人数 > 1 时，权重表里是多个子行，但底层一个项目只有一个权重值 ——
+// 所以子行之间是**联动**的：改任意一格 → 整个项目的权重一起变。
+// GridView 的编辑事件只换掉被编辑的那一格，其余子行仍是旧值，
+// 因此要拿改动前的值当参照逐行比对，定位「用户刚改的那一格」（见 utils/dutyWeightGroups.js）。
 function onWeightCellsUpdate(newRows) {
   const prev = JSON.parse(JSON.stringify(dutyWeights.value))
   const days = settingsDays.value
@@ -1145,17 +1262,18 @@ function onWeightCellsUpdate(newRows) {
       groups[row.label].push(row.cells)
     }
   })
-  const next = {}
-  Object.keys(groups).forEach(name => {
-    next[name] = {}
-    const arr = groups[name]
-    days.forEach((day, i) => {
-      // 取首子行的值（多子行共享同一权重）
-      const raw = arr[0]?.[i]?.course
-      const text = (raw == null ? '' : String(raw)).trim()
-      const num = text === '' ? null : Number(text)
-      next[name][day] = Number.isFinite(num) ? Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, num)) : 0
-    })
+  const next = resolveWeightGroups({
+    groups,
+    prevWeights: prev,
+    days,
+    weekdayWeighted: isWeekdayWeighted.value,
+    // 一维的显示值是各天权重的均值，且表格里显示的是保留 3 位的小数 —— 参照值必须同口径
+    avgOf: (name) => {
+      const v = weightItemValue(name)
+      return v == null ? '' : Math.round(v * 1000) / 1000
+    },
+    min: WEIGHT_MIN,
+    max: WEIGHT_MAX,
   })
   dutyWeights.value = next
   recordGridSnapshotUndo('值日表', 'duty_weight', prev, next, '编辑权重')
@@ -1182,6 +1300,8 @@ function onWeightSwapRows(oldIndex, newIndex) {
   persistSettingsSafe({ active: true, master: true }, '调整权重表顺序')
 }
 function onWeightSwapColumns(oldIndex, newIndex) {
+  // 一维只有「权重」一列，没有可交换的星期列
+  if (!isWeekdayWeighted.value) return
   if (oldIndex === newIndex) return
   const keys = settingsDays.value
   if (oldIndex < 0 || newIndex < 0 || oldIndex >= keys.length || newIndex >= keys.length) return
@@ -1194,7 +1314,17 @@ function onWeightSwapColumns(oldIndex, newIndex) {
 const weightExportVisible = ref(false)
 const weightExportMounted = ref(false)
 watch(() => weightExportVisible.value, v => { if (v) weightExportMounted.value = true })
+// 导出列跟着维度走：一维只有「权重」，二维按星期展开
+const weightExportFields = computed(() => isWeekdayWeighted.value
+  ? exportFields.value
+  : [{ name: '项目', label: '劳动项目' }, { name: '权重', label: '权重' }])
 const weightExportRows = computed(() => {
+  if (!isWeekdayWeighted.value) {
+    return settingsItems.value.map(it => {
+      const v = weightItemValue(it.name)
+      return { 项目: it.name, 权重: v == null ? '' : Number(v.toFixed(3)) }
+    })
+  }
   return settingsItems.value.map(it => {
     const row = { 项目: it.name }
     settingsDays.value.forEach(d => {

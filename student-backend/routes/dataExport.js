@@ -17,6 +17,8 @@ const router = express.Router();
 const { db } = require('../db');
 const { safeJson } = require('../utils/json');
 const { buildZip } = require('../services/zipWriter');
+// 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
+const dutyConfig = require('../services/dutyConfig');
 const dbManager = require('../dbManager/dbManager');
 const fs = require('fs');
 const path = require('path');
@@ -257,12 +259,18 @@ function tSeats() {
   return table(['行号', ...colHeaders], out);
 }
 
-// 值日：cells = { 项目: { 星期: [人名] } }
-function tDuties() {
-  const row = get("SELECT days, cells FROM duty_slots WHERE kind = 'current'");
-  const days = safeJson(row ? row.days : null, WEEK, 'duty_slots.days');
-  const cells = safeJson(row ? row.cells : null, {}, 'duty_slots.cells');
-  const dayList = Array.isArray(days) && days.length ? days : WEEK.slice(0, 5);
+// 值日：cells = { 项目: { 列: [人名] } }
+// ⚠️ 当前值日表（kind='current'）的 cells 是**按模式分键**的 {daily:{...},big:{...}}，
+//    列名也按模式分键（日常值日=星期几，大扫除=分组名+全部）。
+//    这里导出**当前模式**的值日表：日常值日与大扫除的列名不同，混在一张表里没法看，
+//    所以按模式各导一张（key 不同、label 不同）。
+function tDuties(mode) {
+  const m = mode === 'big' ? 'big' : 'daily';
+  const row = get("SELECT cells FROM duty_slots WHERE kind = 'current'");
+  const packed = safeJson(row ? row.cells : null, {}, 'duty_slots.cells');
+  const cells = (packed && typeof packed === 'object' && packed[m] && typeof packed[m] === 'object')
+    ? packed[m] : {};
+  const dayList = dutyConfig.readDays(m);
   const out = [];
   for (const item of Object.keys(cells || {})) {
     const byDay = cells[item] || {};
@@ -484,7 +492,8 @@ const TABLES = [
   { key: 'fees', label: '班费记录', py: 'bfjl', build: tFees },
   { key: 'leaves', label: '请假记录', py: 'qjjl', build: tLeaves },
   { key: 'seats', label: '座位表', py: 'zwb', build: tSeats },
-  { key: 'duties', label: '值日表', py: 'zrb', build: tDuties },
+  { key: 'duties', label: '值日表', py: 'zrb', build: () => tDuties('daily') },
+  { key: 'dutiesBig', label: '值日表（大扫除）', py: 'zrbdsc', build: () => tDuties('big') },
   { key: 'schedule', label: '课程表', py: 'kcb', build: tSchedule },
   { key: 'semesters', label: '学期列表', py: 'xqlb', build: tSemesters },
   { key: 'groups', label: '小组', py: 'xz', build: tGroups },

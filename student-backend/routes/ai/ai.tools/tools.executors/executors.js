@@ -396,6 +396,7 @@ function describeOneTable(table) {
         else if (r.kind === 'date') f.kind = 'date';
         else if (r.kind === 'bool') f.kind = 'bool';
         else if (r.kind === 'json') f.kind = 'json';
+        else if (r.kind === 'dutymap') f.kind = 'json'; // 按模式分键的 JSON（值日设置的 days/items/settings）
       }
       return f;
     });

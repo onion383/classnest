@@ -16,14 +16,22 @@
       </div>
       </Transition>
 
+      <!-- 数据源：本次分组用哪些人。默认「全部同学」= 读学生表里的全班同学来分组；
+           选「现有分组表格」= 只把当前各小组里已有的人重新分组（组数不变） -->
+      <div class="mb-3 flex items-center gap-3">
+        <label class="text-sm font-medium shrink-0">选择数据源</label>
+        <AppSelect v-model="dataSource" :options="dataSourceOptions" class="w-44" @change="onDataSourceChange" />
+        <span class="text-xs text-text-muted">{{ dataSourceHint }}</span>
+      </div>
+
       <!-- 流水线条件（拖入下方选项添加，拖动手柄调整顺序） -->
       <div class="mb-3">
         <div class="flex items-center justify-between mb-2">
           <label class="text-sm font-medium block">排表条件</label>
-          <button @click="startArrange" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm">{{ arranged ? '🔀 换一换' : '▶ 开始排表' }}</button>
+          <button @click="startArrange" :disabled="poolEmpty" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm disabled:opacity-40 disabled:cursor-not-allowed">{{ arranged ? '🔀 换一换' : '▶ 开始排表' }}</button>
         </div>
         <div
-          class="border border-dashed border-border rounded-lg p-2 bg-surface-hover min-h-[44px]"
+          class="border border-dashed border-border rounded-lg p-2 bg-surface/55 backdrop-blur-md"
           @dragover.prevent
           @drop="boxDrop"
         >
@@ -32,25 +40,25 @@
           <div v-if="stages.length === 0" class="text-sm text-text-muted py-1">拖入下方选项作为分组条件</div>
           <div v-for="(st, si) in stages" :key="st.key" class="mb-1 last:mb-0" :data-stage-idx="stages.indexOf(st)" :class="{ 'stage-row-dragging': stageDragIdx === stages.indexOf(st) }">
             <div
-              class="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-surface border border-border text-text text-sm"
+              class="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-primary text-text-inverse text-sm"
             >
               <!-- 拖动手柄：拖动调整条件顺序（指针拖拽，与表格行/列移动同一套让位动画） -->
               <!-- 序号 + 拖动手柄：序号跟着数组顺序走，拖动松手后自动重排 -->
               <span class="flex items-center gap-2 shrink-0">
-                <span class="text-xs tabular-nums text-text-muted select-none opacity-70">{{ stages.indexOf(st) + 1 }}</span>
-                <span class="cursor-grab select-none text-text-muted" @mousedown="sortStage.handleDown($event, stages.indexOf(st))" title="拖动调整顺序">⠿</span>
+                <span class="text-xs tabular-nums text-text-inverse/60 select-none opacity-70">{{ stages.indexOf(st) + 1 }}</span>
+                <span class="cursor-grab select-none text-text-inverse/70" @mousedown="sortStage.handleDown($event, stages.indexOf(st))" title="拖动调整顺序">⠿</span>
               </span>
               <!-- 特殊关系 -->
               <template v-if="st.type === 'relation'">
                 <AppSelect v-model="st.kind" :options="[{ value: 'together', label: '在一组' }, { value: 'apart', label: '不在一组' }]" class="w-28" />
-                <AppSelect v-model="st.a" :options="students.map(s => ({ value: s.id, label: s.姓名 }))" placeholder="选择学生" class="w-32" />
-                <span class="text-text-muted">和</span>
-                <AppSelect v-model="st.b" :options="students.map(s => ({ value: s.id, label: s.姓名 }))" placeholder="选择学生" class="w-32" />
+                <AppSelect v-model="st.a" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
+                <span class="text-text-inverse/90">和</span>
+                <AppSelect v-model="st.b" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
               </template>
               <!-- 指定身份 -->
               <template v-else-if="st.type === 'identity'">
                 <AppSelect v-model="st.kind" :options="[{ value: 'leader', label: '担任' + leaderTitle }, { value: 'not-leader', label: '不担任' + leaderTitle }]" class="w-32" />
-                <AppSelect v-model="st.studentId" :options="students.map(s => ({ value: s.id, label: s.姓名 }))" placeholder="选择学生" class="w-32" />
+                <AppSelect v-model="st.studentId" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
               </template>
               <!-- 性别比例 -->
               <template v-else-if="st.type === 'gender'">
@@ -59,8 +67,8 @@
               </template>
               <!-- 满足率与关闭按钮靠右成组：关闭键永远贴行尾，不随满足率有无而漂移 -->
               <span class="ml-auto flex items-center gap-2 shrink-0">
-                <span v-if="satisfactionOf(st) !== null" class="text-xs px-1.5 py-0.5 rounded bg-info/15 text-info border border-info/30">满足 {{ satisfactionOf(st) }}%</span>
-                <button @click="removeStage(stages.indexOf(st))" class="dlg-close close-sm" title="删除该条件">✕</button>
+                <span v-if="satisfactionOf(st) !== null" class="text-xs px-1.5 py-0.5 rounded bg-white/20 text-text-inverse border border-white/30">满足 {{ satisfactionOf(st) }}%</span>
+                <button @click="removeStage(stages.indexOf(st))" class="dlg-close cond-close" title="删除该条件">✕</button>
               </span>
             </div>
           </div>
@@ -87,7 +95,7 @@
             :key="chip.type"
             draggable="true"
             @dragstart="onChipDragStart($event, chip.type)"
-            class="px-3 py-1.5 rounded border border-border bg-surface cursor-grab select-none text-sm shadow-sm hover:border-info"
+            class="px-3 py-2 rounded border border-border bg-primary text-text-inverse cursor-grab select-none text-sm shadow-sm hover:border-info"
           >＋ {{ chip.label }}</div>
         </div>
       </div>
@@ -137,7 +145,7 @@ import '../../../styles/dialog-transition.css'
 import DialogShell from '../../base/DialogShell.vue'
 import NewComerConfirm from '../NewComerConfirm.vue'
 import AppSelect from '../../base/AppSelect.vue'
-import { useSmartGroupPipeline } from './SmartGroupDialog.pipeline.js'
+import { useSmartGroupPipeline, buildRoster } from './SmartGroupDialog.pipeline.js'
 import { useSmartGroupConditions } from './SmartGroupDialog.conditions.js'
 import { useSmartGroupPreview } from './SmartGroupDialog.preview.js'
 import { useRowSortDrag } from '../../../composables/useRowSortDrag.js'
@@ -180,14 +188,29 @@ const strangerNames = computed(() => {
   return out
 })
 const strangers = computed(() => [...strangerNames.value])
-// 参与分组的班级学生（去掉无名）；若用户选择「参与」，附上小组里的新同学一起分组
-const roster = computed(() => {
-  const base = props.students.filter(s => String(s.姓名 || '').trim())
-  if (!includeNew.value) return base
-  const named = new Set(base.map(s => String(s.姓名).trim()))
-  const extras = [...strangerNames.value].filter(n => !named.has(n)).map(n => ({ 姓名: n }))
-  return extras.length ? base.concat(extras) : base
+// 数据源：table = 只把当前分组表里已有的人重新分组；all = 读学生表里的全班同学来分组
+const dataSource = ref('all')
+const dataSourceOptions = [
+  { value: 'table', label: '现有排表表格' },
+  { value: 'all', label: '全部同学' },
+]
+// 参与分组的学生名单：随数据源切换（名单构造集中在 pipeline.js 的 buildRoster，便于单测）
+const roster = computed(() => buildRoster({
+  dataSource: dataSource.value,
+  students: props.students,
+  groups: props.groups,
+  includeNew: includeNew.value,
+}))
+// 名单里能对应到名册学生（有 id）的人：条件行的学生下拉只列这些人（选了名单外的人也调不动）
+const poolStudents = computed(() => roster.value.filter(s => s.id != null))
+const poolStudentOptions = computed(() => poolStudents.value.map(s => ({ value: s.id, label: s.姓名 })))
+const dataSourceHint = computed(() => {
+  if (dataSource.value === 'all') return '按学生表里的全班同学分组'
+  if (!roster.value.length) return '当前分组表里没有人，改选「全部同学」才能分组'
+  return `只把当前分组表里已有的 ${roster.value.length} 人重新分组`
 })
+// 「现有分组表格」但表里没人 → 没有可分的人，「开始排表」置灰
+const poolEmpty = computed(() => dataSource.value === 'table' && !roster.value.length)
 // 可选条件（可拖入上方，可复用）
 const conditionChips = computed(() => [
   { type: 'relation', label: '特殊关系' },
@@ -200,7 +223,7 @@ const conditionChips = computed(() => [
 const ctx = {
   stages, previewGroups, rejectText, arranged, satisfaction, lastResult,
   stageDragIdx, stageDragOverIdx,
-  showNewPrompt, includeNew, strangers, roster,
+  showNewPrompt, includeNew, strangers, roster, dataSource,
   students: toRef(props, 'students'),
   groups: toRef(props, 'groups'),
   leaderTitle: toRef(props, 'leaderTitle'),
@@ -237,6 +260,16 @@ function groupLabel(gi) {
   return (g && g.name) || `第${gi + 1}组`
 }
 
+// 数据源切换：回到「开始排表」，预览回到当前分组的原样（结果缓存一并清掉）
+function onDataSourceChange() {
+  arranged.value = false
+  lastResult.value = null
+  satisfaction.value = {}
+  includeNew.value = false
+  showNewPrompt.value = false
+  previewGroups.value = buildGroupsPreview()
+}
+
 // immediate：父组件在同一 tick 里同时把 smartGroupMounted 与 showSmartGroup 置 true，
 // 组件挂载时 visible 已经是 true，没有 immediate 的话这里永远不会执行 ——
 // 表现就是「没排表时下面一片空白」。
@@ -250,6 +283,8 @@ watch(() => props.visible, (v) => {
     lastResult.value = null
     showNewPrompt.value = false
     includeNew.value = false
+    // 每次打开都回到默认数据源（全部同学）
+    dataSource.value = 'all'
   }
 }, { immediate: true })
 
@@ -314,6 +349,11 @@ onBeforeUnmount(() => { clearTimeout(ctx._rejectTimer) })
 </script>
 
 <style scoped>
+/* 智能排表条件行内的下拉框：压低触发框高度，让条件行更紧凑 */
+:deep(.av-select__trigger) {
+  padding: 4px 8px;
+}
+
 /* 条件行的基础过渡：让位靠相邻行的 translate 位移，过渡必须在样式层先声明好。
    只在 markShift 里临时写 inline transition 时，「同一帧内既设 transition 又设 transform」
    的首次让位可能被浏览器直接拍到终点，看起来就是没有动画。 */
@@ -321,12 +361,19 @@ onBeforeUnmount(() => { clearTimeout(ctx._rejectTimer) })
   transition: transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
-/* 条件行里的关闭键：沿用全局 .dlg-close（圆角方块 + 浅灰底），只压尺寸——
-   行本身只有 py-1.5 + 20px 内容，28px 会把行撑高一圈。 */
-.close-sm {
+/* 条件行里的关闭键：沿用全局 .dlg-close（圆角方块 + 浅灰底），但行是实心蓝底，
+   默认的「浅灰底 + 深色字」压上去会发闷，这里换成半透明白。
+   尺寸压到 22px：行本身只有 py-1.5 + 20px 内容，28px 会把行撑高一圈。 */
+.cond-close {
   width: 22px;
   height: 22px;
   font-size: 13px;
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--color-text-inverse);
+}
+.cond-close:hover {
+  background: rgba(255, 255, 255, 0.32);
+  color: #fff;
 }
 
 /* 拖动中的条件行：原位变淡，留出「待填补的空槽」（与表格拖行、智能排表条件行一致） */

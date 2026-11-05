@@ -6,7 +6,7 @@ function migrateDuty(conn) {
   for (const n of ['duty_settings', 'duty_layout', 'duty_template', 'duty_weight', 'duty_draft']) dropObjectIfExists(conn, n);
   // 原 duty_settings / duty_layout / duty_template / duty_weight / duty_draft 五张同构单例表
   // 合并为 duty_slots，按 kind 区分：
-  //   settings：全局「星期 + 劳动项目」配置（days/items）
+  //   settings：全局「列名 + 劳动项目 + 模式配置」配置（days/items/settings）
   //   current ：当前值日表（cells/settings）
   //   template：值日模板（cells/settings）
   //   weight  ：项目权重表（weights/settings）
@@ -14,7 +14,7 @@ function migrateDuty(conn) {
   conn.exec(`
     CREATE TABLE IF NOT EXISTS duty_slots (
       kind TEXT PRIMARY KEY CHECK (kind IN ('settings','current','template','weight','draft')),
-      days TEXT NOT NULL DEFAULT '["周一","周二","周三","周四","周五"]',
+      days TEXT NOT NULL DEFAULT '{"daily":["周一","周二","周三","周四","周五"],"big":[]}',
       items TEXT NOT NULL DEFAULT '[]',
       cells TEXT NOT NULL DEFAULT '{}',
       settings TEXT NOT NULL DEFAULT '{}',
@@ -22,17 +22,28 @@ function migrateDuty(conn) {
       conditions TEXT NOT NULL DEFAULT '[]',
       saved_at TEXT NOT NULL DEFAULT ''
     );
+    -- days 的 daily 分键存用户勾选的星期；big 分键**不存列名** ——
+    --   大扫除的列名是「任务分组 + 数量」的纯函数（见 services/dutyConfig.bigColumnNames）：
+    --   第1大组…第N大组（第1小组…第N小组）+ 全部。
+    --   只存配置（settings.big：任务分组 + 数量），
+    --   避免「存了数量又存一份列名」两处打架（改了数量忘了同步列名 → 列名对不上）。
     -- items 必须按模式分键（{daily,big}）：services/dutyMode.unpackMode 只认这个结构，
     -- 播种成扁平数组时全新库进值日页一个项目都看不到（界面保存一次才会被改成分键结构）。
-    INSERT OR IGNORE INTO duty_slots (kind, items) VALUES
-      ('settings', '{"daily":[{"name":"擦黑板","difficulty":0.6,"count":1},{"name":"倒垃圾","difficulty":0.7,"count":2},{"name":"扫地","difficulty":0.8,"count":2}],"big":[{"name":"擦黑板","difficulty":0.6,"count":1},{"name":"倒垃圾","difficulty":0.7,"count":2},{"name":"扫地","difficulty":0.8,"count":2}]}');
+    -- settings 是「按模式分键的模式配置」：
+    --   daily → {}（日常值日没有额外配置）
+    --   big   → { cycle, weekday, groupType, groupCount }（周期/星期几/任务分组/组数）
+    INSERT OR IGNORE INTO duty_slots (kind, days, items, settings) VALUES
+      ('settings',
+       '{"daily":["周一","周二","周三","周四","周五"],"big":[]}',
+       '{"daily":[{"name":"擦黑板","difficulty":0.6,"count":1},{"name":"倒垃圾","difficulty":0.7,"count":2},{"name":"扫地","difficulty":0.8,"count":2}],"big":[{"name":"擦黑板","difficulty":0.6,"count":1},{"name":"倒垃圾","difficulty":0.7,"count":2},{"name":"扫地","difficulty":0.8,"count":2}]}',
+       '{"daily":{},"big":{"cycle":"week","weekday":"周三","groupType":"big","groupCount":3}}');
     INSERT OR IGNORE INTO duty_slots (kind) VALUES ('current'), ('template'), ('weight'), ('draft');
 
     -- 只读逻辑视图：保持既有 SELECT 的写法与结果形状不变（写统一走 services/slotStore.js）
     DROP VIEW IF EXISTS duty_settings;
     DROP TABLE IF EXISTS duty_settings;
     CREATE VIEW duty_settings AS
-      SELECT 1 AS id, days, items FROM duty_slots WHERE kind = 'settings';
+      SELECT 1 AS id, days, items, settings FROM duty_slots WHERE kind = 'settings';
 
     DROP VIEW IF EXISTS duty_layout;
     DROP TABLE IF EXISTS duty_layout;

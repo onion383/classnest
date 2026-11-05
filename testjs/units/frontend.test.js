@@ -664,13 +664,16 @@ const loadDutyPipeline = () => import(pathToFileURL(path.join(
 
 function fairCtx(overrides) {
   // ctx 契约：状态为 ref（.value 访问），跨模块方法经 Object.assign 回填
-  return {
+  const ctx = {
     studentNames: { value: [] },
     weights: { value: {} },
     ledger: { value: {} },
     satisfaction: { value: {} },
     ...overrides,
   }
+  // 数据源决定参与排表的学生池（poolNames）：本用例只测公平分配本身，池与名册保持一致
+  if (!overrides || !overrides.poolNames) ctx.poolNames = { value: ctx.studentNames.value }
+  return ctx
 }
 
 test('fairFill：学生名单为空时返回全空槽位，不因取模 0 崩溃', async () => {

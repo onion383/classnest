@@ -1,7 +1,19 @@
 <template>
   <DialogShell :visible="visible" :z-index="50" overlay-class="bg-black/30">
     <div class="bg-surface rounded-lg p-6 w-[36rem] max-w-[92vw] max-h-[88vh] shadow-card dialog-card flex flex-col overflow-hidden">
-      <h3 class="text-lg font-bold mb-4 flex-shrink-0">值日项目权重算法</h3>
+      <h3 class="text-lg font-bold mb-4 flex-shrink-0 flex items-center gap-2">
+        值日项目权重算法
+        <span class="text-xs font-normal text-text-muted">{{ is2d ? '二维：项目 × 星期' : '一维：按项目' }}</span>
+      </h3>
+
+      <!-- 星期权重开关：与「值日设置」弹窗里的开关是同一个状态，改一处两处同步 -->
+      <div class="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-hover px-3 py-2 mb-4 flex-shrink-0">
+        <div>
+          <span class="text-sm font-medium text-text">开启星期权重</span>
+          <p class="text-xs text-text-muted mt-0.5">开启后按「劳动项目 × 星期」分别计权重</p>
+        </div>
+        <AppSwitch :model-value="weekdayWeighted" @update:model-value="onWeekdayWeightedToggle" aria-label="开启星期权重" />
+      </div>
 
       <!-- 中心区域：一个位置 / 矩形区域，权重均为 1 -->
       <div class="border border-border rounded-lg p-4 mb-4 flex-shrink-0">
@@ -15,45 +27,46 @@
           <label class="text-sm text-text-secondary">项目
             <AppSelect v-model="pointItem" :options="itemOptions" class="w-32 ml-1" />
           </label>
-          <label class="text-sm text-text-secondary">星期
+          <label v-if="is2d" class="text-sm text-text-secondary">星期
             <AppSelect v-model="pointDay" :options="dayOptions" class="w-24 ml-1" />
           </label>
         </div>
 
         <div v-else class="flex items-center gap-4 flex-wrap">
           <span class="text-sm text-text-muted w-24 flex-shrink-0">项目范围</span>
-          <label class="text-sm text-text-secondary">
-            <AppSelect v-model="itemStart" :options="itemOptions" class="w-28" />
+          <!-- flex 布局：AppSelect 根节点是 div（块级），放在 label 里会上下堆叠，这里强制排成一行 -->
+          <label class="flex items-center gap-2 text-sm text-text-secondary">
+            <AppSelect v-model="itemStart" :options="itemOptions" class="w-28 flex-shrink-0" />
             <span class="mx-1">~</span>
-            <AppSelect v-model="itemEnd" :options="itemOptions" class="w-28" />
+            <AppSelect v-model="itemEnd" :options="itemOptions" class="w-28 flex-shrink-0" />
           </label>
         </div>
-        <div v-if="centerType === 'rect'" class="flex items-center gap-4 flex-wrap mt-2">
+        <div v-if="centerType === 'rect' && is2d" class="flex items-center gap-4 flex-wrap mt-2">
           <span class="text-sm text-text-muted w-24 flex-shrink-0">星期范围</span>
-          <label class="text-sm text-text-secondary">
-            <AppSelect v-model="dayStart" :options="dayOptions" class="w-24" />
+          <label class="flex items-center gap-2 text-sm text-text-secondary">
+            <AppSelect v-model="dayStart" :options="dayOptions" class="w-24 flex-shrink-0" />
             <span class="mx-1">~</span>
-            <AppSelect v-model="dayEnd" :options="dayOptions" class="w-24" />
+            <AppSelect v-model="dayEnd" :options="dayOptions" class="w-24 flex-shrink-0" />
           </label>
         </div>
       </div>
 
       <!-- 递减速率（含最小值） -->
       <p class="text-sm font-medium text-text mb-1 flex-shrink-0">递减速率（每跨一格减少的权重，0–1 小数）</p>
-      <p class="text-xs text-text-muted mb-3 flex-shrink-0">距离 = 上下项目步数相加 + 左右星期步数相加</p>
+      <p class="text-xs text-text-muted mb-3 flex-shrink-0">距离 = 上下项目步数相加{{ is2d ? ' + 左右星期步数相加' : '' }}</p>
       <div class="mb-4 p-3 rounded-lg bg-surface/55 backdrop-blur-md flex-shrink-0">
         <div class="border border-border rounded-lg p-4">
           <div class="grid grid-cols-2 gap-3">
             <label class="flex items-center justify-center gap-2 text-sm text-text-secondary">上（轻项目方向）
               <input type="number" step="0.01" min="0" max="1" v-model.number="rateUp" class="w-24 border border-border bg-bg text-text px-2 py-1 rounded text-center" />
             </label>
-            <label class="flex items-center justify-center gap-2 text-sm text-text-secondary">左（靠前天）
+            <label v-if="is2d" class="flex items-center justify-center gap-2 text-sm text-text-secondary">左（靠前天）
               <input type="number" step="0.01" min="0" max="1" v-model.number="rateLeft" class="w-24 border border-border bg-bg text-text px-2 py-1 rounded text-center" />
             </label>
             <label class="flex items-center justify-center gap-2 text-sm text-text-secondary">下（重项目方向）
               <input type="number" step="0.01" min="0" max="1" v-model.number="rateDown" class="w-24 border border-border bg-bg text-text px-2 py-1 rounded text-center" />
             </label>
-            <label class="flex items-center justify-center gap-2 text-sm text-text-secondary">右（靠后天）
+            <label v-if="is2d" class="flex items-center justify-center gap-2 text-sm text-text-secondary">右（靠后天）
               <input type="number" step="0.01" min="0" max="1" v-model.number="rateRight" class="w-24 border border-border bg-bg text-text px-2 py-1 rounded text-center" />
             </label>
             <label class="col-span-2 flex items-center justify-center gap-2 text-sm text-text-secondary">最小值
@@ -73,11 +86,11 @@
           <div class="overflow-auto min-h-0 flex-1" style="max-height: 16rem;">
             <div class="w-max mx-auto">
               <!-- 表头：星期 -->
-              <div class="grid gap-1 mb-1" :style="{ gridTemplateColumns: `70px repeat(${dayCount}, minmax(0, 1fr))` }">
+              <div class="grid gap-1 mb-1" :style="{ gridTemplateColumns: `70px repeat(${previewCols.length}, minmax(0, 1fr))` }">
                 <div></div>
-                <div v-for="d in days" :key="'h_'+d" class="text-xs text-text-muted text-center">{{ d }}</div>
+                <div v-for="d in previewCols" :key="'h_'+d" class="text-xs text-text-muted text-center">{{ d }}</div>
               </div>
-              <div v-for="(row, ri) in previewRows" :key="'r_'+ri" class="grid gap-1 mb-1 items-center" :style="{ gridTemplateColumns: `70px repeat(${dayCount}, minmax(0, 1fr))` }">
+              <div v-for="(row, ri) in previewRows" :key="'r_'+ri" class="grid gap-1 mb-1 items-center" :style="{ gridTemplateColumns: `70px repeat(${previewCols.length}, minmax(0, 1fr))` }">
                 <div class="text-xs text-text-muted truncate text-right pr-1">{{ row.label }}</div>
                 <div
                   v-for="(cell, ci) in row.cells"
@@ -88,7 +101,7 @@
               </div>
             </div>
           </div>
-          <p class="text-xs text-text-muted mt-2 text-center flex-shrink-0">中心区域为 1，向四周按上下左右速率递减</p>
+          <p class="text-xs text-text-muted mt-2 text-center flex-shrink-0">中心区域为 1，{{ is2d ? '向四周按上下左右速率递减' : '向上下按速率递减，同项目所有天共用同一权重' }}</p>
         </div>
       </div>
 
@@ -104,6 +117,7 @@
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
 import AppSelect from '../base/AppSelect.vue'
+import AppSwitch from '../base/AppSwitch.vue'
 import { ref, computed, watch } from 'vue'
 
 defineOptions({ name: 'DutyWeightAlgorithmDialog' })
@@ -112,8 +126,25 @@ const props = defineProps({
   visible: Boolean,
   days: { type: Array, default: () => [] },
   items: { type: Array, default: () => [] },
+  // '1d'（按项目，所有天同权重）| '2d'（项目 × 星期）
+  dimension: { type: String, default: '1d' },
 })
-const emit = defineEmits(['cancel', 'apply'])
+const emit = defineEmits(['cancel', 'apply', 'update:dimension'])
+
+// 本地维度：弹窗内切换即时生效（预览跟着变），同时通知父组件写回全局状态。
+// 与「值日设置」弹窗里的「开启星期权重」是同一个开关 —— 那个开关改的也是 weightDimension。
+const dimension = ref(props.dimension)
+watch(() => props.dimension, (v) => { if (v !== dimension.value) dimension.value = v })
+watch(dimension, (v) => { if (v !== props.dimension) emit('update:dimension', v) })
+const is2d = computed(() => dimension.value === '2d')
+// 开关 ⇄ 维度 双向绑定：开关就是「是否二维（按项目×星期）」
+const weekdayWeighted = computed({
+  get: () => is2d.value,
+  set: (v) => { dimension.value = v ? '2d' : '1d' },
+})
+function onWeekdayWeightedToggle(v) {
+  weekdayWeighted.value = v
+}
 
 const centerTypeOptions = ref([
   { value: 'point', label: '一个位置' },
@@ -161,13 +192,18 @@ const result = computed(() => {
   const dist = (r, c) => {
     const up = Math.max(0, r1 - r)
     const down = Math.max(0, r - r2)
+    if (!is2d.value) return up * ru + down * rd
     const left = Math.max(0, c1 - c)
     const right = Math.max(0, c - c2)
     return up * ru + down * rd + left * rl + right * rr
   }
   let maxDist = 0
   for (let r = 0; r < itemCount.value; r++) {
-    for (let c = 0; c < dayCount.value; c++) maxDist = Math.max(maxDist, dist(r, c))
+    if (is2d.value) {
+      for (let c = 0; c < dayCount.value; c++) maxDist = Math.max(maxDist, dist(r, c))
+    } else {
+      maxDist = Math.max(maxDist, dist(r, 0))
+    }
   }
   const min = _rate(minValue.value)
   const overflow = maxDist > (1 - min) + 1e-9
@@ -184,13 +220,17 @@ const result = computed(() => {
   return { matrix, overflow }
 })
 const overflow = computed(() => result.value.overflow)
+// 预览列：一维只显示「权重」，二维按星期展开
+const previewCols = computed(() => (is2d.value ? props.days : ['权重']))
 // 预览行：[{label, cells:[{text, bg, fg}]}]
 const previewRows = computed(() => {
   const m = result.value.matrix
   return props.items.map(it => ({
     label: it.name,
-    cells: props.days.map(d => {
-      const w = m[it.name]?.[d] ?? 0
+    cells: previewCols.value.map(col => {
+      const w = is2d.value
+        ? (m[it.name]?.[col] ?? 0)
+        : (Object.values(m[it.name] || {})[0] ?? 0)
       return { text: w.toFixed(2), ...heat(w) }
     })
   }))

@@ -4,6 +4,8 @@ const { db } = require('../../../../db');
 const {
   aiParseJson, unpackDutyModeCol, studentIdNameMap,
 } = require('./executors.common');
+// 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
+const dutyConfig = require('../../../../services/dutyConfig');
 
 // 课表行标签：优先按 settings.sections 的节次结构取 lesson 行，退化为 periods/pass 序号
 function buildScheduleRowLabels(settings, cells) {
@@ -73,11 +75,9 @@ function buildDutyImage(mode) {
   if (!row) return null;
   const cells = unpackDutyModeCol(row.cells, mode);
   const ms = unpackDutyModeCol(row.settings, mode);
+  // 列名按模式分键（日常值日=星期几，大扫除=分组名+全部）→ 走 dutyConfig 唯一入口取
   let days = Array.isArray(ms.days) && ms.days.length ? ms.days : null;
-  if (!days) {
-    const ds = db.prepare('SELECT days FROM duty_settings WHERE id = 1').get();
-    days = ds ? (aiParseJson(ds.days, []) || []) : [];
-  }
+  if (!days) days = dutyConfig.readDays(mode);
   if (!days.length) days = ['周一', '周二', '周三', '周四', '周五'];
   let items = Array.isArray(ms.items) ? ms.items.map((it) => it && it.name).filter(Boolean) : [];
   if (!items.length) items = Object.keys(cells || {});

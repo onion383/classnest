@@ -19,7 +19,7 @@ const SPEC = {
   schedule: { table: 'schedule_slots', kind: 'current', columns: ['cells', 'settings'] },
   master_schedule: { table: 'schedule_slots', kind: 'master', columns: ['cells', 'settings'] },
 
-  duty_settings: { table: 'duty_slots', kind: 'settings', columns: ['days', 'items'] },
+  duty_settings: { table: 'duty_slots', kind: 'settings', columns: ['days', 'items', 'settings'] },
   duty_layout: { table: 'duty_slots', kind: 'current', columns: ['cells', 'settings'] },
   duty_template: { table: 'duty_slots', kind: 'template', columns: ['cells', 'settings'] },
   duty_weight: { table: 'duty_slots', kind: 'weight', columns: ['weights', 'settings'] },

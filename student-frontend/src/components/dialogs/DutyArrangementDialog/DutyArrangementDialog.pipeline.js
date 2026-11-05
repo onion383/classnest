@@ -1,10 +1,11 @@
-// ===== 值日智能排表：槽位模型 + 均衡轮转填充 + 流水线排表 + 权重公平分配 + 满足率 + 预览 =====
-// 纯代码搬运自 DutyArrangementDialog.vue 的 methods，未改写逻辑；经 ctx 闭包调用（script setup）。
-// ctx 契约：{ daysArr, itemsArr, studentNames, weights, ledger, tree, previewCells, previewVersion,
-//            satisfaction, _groupMainDay, buildSlots... 等跨模块方法 }（状态为 ref，模块内用 .value）。
+// ===== 值日智能排表：槽位模型 + 座位分组 + 一级条件流水线 =====
+// 条件按列表顺序逐条执行，越靠后越重要；同类型条件可重复添加。
+// 值日表没有空间几何，所谓「一列 / 同桌 / 相邻六位」都是先从座位表抽取学生分组，
+// 再把整组学生作为不可拆的操作单元放进不同的「天」里。
+// ctx 契约：状态为 ref（模块内 .value 访问），跨模块方法运行时解析。
 
 // Fisher-Yates 洗牌
-function shuffle(arr) {
+export function shuffle(arr) {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1))
@@ -13,10 +14,10 @@ function shuffle(arr) {
   return a
 }
 
-export function useDutyArrangementPipeline(ctx, OPTIONS) {
+export function useDutyArrangementPipeline(ctx, REGISTRY) {
   return {
     // ==================== 槽位模型 ====================
-    // 值日槽位：{item, day, k}，按「天」外层排列，使同一天连续，便于均衡轮转同一天互不重复
+    // 槽位：{ item, day, k }，按「天」外层排列，使同一天连续
     buildSlots() {
       const slots = []
       ctx.daysArr.value.forEach(day => {
@@ -27,15 +28,553 @@ export function useDutyArrangementPipeline(ctx, OPTIONS) {
       })
       return slots
     },
-    // 由 assigned(下标→姓名) 还原 cells：{项目:{星期:[姓名,...]}}
+    dayCapacity(day) {
+      let n = 0
+      ctx.itemsArr.value.forEach(it => { n += Math.max(1, Number(it.count) || 1) })
+      return ctx.daysArr.value.includes(day) ? n : 0
+    },
+    slotWeight(slot) {
+      const w = ctx.weights.value?.[slot.item]?.[slot.day]
+      return typeof w === 'number' ? w : 0.5
+    },
+    dayAvgWeight(day) {
+      let sum = 0, n = 0
+      ctx.itemsArr.value.forEach(it => {
+        const c = Math.max(1, Number(it.count) || 1)
+        sum += this.slotWeight({ item: it.name, day }) * c
+        n += c
+      })
+      return n ? sum / n : 0
+    },
+    ledgerOf(name) {
+      const v = ctx.ledger.value?.[name]
+      return typeof v === 'number' ? v : 0
+    },
+
+    // ==================== 基准：从当前值日表开始 ====================
+    buildBaseAssignment(slots) {
+      const assigned = new Array(slots.length).fill('')
+      const cells = ctx.baseCells.value || {}
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i]
+        const name = cells[s.item]?.[s.day]?.[s.k]
+        if (typeof name === 'string' && name.trim()) assigned[i] = name.trim()
+      }
+      // 当前表里有空槽时，用还没上表的学生补齐；不够再轮转学生池
+      // 学生池随数据源切换：全部同学 = 学生表名册；现有排表表格 = 表里的人
+      const used = new Set(assigned.filter(Boolean))
+      const rest = ctx.poolNames.value.filter(n => !used.has(n))
+      this.fillEmptySlots(slots, assigned, rest)
+      return assigned
+    },
+    // 补空槽：优先未上表的学生，其次轮转学生池；尽量不重复同一人。
+    // 去重范围（dedupeKey）：
+    //   日常值日 → 按「星期」去重（同一天不重复同一人）
+    //   大扫除   → 整张表就是「一次活动」，一个人只能出现一次（不能同时扫第1大组和第2大组）
+    fillEmptySlots(slots, assigned, extraPool) {
+      const all = ctx.poolNames.value
+      if (!all.length) return
+      // 大扫除时列是「组」而不是「星期」→ 去重范围是整张表
+      const wholeTable = ctx.dedupeWholeTable === true
+      const keyOf = (day) => (wholeTable ? '__all__' : day)
+      const daySets = {}
+      assigned.forEach((n, i) => {
+        if (!n) return
+        const k = keyOf(slots[i].day)
+        ;(daySets[k] = daySets[k] || new Set()).add(n)
+      })
+      const pool = [...(extraPool || []).filter(n => all.includes(n)), ...all]
+      if (!pool.length) return
+      let cursor = 0
+      for (let i = 0; i < assigned.length; i++) {
+        if (assigned[i]) continue
+        const set = daySets[keyOf(slots[i].day)] = daySets[keyOf(slots[i].day)] || new Set()
+        let pick = null
+        for (let t = 0; t < pool.length; t++) {
+          const n = pool[(cursor + t) % pool.length]
+          if (!set.has(n)) { pick = n; cursor = (cursor + t + 1) % pool.length; break }
+        }
+        if (pick == null) { pick = pool[cursor % pool.length]; cursor = (cursor + 1) % pool.length }
+        assigned[i] = pick
+        set.add(pick)
+      }
+    },
+
+    // ==================== 座位表抽取学生分组 ====================
+    // 返回 [{ r, c, name }]，只保留有人的格子
+    seatCellNames() {
+      const seats = ctx.seat.value?.seats || []
+      const idToName = new Map((ctx.students.value || []).map(s => [s.id, String(s.姓名 || '').trim()]))
+      const cells = []
+      seats.forEach((row, r) => {
+        (row || []).forEach((val, c) => {
+          let name = ''
+          if (typeof val === 'number') name = idToName.get(val) || ''
+          else if (typeof val === 'string') name = val.trim()
+          else if (val && typeof val === 'object') name = String(val.姓名 || '').trim()
+          if (name) cells.push({ r, c, name })
+        })
+      })
+      return cells
+    },
+    // 座位几何分组：同学 / 同桌 / 相邻四位 / 相邻六位 / 一列 / 一大组（整块座位）
+    seatGroups(shape) {
+      const cells = this.seatCellNames()
+      if (!cells.length) return []
+      if (shape === 'student') return cells.map(c => [c.name])
+      if (shape === 'bigroup') return [cells.map(c => c.name)]
+      if (shape === 'column') {
+        const map = new Map()
+        cells.forEach(c => {
+          if (!map.has(c.c)) map.set(c.c, [])
+          map.get(c.c).push(c.name)
+        })
+        return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([, names]) => names)
+      }
+      if (shape === 'deskmate') {
+        const map = new Map()
+        cells.forEach(c => {
+          const key = c.r + ',' + Math.floor(c.c / 2)
+          if (!map.has(key)) map.set(key, [])
+          map.get(key).push(c.name)
+        })
+        return [...map.values()]
+      }
+      // four = 2×2；six = 3×2
+      const rSpan = shape === 'six' ? 3 : 2
+      const map = new Map()
+      cells.forEach(c => {
+        const key = Math.floor(c.r / rSpan) + ',' + Math.floor(c.c / 2)
+        if (!map.has(key)) map.set(key, [])
+        map.get(key).push(c.name)
+      })
+      return [...map.values()]
+    },
+    // 宿舍组：取分组管理当前维度的组
+    dormGroups() {
+      const buckets = typeof ctx.groupBuckets === 'function' ? ctx.groupBuckets() : []
+      return buckets
+        .map(g => g.filter(n => ctx.poolNames.value.includes(n)))
+        .filter(g => g.length)
+    },
+
+    // 按操作单元切块：单元组之间不重叠，落在作用域外的人被剔除（整组不切半只在全员作用域成立）
+    unitGroups(unit, context, slots, assigned) {
+      const participants = context.participants
+      if (unit === 'student') return [...participants].map(n => [n])
+      if (unit === 'day') {
+        const byDay = new Map(context.days.map(d => [d, new Set()]))
+        slots.forEach((s, i) => {
+          if (assigned[i] && byDay.has(s.day)) byDay.get(s.day).add(assigned[i])
+        })
+        return context.days
+          .map(d => [...byDay.get(d)].filter(n => participants.has(n)))
+          .filter(g => g.length)
+      }
+      const groups = unit === 'dorm' ? this.dormGroups() : this.seatGroups(unit)
+      const out = []
+      const claimed = new Set()
+      for (const g of groups) {
+        const names = g.filter(n => participants.has(n) && !claimed.has(n))
+        if (!names.length) continue
+        names.forEach(n => claimed.add(n))
+        out.push(names)
+      }
+      for (const n of participants) if (!claimed.has(n)) out.push([n])
+      return out
+    },
+
+    // ==================== 作用域：切成若干块，每块单独执行 ====================
+    scopeContexts(scope, slots, assigned) {
+      const allDays = ctx.daysArr.value
+      const daySets = new Map(allDays.map(d => [d, new Set()]))
+      slots.forEach((s, i) => {
+        if (assigned[i] && daySets.has(s.day)) daySets.get(s.day).add(assigned[i])
+      })
+      const allNames = new Set(ctx.poolNames.value)
+      if (scope === 'all') return [{ days: allDays, participants: allNames, key: 'all' }]
+      if (scope === 'bigroup') {
+        const seated = new Set(this.seatCellNames().map(c => c.name).filter(n => allNames.has(n)))
+        return [{ days: allDays, participants: seated.size ? seated : allNames, key: 'bigroup' }]
+      }
+      if (scope === 'day') {
+        return allDays.map(day => ({
+          days: [day],
+          participants: new Set(daySets.get(day)),
+          key: 'day:' + day,
+        }))
+      }
+      // 单个学生没有可整组挪动的空间，按无操作处理，避免把同一人的多天名额弄丢
+      if (scope === 'student') {
+        return [{ days: allDays, participants: new Set(), key: 'student', noop: true }]
+      }
+      const groups = scope === 'dorm' ? this.dormGroups() : this.seatGroups(scope)
+      const contexts = []
+      groups.forEach((g, idx) => {
+        const participants = new Set(g.filter(n => allNames.has(n)))
+        if (!participants.size) return
+        const usedDays = allDays.filter(d => [...participants].some(n => daySets.get(d).has(n)))
+        contexts.push({
+          days: usedDays.length ? usedDays : allDays,
+          participants,
+          key: scope + ':' + idx,
+        })
+      })
+      return contexts
+    },
+    // 把作用域内参与者的当前槽位空出来；返回每天可用的槽位下标
+    vacateContext(slots, assigned, context) {
+      const freeByDay = new Map(context.days.map(d => [d, []]))
+      const participants = context.participants
+      for (let i = 0; i < slots.length; i++) {
+        const day = slots[i].day
+        if (!freeByDay.has(day)) continue
+        const name = assigned[i]
+        if (name && participants.has(name)) {
+          assigned[i] = ''
+          freeByDay.get(day).push(i)
+        } else if (!name) {
+          freeByDay.get(day).push(i)
+        }
+      }
+      return freeByDay
+    },
+    writeToDay(slots, assigned, freeByDay, day, names, writes) {
+      const idxs = freeByDay.get(day) || []
+      let n = 0
+      for (const name of names) {
+        const i = idxs.shift()
+        if (i == null) break
+        assigned[i] = name
+        writes.push({ i, name, day })
+        n++
+      }
+      return n
+    },
+    // 把单元组塞进每天的空槽：容量优先；装不下才拆尾数
+    placeUnits(slots, assigned, freeByDay, units, opts = {}) {
+      let list = units.filter(u => u.length)
+      if (opts.order === 'shift') {
+        list = list.length ? [...list.slice(1), list[0]] : []
+      } else if (opts.order === 'size') {
+        list = [...list].sort((a, b) => b.length - a.length)
+      } else if (opts.order === 'ledger') {
+        const avg = u => u.reduce((t, n) => t + this.ledgerOf(n), 0) / u.length
+        list = [...list].sort((a, b) => avg(b) - avg(a))
+      } else {
+        list = shuffle(list)
+      }
+      const writes = []
+      let placed = 0
+      const tail = []
+      const freeDays = () => [...freeByDay.entries()].filter(([, idxs]) => idxs.length)
+      const maxFreeDay = () => freeDays().sort((a, b) => b[1].length - a[1].length)[0]?.[0]
+      const pickDay = (size, hint) => {
+        if (hint != null && (freeByDay.get(hint)?.length || 0) >= size) return hint
+        const fits = freeDays().filter(([, idxs]) => idxs.length >= size)
+        if (fits.length) {
+          if (opts.dayPick === 'random') return fits[Math.floor(Math.random() * fits.length)][0]
+          if (opts.dayPick === 'minWeight') {
+            let best = null, bw = Infinity
+            for (const [day] of fits) {
+              const w = this.dayAvgWeight(day)
+              if (w < bw) { bw = w; best = day }
+            }
+            return best
+          }
+          return fits.sort((a, b) => b[1].length - a[1].length)[0][0]
+        }
+        const best = freeDays().sort((a, b) => b[1].length - a[1].length)[0]
+        if (!best) return null
+        if (opts.dayPick === 'minWeight') {
+          let day = best[0], bw = this.dayAvgWeight(day)
+          for (const [d, idxs] of freeDays()) {
+            if (idxs.length === best[1].length && this.dayAvgWeight(d) < bw) { bw = this.dayAvgWeight(d); day = d }
+          }
+          return day
+        }
+        return best[0]
+      }
+      for (const unit of list) {
+        const names = shuffle(unit)
+        const day = pickDay(names.length)
+        if (!day) { tail.push({ names, hint: null }); continue }
+        const room = freeByDay.get(day).length
+        const take = Math.min(room, names.length)
+        const chosen = names.slice(0, take)
+        const rest = names.slice(take)
+        placed += this.writeToDay(slots, assigned, freeByDay, day, chosen, writes)
+        if (rest.length) tail.push({ names: rest, hint: day })
+      }
+      // 尾数：优先补到同组已经落座的天，其次任意还有空位的天；最后拆成单人
+      for (const t of tail) {
+        let names = shuffle(t.names)
+        const day = pickDay(names.length, t.hint)
+        if (day) {
+          const room = freeByDay.get(day).length
+          const take = Math.min(room, names.length)
+          const chosen = names.slice(0, take)
+          names = names.slice(take)
+          placed += this.writeToDay(slots, assigned, freeByDay, day, chosen, writes)
+        }
+        for (const n of names) {
+          const d = maxFreeDay()
+          if (!d) break
+          placed += this.writeToDay(slots, assigned, freeByDay, d, [n], writes)
+        }
+      }
+      return { placed, writes }
+    },
+
+    // ==================== 条件执行 ====================
+    buildAssignment() {
+      const slots = this.buildSlots()
+      ctx.satisfaction.value = {}
+      if (!slots.length) return { slots, assigned: [] }
+      const assigned = this.buildBaseAssignment(slots)
+      for (const node of ctx.conditions.value) {
+        const reg = REGISTRY[node.key]
+        const fn = reg && reg.apply
+        if (fn && typeof this[fn] === 'function') this[fn](slots, assigned, node)
+      }
+      return { slots, assigned }
+    },
+    // 作用域 + 单元 + 随机 / 平移
+    applyRandom(slots, assigned, node) {
+      const contexts = this.scopeContexts(node.scope, slots, assigned)
+      let done = 0, total = 0
+      for (const c of contexts) {
+        if (c.noop) continue
+        const units = this.unitGroups(node.unit, c, slots, assigned)
+        total += c.participants.size
+        const free = this.vacateContext(slots, assigned, c)
+        const r = this.placeUnits(slots, assigned, free, units, {
+          order: node.action === 'shift' ? 'shift' : 'random',
+          dayPick: node.action === 'shift' ? 'maxFree' : 'random',
+        })
+        done += r.placed
+      }
+      this.trackSatisfaction(node.uid, done, total)
+    },
+    // 分组：按容量优先整组落天；平移只是把组序循环移一位
+    applyGroupAction(slots, assigned, node) {
+      const contexts = this.scopeContexts(node.scope, slots, assigned)
+      let done = 0, total = 0
+      for (const c of contexts) {
+        if (c.noop) continue
+        const units = this.unitGroups(node.unit, c, slots, assigned)
+        total += c.participants.size
+        const free = this.vacateContext(slots, assigned, c)
+        const r = this.placeUnits(slots, assigned, free, units, {
+          order: node.action === 'shift' ? 'shift' : 'size',
+          dayPick: 'maxFree',
+        })
+        done += r.placed
+      }
+      this.trackSatisfaction(node.uid, done, total)
+    },
+    // 基础公平分配：学生按账本降序、槽位按权重升序配对；学生不够时循环使用。
+    // 保留为独立工具（历史单测与后续跨模式公平可复用）。
+    fairFill(slots) {
+      const w = ctx.weights.value || {}
+      const led = ctx.ledger.value || {}
+      const students = ctx.poolNames.value.map(name => ({ name, led: led[name] || 0 }))
+      students.sort((a, b) => b.led - a.led)
+      const order = slots.map((s, i) => ({ i, w: w[s.item]?.[s.day] ?? 0.5 }))
+      order.sort((a, b) => a.w - b.w)
+      const assigned = new Array(slots.length).fill('')
+      if (!students.length) return assigned
+      for (let i = 0; i < order.length; i++) assigned[order[i].i] = students[i % students.length].name
+      return assigned
+    },
+    // 辛苦度公平：按账本降序对学生、权重升序对槽位；允许时可再调整组内顺序
+    applyFair(slots, assigned, node) {
+      const contexts = this.scopeContexts(node.scope, slots, assigned)
+      let done = 0, total = 0
+      for (const c of contexts) {
+        if (c.noop) continue
+        const units = this.unitGroups(node.unit, c, slots, assigned)
+        total += c.participants.size
+        const free = this.vacateContext(slots, assigned, c)
+        if (node.unit === 'student') {
+          const names = [...c.participants].sort((a, b) => this.ledgerOf(b) - this.ledgerOf(a))
+          const idxs = [...free.values()].flat().sort((a, b) => {
+            const wa = this.slotWeight(slots[a]), wb = this.slotWeight(slots[b])
+            return wa - wb
+          })
+          const n = Math.min(names.length, idxs.length)
+          for (let i = 0; i < n; i++) assigned[idxs[i]] = names[i]
+          done += n
+        } else {
+          const r = this.placeUnits(slots, assigned, free, units, {
+            order: 'ledger',
+            dayPick: 'minWeight',
+          })
+          done += r.placed
+          if (node.innerOrder === 'yes' && r.writes.length) {
+            this.reorderWithinDays(slots, assigned, r.writes)
+          }
+        }
+      }
+      this.trackSatisfaction(node.uid, done, total)
+    },
+    // 组内排序：同一天内，账本高的人坐权重低的槽
+    reorderWithinDays(slots, assigned, writes) {
+      const byDay = new Map()
+      writes.forEach(w => {
+        if (!byDay.has(w.day)) byDay.set(w.day, [])
+        byDay.get(w.day).push(w)
+      })
+      byDay.forEach((list) => {
+        const names = list.map(w => w.name).sort((a, b) => this.ledgerOf(b) - this.ledgerOf(a))
+        const idxs = list.map(w => w.i).sort((a, b) => {
+          const wa = this.slotWeight(slots[a]), wb = this.slotWeight(slots[b])
+          return wa - wb
+        })
+        idxs.forEach((i, k) => { assigned[i] = names[k] })
+      })
+    },
+
+    findByName(slots, assigned, name) {
+      const out = []
+      for (let i = 0; i < slots.length; i++) if (assigned[i] === name) out.push(i)
+      return out
+    },
+    // 特殊关系：在同一天 / 不在同一天（按「天」判定，允许跨天调整）
+    applyRelation(slots, assigned, node) {
+      const a = node.a, b = node.b
+      if (!a || !b || a === b) return
+      const ia = this.findByName(slots, assigned, a)
+      const ib = this.findByName(slots, assigned, b)
+      const daysA = new Set(ia.map(i => slots[i].day))
+      if (node.relationType === 'same') {
+        let ok = ib.some(i => daysA.has(slots[i].day))
+        if (!ok) {
+          const targetDay = [...daysA][0]
+          if (targetDay != null) {
+            const empty = slots.findIndex((s, i) => s.day === targetDay && !assigned[i])
+            if (empty >= 0) {
+              const moveIdx = ib.find(i => !daysA.has(slots[i].day))
+              if (moveIdx != null) {
+                assigned[empty] = b
+                assigned[moveIdx] = ''
+                ok = true
+              } else if (!ib.length) {
+                assigned[empty] = b
+                ok = true
+              }
+            } else {
+              const swapIdx = slots.findIndex((s, i) =>
+                s.day === targetDay && assigned[i] && assigned[i] !== a && assigned[i] !== b)
+              if (swapIdx >= 0 && ib.length) {
+                const tmp = assigned[swapIdx]
+                assigned[swapIdx] = b
+                assigned[ib[0]] = tmp
+                ok = true
+              }
+            }
+          }
+        }
+        this.trackSatisfaction(node.uid, ok ? 1 : 0, 1)
+        return
+      }
+      // 不在同一天
+      let ok = true
+      for (const i of ib) {
+        if (!daysA.has(slots[i].day)) continue
+        const target = slots.findIndex((s, j) => !daysA.has(s.day) && !assigned[j])
+        if (target >= 0) {
+          assigned[target] = b
+          assigned[i] = ''
+          continue
+        }
+        const swap = slots.findIndex((s, j) =>
+          !daysA.has(s.day) && assigned[j] && assigned[j] !== a && assigned[j] !== b)
+        if (swap >= 0) {
+          const tmp = assigned[swap]
+          assigned[swap] = b
+          assigned[i] = tmp
+        } else {
+          ok = false
+        }
+      }
+      this.trackSatisfaction(node.uid, ok ? 1 : 0, 1)
+    },
+    // 特殊劳动：一定做 / 不做某项目
+    applyLabor(slots, assigned, node) {
+      const name = node.student
+      const item = node.item
+      if (!name || !item) return
+      const want = node.action === 'do'
+      const aSlots = this.findByName(slots, assigned, name)
+      const inItem = aSlots.filter(i => slots[i].item === item)
+      let ok
+      if (want) {
+        ok = inItem.length > 0
+        if (!ok) {
+          const empty = slots.findIndex((s, i) => s.item === item && !assigned[i])
+          if (empty >= 0) {
+            if (aSlots.length) { assigned[empty] = name; assigned[aSlots[0]] = '' }
+            else assigned[empty] = name
+            ok = true
+          } else {
+            const otherItem = aSlots.find(i => slots[i].item !== item)
+            const target = slots.findIndex((s, i) => s.item === item && i !== aSlots[0])
+            if (otherItem != null && target >= 0) {
+              const tmp = assigned[target]
+              assigned[target] = name
+              assigned[otherItem] = tmp
+              ok = true
+            }
+          }
+        }
+      } else {
+        ok = inItem.length === 0
+        if (!ok) {
+          for (const idx of inItem) {
+            const empty = slots.findIndex((s, i) => s.item !== item && !assigned[i])
+            if (empty >= 0) { assigned[empty] = name; assigned[idx] = '' }
+            else assigned[idx] = ''
+          }
+          if (!this.findByName(slots, assigned, name).length) ok = true
+        }
+      }
+      this.trackSatisfaction(node.uid, ok ? 1 : 0, 1)
+    },
+
+    // ==================== 满足率 ====================
+    trackSatisfaction(uid, done, total) {
+      const st = ctx.satisfaction.value[uid] || { done: 0, total: 0 }
+      st.done += done
+      st.total += total
+      ctx.satisfaction.value[uid] = st
+    },
+    satisfactionOf(node) {
+      const st = ctx.satisfaction.value[node.uid]
+      if (!st) return null
+      return st.total ? Math.round((st.done / st.total) * 100) : 0
+    },
+
+    // ==================== 预览 ====================
+    generatePreview() {
+      const { slots, assigned } = this.buildAssignment()
+      ctx.previewCells.value = this.buildCells(slots, assigned)
+      ctx.previewVersion.value++
+    },
+    resetPreview() {
+      ctx.previewCells.value = JSON.parse(JSON.stringify(ctx.baseCells.value || {}))
+      ctx.previewVersion.value++
+    },
     buildCells(slots, assigned) {
       const cells = {}
-      ctx.itemsArr.value.forEach(it => { cells[it.name] = {}; ctx.daysArr.value.forEach(d => { cells[it.name][d] = [] }) })
+      ctx.itemsArr.value.forEach(it => {
+        cells[it.name] = {}
+        ctx.daysArr.value.forEach(d => { cells[it.name][d] = [] })
+      })
       slots.forEach((s, i) => {
         const name = assigned[i]
-        if (name && typeof name === 'string' && name.trim()) cells[s.item][s.day].push(name)
+        if (name) cells[s.item][s.day].push(name)
       })
-      // 对齐每个项目每天人数 = count
       ctx.itemsArr.value.forEach(it => {
         const n = Math.max(1, Number(it.count) || 1)
         ctx.daysArr.value.forEach(d => {
@@ -45,243 +584,6 @@ export function useDutyArrangementPipeline(ctx, OPTIONS) {
       })
       return cells
     },
-    findSlots(slots, assigned, name) {
-      const out = []
-      for (let i = 0; i < slots.length; i++) if (assigned[i] === name) out.push(i)
-      return out
-    },
-
-    // ==================== 均衡轮转填充 ====================
-    // 把 names 循环填入所有槽位（尽量均衡；同一天连续槽位互不重复）
-    roundRobinFill(slots, names) {
-      const assigned = new Array(slots.length).fill('')
-      names = [...names]
-      for (let i = 0; i < slots.length; i++) assigned[i] = names[i % names.length]
-      return assigned
-    },
-    // 分组填充：每组分配到「主天」，同组成员尽量同一天；空余用全体均衡补充
-    groupFill(slots, buckets) {
-      const names = ctx.studentNames.value
-      const allMembers = buckets.flat().filter(Boolean)
-      const others = names.filter(n => !allMembers.includes(n))
-      const dayList = ctx.daysArr.value
-      // 组 → 主天（循环分配，保证尽量分布在天上）
-      const pool = {}
-      buckets.forEach((g, gi) => {
-        const d = dayList[gi % dayList.length]
-        ;(pool[d] = pool[d] || []).push(...shuffle(g))
-        // 记录主天统计（用于符合度）
-        const key = 'g' + gi
-        ctx._groupMainDay = ctx._groupMainDay || {}
-        ctx._groupMainDay[key] = d
-      })
-      // 每 slot 归到其天
-      const byDay = {}
-      slots.forEach((s, i) => { (byDay[s.day] = byDay[s.day] || []).push(i) })
-      Object.keys(byDay).forEach(d => {
-        const need = byDay[d].length
-        const have = (pool[d] || []).length
-        if (have < need) {
-          const source = others.length ? others.concat(allMembers) : names
-          for (let i = have; i < need; i++) pool[d].push(source[i % source.length])
-        }
-      })
-      const assigned = new Array(slots.length).fill('')
-      Object.keys(byDay).forEach(d => {
-        const arr = (pool[d] || [])
-        byDay[d].forEach((si, idx) => { assigned[si] = arr[idx] || '' })
-      })
-      return assigned
-    },
-
-    // ==================== 流水线排表 ====================
-    isMethod(n) {
-      return OPTIONS.find(o => o.key === n.key)?.type === 'method'
-    },
-    // 先序处理：随机/分组/权重公平可并存，主填充优先级：公平 > 分组 > 随机
-    buildAssignment() {
-      ctx.satisfaction.value = {}
-      const slots = ctx.buildSlots()
-      if (!slots.length) { ctx.previewCells.value = {}; return }
-      // 方式节点：多个方式可同时存在，取最高优先级的作主策略
-      const methods = ctx.tree.value.filter(n => ctx.isMethod(n))
-      const group = methods.find(n => n.key === 'group')
-      const fair = methods.find(n => n.key === 'fair')
-      let assigned
-      if (fair && ctx.hasWeightData()) {
-        assigned = ctx.fairFill(slots)
-      } else if (group && ctx.groupBuckets().length) {
-        ctx._groupMainDay = {}
-        assigned = ctx.groupFill(slots, ctx.groupBuckets())
-      } else {
-        assigned = ctx.roundRobinFill(slots, shuffle(ctx.studentNames.value))
-        ctx.trackSatisfaction('random', ctx.studentNames.value.length, ctx.studentNames.value.length)
-      }
-      // 收集全部约束：各方式子级 + 独立拖放顶部的限制条件，逐个应用
-      const constraints = methods.flatMap(n => n.children || [])
-        .concat(ctx.tree.value.filter(n => !ctx.isMethod(n)))
-      for (const c of constraints) {
-        if (c.key === 'relation') assigned = ctx.applyRelation(slots, assigned, c)
-        else if (c.key === 'labor') assigned = ctx.applyLabor(slots, assigned, c)
-      }
-      return { slots, assigned }
-    },
-    // 是否具备可用的权重数据（每个槽位都能取到权重值）
-    hasWeightData() {
-      const w = ctx.weights.value || {}
-      return ctx.itemsArr.value.every(it => w[it.name] && typeof w[it.name] === 'object')
-    },
-
-    // 分组符合度：组内成员落在「其组主天」人数的占比（由 computeGroupSatisfaction 依据实际排表结果计算）
-
-    // 特殊关系：A、B 不在同一天值日。冲突时把 B 的一个槽位移到别的天
-    applyRelation(slots, assigned, node) {
-      assigned = [...assigned]
-      if (!node.a || !node.b || node.a === node.b) return assigned
-      const ia = ctx.findSlots(slots, assigned, node.a)
-      const ib = ctx.findSlots(slots, assigned, node.b)
-      const daysA = new Set(ia.map(i => slots[i].day))
-      let conflict = false
-      for (const i of ib) if (daysA.has(slots[i].day)) { conflict = true; break }
-      let ok = !conflict
-      if (conflict) {
-        // 找一个不同天的空槽位给 b 的第一个冲突槽位
-        const targetDay = ctx.daysArr.value.find(d => !daysA.has(d))
-        for (let i = 0; i < ib.length && !ok; i++) {
-          const idx = ib[i]
-          if (!daysA.has(slots[idx].day)) continue
-          if (targetDay == null) break
-          // 在该目标天找一个空槽位
-          const empty = slots.findIndex((s, j) => s.day === targetDay && !assigned[j])
-          if (empty >= 0) {
-            assigned[empty] = assigned[idx]
-            assigned[idx] = ''
-            ok = true
-            break
-          }
-        }
-      }
-      ctx.trackSatisfaction('relation:' + node.a + '-' + node.b, ok ? 1 : 0, 1)
-      return assigned
-    },
-
-    // 特殊劳动：A 一定做 / 不做某劳动项目
-    applyLabor(slots, assigned, node) {
-      assigned = [...assigned]
-      if (!node.student || !node.item) return assigned
-      const a = node.student
-      const want = node.action === 'do' // true=一定做，false=不做
-      const aSlots = ctx.findSlots(slots, assigned, a)
-      const inItem = aSlots.filter(i => slots[i].item === node.item)
-      let ok
-      if (want) {
-        ok = inItem.length > 0
-        if (!ok) {
-          // 找到该项目空槽位放 A；否则把 A 一个非该项目槽位与该项目的某槽位交换
-          const empty = slots.findIndex((s, i) => s.item === node.item && !assigned[i])
-          if (empty >= 0) {
-            if (aSlots.length) { assigned[empty] = a; assigned[aSlots[0]] = '' }
-            else assigned[empty] = a
-            ok = true
-          } else {
-            const otherItemSlot = aSlots.find(i => slots[i].item !== node.item)
-            const tgtItem = slots.findIndex((s, i2) => s.item === node.item && i2 !== aSlots[0])
-            if (otherItemSlot != null && tgtItem >= 0) {
-              const tmp = assigned[tgtItem]; assigned[tgtItem] = a; assigned[otherItemSlot] = tmp
-              ok = true
-            }
-          }
-        }
-      } else {
-        ok = inItem.length === 0
-        if (!ok) {
-          // 把 A 移出该项目：移到任意空位，否则清空（保证不占用该劳动）
-          for (const idx of inItem) {
-            const empty = slots.findIndex((s, i) => s.item !== node.item && !assigned[i])
-            if (empty >= 0) { assigned[empty] = a; assigned[idx] = '' }
-            else { assigned[idx] = '' }
-          }
-          if (ctx.findSlots(slots, assigned, a).length === 0) ok = true
-        }
-      }
-      ctx.trackSatisfaction('labor:' + a + ':' + node.item, ok ? 1 : 0, 1)
-      return assigned
-    },
-
-    // ==================== 权重公平分配 ====================
-    // 把槽位按权重升序排列、学生按累计权重（账本）降序排列，配对分配——
-    // 权重低的槽位给累计多的人，权重高的槽位给累计少的人，使长期趋于公平。
-    fairFill(slots) {
-      const w = ctx.weights.value || {}
-      const led = ctx.ledger.value || {}
-      // 学生名单 + 账本值（没记录的按 0 计），按账本降序
-      const students = ctx.studentNames.value.map(name => ({ name, led: led[name] || 0 }))
-      students.sort((a, b) => b.led - a.led)
-      // 槽位按权重升序（权重相同保持原顺序）
-      const slotOrder = slots.map((s, i) => ({ i, w: w[s.item]?.[s.day] ?? 0.5 }))
-      slotOrder.sort((a, b) => a.w - b.w)
-      const assigned = new Array(slots.length).fill('')
-      // 多对多：若学生数 < 槽位数，循环使用（仍按账本降序轮询）；反之多余学生不上表
-      // 名单为空时 students.length === 0，i % 0 = NaN，students[NaN] 为 undefined，
-      // 取 .name 会直接抛 TypeError。空名单应返回「全部留空」，由调用方提示未选学生。
-      if (students.length === 0) {
-        ctx.trackSatisfaction('fair', 0, 0)
-        return new Array(slots.length).fill('')
-      }
-      for (let i = 0; i < slotOrder.length; i++) {
-        assigned[slotOrder[i].i] = students[i % students.length].name
-      }
-      ctx.trackSatisfaction('fair', slots.length, slots.length)
-      return assigned
-    },
-
-    // ==================== 满足率 ====================
-    trackSatisfaction(key, done, total) {
-      if (!ctx.satisfaction.value[key]) ctx.satisfaction.value[key] = { done: 0, total: 0 }
-      ctx.satisfaction.value[key].done += done
-      ctx.satisfaction.value[key].total += total
-    },
-    satisfactionKey(node) {
-      if (node.key === 'relation') return 'relation:' + node.a + '-' + node.b
-      if (node.key === 'labor') return 'labor:' + node.student + ':' + node.item
-      return node.key
-    },
-    satisfactionOf(node) {
-      const key = ctx.satisfactionKey(node)
-      if (!key || !ctx.satisfaction.value[key]) return null
-      const { done, total } = ctx.satisfaction.value[key]
-      return total ? Math.round((done / total) * 100) : 0
-    },
-
-    // ==================== 预览 ====================
-    generatePreview() {
-      let result = ctx.buildAssignment()
-      if (!result || !result.assigned.length) return
-      ctx.previewCells.value = ctx.buildCells(result.slots, result.assigned)
-      ctx.previewVersion.value++
-      // 分组符合度：补算（需用排表结果）
-      ctx.computeGroupSatisfaction()
-    },
-    computeGroupSatisfaction() {
-      if (!ctx._groupMainDay) return
-      const buckets = ctx.groupBuckets()
-      let done = 0, total = 0
-      // 每位学生所在天 = 其在 previewCells 中出现的 day 集合的主天
-      buckets.forEach((g, gi) => {
-        const main = ctx._groupMainDay['g' + gi]
-        if (!main || !g.length) return
-        g.forEach(name => {
-          total++
-          const days = new Set()
-          for (const it of Object.keys(ctx.previewCells.value))
-            for (const day of Object.keys(ctx.previewCells.value[it]))
-              if (ctx.previewCells.value[it][day].includes(name)) days.add(day)
-          if (days.has(main)) done++
-        })
-      })
-      if (total) { ctx.satisfaction.value.group = { done, total } }
-    },
-
     buildPreviewRows(cells) {
       const rows = []
       const days = ctx.daysArr.value

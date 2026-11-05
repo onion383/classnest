@@ -130,7 +130,8 @@ classnest/
 - **使用方**：`SeatView` / `SmartArrangementDialog`。
 
 #### [DutySettingsDialog.vue](../../../../student-frontend/src/components/dialogs/DutySettingsDialog.vue) · 值日设置
-- **对外接口**：`props`（组件属性）：`visible`（显隐）/ `days`（值日天数与结构）/ `items`（值日条目）；`emits`（组件事件）：`save`（保存）/ `cancel`（取消）。
+- **对外接口**：`props`（组件属性）：`visible`（显隐）/ `days`（值日天数与结构）/ `items`（值日条目）/ `studentCount`（班级学生数，用于保存时判断人数是否够排）；`emits`（组件事件）：`save`（保存）/ `cancel`（取消）。
+- **内部实现**：保存前若「天数 × 每班人数」小于学生数，先弹人数不足确认。
 - **使用方**：`DutyView`。
 
 #### [DutyRecordSettingsDialog.vue](../../../../student-frontend/src/components/dialogs/DutyRecordSettingsDialog.vue) · 值日记录设置
@@ -142,8 +143,8 @@ classnest/
 - **使用方**：`DutyView`。
 
 #### [DutyWeightAlgorithmDialog.vue](../../../../student-frontend/src/components/dialogs/DutyWeightAlgorithmDialog.vue) · 值日权重算法
-- **对外接口**：`props`（组件属性）：`days`（值日天数与结构）/ `items`（值日条目）；`emits`（组件事件）：`cancel`（取消）/ `apply`（应用权重）。
-- **内部实现**：编辑劳动项目与星期维度权重，应用后供智能编排使用。
+- **对外接口**：`props`（组件属性）：`days`（值日天数与结构）/ `items`（值日条目）/ `dimension`（权重维度，`1d` 按项目 / `2d` 项目 × 星期，默认 `1d`）；`emits`（组件事件）：`cancel`（取消）/ `apply`（应用权重）。
+- **内部实现**：一维只按项目轴生成权重并平铺到所有天；二维按项目 × 星期生成梯度矩阵，应用后供智能编排使用。
 - **使用方**：`DutyView` / `DutyArrangementDialog`。
 
 #### [SettingsDialog.vue](../../../../student-frontend/src/components/dialogs/SettingsDialog.vue) · 课程表设置
@@ -151,9 +152,9 @@ classnest/
 - **使用方**：`ScheduleView`。
 
 #### [DutyArrangementDialog/DutyArrangementDialog.vue](../../../../student-frontend/src/components/dialogs/DutyArrangementDialog/DutyArrangementDialog.vue) · 值日编排
-- **对外接口**：`props`（组件属性）：`days`（值日天数与结构）/ `items`（值日条目）/ `students`（学生名单）/ `weights`（权重，默认空对象）/ `ledger`（已排记录，默认空对象）/ `draft`（草稿，默认 `{exists:false}`（不存在））；`emits`（组件事件）：`cancel`（取消）/ `confirm`（确认）/ `save-draft`（保存草稿）/ `clear-draft`（清除草稿）。
-- **内部实现**：随机排表 + 预览 + 应用；草稿可暂存/清除（`/api/duty/template` 相关）。
-- **使用方**：`DutyView`（`v-if` 挂载，无 `visible`）。
+- **对外接口**：`props`（组件属性）：`visible`（显隐）/ `days`（值日天数与结构）/ `items`（值日条目）/ `students`（学生名单）/ `weights`（权重，默认空对象）/ `ledger`（已排记录，默认空对象）/ `draft`（草稿，默认 `{exists:false}`（不存在））/ `baseCells`（当前值日表，作为流水线起点）/ `seat`（当前座位表快照，用于抽取同桌/六位/一列等学生分组）；`emits`（组件事件）：`cancel`（取消）/ `confirm`（确认）/ `save-draft`（保存草稿）/ `clear-draft`（清除草稿）/ `open-settings`（人数不足时打开值日设置）。
+- **内部实现**：一级条件列表（随机/分组/特殊关系/特殊劳动/辛苦度公平），条件可重复、按顺序执行；从当前值日表起步，结果只预览，确认后写回；总槽位小于学生数时先弹确认。
+- **使用方**：`DutyView`（`v-if` 挂载，`visible` 控制显隐）。
 
 #### [SmartArrangementDialog/SmartArrangementDialog.vue](../../../../student-frontend/src/components/dialogs/SmartArrangementDialog/SmartArrangementDialog.vue) · 智能排表
 - **对外接口**：`props`（组件属性）：`rows`（行数，默认 6）/ `cols`（列数，默认 7）/ `mode`（排表模式，默认 `single`（单人单桌））/ `showAisle`（是否显示走廊，默认 `true`）/ `students`（学生名单）/ `initialSeats`（初始座位）/ `weights`（权重）/ `ledger`（已排记录，默认空对象）；`emits`（组件事件）：`cancel`（取消）/ `confirm`（确认）。

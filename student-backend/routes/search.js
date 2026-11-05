@@ -3,6 +3,8 @@ const router = express.Router()
 const { db } = require('../db')
 // 值日数据「按模式拆分」的唯一实现（此前本文件自己抄了一份 toModeMap）
 const { unpackMode } = require('../services/dutyMode')
+// 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
+const dutyConfig = require('../services/dutyConfig')
 const { safeJson } = require('../utils/json')
 
 // 标题栏「全局搜索」的服务端数据源：对若干业务表的文本列做 LIKE 匹配，分组返回。
@@ -477,21 +479,19 @@ router.get('/', (req, res) => {
       if (items.length) groups.push({ table: st.table, group: st.group, emoji: '🪑', route: '/seats', items })
     }
 
-    // 值日表（项目×星期；行按项目人数展开，与页面 buildGridRows 的行号一致）
-    let dutyDays = DEFAULT_DAYS, dutyItemsField = null
+    // 值日表（项目×列；行按项目人数展开，与页面 buildGridRows 的行号一致）
+    // 列名按模式分键（日常值日=星期几，大扫除=分组名+全部），走 dutyConfig 唯一入口取
+    let dutyItemsField = null
     try {
-      const g = db.prepare('SELECT days, items FROM duty_settings WHERE id = 1').get()
-      if (g) {
-        const d = safeJson(g.days, [], 'duty_settings.days')
-        if (Array.isArray(d) && d.length) dutyDays = d
-        dutyItemsField = g.items
-      }
+      const g = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get()
+      if (g) dutyItemsField = g.items
     } catch (_) {}
     for (const dt of DUTY_TABLES) {
       let row = null
       try { row = db.prepare(`SELECT cells FROM ${dt.table} WHERE id = 1`).get() } catch (_) { continue }
       if (!row) continue
       for (const mode of ['daily', 'big']) {
+        const dutyDays = dutyConfig.readDays(mode)
         const cells = unpackMode(row.cells, mode)
         const items = dutyItemsField ? unpackMode(dutyItemsField, mode, []) : []
         if (!Array.isArray(items) || !items.length) continue

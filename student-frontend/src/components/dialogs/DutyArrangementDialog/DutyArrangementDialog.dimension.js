@@ -1,6 +1,6 @@
 // ===== 值日智能排表：分组维度（分组管理接口） =====
 // 纯代码搬运自 DutyArrangementDialog.vue 的 methods，未改写逻辑；经 ctx 闭包调用（script setup）。
-// ctx 契约：{ dimensions, groups, selectedDimId, tree, arranged, rejectText, loadDimensionGroups 等 }。
+// ctx 契约：{ dimensions, groups, selectedDimId, arranged, rejectText, showReject 等 }。
 import axios from 'axios'
 
 const API_BASE = '/api'
@@ -15,9 +15,6 @@ export function useDutyArrangementDimension(ctx) {
         const active = res.data.active
         ctx.groups.value = (active && active.groups) || []
         ctx.selectedDimId.value = active ? String(active.dimension.id) : ''
-        // 若当前默认方式是分组，同步其维度选项
-        const g = ctx.tree.value.find(n => n.key === 'group')
-        if (g && ctx.selectedDimId.value) g.option = ctx.selectedDimId.value
       } catch (e) {
         console.error(e);
         ctx.rejectText.value = '加载分组维度失败';

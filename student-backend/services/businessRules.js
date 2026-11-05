@@ -8,6 +8,8 @@
 
 const { db } = require('../db');
 const { resolveNames } = require('./provisionalStudents');
+// 列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
+const dutyConfig = require('./dutyConfig');
 
 // —— 通用工具 ——
 function toObj(v) {
@@ -86,8 +88,13 @@ function assertDutyRefs(cells, name) {
   const isModeMap = keys.length > 0 && keys.every((k) => k === 'daily' || k === 'big');
 
   const s = db.prepare('SELECT days, items FROM duty_settings WHERE id = 1').get();
-  const dayObj = toObj(s ? s.days : null);
-  const dayList = Array.isArray(dayObj) ? dayObj.map(String) : [];
+  // 列名按模式分键：daily 是星期几，big 是分组名 + 全部。
+  // 打包提交按各模式自己的列名校验；单模式提交（看不出是哪个模式）校验「在任一模式的列名里」。
+  const dayLists = {
+    daily: dutyConfig.readDays('daily'),
+    big: dutyConfig.readDays('big'),
+  };
+  const unionDays = Array.from(new Set([...dayLists.daily, ...dayLists.big]));
   const { names: itemNames, maps } = parseDutyItems(s ? s.items : null);
   // 单模式提交（看不出是哪个模式）时，人数取 daily 与 big 的并集（同名以 daily 优先）
   const unionMap = new Map([...maps.big, ...maps.daily]);
@@ -102,6 +109,8 @@ function assertDutyRefs(cells, name) {
   layers.forEach(({ mode, layer }) => {
     // 打包提交按模式取人数；单模式提交共用并集
     const countMap = mode != null ? maps[mode] : unionMap;
+    // 打包提交按该模式的列名校验；单模式提交用两模式并集
+    const dayList = mode != null ? dayLists[mode] : unionDays;
     Object.keys(layer).forEach((item) => {
       if (itemNames.size && !itemNames.has(item)) {
         throw new Error(`值日项目「${item}」不在设置的劳动项目里（字段「${name}」）`);
@@ -110,7 +119,7 @@ function assertDutyRefs(cells, name) {
       if (!daysObj || typeof daysObj !== 'object' || Array.isArray(daysObj)) return;
       Object.keys(daysObj).forEach((day) => {
         if (dayList.length && !dayList.includes(day)) {
-          throw new Error(`值日星期「${day}」不在设置的星期列表里（字段「${name}」）`);
+          throw new Error(`值日列「${day}」不在设置的列名列表里（字段「${name}」）`);
         }
         const list = daysObj[day];
         if (!Array.isArray(list)) return;

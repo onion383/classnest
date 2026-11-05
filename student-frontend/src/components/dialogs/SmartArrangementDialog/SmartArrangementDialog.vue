@@ -18,11 +18,19 @@
         @cancel="draftConfirmVisible = false"
       />
 
+      <!-- 数据源：本次排表用哪些学生。默认「现有排表表格」= 只重排当前座位表里的人；
+           选「全部同学」= 按学生表里的全班同学排（没入座的补进空位） -->
+      <div class="mb-3 flex items-center gap-3">
+        <label class="text-sm font-medium shrink-0">选择数据源</label>
+        <AppSelect v-model="dataSource" :options="dataSourceOptions" class="w-44" @change="onDataSourceChange" />
+        <span class="text-xs text-text-muted">{{ dataSourceHint }}</span>
+      </div>
+
       <!-- 排表条件：标题与「开始排表」按钮独立在毛玻璃外；条件行 + 底部拖放位同处一块毛玻璃 -->
       <div class="mb-3">
         <div class="flex items-center justify-between mb-2">
           <label class="text-sm font-medium block">排表条件</label>
-          <button @click="startArrange" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm">{{ arranged ? '🔀 换一换' : '▶ 开始排表' }}</button>
+          <button @click="startArrange" :disabled="poolEmpty" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm disabled:opacity-40 disabled:cursor-not-allowed">{{ arranged ? '🔀 换一换' : '▶ 开始排表' }}</button>
         </div>
         <div
           class="border border-dashed border-border rounded-lg p-2 bg-surface/55 backdrop-blur-md"
@@ -268,6 +276,12 @@ const draftInUse = ref(false)
 const draftConfirmVisible = ref(false)
 // 恢复草稿的过程中暂缓条件变更监听，避免恢复动作本身把 arranged 重置掉
 const restoring = ref(false)
+// 数据源：table = 只用现有排表（座位表）里的人；all = 学生表里的全班同学
+const dataSource = ref('table')
+const dataSourceOptions = [
+  { value: 'table', label: '现有排表表格' },
+  { value: 'all', label: '全部同学' },
+]
 
 // 排表基准座位：有草稿用草稿，否则用父组件传入的当前座位表
 const baseSeats = computed(() => draftSeats.value || props.initialSeats)
@@ -286,6 +300,30 @@ const strangerNames = computed(() => {
   return out
 })
 const strangers = computed(() => [...strangerNames.value])
+// 现有座位表里的人（去重）：数据源选「现有排表表格」时的参与者（含不在名册里的新同学）
+const tableStudents = computed(() => {
+  const out = []
+  const seen = new Set()
+  for (const row of baseSeats.value || []) {
+    for (const val of row || []) {
+      let n = ''
+      if (typeof val === 'number') {
+        const s = props.students.find(x => x.id === val)
+        n = s ? String(s.姓名 || '').trim() : ''
+      } else if (typeof val === 'string') n = val.trim()
+      else if (val && typeof val === 'object') n = String(val.姓名 || '').trim()
+      if (n && !seen.has(n)) { seen.add(n); out.push(n) }
+    }
+  }
+  return out
+})
+const dataSourceHint = computed(() => {
+  if (dataSource.value === 'all') return '按学生表里的全班同学排，没入座的补进空位'
+  if (!tableStudents.value.length) return '当前座位表里没有人，改选「全部同学」才能排表'
+  return `只排现有座位表里已有的 ${tableStudents.value.length} 人，空位保持空着`
+})
+// 「现有排表表格」但表里没人 → 没有可排的人，「开始排表」置灰
+const poolEmpty = computed(() => dataSource.value === 'table' && !tableStudents.value.length)
 const previewKey = computed(() => {
   const sig = conditions.value.map(c => c.key + ':' + c.uid).join('-') || 'empty'
   return props.visible ? `arrange-${props.rows}-${props.cols}-${sig}-${previewVersion.value}` : 'closed'
@@ -303,7 +341,8 @@ const ctx = {
   conditions, nextUid, previewSeats, previewVersion, arranged, satisfaction,
   dragIdx, dragOverIdx,
   showNewPrompt, excludeNew, draftSeats, savingDraft, draftInUse, draftConfirmVisible, restoring,
-  baseSeats, strangerNames, strangers,
+  dataSource,
+  baseSeats, strangerNames, strangers, tableStudents,
   rows: toRef(props, 'rows'),
   cols: toRef(props, 'cols'),
   mode: toRef(props, 'mode'),
@@ -318,6 +357,11 @@ const pipeline = useSmartArrangementPipeline(ctx, CONDITION_REGISTRY)
 const blocks = useSmartArrangementBlocks(ctx)
 const options = useSmartArrangementOptions(ctx, CONDITION_REGISTRY)
 Object.assign(ctx, pipeline, blocks, options)
+
+// 数据源切换：回到「开始排表」，按新数据源重排一次（预览回到未改动的座位表）
+function onDataSourceChange() {
+  ctx.resetArranged()
+}
 
 // 条件行拖拽排序：指针拖拽 + 相邻行让位 + 松手滑入（与表格行/列移动同一套，见 composables/useRowSortDrag.js）
 const sortCond = useRowSortDrag({
@@ -347,6 +391,8 @@ watch(() => props.visible, async (v) => {
   excludeNew.value = false
   arranged.value = false
   draftConfirmVisible.value = false
+  // 每次打开都回到默认数据源（现有排表表格）；草稿里不存这一项
+  dataSource.value = 'table'
   // 有草稿则恢复上次草稿（座位结果 + 排表条件）；没有则显示未改动的当前座位表，不自动排表
   const { draft, fetchDraft } = useSeatDraft()
   if (!draft.loaded) await fetchDraft()

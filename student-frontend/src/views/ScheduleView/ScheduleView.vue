@@ -38,6 +38,8 @@
               :title="activeTitle"
               :anchorPrefix="'s'"
               :colHeaders="activeColHeaders"
+              :colDates="activeColDates"
+              :today-col="todayName"
               :rows="activeDisplayRows"
               :showPeriodColumn="true"
               :enableCandidate="true"
@@ -107,6 +109,8 @@
               v-else
               :anchorPrefix="'m'"
               :colHeaders="masterColHeaders"
+              :colDates="masterColDates"
+              :today-col="todayName"
               :rows="masterDisplayRows"
               :showPeriodColumn="true"
               :enableCandidate="true"
@@ -174,6 +178,7 @@
               <GridView
                 v-else
                 :colHeaders="historyColHeaders"
+                :colDates="historyColDates"
                 :title="activeTitle"
                 :rows="historySnapshot ? historyDisplayRows : []"
                 :showPeriodColumn="true"
@@ -266,6 +271,8 @@ import GridView from '../../components/tables/GridView/GridView.vue';
 import Tabs from '../../components/base/Tabs.vue';
 import WeekSwitcher from '../../components/base/WeekSwitcher.vue';
 import { shiftDateStr, diffDays, localDateStr } from '../../utils/dateTime.js';
+import { buildWeekDateMap } from '../../utils/weekDates.js';
+import { useWeekDates } from '../../composables/useWeekDates.js';
 import { useNotification } from '../../composables/useNotification.js';
 import { useUndoShortcut, recordGridSnapshotUndo } from '../../composables/useUndo.js';
 import { createRowReuseCache } from '../../utils/rowReuse.js';
@@ -618,6 +625,15 @@ const activeTitle = computed(() =>
   semesterStart.value ? `第 ${weekNumber.value} 周 课程表` : '课程表');
 const canDeleteHistorySnapshot = computed(() =>
   !!historyCurrentWeek.value && historyWeeks.value.some(w => w.week_start === historyCurrentWeek.value));
+
+// ---- 列头的日期副行（星期名下面标出这一周的具体日期）----
+// 口径：**当前自然周**（今天所在的那一周的周一~周五），不是学期周次 ——
+// 用户要的是「这一栏是几号」，学期第几周回答不了这个问题。
+// 历史记录页例外：按用户选中的那一周算（historyCurrentWeek 就是那一周的周一）。
+const { monday, todayName } = useWeekDates();
+const activeColDates = computed(() => buildWeekDateMap(monday.value, activeColHeaders.value));
+const masterColDates = computed(() => buildWeekDateMap(monday.value, masterColHeaders.value));
+const historyColDates = computed(() => buildWeekDateMap(historyCurrentWeek.value, historyColHeaders.value));
 const deleteSnapshotMessage = computed(() => {
   const w = historyCurrentWeek.value;
   if (!w) return '';

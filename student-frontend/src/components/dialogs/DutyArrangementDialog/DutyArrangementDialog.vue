@@ -2,100 +2,105 @@
   <DialogShell :visible="visible" :z-index="50" overlay-class="bg-black/30">
     <div class="bg-surface rounded-lg p-5 shadow-card dialog-card flex flex-col overflow-hidden" style="width: 900px; height: 720px; max-width: 92vw;">
       <h3 class="text-lg font-bold mb-1">🧹 值日智能排表</h3>
-      <p class="text-xs text-text-muted mb-3">按「条件流水线」依次生效：先排表方式，再逐条应用限制条件，越靠后的条件越重要，可部分覆盖前面的结果。结果仅预览，确认后才写回当前值日表。</p>
+      <p class="text-xs text-text-muted mb-3">只有一级条件，按顺序从第一条执行到最后一条；越靠后的条件越重要，可部分覆盖前面的结果。结果仅预览，确认后才写回当前值日表。</p>
+
+      <!-- 人数不足：总槽位 < 班级学生数时先确认 -->
+      <ConfirmDialog
+        :visible="slotWarningVisible"
+        title="人数不足提示"
+        :message="slotWarningMessage"
+        confirm-text="确认继续"
+        extra-text="打开值日设置"
+        :show-cancel="false"
+        @confirm="proceedStart"
+        @extra="openSettingsFromWarning"
+      />
 
       <!-- 拒绝提示 -->
       <div v-if="rejectText" class="mb-3 px-3 py-2 rounded bg-warning/15 border border-warning/40 text-warning text-sm">{{ rejectText }}</div>
 
-      <!-- 排表条件（方式 + 子级约束） -->
+      <!-- 数据源：本次排表用哪些人。默认「现有排表表格」= 只排当前值日表里已有的人；
+           选「全部同学」= 按学生表里的全班同学排 -->
+      <div class="mb-3 flex items-center gap-3">
+        <label class="text-sm font-medium shrink-0">选择数据源</label>
+        <AppSelect v-model="dataSource" :options="dataSourceOptions" class="w-44" @change="onDataSourceChange" />
+        <span class="text-xs text-text-muted">{{ dataSourceHint }}</span>
+      </div>
+
+      <!-- 排表条件：一层平铺，一行一条件（可拖拽排序、可重复添加、不限数量） -->
       <div class="mb-3">
         <div class="flex items-center justify-between mb-2">
           <label class="text-sm font-medium block">排表条件</label>
           <button @click="startArrange" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm">{{ arranged ? '🔀 换一换' : '▶ 开始排表' }}</button>
         </div>
-        <div class="border border-dashed border-border rounded p-2 bg-surface-hover min-h-[44px]" @dragover.prevent @drop="onDropTop">
-          <div v-if="tree.length === 0" class="text-sm text-text-muted py-1">拖入下方「排表方式」作为一级条件</div>
-          <div v-for="(node, ni) in tree" :key="node.key" class="mb-1">
-            <template v-if="isMethod(node)">
-              <!-- 排表方式（随机/分组可并存） -->
-              <div class="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-primary text-text-inverse text-sm cursor-default" @dragover.prevent @drop.stop="onDropChild($event, node)">
-                <button @click="removeNode(ni)" class="cursor-pointer text-text-inverse/80 hover:text-text-inverse font-bold leading-none text-base">×</button>
-                <span class="cursor-grab select-none text-text-inverse/70" draggable="true" @dragstart="onNodeDragStart($event, node)">⠿</span>
-                <span>{{ node.label }}</span>
-                <!-- 分组排表：选择分组维度 -->
-                <AppSelect v-if="node.key === 'group'" v-model="node.option" :options="dimensionOptions" placeholder="选择分组维度" class="w-40" @change="onDimensionChange" />
-                <span v-if="satisfactionOf(node) !== null" class="ml-auto text-xs px-1.5 py-0.5 rounded bg-white/20 text-text-inverse border border-white/30">满足 {{ satisfactionOf(node) }}%</span>
+        <div
+          class="border border-dashed border-border rounded-lg p-2 bg-surface/55 backdrop-blur-md"
+          @dragover.prevent
+          @drop="onDropZone"
+        >
+          <div class="max-h-[112px] overflow-auto" @scroll="sortCond.onScroll">
+            <div v-if="conditions.length === 0" class="text-sm text-text-muted py-1">把下方的条件选项拖到这里添加</div>
+            <div
+              v-for="(node, ni) in conditions"
+              :key="node.uid"
+              :data-cond-idx="ni"
+              class="mb-1 last:mb-0"
+              :class="{ 'cond-row-dragging': dragIdx === ni }"
+              @dragover.prevent
+              @drop.stop="onDropOnRow($event, ni)"
+            >
+              <div class="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-primary text-text-inverse text-sm">
+                <span class="flex items-center gap-2 shrink-0">
+                  <span class="text-xs tabular-nums text-text-inverse/60 select-none">{{ ni + 1 }}</span>
+                  <span class="cursor-grab select-none text-text-inverse/70" @mousedown="sortCond.handleDown($event, ni)">⠿</span>
+                </span>
+                <span class="font-semibold whitespace-nowrap">{{ node.label }}</span>
+                <template v-for="s in segmentsOf(node)" :key="s.idx">
+                  <span v-if="s.t === 'text'" class="text-text-inverse/90">{{ s.v }}</span>
+                  <AppSelect
+                    v-else
+                    :model-value="getField(node, s.path)"
+                    :options="s.options"
+                    :placeholder="s.placeholder"
+                    :class="s.width"
+                    @update:model-value="v => setField(node, s.path, v)"
+                  />
+                </template>
+                <span class="ml-auto flex items-center gap-2 shrink-0">
+                  <span v-if="satisfactionOf(node) !== null" class="text-xs px-1.5 py-0.5 rounded bg-white/20 text-text-inverse border border-white/30">满足 {{ satisfactionOf(node) }}%</span>
+                  <button @click="removeCondition(ni)" class="dlg-close cond-close" title="删除该条件">✕</button>
+                </span>
               </div>
-              <!-- 子级约束 -->
-              <div v-if="node.children.length" class="ml-8 mt-1 border border-dashed border-info/50 rounded p-1 space-y-1">
-                <div v-for="(child, ci) in node.children" :key="'c'+ci" class="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-surface border border-border text-text text-sm">
-                  <button @click="removeChild(ni, ci)" class="cursor-pointer text-text-muted hover:text-text font-bold leading-none text-base">×</button>
-                  <span class="cursor-grab select-none" draggable="true" @dragstart="onNodeDragStart($event, child)">⠿</span>
-                  <span>{{ child.label }}</span>
-                  <!-- 特殊关系配置 -->
-                  <template v-if="child.key === 'relation'">
-                    <AppSelect v-model="child.a" :options="studentOptions" placeholder="学生" class="w-24" />
-                    <span class="text-text-muted">和</span>
-                    <AppSelect v-model="child.b" :options="studentOptions" placeholder="学生" class="w-24" />
-                    <span class="text-text-muted">不在同一天值日</span>
-                  </template>
-                  <!-- 特殊劳动配置 -->
-                  <template v-if="child.key === 'labor'">
-                    <AppSelect v-model="child.student" :options="studentOptions" placeholder="学生" class="w-24" />
-                    <AppSelect v-model="child.action" :options="[{value:'do',label:'一定做'},{value:'not',label:'不做'}]" class="w-20" />
-                    <AppSelect v-model="child.item" :options="itemOptions" placeholder="劳动项目" class="w-32" />
-                  </template>
-                  <span v-if="satisfactionOf(child) !== null" class="ml-auto text-xs px-1.5 py-0.5 rounded bg-info/15 text-info border border-info/30">满足 {{ satisfactionOf(child) }}%</span>
-                </div>
-              </div>
-              <div v-else class="ml-8 mt-1 border border-dashed border-info/40 rounded p-1 min-h-[24px] flex items-center text-xs text-text-muted px-2">
-                拖入限制条件（特殊关系 / 特殊劳动）
-              </div>
-            </template>
-            <!-- 独立限制条件：无需依附某方式，可单独排表满足 -->
-            <div v-else class="ml-8 flex flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-surface border border-border text-text text-sm" @dragover.prevent @drop.stop="onDropChild($event, node)">
-              <button @click="removeNode(ni)" class="cursor-pointer text-text-muted hover:text-text font-bold leading-none text-base">×</button>
-              <span class="cursor-grab select-none" draggable="true" @dragstart="onNodeDragStart($event, node)">⠿</span>
-              <span>{{ node.label }}</span>
-              <!-- 特殊关系配置 -->
-              <template v-if="node.key === 'relation'">
-                <AppSelect v-model="node.a" :options="studentOptions" placeholder="学生" class="w-24" />
-                <span class="text-text-muted">和</span>
-                <AppSelect v-model="node.b" :options="studentOptions" placeholder="学生" class="w-24" />
-                <span class="text-text-muted">不在同一天值日</span>
-              </template>
-              <!-- 特殊劳动配置 -->
-              <template v-if="node.key === 'labor'">
-                <AppSelect v-model="node.student" :options="studentOptions" placeholder="学生" class="w-24" />
-                <AppSelect v-model="node.action" :options="[{value:'do',label:'一定做'},{value:'not',label:'不做'}]" class="w-20" />
-                <AppSelect v-model="node.item" :options="itemOptions" placeholder="劳动项目" class="w-32" />
-              </template>
-              <span v-if="satisfactionOf(node) !== null" class="ml-auto text-xs px-1.5 py-0.5 rounded bg-info/15 text-info border border-info/30">满足 {{ satisfactionOf(node) }}%</span>
             </div>
           </div>
+          <div
+            class="mt-1 text-xs text-text-muted px-2 py-1 rounded border border-dashed border-info/40 flex items-center select-none"
+            @dragover.prevent
+            @drop.stop="onDropZone"
+          >拖动到这里新增条件</div>
         </div>
+        <p class="mt-1 text-xs text-text-muted">条件按顺序依次生效；同类型条件可以重复添加。</p>
       </div>
 
-      <!-- 可选条件（可拖拽） -->
-      <div class="mb-4 flex gap-4">
-        <div class="flex-1">
-          <label class="text-sm font-medium mb-2 block">排表方式（拖到上方，二选一）</label>
-          <div class="flex flex-wrap gap-2">
-            <div v-for="opt in methodOptions" :key="opt.key" draggable="true" @dragstart="onOptionDragStart($event, opt)" class="px-3 py-2 rounded border border-border bg-primary text-text-inverse cursor-grab select-none text-sm shadow-sm hover:border-info">{{ opt.label }}</div>
-          </div>
-        </div>
-        <div class="flex-1">
-          <label class="text-sm font-medium mb-2 block">限制条件（拖到某方式下方）</label>
-          <div class="flex flex-wrap gap-2">
-            <div v-for="opt in constraintOptions" :key="opt.key" draggable="true" @dragstart="onOptionDragStart($event, opt)" class="px-3 py-2 rounded border border-border bg-surface cursor-grab select-none text-sm shadow-sm hover:border-info">{{ opt.label }}</div>
+      <!-- 条件选项：5 个按钮，拖到上方即可添加 -->
+      <div class="mb-3">
+        <label class="text-sm font-medium mb-2 block">条件选项（拖到上方添加，可重复添加）</label>
+        <div class="flex flex-wrap gap-2">
+          <div
+            v-for="opt in conditionButtons"
+            :key="opt.key"
+            draggable="true"
+            @dragstart="onOptionDragStart($event, opt.key)"
+            class="px-3 py-2 rounded border border-border bg-primary text-text-inverse cursor-grab select-none text-sm shadow-sm hover:border-info"
+          >
+            {{ opt.label }}
           </div>
         </div>
       </div>
 
       <!-- 预览 -->
       <div class="flex-1 overflow-auto border border-border rounded mb-4" style="min-height: 200px;">
-        <!-- maxHeight=0：预览区外层已是 flex-1 overflow-auto（弹窗自身滚动），
-             这里再限高会形成嵌套滚动条 -->
+        <!-- maxHeight=0：预览区外层已是 flex-1 overflow-auto，这里再限高会形成嵌套滚动条 -->
         <GridView
           v-if="previewRows.length"
           :key="previewKey"
@@ -126,14 +131,16 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, watch, onBeforeUnmount, nextTick, toRef } from 'vue'
+import { ref, computed, watch, nextTick, toRef, onBeforeUnmount } from 'vue'
 import GridView from '../../tables/GridView/GridView.vue'
 import AppSelect from '../../base/AppSelect.vue'
+import DialogShell from '../../base/DialogShell.vue'
+import ConfirmDialog from '../../base/ConfirmDialog.vue'
+import '../../../styles/dialog-transition.css'
+import { useRowSortDrag } from '../../../composables/useRowSortDrag.js'
 import { useDutyArrangementPipeline } from './DutyArrangementDialog.pipeline.js'
 import { useDutyArrangementOptions } from './DutyArrangementDialog.options.js'
 import { useDutyArrangementDimension } from './DutyArrangementDialog.dimension.js'
-import '../../../styles/dialog-transition.css'
-import DialogShell from '../../base/DialogShell.vue'
 
 defineOptions({ name: 'DutyArrangementDialog' })
 const props = defineProps({
@@ -148,103 +155,309 @@ const props = defineProps({
   // 公平账本：{ 学生姓名: 累计权重值 }
   ledger: { type: Object, default: () => ({}) },
   // 草稿：{ exists, cells, settings, conditions, savedAt }
-  draft: { type: Object, default: () => ({ exists: false }) }
+  draft: { type: Object, default: () => ({ exists: false }) },
+  // 当前值日表：{ 项目: { 星期: [姓名,...] } }
+  baseCells: { type: Object, default: () => ({}) },
+  // 当前座位表：{ rows, cols, mode, seats }，用于抽取同桌/六位/一列等学生分组
+  seat: { type: Object, default: () => ({ rows: 0, cols: 0, mode: 'single', seats: [] }) },
+  // 大扫除模式：列是「第X大组 / 第X小组」而不是星期，整张表就是一次活动
+  // → 同一个人不能同时出现在两个组（去重范围是整张表而不是单个列）
+  bigCleanup: { type: Boolean, default: false },
 })
-const emit = defineEmits(['cancel', 'confirm', 'save-draft', 'clear-draft'])
+const emit = defineEmits(['cancel', 'confirm', 'save-draft', 'clear-draft', 'open-settings'])
 
-// 排表条件选项：method 为排表方式，constraint 为限制条件（拖到方式下方）
-const OPTIONS = [
-  { key: 'random', label: '随机排表', type: 'method' },
-  { key: 'group', label: '分组排表', type: 'method' },
-  { key: 'fair', label: '权重公平', type: 'method' },
-  { key: 'relation', label: '特殊关系', type: 'constraint' },
-  { key: 'labor', label: '特殊劳动', type: 'constraint' }
-]
+// 条件注册表：每类条件在这里登记语义句、默认参数和执行方法。
+const REGISTRY = {
+  random: {
+    label: '随机选项',
+    apply: 'applyRandom',
+    defaults: () => ({ scope: 'all', unit: 'student', action: 'random' }),
+    segments: [
+      { t: 'text', v: '在' }, { t: 'select', path: 'scope', options: 'scopes', width: 'w-24' },
+      { t: 'text', v: '内 按照' }, { t: 'select', path: 'unit', options: 'units', width: 'w-24' },
+      { t: 'text', v: '为操作单元' }, { t: 'select', path: 'action', options: 'actions', width: 'w-28' },
+    ],
+  },
+  group: {
+    label: '分组选项',
+    apply: 'applyGroupAction',
+    defaults: () => ({ scope: 'all', unit: 'six', action: 'pack' }),
+    segments: [
+      { t: 'text', v: '在' }, { t: 'select', path: 'scope', options: 'scopes', width: 'w-24' },
+      { t: 'text', v: '内 按照' }, { t: 'select', path: 'unit', options: 'units', width: 'w-24' },
+      { t: 'text', v: '为一组' }, { t: 'select', path: 'action', options: 'actions', width: 'w-28' },
+    ],
+  },
+  relation: {
+    label: '特殊关系',
+    apply: 'applyRelation',
+    defaults: () => ({ a: '', b: '', relationType: 'same' }),
+    segments: [
+      { t: 'text', v: '尽量安排' },
+      { t: 'select', path: 'a', options: 'students', width: 'w-24', placeholder: '选择学生' },
+      { t: 'text', v: '和' },
+      { t: 'select', path: 'b', options: 'students', width: 'w-24', placeholder: '选择学生' },
+      { t: 'text', v: '同学' },
+      { t: 'select', path: 'relationType', options: 'relationTypes', width: 'w-36' },
+    ],
+  },
+  labor: {
+    label: '特殊劳动',
+    apply: 'applyLabor',
+    defaults: () => ({ student: '', action: 'do', item: '' }),
+    segments: [
+      { t: 'text', v: '尽量满足' },
+      { t: 'select', path: 'student', options: 'students', width: 'w-24', placeholder: '选择学生' },
+      { t: 'select', path: 'action', options: 'laborActions', width: 'w-24' },
+      { t: 'select', path: 'item', options: 'items', width: 'w-32', placeholder: '选择项目' },
+    ],
+  },
+  fair: {
+    label: '辛苦度公平选项',
+    apply: 'applyFair',
+    defaults: () => ({ scope: 'all', unit: 'student', innerOrder: 'no' }),
+    segments: [
+      { t: 'text', v: '在' }, { t: 'select', path: 'scope', options: 'scopes', width: 'w-24' },
+      { t: 'text', v: '中 按照' }, { t: 'select', path: 'unit', options: 'units', width: 'w-24' },
+      { t: 'text', v: '为一组 整体调整使得辛苦度更加公平 并且' },
+      { t: 'select', path: 'innerOrder', options: 'innerOrder', width: 'w-28' },
+      { t: 'text', v: '调整组内顺序 使得辛苦度更加公平' },
+    ],
+  },
+}
+const CONDITION_ORDER = ['random', 'group', 'relation', 'labor', 'fair']
 
-const tree = ref([{ key: 'random', label: '随机排表', children: [] }])
+// 默认只放一条「全部 / 同学 / 随机」
+function defaultConditions() {
+  return [{ uid: 0, key: 'random', label: '随机选项', scope: 'all', unit: 'student', action: 'random' }]
+}
+
+const conditions = ref(defaultConditions())
+const nextUid = ref(1)
 const previewCells = ref({})
 const previewVersion = ref(0)
 const rejectText = ref('')
 const arranged = ref(false)
 const satisfaction = ref({})
-// 分组维度（来自分组管理接口）
+const dragIdx = ref(null)
+const dragOverIdx = ref(null)
+const slotWarningVisible = ref(false)
+// 人数提示文案随数据源变：「全部同学」是人不够，「现有排表表格」是槽位比表里已排的人多
+const slotWarningMessage = computed(() => (dataSource.value === 'all'
+  ? '您设置的值日人数小于学生人数，会导致部分同学排不上值日表，确认继续吗？'
+  : '值日槽位比当前值日表里已排的人数多，部分同学会重复值日，确认继续吗？'))
+// 分组维度：用于「宿舍组」这类非座位几何的分组
 const dimensions = ref([])
 const groups = ref([])
 const selectedDimId = ref('')
+// 恢复草稿时暂缓条件监听，避免恢复动作把 arranged 重置
+const restoring = ref(false)
+// 数据源：table = 只用现有排表（值日表）里的人；all = 学生表里的全班同学
+const dataSource = ref('table')
+const dataSourceOptions = [
+  { value: 'table', label: '现有排表表格' },
+  { value: 'all', label: '全部同学' },
+]
+// 有草稿时以草稿为基准继续排；没有则用父组件传入的当前值日表
+const draftCells = ref(null)
+const baseCells = computed(() => draftCells.value || props.baseCells)
 
 const daysArr = computed(() => (props.days && props.days.length) ? props.days : ['周一', '周二', '周三', '周四', '周五'])
-const itemsArr = computed(() => (props.items && props.items.length) ? props.items : [])
-// 学生姓名（排表操作的原子单位）
+const itemsArr = computed(() => props.items || [])
 const studentNames = computed(() => props.students.map(s => String(s.姓名 || '').trim()).filter(Boolean))
-const studentOptions = computed(() => props.students.map(s => ({ value: String(s.姓名).trim(), label: s.姓名 })))
-const itemOptions = computed(() => itemsArr.value.map(it => ({ value: it.name, label: it.name })))
-const dimensionOptions = computed(() => dimensions.value.map(d => ({ value: String(d.id), label: d.name })))
-const methodOptions = computed(() => OPTIONS.filter(o => o.type === 'method'))
-const constraintOptions = computed(() => OPTIONS.filter(o => o.type === 'constraint'))
-const previewKey = computed(() => {
-  const flat = tree.value.flatMap(n => [n.key, ...(n.children || []).map(c => c.key)]).join('-') || 'empty'
-  return props.visible ? `duty-arrange-${flat}-${previewVersion.value}` : 'closed'
+// 现有值日表里的人（按出现顺序去重）：数据源选「现有排表表格」时的参与者
+const tableNames = computed(() => {
+  const out = []
+  const seen = new Set()
+  const cells = baseCells.value || {}
+  for (const item of Object.keys(cells)) {
+    const byDay = cells[item] || {}
+    for (const day of Object.keys(byDay)) {
+      const arr = byDay[day]
+      if (!Array.isArray(arr)) continue
+      for (const n of arr) {
+        const t = String(n || '').trim()
+        if (t && !seen.has(t)) { seen.add(t); out.push(t) }
+      }
+    }
+  }
+  return out
 })
+// 参与排表的学生池：随数据源切换（全部同学 = 学生表名册；现有排表表格 = 表里的人）
+const poolNames = computed(() => (dataSource.value === 'all' ? studentNames.value : tableNames.value))
+// 现有值日表里已排的人次（含重复：同一人排了多天算多次），用于「槽位够不够」的判断
+const tableFilled = computed(() => {
+  let n = 0
+  const cells = baseCells.value || {}
+  for (const item of Object.keys(cells)) {
+    const byDay = cells[item] || {}
+    for (const day of Object.keys(byDay)) {
+      const arr = byDay[day]
+      if (!Array.isArray(arr)) continue
+      for (const x of arr) if (String(x || '').trim()) n++
+    }
+  }
+  return n
+})
+const dataSourceHint = computed(() => {
+  if (dataSource.value === 'all') return '按学生表里的全班同学排'
+  if (!tableNames.value.length) return '当前值日表里没有人，改选「全部同学」才能排表'
+  return `只排当前值日表里已有的 ${tableNames.value.length} 人`
+})
+// 条件里的学生下拉：只列当前数据源里能参与排表的人（否则选中的人也调不动）
+const studentOptions = computed(() => poolNames.value.map(n => ({ value: n, label: n })))
+const itemOptions = computed(() => itemsArr.value.map(it => ({ value: it.name, label: it.name })))
+const previewKey = computed(() => {
+  const sig = conditions.value.map(c => c.key + ':' + c.uid).join('-') || 'empty'
+  return props.visible ? `duty-arrange-${daysArr.value.length}-${itemsArr.value.length}-${sig}-${previewVersion.value}` : 'closed'
+})
+const previewRows = computed(() => pipeline.buildPreviewRows(previewCells.value))
+const conditionButtons = computed(() => CONDITION_ORDER.map(k => ({ key: k, label: REGISTRY[k].label })))
 
-// 跨模块共享的上下文：状态为 ref（模块内 .value 访问），临时字段与方法直接挂上；
-// 三个 useXxx 的返回方法在下方 Object.assign 回填，模块间经 ctx 互相调用（运行时解析）
+// 跨模块共享上下文：状态为 ref（模块内 .value 访问），方法在下方 Object.assign 回填
 const ctx = {
-  tree, previewCells, previewVersion, rejectText, arranged, satisfaction,
+  conditions, nextUid, previewCells, previewVersion, arranged, satisfaction,
+  dragIdx, dragOverIdx, rejectText, slotWarningVisible,
   dimensions, groups, selectedDimId,
-  daysArr, itemsArr, studentNames,
+  daysArr, itemsArr, studentNames, studentOptions, itemOptions,
+  dataSource, poolNames, tableNames, tableFilled,
+  // 大扫除：整张表是一次活动 → 一个人不能同时出现在两个组
+  dedupeWholeTable: computed(() => props.bigCleanup),
+  students: toRef(props, 'students'),
   weights: toRef(props, 'weights'),
   ledger: toRef(props, 'ledger'),
-  // 恢复草稿时 tree 的赋值会触发深度 watch，先压住它，避免刚恢复的 arranged 立刻被重置
+  baseCells,
+  seat: toRef(props, 'seat'),
+  // 恢复草稿时暂缓 watch
   _restoringDraft: false,
-  // 提示条自动消失的定时器
   _rejectTimer: null,
-  // 分组主天统计（groupFill 写入、computeGroupSatisfaction 读取）
-  _groupMainDay: null,
   emit,
 }
-const pipeline = useDutyArrangementPipeline(ctx, OPTIONS)
-const options = useDutyArrangementOptions(ctx, OPTIONS)
+const pipeline = useDutyArrangementPipeline(ctx, REGISTRY)
+const options = useDutyArrangementOptions(ctx, REGISTRY)
 const dimension = useDutyArrangementDimension(ctx)
 Object.assign(ctx, pipeline, options, dimension)
 
-// 供模板调用的顶层绑定
-const { isMethod, satisfactionOf, buildPreviewRows } = pipeline
-const {
-  onOptionDragStart, onNodeDragStart, onDropTop, onDropChild,
-  removeNode, removeChild, startArrange, confirm, onSaveDraft, onClearDraft,
-} = options
-const { onDimensionChange, fetchDimensions } = dimension
-
-const previewRows = computed(() => buildPreviewRows(previewCells.value))
-
-watch(() => props.visible, (v) => {
-  if (v) {
-    arranged.value = false
-    previewCells.value = {}
-    previewVersion.value++
-    satisfaction.value = {}
-    rejectText.value = ''
-    // 草稿恢复：若存在草稿则先恢复（树 + 预览），让用户接着上次继续
-    if (props.draft && props.draft.exists && props.draft.conditions && props.draft.conditions.length) {
-      ctx._restoringDraft = true
-      tree.value = props.draft.conditions.map(c => ({ ...c, children: c.children || [] }))
-      if (props.draft.cells && Object.keys(props.draft.cells).length) {
-        previewCells.value = props.draft.cells
-        arranged.value = true
-        previewVersion.value++
-      }
-      nextTick(() => { ctx._restoringDraft = false })
-    } else {
-      tree.value = [{ key: 'random', label: '随机排表', children: [] }]
-    }
-    fetchDimensions()
-  }
+const sortCond = useRowSortDrag({
+  items: conditions,
+  dragIdx,
+  overIdx: dragOverIdx,
+  attr: 'data-cond-idx',
+  rowClass: 'cond-row-dragging',
+  onMoved: () => ctx.resetArranged(),
 })
-watch(tree, () => {
-  if (ctx._restoringDraft) return
+
+const {
+  segmentsOf, getField, setField, removeCondition,
+  onDropOnRow, onDropZone, onOptionDragStart,
+  startArrange, proceedStart, openSettingsFromWarning,
+  confirm, onSaveDraft, onClearDraft,
+} = options
+const { satisfactionOf } = pipeline
+const { fetchDimensions } = dimension
+
+// 数据源切换：回到「开始排表」，按新数据源重排一次（预览回到当前值日表）
+function onDataSourceChange() {
+  ctx.resetArranged()
+}
+
+// 旧草稿是「方式 → 子约束」的树，这里按文档顺序拍平；无法识别的条件直接忽略
+function normalizeDraftConditions(list) {
+  const out = []
+  for (const n of list || []) {
+    if (!n || !REGISTRY[n.key]) continue
+    out.push(n)
+    for (const c of n.children || []) if (c && REGISTRY[c.key]) out.push(c)
+  }
+  return out
+}
+function restoreConditions(list) {
+  const flat = normalizeDraftConditions(list)
+  if (!flat.length) return defaultConditions()
+  return flat.map(c => {
+    const reg = REGISTRY[c.key]
+    const merged = JSON.parse(JSON.stringify({ ...(reg.defaults ? reg.defaults() : {}), ...c }))
+    delete merged.children
+    // 旧草稿的「特殊关系」只有「不在同一天值日」，缺字段时按旧语义恢复
+    if (c.key === 'relation' && !c.relationType) merged.relationType = 'different'
+    merged.uid = nextUid.value++
+    merged.label = reg.label
+    return merged
+  })
+}
+
+watch(() => props.visible, async (v) => {
+  if (!v) return
+  rejectText.value = ''
+  satisfaction.value = {}
+  arranged.value = false
+  // 每次打开都回到默认数据源（现有排表表格）；草稿里不存这一项
+  dataSource.value = 'table'
+  slotWarningVisible.value = false
+  dragIdx.value = null
+  dragOverIdx.value = null
+  const draft = props.draft || { exists: false }
+  if (draft.exists && Array.isArray(draft.conditions) && draft.conditions.length) {
+    restoring.value = true
+    ctx._restoringDraft = true
+    nextUid.value = 1
+    conditions.value = restoreConditions(draft.conditions)
+    await nextTick()
+    restoring.value = false
+    ctx._restoringDraft = false
+    if (draft.cells && Object.keys(draft.cells).length) {
+      draftCells.value = JSON.parse(JSON.stringify(draft.cells))
+      previewCells.value = JSON.parse(JSON.stringify(draft.cells))
+      arranged.value = true
+      previewVersion.value++
+    } else {
+      draftCells.value = null
+      ctx.resetPreview()
+    }
+  } else {
+    draftCells.value = null
+    nextUid.value = 1
+    conditions.value = defaultConditions()
+    ctx.resetPreview()
+  }
+  fetchDimensions()
+}, { immediate: true })
+
+// 任一条件（含下拉选项、顺序）变更：回到「开始排表」
+watch(conditions, () => {
+  if (restoring.value || ctx._restoringDraft) return
   arranged.value = false
 }, { deep: true })
 
-// 提示条自动消失的定时器：弹窗关闭后仍在跑会往已销毁的实例写 rejectText
 onBeforeUnmount(() => { clearTimeout(ctx._rejectTimer) })
 </script>
+
+<style scoped>
+/* 智能排表条件行内的下拉框：压低触发框高度，让条件行更紧凑 */
+:deep(.av-select__trigger) {
+  padding: 4px 8px;
+}
+
+/* 条件行的基础过渡：让位靠相邻行的 translate 位移，过渡必须在样式层先声明好 */
+[data-cond-idx] {
+  transition: transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 条件行里的关闭键：行是实心蓝底，换成半透明白 */
+.cond-close {
+  width: 22px;
+  height: 22px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--color-text-inverse);
+}
+.cond-close:hover {
+  background: rgba(255, 255, 255, 0.32);
+  color: #fff;
+}
+
+/* 拖动中的条件行：原位变淡，留出「待填补的空槽」 */
+.cond-row-dragging {
+  opacity: 0.35;
+}
+</style>

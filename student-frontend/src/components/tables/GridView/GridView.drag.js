@@ -958,9 +958,16 @@ export function useGridViewDrag(ctx) {
     },
     _updateColGhostLabel(label) {
       if (!ctx._colGhost || !label) return;
-      const spans = ctx._colGhost.querySelectorAll('th span');
-      const el = spans.length ? spans[spans.length - 1] : null;
+      // 只改「标签」那个 span，不要用「最后一个 span」——表头现在还有日期副行
+      // （grid-col-date），按最后一个会把日期覆盖成标签文字。
+      const el = ctx._colGhost.querySelector('th .grid-col-label');
       if (el && el.textContent !== label) el.textContent = label;
+      // 日期副行跟着标签一起换：标签变成另一个星期时，日期也该是那个星期的。
+      const dateEl = ctx._colGhost.querySelector('th .grid-col-date');
+      if (dateEl) {
+        const d = (ctx.colDates && ctx.colDates.value && ctx.colDates.value[label]) || '';
+        if (dateEl.textContent !== d) dateEl.textContent = d;
+      }
     },
     _restoreColLabels() {
       ctx.colLabelOverride.value = null;

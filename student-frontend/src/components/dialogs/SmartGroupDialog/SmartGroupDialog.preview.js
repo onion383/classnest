@@ -33,8 +33,12 @@ export function useSmartGroupPreview(ctx) {
 
     // ==================== 按钮 ====================
     startArrange() {
-      // 首次排表且小组里有新同学时，先弹窗确认是否参与
-      if (!ctx.arranged.value && ctx.strangers.value.length > 0) { ctx.showNewPrompt.value = true; return }
+      // 首次排表且分组表里有新同学时，先弹窗确认是否参与
+      // （「现有分组表格」数据源下这些新同学本来就在表里，不用问）
+      if (!ctx.arranged.value && ctx.dataSource.value !== 'table' && ctx.strangers.value.length > 0) {
+        ctx.showNewPrompt.value = true
+        return
+      }
       ctx.generatePreview()
     },
     onParticipate() {

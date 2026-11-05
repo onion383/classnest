@@ -19,29 +19,41 @@ const { localDateStr, localDateTimeStr, shiftDateStr, mondayOf } = require('../u
 // 拆包/打包的唯一实现在 services/dutyMode.js —— search.js / ai.dataRoutes.js / AI 工具
 // 执行器读的是同一批字段，此前四份实现逐字重复，口径不一致会让同一份数据被解释成不同结构。
 const { unpackMode, packMode, normalizeMode } = require('../services/dutyMode');
+// 列名与模式配置的唯一读写入口（见 services/dutyConfig.js）
+const dutyConfig = require('../services/dutyConfig');
+// 周期命中日的唯一计算实现（见 services/dutyCycle.js）
+const dutyCycle = require('../services/dutyCycle');
 
 // ======================== 全局设置（时间 + 劳动项目） ========================
+// 列名按模式分键存储：日常值日是「周一…周五」，大扫除是「分组名 + 全部」。
+// 读写一律走 services/dutyConfig.js（唯一入口），别处不要直接 SELECT days。
 router.get('/settings', (req, res) => {
     const mode = normalizeMode(req.query.mode);
-  const row = db.prepare('SELECT days, items FROM duty_settings WHERE id = 1').get();
-  if (!row) return res.json({ days: ['周一','周二','周三','周四','周五'], items: [] });
-  const doc = readDocJson(row, { days: [] });
-  res.json({
-    days: doc.days,
-    items: unpackMode(row.items, mode, []) // items 的模式值是数组：缺失/旧结构回 []，不能回 {}
-  });
+    const row = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
+    if (!row) return res.json({ days: dutyConfig.readDays(mode), items: [] });
+    res.json({
+      days: dutyConfig.readDays(mode),
+      items: unpackMode(row.items, mode, []), // items 的模式值是数组：缺失/旧结构回 []，不能回 {}
+      config: dutyConfig.readConfig(mode)
+    });
 });
 
 router.put('/settings', (req, res) => {
     const { days, items } = req.body;
-  const mode = normalizeMode(req.body.mode || req.query.mode);
-  if (!Array.isArray(days) || !Array.isArray(items)) {
-    return res.status(400).json({ error: '参数格式错误' });
-  }
-  const row = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
-  const mergedItems = packMode(row ? row.items : null, mode, items);
-  store.setDoc('duty_settings', { days: JSON.stringify(days), items: JSON.stringify(mergedItems) });
-  res.json({ message: '设置已保存' });
+    const mode = normalizeMode(req.body.mode || req.query.mode);
+    // 大扫除的列名是派生的（组数的纯函数）→ 不传 days；日常值日必须传
+    if (!Array.isArray(items) || (mode === 'daily' && !Array.isArray(days))) {
+        return res.status(400).json({ error: '参数格式错误' });
+    }
+    const row = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
+    const mergedItems = packMode(row ? row.items : null, mode, items);
+    // 列名与项目必须同事务写入：只写一半会出现「列头是组名、项目还是旧列表」的错位状态
+    db.transaction(() => {
+      dutyConfig.writeDays(mode, days);
+      store.setDoc('duty_settings', { items: JSON.stringify(mergedItems) });
+      if (req.body.config) dutyConfig.writeConfig(mode, req.body.config);
+    })();
+    res.json({ message: '设置已保存' });
 });
 
 // ======================== 当前值日表 ========================
@@ -149,25 +161,28 @@ router.put('/template', (req, res) => {
 // active / master 为可选：只有显式传入（对象，哪怕空对象 {}）时才写对应的表。
 router.put('/save', (req, res) => {
     const { days, items, active, master } = req.body;
-  const mode = normalizeMode(req.body.mode || req.query.mode);
-  if (!Array.isArray(days) || !Array.isArray(items)) {
-    return res.status(400).json({ error: '参数格式错误' });
-  }
-  if (active !== undefined && (!active || typeof active !== 'object')) {
-    return res.status(400).json({ error: '参数格式错误' });
-  }
-  if (master !== undefined && (!master || typeof master !== 'object')) {
-    return res.status(400).json({ error: '参数格式错误' });
-  }
-  // 依赖既有数据的一致性校验（当前表 / 模板各自校验）
-  if (active !== undefined) validateRow('duty_layout', { cells: active });
-  if (master !== undefined) validateRow('duty_template', { cells: master });
+    const mode = normalizeMode(req.body.mode || req.query.mode);
+    // 大扫除的列名是派生的（组数的纯函数）→ 不传 days；日常值日必须传
+    if (!Array.isArray(items) || (mode === 'daily' && !Array.isArray(days))) {
+        return res.status(400).json({ error: '参数格式错误' });
+    }
+    if (active !== undefined && (!active || typeof active !== 'object')) {
+        return res.status(400).json({ error: '参数格式错误' });
+    }
+    if (master !== undefined && (!master || typeof master !== 'object')) {
+        return res.status(400).json({ error: '参数格式错误' });
+    }
+    // 依赖既有数据的一致性校验（当前表 / 模板各自校验）
+    if (active !== undefined) validateRow('duty_layout', { cells: active });
+    if (master !== undefined) validateRow('duty_template', { cells: master });
 
-  db.transaction(() => {
-    // ① 全局设置（时间 + 劳动项目）
-    const s = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
-    const mergedItems = packMode(s ? s.items : null, mode, items);
-    store.setDoc('duty_settings', { days: JSON.stringify(days), items: JSON.stringify(mergedItems) });
+    db.transaction(() => {
+        // ① 全局设置（时间 + 劳动项目）
+        const s = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
+        const mergedItems = packMode(s ? s.items : null, mode, items);
+        dutyConfig.writeDays(mode, days);
+        store.setDoc('duty_settings', { items: JSON.stringify(mergedItems) });
+        if (req.body.config) dutyConfig.writeConfig(mode, req.body.config);
 
     // ② 当前值日表（仅当显式传入 active 时）
     if (active !== undefined) {
@@ -295,9 +310,31 @@ function snapshotRow(rec) {
   };
 }
 
+// 大扫除的「发生日」：周期 + 星期几 → 学期内的命中日列表 + 下一次。
+// 命中日的计算在后端单源（services/dutyCycle.js），前端只负责显示 ——
+// 前端再算一份就必然出现「界面上写的日期和实际补存的快照对不上」。
+router.get('/big-dates', (req, res) => {
+  const mode = normalizeMode(req.query.mode);
+  if (mode !== 'big') return res.json({ cycle: 'week', weekday: '', dates: [], next: '' });
+  const config = dutyConfig.readConfig('big');
+  const { start, end } = store.semesterRange();
+  if (!start) return res.json({ ...config, dates: [], next: '' });
+  const baseMonday = mondayOf(start);
+  const today = localDateStr(new Date());
+  // 学期内 + 从今天往后再看一个学期（避免学期结束时没有「下一次」）
+  const horizon = end && end > today ? end : shiftDateStr(today, 120);
+  const dates = dutyCycle.hitDatesBetween(start, horizon, config, baseMonday);
+  const upcoming = dates.filter((d) => d >= today);
+  return res.json({
+    ...config,
+    dates,
+    next: upcoming[0] || dates[dates.length - 1] || '',
+  });
+});
+
 // 历史列表：按周聚合（代表日期 = 该周最后一天），供下拉框使用
 router.get('/history', (req, res) => {
-    const mode = normalizeMode(req.query.mode);
+  const mode = normalizeMode(req.query.mode);
   res.json(store.histWeeks('duty', mode));
 });
 
@@ -335,6 +372,11 @@ router.post('/snapshot', (req, res) => {
 
 // 补存历史快照：仅学期范围内。过去日期缺失才补（沿用最近一天该模式的值日表），
 // includeToday=true 时今天总是用当前值日表覆盖（启动时静默补全用）。
+//
+// 大扫除（big）只在**命中日**补：它的「周期 + 星期几」决定了大扫除多久发生一次，
+// 若跟日常值日一样逐日补，值日指数算出来的「次数」永远是学期天数（对所有人一样），
+// 周期变长也不会让指数变小 —— 这正是「时间变少 → 次数变少 → 指数变小」的实现处。
+// 日常值日（daily）维持逐日补（每天都有值日）。
 router.post('/snapshot/backfill', (req, res) => {
   try {
     const mode = normalizeMode(req.body && req.body.mode);
@@ -354,6 +396,11 @@ router.post('/snapshot/backfill', (req, res) => {
       settings: layout ? unpackMode(layout.settings, mode) : {},
     };
 
+    // 大扫除的命中日判定：基准周一 = 学期开始日所在周的周一
+    const hitConfig = mode === 'big' ? dutyConfig.readConfig('big') : null;
+    const baseMonday = mondayOf(start);
+    const isHit = (dateStr) => (hitConfig ? dutyCycle.isHitDate(dateStr, hitConfig, baseMonday) : true);
+
     // 写循环整体放进一个事务：逐日 INSERT 各自提交时，中途失败会留下半截快照
     // （前几天已落库、后几天没有），用户看到的是「补了 37 天」这种半吊子结果，
     // 而且得再点一次才知道到底补了哪些。整批要么全成、要么全不成。
@@ -364,6 +411,11 @@ router.post('/snapshot/backfill', (req, res) => {
       while (cur <= upper) {
         const isToday = cur === today;
         const exists = store.histFind('duty', cur, mode);
+        // 大扫除：非命中日一律不补（今天例外：今天是大扫除日就该有记录）
+        if (!(isToday && includeToday) && !isHit(cur)) {
+          cur = shiftDateStr(cur, 1);
+          continue;
+        }
         if (isToday && includeToday) {
           // 今天：总是覆盖为当前值日表
           if (exists) store.histUpdateByDate('duty', cur, mode, layoutPayload);

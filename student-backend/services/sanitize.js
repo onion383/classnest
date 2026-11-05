@@ -266,7 +266,14 @@ const COLUMN_RULES = {
   duty_layout: { cells: { kind: 'dutycells' }, settings: { kind: 'json', shape: 'object' } },
   duty_template: { cells: { kind: 'dutycells' }, settings: { kind: 'json', shape: 'object' } },
   duty_weight: { weights: { kind: 'json', shape: 'object' }, settings: { kind: 'json', shape: 'object' } },
-  duty_settings: { days: { kind: 'json', shape: 'array' }, items: { kind: 'json', shape: 'array' } },
+  // 值日设置：days = {daily:[列名...],big:[列名...]}（列名按模式分键），
+  // items = {daily:[项目...],big:[项目...]}（按模式分键），
+  // settings = {daily:{},big:{cycle,weekday,dimensionId}}（模式配置）
+  duty_settings: {
+    days: { kind: 'dutymap' },
+    items: { kind: 'dutymap' },
+    settings: { kind: 'dutymap' },
+  },
 };
 
 // 元素级校验（数组类 JSON 列，如课表 cells）：
@@ -414,6 +421,18 @@ function sanitizePathElements(arr, name) {
   return out;
 }
 
+// 值日设置列的形状校验：{ daily: ..., big: ... } 按模式分键。
+// 与 dutycells 同一套约定（键只能是 daily/big），否则 AI 整块写入一个扁平数组会静默写坏：
+// unpackMode 认不出分键 → 读到空 → 用户看到「设置全没了」。
+function cleanDutyModeMap(value, name) {
+  const obj = parseJsonShape(value, 'object', name);
+  const keys = Object.keys(obj);
+  if (keys.length && !keys.every((k) => k === 'daily' || k === 'big')) {
+    throw new Error(`字段「${name}」需要是 { daily: ..., big: ... } 结构（按模式分键）`);
+  }
+  return obj;
+}
+
 // 值日名单结构校验：{ 项目名: { 星期: [姓名,...] } }
 // 项目值必须是对象、星期值必须是数组、数组元素必须是姓名文本（拒 null/数字/对象）
 function assertDutyCellShape(cells, name) {
@@ -533,6 +552,8 @@ function applyRule(value, rule, name) {
       return cleanSeatGrid(value, name);
     case 'dutycells':
       return cleanDutyCells(value, name);
+    case 'dutymap':
+      return cleanDutyModeMap(value, name);
     case 'apps':
       return cleanDesktopApps(value, name);
     case 'classinfo':

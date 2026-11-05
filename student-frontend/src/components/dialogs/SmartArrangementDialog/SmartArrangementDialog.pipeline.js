@@ -90,11 +90,15 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
           if (s) { grid[r][c] = s; used.add(s.id) }
         }
       }
-      const rest = ctx.students.value.filter(s => !used.has(s.id))
-      let k = 0
-      for (let r = 0; r < ctx.rows.value && k < rest.length; r++) {
-        for (let c = 0; c < ctx.cols.value && k < rest.length; c++) {
-          if (!grid[r][c]) { grid[r][c] = rest[k++]; used.add(rest[k - 1].id) }
+      // 数据源「现有排表表格」：只重排表里已有的人，空位保持空着；
+      // 「全部同学」：把学生表里还没入座的同学补进空位
+      if (ctx.dataSource.value !== 'table') {
+        const rest = ctx.students.value.filter(s => !used.has(s.id))
+        let k = 0
+        for (let r = 0; r < ctx.rows.value && k < rest.length; r++) {
+          for (let c = 0; c < ctx.cols.value && k < rest.length; c++) {
+            if (!grid[r][c]) { grid[r][c] = rest[k++]; used.add(rest[k - 1].id) }
+          }
         }
       }
       return grid

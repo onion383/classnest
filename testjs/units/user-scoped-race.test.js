@@ -44,6 +44,16 @@ function json(res, code, body, delayMs = 0) {
   }, delayMs)
 }
 
+// 把 axios 指向本用例的 server，并给一个**不复用连接**的独立 agent。
+// Node 22 的 http.globalAgent 默认 keepAlive=true：上一个用例 server.close() 断掉的
+// socket 仍留在池里，下一个用例复用它 → socket hang up；重试时 follow-redirects 把
+// 绝对 URL 当成 path 发出来 → server 的 startsWith('/api/...') 全落空 → 404。
+// 这不是被测代码的问题，是测试之间互相污染。
+function bindToServer(axios, server) {
+  axios.defaults.baseURL = 'http://127.0.0.1:' + server.address().port
+  axios.defaults.httpAgent = new http.Agent({ keepAlive: false })
+}
+
 test('正例：不换号时响应正常写缓存，第二次调用命中缓存', async () => {
   let hits = 0
   const server = await startServer((req, res) => {
@@ -56,7 +66,7 @@ test('正例：不换号时响应正常写缓存，第二次调用命中缓存',
   })
   try {
     const axios = await loadAxios()
-    axios.defaults.baseURL = 'http://127.0.0.1:' + server.address().port
+    bindToServer(axios, server)
     const mod = await fresh('src/composables/useDashboardData.js')
     const d1 = await mod.ensureDashboardData()
     assert.equal(d1.students[0].姓名, 'A')
@@ -81,7 +91,7 @@ test('反例：请求在飞时换号 → 旧响应不写缓存，最终拿到新
   })
   try {
     const axios = await loadAxios()
-    axios.defaults.baseURL = 'http://127.0.0.1:' + server.address().port
+    bindToServer(axios, server)
     const mod = await fresh('src/composables/useDashboardData.js')
     const scoped = await import(urlOf('src/utils/userScopedCache.js'))
 
@@ -114,7 +124,7 @@ test('反例：semesterStart 换号后不返回上一个库的开学日', async 
   })
   try {
     const axios = await loadAxios()
-    axios.defaults.baseURL = 'http://127.0.0.1:' + server.address().port
+    bindToServer(axios, server)
     const mod = await fresh('src/utils/semesterStart.js')
     const scoped = await import(urlOf('src/utils/userScopedCache.js'))
 

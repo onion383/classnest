@@ -350,6 +350,7 @@ import { shiftDateStr, localDateStr } from '../utils/dateTime.js'
 import { buildWeekDateMap } from '../utils/weekDates.js'
 import { useWeekDates } from '../composables/useWeekDates.js'
 import { getSemesterStart } from '../utils/semesterStart.js'
+import { accumulateDutyIndex } from '../utils/dutyIndex.js'
 import { createSerialSaver } from '../utils/serialSaver.js'
 import { createLatest } from '../utils/latestOnly.js'
 import Tabs from '../components/base/Tabs.vue'
@@ -1371,24 +1372,7 @@ async function loadDutyIndex() {
   } catch (e) { console.error(e) }
 }
 const dutyIndexRows = computed(() => {
-  const weights = dutyWeights.value
-  if (!weights || !dutyIndexDaily.value.length) return []
-  const acc = {}
-  for (const day of dutyIndexDaily.value) {
-    const cells = day.cells || {}
-    for (const item of Object.keys(cells)) {
-      const days = cells[item] || {}
-      for (const dayName of Object.keys(days)) {
-        const names = days[dayName] || []
-        const w = weights[item]?.[dayName]
-        if (typeof w !== 'number') continue
-        names.forEach(name => {
-          if (!name) return
-          acc[name] = (acc[name] || 0) + w
-        })
-      }
-    }
-  }
+  const acc = accumulateDutyIndex(dutyIndexDaily.value, dutyWeights.value)
   const rows = Object.keys(acc).map(name => ({ name, value: acc[name] })).filter(r => r.value !== 0)
   rows.sort((a, b) => b.value - a.value)
   const max = Math.max(...rows.map(r => Math.abs(r.value)), 0)
@@ -1398,10 +1382,11 @@ const dutyIndexRows = computed(() => {
 function dutyIndexBarWidth(row) {
   return Math.round((Math.abs(row.value) / row._max) * 100)
 }
-// 刷新值日指数：权重与逐天账本都重取，避免只刷新其中一侧导致数据不一致
+// 刷新值日指数：权重、展示用逐日账本、排表用账本三者一起重取。
+// 只刷前两者会让界面上的指数更新、排表仍拿旧账本，口径就此分叉。
 async function refreshDutyIndex() {
   try {
-    await Promise.all([loadWeight(), loadDutyIndex()])
+    await Promise.all([loadWeight(), loadDutyIndex(), loadDutyLedger()])
     notifySuccess('已刷新值日指数')
   } catch (e) { notifyError('刷新值日指数失败'); console.error(e) }
 }
@@ -1434,21 +1419,7 @@ async function loadDutyLedger() {
     const params = { mode: dutyMode.value, to }
     if (from) params.from = from
     const res = await axios.get(`${API_BASE}/duty/daily`, { params })
-    const weights = dutyWeights.value
-    const led = {}
-    for (const day of res.data || []) {
-      const cells = day.cells || {}
-      for (const item of Object.keys(cells)) {
-        const days = cells[item] || {}
-        for (const dayName of Object.keys(days)) {
-          const names = days[dayName] || []
-          const w = weights[item]?.[dayName]
-          if (typeof w !== 'number') continue
-          names.forEach(name => { if (name) led[name] = (led[name] || 0) + w })
-        }
-      }
-    }
-    dutyLedger.value = led
+    dutyLedger.value = accumulateDutyIndex(res.data || [], dutyWeights.value)
   } catch (e) { console.error(e) }
 }
 

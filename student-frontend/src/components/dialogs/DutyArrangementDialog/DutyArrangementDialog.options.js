@@ -39,15 +39,28 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
     segmentsOf(node) {
       const reg = REGISTRY[node.key]
       if (!reg || !reg.segments) return []
-      return reg.segments.map((s, idx) => s.t === 'text'
+      const big = ctx.bigCleanup.value
+      // when: 日常只显示「在同一天值日」，大扫除才显示三档装箱轴（避免单选项下拉）
+      // inner: 「同区域且同项目」时整组在同一格，格内只有 count 个位置，
+      //        内部排布只换姓名先后、不改变任何安排，故隐藏这一段
+      const segs = reg.segments.filter(s => {
+        if (s.when === 'big' && !big) return false
+        if (s.when === 'daily' && big) return false
+        if (s.inner && node.axis === 'cell') return false
+        return true
+      })
+      return segs.map((s, idx) => s.t === 'text'
         ? { ...s, idx }
-        : { ...s, idx, options: ctx.resolveOptions(s.options, node) })
+        : { ...s, idx, options: ctx.resolveOptions(s.options) })
     },
-    resolveOptions(kind, node) {
+    resolveOptions(kind) {
       switch (kind) {
         case 'scopes': return ctx.scopeOptions()
         case 'units': return ctx.unitOptions()
-        case 'actions': return ctx.actionOptions(node)
+        case 'groups': return ctx.groupOptions()
+        case 'axes': return ctx.axisOptions()
+        case 'directions': return ctx.directionOptions()
+        case 'innerArranges': return ctx.innerArrangeOptions()
         case 'relationTypes': return ctx.relationOptions()
         case 'laborActions': return ctx.laborActionOptions()
         case 'innerOrder': return ctx.innerOrderOptions()
@@ -97,16 +110,34 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
         { value: 'day', label: '一天' },
       ]
     },
-    actionOptions(node) {
-      if (node.key === 'random') {
-        return [
-          { value: 'random', label: '随机排布' },
-          { value: 'shift', label: '平移排布' },
-        ]
-      }
+    // 「随机分组」专用：不含「一天」——装箱目标就是「同一天」，再以一天为单元没有语义
+    groupOptions() {
       return [
-        { value: 'pack', label: '分组填充' },
-        { value: 'shift', label: '平移排布' },
+        { value: 'student', label: '同学' },
+        { value: 'deskmate', label: '同桌' },
+        { value: 'four', label: '相邻四位' },
+        { value: 'six', label: '相邻六位' },
+        { value: 'column', label: '一列' },
+        { value: 'bigroup', label: '一大组' },
+        { value: 'dorm', label: '宿舍组' },
+      ]
+    },
+    // 顺序选项的铺设方向：lr/rl 行优先，tb/bt 列优先；反向只反转行内 / 列内
+    directionOptions() {
+      return [
+        { value: 'lr', label: '从左往右' },
+        { value: 'rl', label: '从右往左' },
+        { value: 'tb', label: '从上往下' },
+        { value: 'bt', label: '从下往上' },
+      ]
+    },
+    // 装箱轴：日常值日按「天」；大扫除按工作区域（列）/ 劳动项目（行）/ 具体格子
+    axisOptions() {
+      if (!ctx.bigCleanup.value) return []
+      return [
+        { value: 'column', label: '同一个工作区域' },
+        { value: 'row', label: '同一个劳动项目' },
+        { value: 'cell', label: '同区域且同项目' },
       ]
     },
     relationOptions() {
@@ -127,6 +158,14 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
         { value: 'yes', label: '可以' },
       ]
     },
+    // 同一天内人名落到具体值日槽位的方式。与 fair 的 innerOrder（可否调整组内顺序）不是一回事，
+    // 故另起字段；只改天内顺序，不改变装箱结果（谁在哪一天）。
+    innerArrangeOptions() {
+      return [
+        { value: 'default', label: '默认排布' },
+        { value: 'random', label: '随机排布' },
+      ]
+    },
 
     // ==================== 开始排表 / 确认 / 草稿 ====================
     // 总槽位 = 值日天数 × Σ 每个项目人数
@@ -134,11 +173,17 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
       const perDay = ctx.itemsArr.value.reduce((t, it) => t + Math.max(1, Number(it.count) || 1), 0)
       return ctx.daysArr.value.length * perDay
     },
+    // 参与人数与总槽位的差额（> 0 表示有人排不进表）。
+    // 确认框文案与 needsSlotWarning 都读它，别再各写一遍筛选条件。
+    shortageCount() {
+      return Math.max(0, ctx.poolNames.value.length - ctx.totalSlots())
+    },
     needsSlotWarning() {
       const total = ctx.totalSlots()
       if (total <= 0) return false
-      // 「全部同学」：槽位 < 全班人数 → 部分同学排不上值日
-      if (ctx.dataSource.value === 'all') return total < ctx.studentNames.value.length
+      // 人数 > 槽位：有人排不进表，X 由 shortageCount 单源给出
+      if (ctx.shortageCount() > 0) return true
+      if (ctx.dataSource.value === 'all') return false
       // 「现有排表表格」：槽位 > 表里已排的人次 → 有人要重复值日（方向与上面相反）
       return total > ctx.tableFilled.value
     },

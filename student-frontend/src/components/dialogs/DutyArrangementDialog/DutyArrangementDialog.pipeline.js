@@ -1,3 +1,5 @@
+import { packGroupsIntoDays } from './DutyArrangementDialog.packing.js'
+
 // ===== 值日智能排表：槽位模型 + 座位分组 + 一级条件流水线 =====
 // 条件按列表顺序逐条执行，越靠后越重要；同类型条件可重复添加。
 // 值日表没有空间几何，所谓「一列 / 同桌 / 相邻六位」都是先从座位表抽取学生分组，
@@ -5,10 +7,10 @@
 // ctx 契约：状态为 ref（模块内 .value 访问），跨模块方法运行时解析。
 
 // Fisher-Yates 洗牌
-export function shuffle(arr) {
+export function shuffle(arr, random = Math.random) {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
+    const j = Math.floor(random() * (i + 1))
     ;[a[i], a[j]] = [a[j], a[i]]
   }
   return a
@@ -27,11 +29,6 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
         })
       })
       return slots
-    },
-    dayCapacity(day) {
-      let n = 0
-      ctx.itemsArr.value.forEach(it => { n += Math.max(1, Number(it.count) || 1) })
-      return ctx.daysArr.value.includes(day) ? n : 0
     },
     slotWeight(slot) {
       const w = ctx.weights.value?.[slot.item]?.[slot.day]
@@ -254,11 +251,7 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     // 把单元组塞进每天的空槽：容量优先；装不下才拆尾数
     placeUnits(slots, assigned, freeByDay, units, opts = {}) {
       let list = units.filter(u => u.length)
-      if (opts.order === 'shift') {
-        list = list.length ? [...list.slice(1), list[0]] : []
-      } else if (opts.order === 'size') {
-        list = [...list].sort((a, b) => b.length - a.length)
-      } else if (opts.order === 'ledger') {
+      if (opts.order === 'ledger') {
         const avg = u => u.reduce((t, n) => t + this.ledgerOf(n), 0) / u.length
         list = [...list].sort((a, b) => avg(b) - avg(a))
       } else {
@@ -273,7 +266,6 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
         if (hint != null && (freeByDay.get(hint)?.length || 0) >= size) return hint
         const fits = freeDays().filter(([, idxs]) => idxs.length >= size)
         if (fits.length) {
-          if (opts.dayPick === 'random') return fits[Math.floor(Math.random() * fits.length)][0]
           if (opts.dayPick === 'minWeight') {
             let best = null, bw = Infinity
             for (const [day] of fits) {
@@ -339,39 +331,98 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
       }
       return { slots, assigned }
     },
-    // 作用域 + 单元 + 随机 / 平移
-    applyRandom(slots, assigned, node) {
-      const contexts = this.scopeContexts(node.scope, slots, assigned)
-      let done = 0, total = 0
-      for (const c of contexts) {
-        if (c.noop) continue
-        const units = this.unitGroups(node.unit, c, slots, assigned)
-        total += c.participants.size
-        const free = this.vacateContext(slots, assigned, c)
-        const r = this.placeUnits(slots, assigned, free, units, {
-          order: node.action === 'shift' ? 'shift' : 'random',
-          dayPick: node.action === 'shift' ? 'maxFree' : 'random',
-        })
-        done += r.placed
-      }
-      this.trackSatisfaction(node.uid, done, total)
+    // 按 axis 把槽位切成「桶」：column=同一列（日常的天 / 大扫除的工作区域）、
+    // row=同一行（同一个劳动项目）、cell=同一格（同区域且同项目）。
+    // 容量直接取分组后的槽位数，天然支持各项目 count 不同，不用从 itemsArr 反推。
+    bucketIdxs(slots, axis) {
+      const map = new Map()
+      slots.forEach((s, i) => {
+        const key = axis === 'row' ? 'item:' + s.item
+          : axis === 'cell' ? 'cell:' + s.item + '\u0000' + s.day
+            : 'col:' + s.day
+        if (!map.has(key)) map.set(key, [])
+        map.get(key).push(i)
+      })
+      return [...map.values()]
     },
-    // 分组：按容量优先整组落天；平移只是把组序循环移一位
-    applyGroupAction(slots, assigned, node) {
-      const contexts = this.scopeContexts(node.scope, slots, assigned)
-      let done = 0, total = 0
-      for (const c of contexts) {
-        if (c.noop) continue
-        const units = this.unitGroups(node.unit, c, slots, assigned)
-        total += c.participants.size
-        const free = this.vacateContext(slots, assigned, c)
-        const r = this.placeUnits(slots, assigned, free, units, {
-          order: node.action === 'shift' ? 'shift' : 'size',
-          dayPick: 'maxFree',
-        })
-        done += r.placed
+    // 随机分组：先离线装箱（尽量让整组落在同一个桶），桶标签等价时再把整桶随机映射一次。
+    // 不再逐组「挑一天」：挑天不决定拆不拆，只决定去哪一天。
+    applyPackedRandom(slots, assigned, node) {
+      if (!slots.length) return
+      const days = ctx.daysArr.value
+      const participants = new Set(ctx.poolNames.value)
+      const units = this.unitGroups(node.unit, { days, participants }, slots, assigned)
+      const bucketIdxs = this.bucketIdxs(slots, node.axis)
+      const caps = bucketIdxs.map(idxs => idxs.length)
+      // 随机源可注入：单测要固定装箱与天内顺序；组件不提供时用 Math.random
+      const rng = typeof ctx.packRandom === 'function' ? ctx.packRandom : Math.random
+      // 大扫除以项目行/格子分桶时标签不等价（扫地 ≠ 拖地），整桶随机映射会把约束打乱；
+      // 区域列也不等价（含内置「全部」列）且会抹掉手工分配，故大扫除一律关闭。
+      const mapBuckets = !ctx.bigCleanup.value && node.axis !== 'row' && node.axis !== 'cell'
+      const res = packGroupsIntoDays(units, caps.length, caps, rng, { mapBuckets })
+      this.writeBuckets(slots, assigned, bucketIdxs, res.buckets, node.innerArrange, rng)
+      // 满足率换成「整组同桶」口径：分子是完整落位的组数，不再是排进去的人数
+      this.trackSatisfaction(node.uid, res.intactGroups, res.totalGroups)
+    },
+    // 把装箱结果写回槽位：每个桶按自己的槽位下标依次填，剩余空槽沿用现有轮转口径补齐。
+    // innerArrange='random' 只打乱桶内的人名顺序，不改变谁在哪个桶（装箱结果）。
+    writeBuckets(slots, assigned, bucketIdxs, buckets, innerArrange, rng) {
+      assigned.fill('')
+      bucketIdxs.forEach((idxs, bi) => {
+        const names = buckets[bi] || []
+        const ordered = innerArrange === 'random' ? shuffle(names, rng) : names
+        for (let k = 0; k < ordered.length && k < idxs.length; k++) assigned[idxs[k]] = ordered[k]
+      })
+      this.fillEmptySlots(slots, assigned, [])
+    },
+    // 顺序排布：按方向生成槽位遍历路径。lr/rl 行优先（先走完一行再下一行），
+    // tb/bt 列优先（先走完一列再下一列）。反向只反转「行内 / 列内」，
+    // 主轴（行优先的项目序 / 列优先的星期序）保持正序。
+    orderedPath(slots, direction) {
+      const cells = new Map()
+      slots.forEach((s, i) => {
+        const k = s.item + '\u0000' + s.day
+        if (!cells.has(k)) cells.set(k, [])
+        cells.get(k).push(i)
+      })
+      const days = ctx.daysArr.value
+      const items = ctx.itemsArr.value.map(it => it.name)
+      const rowFirst = direction === 'lr' || direction === 'rl'
+      const revInner = direction === 'rl' || direction === 'bt'
+      const inner = rowFirst ? days : items
+      const innerList = revInner ? [...inner].reverse() : inner
+      const path = []
+      for (const o of (rowFirst ? items : days)) {
+        for (const i of innerList) {
+          const key = rowFirst ? o + '\u0000' + i : i + '\u0000' + o
+          path.push(...(cells.get(key) || []))
+        }
       }
-      this.trackSatisfaction(node.uid, done, total)
+      return path
+    },
+    // 独立条件「顺序选项」：按数据源顺序、以 unit 切组，沿路径连续铺。
+    // 不调装箱、不做随机映射、不记录满足率（确定性规则没有「尽量」目标）。
+    // 一组占路径上连续 N 个槽；只有总人数超过总槽位时末尾才会被截断，如实报 dropped。
+    applyOrdered(slots, assigned, node) {
+      if (!slots.length) return { placed: 0, dropped: 0 }
+      const days = ctx.daysArr.value
+      const participants = new Set(ctx.poolNames.value)
+      const units = this.unitGroups(node.unit, { days, participants }, slots, assigned)
+      const path = this.orderedPath(slots, node.direction)
+      assigned.fill('')
+      let cursor = 0
+      for (const unit of units) {
+        if (cursor >= path.length) break
+        for (const name of unit) {
+          if (cursor >= path.length) break
+          assigned[path[cursor++]] = name
+        }
+      }
+      const totalPeople = units.reduce((n, g) => n + g.length, 0)
+      const dropped = totalPeople - cursor
+      // 人数少于槽位时沿用既有轮转口径补满（会重复值日，排表前已有确认提示）
+      this.fillEmptySlots(slots, assigned, [])
+      return { placed: cursor, dropped }
     },
     // 基础公平分配：学生按账本降序、槽位按权重升序配对；学生不够时循环使用。
     // 保留为独立工具（历史单测与后续跨模式公平可复用）。

@@ -67,7 +67,7 @@
                   />
                 </template>
                 <span class="ml-auto flex items-center gap-2 shrink-0">
-                  <span v-if="satisfactionOf(node) !== null" class="text-xs px-1.5 py-0.5 rounded bg-white/20 text-text-inverse border border-white/30">满足 {{ satisfactionOf(node) }}%</span>
+                  <span v-if="satisfactionOf(node) !== null" class="text-xs px-1.5 py-0.5 rounded bg-white/20 text-text-inverse border border-white/30">{{ satisfactionLabel(node) }} {{ satisfactionOf(node) }}%</span>
                   <button @click="removeCondition(ni)" class="dlg-close cond-close" title="删除该条件">✕</button>
                 </span>
               </div>
@@ -82,7 +82,7 @@
         <p class="mt-1 text-xs text-text-muted">条件按顺序依次生效；同类型条件可以重复添加。</p>
       </div>
 
-      <!-- 条件选项：5 个按钮，拖到上方即可添加 -->
+      <!-- 条件选项：拖到上方即可添加 -->
       <div class="mb-3">
         <label class="text-sm font-medium mb-2 block">条件选项（拖到上方添加，可重复添加）</label>
         <div class="flex flex-wrap gap-2">
@@ -170,22 +170,28 @@ const emit = defineEmits(['cancel', 'confirm', 'save-draft', 'clear-draft', 'ope
 const REGISTRY = {
   random: {
     label: '随机选项',
-    apply: 'applyRandom',
-    defaults: () => ({ scope: 'all', unit: 'student', action: 'random' }),
+    apply: 'applyPackedRandom',
+    defaults: () => ({ unit: 'student', axis: 'column', innerArrange: 'default' }),
     segments: [
-      { t: 'text', v: '在' }, { t: 'select', path: 'scope', options: 'scopes', width: 'w-24' },
-      { t: 'text', v: '内 按照' }, { t: 'select', path: 'unit', options: 'units', width: 'w-24' },
-      { t: 'text', v: '为操作单元' }, { t: 'select', path: 'action', options: 'actions', width: 'w-28' },
+      { t: 'text', v: '尽量让' }, { t: 'select', path: 'unit', options: 'groups', width: 'w-28' },
+      { t: 'text', v: '在同一天值日', when: 'daily' },
+      { t: 'text', v: '在', when: 'big' },
+      { t: 'select', path: 'axis', options: 'axes', width: 'w-40', when: 'big' },
+      { t: 'text', v: ' 并且 内部', inner: true },
+      { t: 'select', path: 'innerArrange', options: 'innerArranges', width: 'w-28', inner: true },
     ],
   },
   group: {
     label: '分组选项',
-    apply: 'applyGroupAction',
-    defaults: () => ({ scope: 'all', unit: 'six', action: 'pack' }),
+    apply: 'applyPackedRandom',
+    defaults: () => ({ unit: 'student', axis: 'column', innerArrange: 'default' }),
     segments: [
-      { t: 'text', v: '在' }, { t: 'select', path: 'scope', options: 'scopes', width: 'w-24' },
-      { t: 'text', v: '内 按照' }, { t: 'select', path: 'unit', options: 'units', width: 'w-24' },
-      { t: 'text', v: '为一组' }, { t: 'select', path: 'action', options: 'actions', width: 'w-28' },
+      { t: 'text', v: '尽量让' }, { t: 'select', path: 'unit', options: 'groups', width: 'w-28' },
+      { t: 'text', v: '在同一天值日', when: 'daily' },
+      { t: 'text', v: '在', when: 'big' },
+      { t: 'select', path: 'axis', options: 'axes', width: 'w-40', when: 'big' },
+      { t: 'text', v: ' 并且 内部', inner: true },
+      { t: 'select', path: 'innerArrange', options: 'innerArranges', width: 'w-28', inner: true },
     ],
   },
   relation: {
@@ -224,12 +230,32 @@ const REGISTRY = {
       { t: 'text', v: '调整组内顺序 使得辛苦度更加公平' },
     ],
   },
+  order: {
+    label: '顺序选项',
+    apply: 'applyOrdered',
+    defaults: () => ({ unit: 'student', direction: 'tb' }),
+    segments: [
+      { t: 'text', v: '按数据源顺序，以' },
+      { t: 'select', path: 'unit', options: 'groups', width: 'w-28' },
+      { t: 'text', v: '为一组，' },
+      { t: 'select', path: 'direction', options: 'directions', width: 'w-28' },
+      { t: 'text', v: '依次排布' },
+    ],
+  },
 }
-const CONDITION_ORDER = ['random', 'group', 'relation', 'labor', 'fair']
+const CONDITION_ORDER = ['random', 'group', 'relation', 'labor', 'fair', 'order']
 
-// 默认只放一条「全部 / 同学 / 随机」
+// 默认只放一条「同学 / 随机选项」：不依赖座位表，等价于全员整体洗牌
 function defaultConditions() {
-  return [{ uid: 0, key: 'random', label: '随机选项', scope: 'all', unit: 'student', action: 'random' }]
+  return [{ uid: 0, key: 'random', label: '随机选项', unit: 'student', axis: 'column', innerArrange: 'default' }]
+}
+
+// 满足率标签跟装箱轴走：整组落在「天 / 区域 / 项目 / 格」，别让用户以为都是同一个指标
+function satisfactionLabel(node) {
+  if (node.key !== 'random' && node.key !== 'group') return '满足'
+  if (node.axis === 'cell') return '整组同格'
+  if (node.axis === 'row') return '整组同项'
+  return props.bigCleanup ? '整组同区' : '整组同天'
 }
 
 const conditions = ref(defaultConditions())
@@ -242,10 +268,14 @@ const satisfaction = ref({})
 const dragIdx = ref(null)
 const dragOverIdx = ref(null)
 const slotWarningVisible = ref(false)
-// 人数提示文案随数据源变：「全部同学」是人不够，「现有排表表格」是槽位比表里已排的人多
-const slotWarningMessage = computed(() => (dataSource.value === 'all'
-  ? '您设置的值日人数小于学生人数，会导致部分同学排不上值日表，确认继续吗？'
-  : '值日槽位比当前值日表里已排的人数多，部分同学会重复值日，确认继续吗？'))
+// 人数提示：优先报「有几人排不进表」（数字来自 options.shortageCount 单源）；
+// 否则报「槽位比已排人次多 → 部分同学会重复值日」。两种情况方向相反，不能合并成一句。
+const slotWarningMessage = computed(() => {
+  const n = ctx.shortageCount()
+  return n > 0
+    ? `值日位置不足，有 ${n} 人排不进值日表，确认继续吗？`
+    : '值日槽位比当前值日表里已排的人数多，部分同学会重复值日，确认继续吗？'
+})
 // 分组维度：用于「宿舍组」这类非座位几何的分组
 const dimensions = ref([])
 const groups = ref([])
@@ -323,6 +353,8 @@ const ctx = {
   dataSource, poolNames, tableNames, tableFilled,
   // 大扫除：整张表是一次活动 → 一个人不能同时出现在两个组
   dedupeWholeTable: computed(() => props.bigCleanup),
+  // 大扫除以列/行/格分桶，桶标签不等价，装箱后不做整桶随机映射
+  bigCleanup: toRef(props, 'bigCleanup'),
   students: toRef(props, 'students'),
   weights: toRef(props, 'weights'),
   ledger: toRef(props, 'ledger'),

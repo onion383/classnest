@@ -49,17 +49,19 @@
 
     <!-- ====== 编辑界面 ====== -->
     <template v-else>
-      <div class="canvas-area" ref="canvasArea" @mousedown="onCanvasMouseDown">
+      <div class="canvas-area" ref="canvasArea" @pointerdown="onCanvasPointerDown">
         <canvas ref="bgCanvas" class="bg-canvas"></canvas>
         <canvas ref="hlCanvas" class="hl-canvas" :style="{ opacity: HL_OPACITY }"></canvas>
         <canvas
           ref="drawCanvas"
           class="draw-canvas"
           :style="{ cursor: eraserCursor }"
-          @mousedown="onMouseDown"
-          @mousemove="onMouseMove"
-          @mouseup="onMouseUp"
-          @mouseleave="onMouseUp"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointercancel="onPointerUp"
+          @lostpointercapture="onPointerUp"
+          @contextmenu.prevent
         ></canvas>
       </div>
 
@@ -69,7 +71,7 @@
         ref="toolbarRef"
         :style="{ left: toolbarPos.x + 'px', top: toolbarPos.y + 'px' }"
       >
-        <div class="tb-drag-bar" @mousedown="onToolbarDragStart">
+        <div class="tb-drag-bar" @pointerdown="onToolbarDragStart">
           <div class="tb-drag-dot"></div>
         </div>
         <div class="tb-body">
@@ -111,7 +113,7 @@
         class="tb-sub-float"
         ref="subRef"
         :style="subStyle"
-        @mousedown.stop
+        @pointerdown.stop
       >
         <!-- 画笔二级菜单 -->
         <template v-if="subTool === 'brush'">
@@ -249,9 +251,20 @@ function toggleSub(tool) {
   subTool.value = subTool.value === tool ? null : tool
 }
 
-let isDrawing = false
-let pointBuffer = [] // Catmull-Rom 点缓冲 [{x, y, w, time}]
-let widthSmooth = [] // 宽度平滑缓冲，减少钢笔笔锋抖动
+// 多指同时书写：每根手指/笔各一套独立缓冲，按 pointerId 分桶。
+// 原先的 isDrawing / pointBuffer / widthSmooth 是模块级单例 —— 第二根手指按下会把
+// 第一根的缓冲重置掉，所以只能画一条。改成 Map 后，按下的指针互不干扰。
+// 桶内字段：
+//   cfg      下笔瞬间的工具快照（粗细/颜色/是否橡皮）——不能每帧现读 currentTool，
+//            否则一指在画、另一指去点工具栏切橡皮，正在画的笔画下一段会变成橡皮
+//   buf      Catmull-Rom 点缓冲 [{x, y, w, time}]
+//   widths   宽度平滑缓冲，减少钢笔笔锋抖动
+//   target   该笔落到哪块画布（荧光笔 → hlCanvas，其余 → drawCanvas）
+//   scale    canvas 内部分辨率 / CSS 显示尺寸，move 时用来把距离换算回 CSS 像素
+const strokes = new Map()
+// 画布的显示矩形（CSS 像素）。每笔起始时刷新一次，move 高频阶段复用：
+// 多指 × 60~120Hz 每次 move 都 getBoundingClientRect 会连续触发强制布局。
+let canvasRect = null
 let bgImage = null
 let canvasW = 0, canvasH = 0
 
@@ -261,16 +274,22 @@ let toolbarPlaced = false
 
 function onToolbarDragStart(e) {
   if (e.target.tagName === 'INPUT') return
+  if (tbDragging) return
+  if (e.pointerType === 'mouse' && e.button !== 0) return
   e.preventDefault()
   tbDragging = true
+  // document 上的 pointermove 会收到**所有**指针的移动：多指时另一根手指在画布上
+  // 滑动不该把工具栏一起拖走，所以只认发起拖拽的那个 pointerId。
+  const pid = e.pointerId
   tbStart = { x: e.clientX, y: e.clientY }
   tbPosStart = { x: toolbarPos.x, y: toolbarPos.y }
   // 监听器登记到资源表：鼠标松开时正常移除，但**拖拽途中组件被卸载**时，
   // onUp 永远不会执行 → 原先这两个监听器会永久留在 document 上。
   let cancelMove = null
   let cancelUp = null
+  let cancelCancel = null
   const onMove = (ev) => {
-    if (!tbDragging || !toolbarRef.value) return
+    if (!tbDragging || ev.pointerId !== pid || !toolbarRef.value) return
     const w = toolbarRef.value.offsetWidth
     const h = toolbarRef.value.offsetHeight
     let nx = tbPosStart.x + ev.clientX - tbStart.x
@@ -280,16 +299,21 @@ function onToolbarDragStart(e) {
     toolbarPos.x = nx
     toolbarPos.y = ny
   }
-  const onUp = () => {
+  const onUp = (ev) => {
+    if (ev && ev.pointerId !== pid) return
     tbDragging = false
     toolbarPlaced = true
     if (cancelMove) cancelMove()
     if (cancelUp) cancelUp()
+    if (cancelCancel) cancelCancel()
     cancelMove = null
     cancelUp = null
+    cancelCancel = null
   }
-  cancelMove = disposables.listen(document, 'mousemove', onMove)
-  cancelUp = disposables.listen(document, 'mouseup', onUp)
+  cancelMove = disposables.listen(document, 'pointermove', onMove)
+  cancelUp = disposables.listen(document, 'pointerup', onUp)
+  // 触摸被系统手势/窗口切换打断时没有 pointerup，只有 pointercancel → 不收尾就永远卡在拖拽态
+  cancelCancel = disposables.listen(document, 'pointercancel', onUp)
 }
 
 // 绘制
@@ -307,7 +331,9 @@ function toolCfg() {
 
 
 function pos(e) {
-  const r = drawCanvas.value.getBoundingClientRect()
+  // canvasRect 在 pointerdown 时刷新一次，move 阶段直接复用（多指高频 move 每次
+  // getBoundingClientRect 都会强制布局）
+  const r = canvasRect || drawCanvas.value.getBoundingClientRect()
   const cssX = e.clientX - r.left
   const cssY = e.clientY - r.top
   // CSS 显示尺寸和 canvas 内部分辨率可能不同，需要缩放坐标
@@ -317,127 +343,141 @@ function pos(e) {
   }
 }
 
-
-
-function onMouseDown(e) {
-  if (!bgImage) return
-  const p = pos(e)
-  isDrawing = true
-  const cfg = toolCfg()
-  const width = cfg.w
-  // 初始化点缓冲和宽度平滑
-  const now = Date.now()
-  pointBuffer = [
-    { x: p.x, y: p.y, w: width, time: now },
-    { x: p.x, y: p.y, w: width, time: now }
-  ]
-  widthSmooth = [width]
-  const isHL = currentTool.value === 'highlighter'
-  const ctx = (isHL ? hlCanvas.value : drawCanvas.value).getContext('2d')
-
-  if (cfg.isEraser) {
-    ;[drawCanvas.value, hlCanvas.value].forEach(c => {
-      const ec = c.getContext('2d')
-      ec.globalCompositeOperation = 'destination-out'
-      ec.beginPath()
-      ec.arc(p.x, p.y, width / 2, 0, Math.PI * 2)
-      ec.fill()
-      ec.globalCompositeOperation = 'source-over'
-    })
-  } else {
-    ctx.beginPath()
-    ctx.fillStyle = cfg.color
-    ctx.arc(p.x, p.y, width / 2, 0, Math.PI * 2)
-    ctx.fill()
-  }
+// 橡皮擦同时擦两层：荧光笔层在导出时才叠到 drawCanvas 之下，必须一起擦
+function eraseAt(x, y, w) {
+  const layers = [drawCanvas.value, hlCanvas.value]
+  layers.forEach(c => {
+    const ec = c.getContext('2d')
+    ec.globalCompositeOperation = 'destination-out'
+    ec.beginPath()
+    ec.arc(x, y, w / 2, 0, Math.PI * 2)
+    ec.fill()
+    ec.globalCompositeOperation = 'source-over'
+  })
 }
 
-function onMouseMove(e) {
-  if (!isDrawing || !bgImage) return
-  const p = pos(e)
-  const now = Date.now()
-  const lastPt = pointBuffer[pointBuffer.length - 1]
-  const dt = Math.max(now - lastPt.time, 1)
-  // canvas 内部分辨率 = 截图原始分辨率，高分辨率下坐标被放大，
-  // 若直接用画布像素算速度，测得的速度会被放大数十倍，钢笔笔锋会立刻衰减到最细，
-  // 高 DPI 下画成亚像素细线（观感上像断线）。这里统一换算回 CSS 像素再算速度。
-  const drawRect = drawCanvas.value.getBoundingClientRect()
-  const canvasScale = drawRect.width > 0 ? canvasW / drawRect.width : 1
-  const dist = Math.hypot(p.x - lastPt.x, p.y - lastPt.y) / canvasScale
-  const speed = dist / dt
-  const cfg = toolCfg()
-  let width = calcW(speed, cfg)
-
-  // 宽度平滑：移动平均，减少速度突变导致的笔锋抖动
-  widthSmooth.push(width)
-  if (widthSmooth.length > 4) widthSmooth.shift()
-  width = widthSmooth.reduce((a, b) => a + b, 0) / widthSmooth.length
-  const isHL = currentTool.value === 'highlighter'
-  const ctx = (isHL ? hlCanvas.value : drawCanvas.value).getContext('2d')
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round'
-
-  // 追加采样点到缓冲
-  pointBuffer.push({ x: p.x, y: p.y, w: width, time: now })
-
-  // 缓冲满 4 个点时，用 Catmull-Rom 绘制倒数第 3→倒数第 2 点之间的平滑曲线
-  if (pointBuffer.length >= 4) {
-    const n = pointBuffer.length
-    const p0 = pointBuffer[n - 4], p1 = pointBuffer[n - 3]
-    const p2 = pointBuffer[n - 2], p3 = pointBuffer[n - 1]
-
-    if (cfg.isEraser) {
-      ;[drawCanvas.value, hlCanvas.value].forEach(c => {
-        const ec = c.getContext('2d')
-        ec.globalCompositeOperation = 'destination-out'
-        ec.strokeStyle = 'rgba(0,0,0,1)'
-        ec.lineCap = 'round'; ec.lineJoin = 'round'
-        drawCurveSegment(ec, p0, p1, p2, p3)
-        ec.globalCompositeOperation = 'source-over'
-      })
-    } else {
-      ctx.strokeStyle = cfg.color
-      ctx.globalAlpha = cfg.alpha
-      drawCurveSegment(ctx, p0, p1, p2, p3)
-      ctx.globalAlpha = 1
-    }
-  }
-}
-
-function onMouseUp() {
-  if (!isDrawing) return
-  const n = pointBuffer.length
-  if (n < 3) { isDrawing = false; return }
-
-  const cfg = toolCfg()
-  const isHL = currentTool.value === 'highlighter'
-  const ctx = (isHL ? hlCanvas.value : drawCanvas.value).getContext('2d')
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round'
-
-  // 用最后 3 个点绘制末尾曲线段，P3 镜像 P2 作为终点
-  const p0 = pointBuffer[n - 3], p1 = pointBuffer[n - 2], p2 = pointBuffer[n - 1]
-
-  if (cfg.isEraser) {
-    ;[drawCanvas.value, hlCanvas.value].forEach(c => {
+// 画一段曲线。多指共用同一个 canvas context 是安全的：这里每次都重设
+// strokeStyle / globalAlpha / lineCap，lineWidth 由 drawCurveSegment 逐段设置并
+// 自己 beginPath，不存在跨指针的状态残留（所以别在这条链上引入 rAF 延迟批处理，
+// 一旦跨越帧，多指针的上下文状态就会互相污染）。
+function drawSegment(st, p0, p1, p2, p3) {
+  if (st.isEraser) {
+    const layers = [drawCanvas.value, hlCanvas.value]
+    layers.forEach(c => {
       const ec = c.getContext('2d')
       ec.globalCompositeOperation = 'destination-out'
       ec.strokeStyle = 'rgba(0,0,0,1)'
       ec.lineCap = 'round'; ec.lineJoin = 'round'
-      drawCurveSegment(ec, p0, p1, p2, p2)
+      drawCurveSegment(ec, p0, p1, p2, p3)
       ec.globalCompositeOperation = 'source-over'
     })
-  } else {
-    ctx.strokeStyle = cfg.color
-    ctx.globalAlpha = cfg.alpha
-    drawCurveSegment(ctx, p0, p1, p2, p2)
-    ctx.globalAlpha = 1
+    return
+  }
+  const ctx = st.target.getContext('2d')
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+  ctx.strokeStyle = st.cfg.color
+  ctx.globalAlpha = st.cfg.alpha
+  drawCurveSegment(ctx, p0, p1, p2, p3)
+  ctx.globalAlpha = 1
+}
+
+// 起笔：为一根手指/笔建一套独立状态
+function onPointerDown(e) {
+  if (!bgImage) return
+  // 同一指针重复 down（浏览器合成事件重发）不能把新建的缓冲重置掉
+  if (strokes.has(e.pointerId)) return
+  // 鼠标只认左键；触摸/笔的 button 恒为 0，不做限制
+  if (e.pointerType === 'mouse' && e.button !== 0) return
+
+  // 每笔起始刷新一次显示矩形：窗口位置/尺寸变化（全屏切换、居中）后旧矩形会失效
+  const r = drawCanvas.value.getBoundingClientRect()
+  canvasRect = { left: r.left, top: r.top, width: r.width, height: r.height }
+
+  const p = pos(e)
+  // 工具配置在下笔瞬间快照：多指时另一根手指可能去点工具栏切换工具，
+  // 若 move 里现读 currentTool，正在画的这一笔会被中途改成别的笔/橡皮
+  const cfg = toolCfg()
+  const isHL = currentTool.value === 'highlighter'
+  const st = {
+    cfg,
+    isEraser: !!cfg.isEraser,
+    target: isHL ? hlCanvas.value : drawCanvas.value,
+    buf: [
+      { x: p.x, y: p.y, w: cfg.w, time: e.timeStamp },
+      { x: p.x, y: p.y, w: cfg.w, time: e.timeStamp }
+    ],
+    widths: [cfg.w],
+    // canvas 内部分辨率 = 截图原始分辨率，高分辨率下坐标被放大，
+    // 若直接用画布像素算速度，测得的速度会被放大数十倍，钢笔笔锋会立刻衰减到最细。
+    // 这里预先存好换算系数，move 时统一换算回 CSS 像素再算速度。
+    scale: r.width > 0 ? canvasW / r.width : 1
+  }
+  strokes.set(e.pointerId, st)
+
+  // 捕获指针：手指滑出画布（甚至滑到工具栏下方）仍能收到 move，笔画不断；
+  // 不捕获的话触摸一离开元素就只剩 pointercancel，线直接断掉。
+  try {
+    drawCanvas.value.setPointerCapture(e.pointerId)
+  } catch (_) {
+    // 指针已失效（极短触碰），忽略即可，后续靠 pointercancel 收尾
   }
 
-  isDrawing = false
-  pointBuffer = []
+  if (st.isEraser) {
+    eraseAt(p.x, p.y, cfg.w)
+  } else {
+    const ctx = st.target.getContext('2d')
+    ctx.beginPath()
+    ctx.fillStyle = cfg.color
+    ctx.arc(p.x, p.y, cfg.w / 2, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
+function onPointerMove(e) {
+  const st = strokes.get(e.pointerId)
+  if (!st) return
+  const p = pos(e)
+  const now = e.timeStamp
+  const lastPt = st.buf[st.buf.length - 1]
+  const dt = Math.max(now - lastPt.time, 1)
+  const dist = Math.hypot(p.x - lastPt.x, p.y - lastPt.y) / st.scale
+  const speed = dist / dt
+
+  // 宽度平滑：移动平均，减少速度突变导致的笔锋抖动
+  let width = calcW(speed, st.cfg)
+  st.widths.push(width)
+  if (st.widths.length > 4) st.widths.shift()
+  width = st.widths.reduce((a, b) => a + b, 0) / st.widths.length
+
+  // 追加采样点到缓冲
+  st.buf.push({ x: p.x, y: p.y, w: width, time: now })
+
+  // 绘制只用到最后 4 个点（收尾用最后 3 个），所以缓冲裁到 5 个即可。
+  // 不裁的话：单手画 10 秒就是 1200 个点，十指同时画是 12000 个 —— 全是没人再读的死数据。
+  if (st.buf.length > 5) st.buf.shift()
+
+  // 缓冲满 4 个点时，用 Catmull-Rom 绘制倒数第 3→倒数第 2 点之间的平滑曲线
+  if (st.buf.length >= 4) {
+    const n = st.buf.length
+    drawSegment(st, st.buf[n - 4], st.buf[n - 3], st.buf[n - 2], st.buf[n - 1])
+  }
+}
+
+// pointerup / pointercancel / lostpointercapture 三个都会派发到这里（浏览器会连着发），
+// 用「strokes 里还有没有这个 id」保证只收尾一次，缓冲随删随释放。
+function onPointerUp(e) {
+  const st = strokes.get(e.pointerId)
+  if (!st) return
+  strokes.delete(e.pointerId)
+
+  const n = st.buf.length
+  if (n < 3) return
+  // 用最后 3 个点绘制末尾曲线段，P3 镜像 P2 作为终点
+  drawSegment(st, st.buf[n - 3], st.buf[n - 2], st.buf[n - 1], st.buf[n - 1])
 }
 
 // 点击画布区域关闭二级菜单
-function onCanvasMouseDown(e) {
+function onCanvasPointerDown(e) {
   if (toolbarRef.value && toolbarRef.value.contains(e.target)) return
   if (subRef.value && subRef.value.contains(e.target)) return
   subTool.value = null
@@ -774,6 +814,10 @@ onUnmounted(() => {
   top: 0; left: 0; right: 0; bottom: 0;
   overflow: hidden;
   background: #000;
+  /* 触屏书写的关键：不声明 none，触摸一移动就被判成滚动/捏合手势，
+     浏览器直接发 pointercancel 把笔画掐断，两指还会把整个页面缩放掉。 */
+  touch-action: none;
+  user-select: none;
 }
 
 .bg-canvas,
@@ -791,6 +835,7 @@ onUnmounted(() => {
 
 .draw-canvas {
   z-index: 3;
+  touch-action: none;
 }
 
 /* ====== 工具栏 ====== */
@@ -811,6 +856,8 @@ onUnmounted(() => {
   justify-content: center;
   cursor: grab;
   padding-top: 4px;
+  /* 触摸拖工具栏时不要被系统判成滚动手势（否则只有 pointercancel，拖不动） */
+  touch-action: none;
 }
 .tb-drag-bar:active { cursor: grabbing; }
 .tb-drag-dot {

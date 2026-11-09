@@ -67,7 +67,7 @@
 - 使用位置：[`components/dialogs/AlbumManageDialog.vue`](../../../student-frontend/src/components/dialogs/AlbumManageDialog.vue)（`import('sortablejs')` 懒加载，用于相册拖拽排序）。
 - **备注**：`AboutView` 只在「第三方库致谢」里提到它，不是运行使用。
 
-### [`vue`](../../../student-frontend/node_modules/vue) 3.5.44 · MIT · 前端框架
+### [`vue`](../../../student-frontend/node_modules/vue) 3.5.45 · MIT · 前端框架
 - 用途：框架主运行时。
 - 使用位置：全部 SFC 与应用入口。
 - 打包：renderer bundle。

@@ -21,7 +21,7 @@
 
 | 依赖 | 版本 | 用途 | 使用位置 |
 | --- | --- | --- | --- |
-| [`electron`](../../../node_modules/electron) | 44.9.3 | 桌面运行时 | `main: electron/main/main.js` |
+| [`electron`](../../../node_modules/electron) | 45.2.3 | 桌面运行时 | `main: electron/main/main.js` |
 | [`electron-builder`](../../../node_modules/electron-builder) | 26.17.0（声明 `^26.15.3`） | 打包（`--dir`） | `npm run electron:build` |
 | [`@electron/rebuild`](../../../node_modules/@electron/rebuild) | 4.2.1 | 原生模块按 Electron ABI 重编译 | `postinstall` / 手动 |
 | [`concurrently`](../../../node_modules/concurrently) | 10.0.6 | 并行跑 Vite + Electron | `electron:dev` / `electron:dev36` |

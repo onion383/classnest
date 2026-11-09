@@ -149,6 +149,8 @@ classnest/
 #### [`secureChannel.js`](../../../student-frontend/src/composables/secureChannel.js) · 加密原语
 - **导出**：`safe()`、`markAuthBound()`、`resetAuthBinding()`、`applyAuthHeader(headers, token, { forceToken })`、`encryptBody()`、`decryptBody()`、`clearSession()`。
 - 内部：ECDH P-256 + HKDF(`campus-secure-v1`) + AES-256-GCM；与后端 `services/secureChannel.js` 参数一一对应。
+- **主密钥来源**：`preload.js` 在页面脚本之前发起白名单 IPC `get-master-key`，本模块经 `window.__MASTER_KEY__.get()` 复用同一个在途 `promise`，取不到时回退 `window.electron.invoke`。取回值按 64 位十六进制校验后缓存在模块级 `kMaster`（应用级状态，登出不清）。这把 18~30ms 的跨进程往返从握手关键路径挪到页面解析之前。⚠️ 相位副作用：省下的约 20ms 会让握手那条裸 `fetch` 早于后端 `listen`（监听）发出，撞连接被拒并触发约 210ms 固定退避，故本模块在裸 `fetch` 之前另有 `await waitForBackendReady(1500)`（等待后端就绪），两者必须配套（判据见 `topics/performance.md` 第 7 节）。
+- **握手分段打点**：`握手完成 Nms 分段(IPC / keygen / fetch / derive)` 把一次握手拆成主进程往返、密钥生成、网络往返、密钥派生四段，供启动归因区分本机阻塞与后端排队；`waitForBackendReady` 的等待计入 `keygen` 段，不改 `IPC` / `fetch` 口径。
 
 #### [`secureAxios.js`](../../../student-frontend/src/composables/secureAxios.js) · axios 加解密装配
 - **签名**：`setupSecureAxios(axios)`。

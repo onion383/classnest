@@ -203,5 +203,8 @@ node testjs/tools/docs-verify.mjs --json   # 机器可读
 | 2026-11-02 | 同上 | 本页按「写作标准 / 文档更新 / 文档校验」三块重组：模板拆成子文档、子模块、专题三类，校验拆成格式 6 类与内容 21 类 | 80 份文档、0 死链；27 类校验全 PASS |
 | 2026-11-02 | 同上 | 新增「模块间 + 文末 `---`」规则与校验：14 个文件补模块分隔线、5 个文件补文末收尾 | 80 份文档、0 死链；28 类校验全 PASS |
 | 2026-11-02 | 同上 | 用户手册 32 篇按「前言 / 具体方法 / 相关篇目 / 维护记录」重组并统一分隔线；新增用户手册结构断言、构建配置（含 `inno/`、安装器素材）覆盖与 Mermaid 图内中文校验 | 80 份文档、0 死链；30 类校验全 PASS |
+| 2026-11-07 | 工作区未提交 | 启动归因与本轮优化落文档：`topics/performance.md` 补第 6 节（双峰判据、独立探针、打包实测、否掉的两项、电源事件判据）并更新前后端优化表与启动链路图；`backend/README.md` 启动时序改为让路链与首屏路由提前注册；更正 `main-process/entry.md`、`widgets.md` 的回环地址描述；`main-process/root-files.md`、`frontend/composables.md`、`topics/security.md` 补 preload 主密钥预取；同步 `doc/开发文档/优化文档.md` 的 4.3 与新增 4.6 | 禁用词 / 英文标识配中文 / 字段标签加粗 / Mermaid / doc-tree / 模块分隔线 / 死链等本轮相关校验全 PASS；「测试脚本覆盖」等既有缺口属并行会话，未处理 |
+| 2026-11-09 | 工作区未提交 | 同步 11-09 相位竞态复测结论：`topics/performance.md` 第 6 节两条「仍待运行时验证」改为已验证、新增第 7 节（三包排除预连接、裸 `fetch` 早于 `listen` 的固定退避、`waitForBackendReady(1500)` 修法、7 批验证数据、645ms 新基线与未定位项），前端优化表把「回环预连接同源」改为已撤回、补「握手前等后端就绪」行并给主密钥预取加相位副作用；`frontend/composables.md`、`topics/security.md` 补配套等待与安全中性结论；`doc/开发文档/优化文档.md` 4.6 待验证清单改为已验证并新增 4.7 过程记录 | 禁用词 / 英文标识配中文 / 字段标签加粗 / Mermaid / doc-tree / 模块分隔线 / 死链等格式类校验无新增 FAIL；「组合式函数覆盖」等 5 类 FAIL 为并行会话既有缺口，未处理 |
+| 2026-11-09 | 工作区未提交 | Electron 45 保留定案 + 为 46 做安全存储异步化：`main.config.js` / `main.backend.js` / `main.js` 改造后，同步 `main-process/README.md`、`main-process/entry.md`、`main-process/modules.md`、`backend/data-layer.md` 的可用性时序与方法名；`topics/performance.md` 第 7 节补 45 的 A/B 定案；`testing/units.md` 登记新增 `db-master-key.test.js`；`index.html` 作废注释清理与 `dev-vite.js` 过时注释更正 | 禁用词 / 英文标识配中文 / 字段标签加粗 / Mermaid / doc-tree / 模块分隔线 / 死链等格式类校验无新增 FAIL；「测试脚本覆盖」缺口回到基线 21；5 类 FAIL 均为并行会话既有缺口 |
 
 ---

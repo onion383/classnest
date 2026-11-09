@@ -24,7 +24,7 @@
 | `pinia`             | 4.1.0  | MIT                   | 状态管理（`theme.js`）       | renderer bundle       |
 | `pinyin-match`      | 1.2.10 | MIT                   | 中文拼音模糊匹配（搜索/候选）        | renderer bundle       |
 | `sortablejs`        | 1.15.7 | MIT                   | 相册管理等拖拽排序              | renderer bundle       |
-| `vue`               | 3.5.44 | MIT                   | 框架（3.6 预览走 `vue36/`）   | renderer bundle       |
+| `vue`               | 3.5.45 | MIT                   | 框架（3.6 预览走 `vue36/`）   | renderer bundle       |
 | `vue-router`        | 5.4.0  | MIT                   | 路由                     | renderer bundle       |
 | `xlsx`              | 0.20.3 | Apache-2.0            | Excel/CSV 解析与导出        | renderer bundle（按需分包） |
 
@@ -40,7 +40,7 @@
 | ------------------- | ------- | --------------------- | --- | ------------------------------------------------ |
 | `koffi`             | 3.3.3   | 运行时（原生 `FFI`（外部函数接口）） | MIT | 调 `pdh.dll`/`user32`（专用工作集、窗口置底）                 |
 | `ui-ux-pro-max-cli` | 2.15.0  | 运行时（开发辅助）             | MIT | 安装 UI/UX Pro Max 技能给 AI 编码助手（`uipro` 命令），应用源码不引用 |
-| `electron`          | 44.9.3  | 开发期                   | MIT | 桌面运行时                                            |
+| `electron`          | 45.2.3  | 开发期                   | MIT | 桌面运行时                                            |
 | `electron-builder`  | 26.17.0 | 开发期                   | MIT | 打包（`--dir`）                                      |
 | `@electron/rebuild` | 4.2.1   | 开发期                   | MIT | 原生模块按 Electron ABI 重编译                           |
 | `concurrently`      | 10.0.6  | 开发期                   | MIT | 并行跑 Vite + Electron                              |

@@ -13,13 +13,35 @@
 
 import { INVOKE } from '../electronChannels.js'
 import { registerUserScopedReset } from '../utils/userScopedCache.js'
+import { waitForBackendReady } from '../utils/backendReady.js'
 
 const subtle = crypto.subtle
-const BASE = 'http://localhost:3000'
+// 回环地址用 IPv4 字面量，别写 localhost：
+// Windows 上 localhost 优先解析成 ::1（实测 dns.lookup 顺序 [::1, 127.0.0.1]），
+// 而后端 app.listen(port, '127.0.0.1') 只绑 IPv4 —— 浏览器先连 ::1 被拒、再回退 IPv4，
+// 首条请求凭空多出几百毫秒（实测直连 127.0.0.1 5ms / localhost 50ms，浏览器侧更慢）。
+// 握手是启动期第一条网络请求，这笔代价全落在它头上（实测握手 353~535ms → 改后 59~72ms）。
+// ⚠️ 回环地址散在 6 处，必须同改（同一语义只改一处会让 Cookie 域分裂）：
+//   本文件 BASE / httpClient.backendBaseUrl / apiUrl.apiUrl / main.dialogs 背景图 URL /
+//   main.js waitBackendReady / vite.config 的两处 proxy target。
+//   CORS_ORIGIN_RE 与 Host 校验本来都允许 127.0.0.1，无需改后端。
+const BASE = 'http://127.0.0.1:3000'
 
 let kMaster = null
 let sessionKey = null
 let sessionId = null
+// 主密钥由 preload 在 document-start 就发起预取（见 electron/preload.js 的 __MASTER_KEY__），
+// 握手时只是取回那个已完成的 promise：原本那次跨进程 IPC 往返（18~30ms）不再落在
+// ensureSession 的「IPC」分段上。老版 preload / 预取失败时回退到 invoke，保证信道仍建得起来。
+// master key 是应用级（非用户级）状态，登出不清，见文件末尾 registerUserScopedReset 的说明。
+async function getMasterKey() {
+  if (kMaster) return kMaster
+  let raw = window.__MASTER_KEY__ ? await window.__MASTER_KEY__.get() : null
+  if (!raw) raw = await window.electron.invoke(INVOKE.GET_MASTER_KEY)
+  kMaster = raw && /^[0-9a-f]{64}$/.test(String(raw)) ? raw : null
+  return kMaster
+}
+
 // 会话代次：登出/换号会 +1。在途的握手回来时若代次已变，说明这次握手属于旧用户，
 // 不能再把会话写回（否则登出后又被“复活”）。
 let sessionGen = 0
@@ -30,13 +52,6 @@ let authBound = false
 export function safe() {
   if (window.__SECURE_CHANNEL__ === true) return true
   return import.meta.env && import.meta.env.VITE_SECURE === '1'
-}
-
-async function getMasterKey() {
-  if (kMaster) return kMaster
-  kMaster = await window.electron.invoke(INVOKE.GET_MASTER_KEY)
-  if (!kMaster || !/^[0-9a-f]{64}$/.test(String(kMaster))) return null
-  return kMaster
 }
 
 // --- 信道凭据（X-Auth-Proof）---
@@ -120,17 +135,54 @@ const utf8 = (s) => new TextEncoder().encode(s)
 // 并发请求共用同一个握手 promise：否则首屏并发请求各自握手会互相覆盖会话，
 // 导致「请求体用一个会话、凭据用另一个会话」的不一致。
 let pendingSession = null
+// 启动归因：首次握手耗时。
+// 握手走的是一条**裸 fetch**（不经 axios、也不等后端就绪），而首屏第一个请求往往在后端
+// listen 之前就发出 —— 于是它会撞「连接被拒」、降级成明文凭据、被后端以 401 拒掉，再走一轮
+// 重建会话。这条打点用来确认「首屏那几百毫秒」是否花在这里。只记录首次。
+let hsStartMarked = false
+let hsEndMarked = false
+function hsMark(name) {
+  try {
+    console.log(`[startup] ${name} @${Math.round(performance.timeOrigin + performance.now())}`)
+  } catch (_) { /* 打点失败绝不能影响握手 */ }
+}
+
 async function ensureSession() {
   if (sessionKey) return { sessionId, sessionKey }
   if (pendingSession) return pendingSession
   const gen = sessionGen
+  const _hsT0 = Date.now()
+  // 握手分段：「353ms」这类总数只说明握手慢，不说明慢在哪一环。拆成 IPC / 密钥生成 /
+  // fetch 往返 / 密钥派生四段，一次启动就能判定是 WebCrypto 慢还是 TCP 连接慢。
+  let _segT = _hsT0
+  const _seg = []
+  const seg = (name) => {
+    const now = Date.now()
+    _seg.push(`${name} ${now - _segT}ms`)
+    _segT = now
+  }
+  if (!hsStartMarked) { hsStartMarked = true; hsMark('握手开始') }
   pendingSession = (async () => {
     const master = await getMasterKey()
+    seg('IPC')
     if (!master) throw new Error('secure channel: no master key')
+
+    // 裸 fetch 绕开了 axios，也绕开了 axios 拦截器里的「等后端就绪」重试。启动期它常在
+    // 后端 app.listen 之前发出 → 连接被拒 → Chromium 网络栈退避约 210ms（实测打包版
+    // 275~299ms 慢簇，5/5 批）。这里补上对齐：已就绪时 Promise.resolve 零成本，未就绪
+    // 则等 backend-ready 广播，BACKEND_STATUS 主动查询兜住「广播早于监听注册」的竞态；
+    // 该查询返回的是主进程收到后端 listen 上报后才置位的标志，不会提前放行。
+    // 位置刻意放在 IPC 分段之后、keygen 分段之前：等待计入 keygen 分段，保持
+    // 「IPC（预取版本指纹）」与「fetch（慢簇判据）」两个分段口径不变，打点一行未动。
+    // 超时只 resolve(false)、不抛错，这里刻意不判返回值：裸 fetch 照常发出，由既有
+    // axios「不可达 → 等 backend-ready → 重试」链接管。多抛一种错只会让后端真挂时
+    // 每轮重试都白等一遍超时（最多 6 轮）。1500ms 已覆盖实测后端就绪 341~595ms。
+    await waitForBackendReady(1500)
 
     // 前端 ephemeral P-256
     const kp = await subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
     const pub = b64(new Uint8Array(await subtle.exportKey('raw', kp.publicKey)))
+    seg('keygen')
 
     // 裸握手（握手不能加密，用 fetch 避免触发 axios 拦截器）
     const resp = await fetch(BASE + '/api/secure/handshake', {
@@ -140,6 +192,7 @@ async function ensureSession() {
     })
     if (!resp.ok) throw new Error('secure channel: handshake failed ' + resp.status)
     const peer = await resp.json()
+    seg('fetch')
 
     const peerPub = await subtle.importKey('raw', unb64(peer.pub), { name: 'ECDH', namedCurve: 'P-256' }, false, [])
     const shared = await subtle.deriveBits({ name: 'ECDH', public: peerPub }, kp.privateKey, 256)
@@ -149,13 +202,19 @@ async function ensureSession() {
       ikm, 256,
     )
     const key = await subtle.importKey('raw', ke, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+    seg('derive')
     // 握手期间发生了登出/换号：这次会话属于旧用户，不能写回。
     // 抛错让调用方重试（重试会走一次新的握手），而不是拿旧会话继续发请求。
     if (gen !== sessionGen) throw new Error('secure channel: session invalidated')
     sessionKey = key
     sessionId = peer.sessionId
+    if (!hsEndMarked) { hsEndMarked = true; hsMark(`握手完成 ${Date.now() - _hsT0}ms 分段(${_seg.join(' / ')})`) }
     return { sessionId, sessionKey }
-  })().finally(() => { pendingSession = null })
+  })().catch((e) => {
+    // 失败也记一条：否则「握手没打完成」既可能是失败、也可能是还没走到。
+    if (!hsEndMarked) { hsEndMarked = true; hsMark(`握手失败 ${Date.now() - _hsT0}ms 分段(${_seg.join(' / ')})`) }
+    throw e
+  }).finally(() => { pendingSession = null })
   return pendingSession
 }
 

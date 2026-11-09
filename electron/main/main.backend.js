@@ -138,8 +138,12 @@ function getBackendPaths() {
 // 打包模式子进程：child_process.fork + execPath=electron.exe + ELECTRON_RUN_AS_NODE=1，
 // 以 Electron 内置 Node 的纯 Node 模式运行后端，目标机无需安装 Node.js，
 // 实现免依赖分发（原生模块已通过 @electron/rebuild 针对 Electron ABI 重编译）。
-function compileBackendProcess() {
+async function compileBackendProcess() {
   _profMark('【prof】compileBackendProcess 进入')
+  // 46 适配：主密钥来自 safeStorage 的异步 API。ready 时已由 main.js 发起预热（与建窗并行），
+  // 这里通常只等一个已 resolve 的 Promise；即便预热还没完成，也会复用同一个单飞 Promise，
+  // 不会解析出第二把钥匙。dev / 打包两条 fork 分支共用这一份值。
+  const dbKey = await getDbMasterKey()
   const { backendDir, backendPath } = getBackendPaths()
   const dataDir = resolveDataDir()
   const thumbsDir = resolveThumbsDir()
@@ -208,7 +212,7 @@ function compileBackendProcess() {
           AI_SKILLS_DIR: skillsDir,
           NODE_COMPILE_CACHE: compileCacheDir,
           SECURE_MASTER: getMasterKey(),
-          DB_MASTER_KEY: getDbMasterKey(),
+          DB_MASTER_KEY: dbKey,
         },
       })
       backendProcess = child
@@ -266,7 +270,7 @@ function compileBackendProcess() {
       ELECTRON_RUN_AS_NODE: '1',
       NODE_COMPILE_CACHE: compileCacheDir,
       SECURE_MASTER: getMasterKey(),
-      DB_MASTER_KEY: getDbMasterKey(),
+      DB_MASTER_KEY: dbKey,
     },
   })
 
@@ -300,7 +304,12 @@ function startBackend() {
   broadcast({ type: 'backend-resetting' })
   setBootStatus('正在启动本地服务…')
   armBackendFailWatchdog()
-  compileBackendProcess()
+  // compileBackendProcess 现在是 async（fork 前要 await 主密钥）。startBackend 保持同步签名，
+  // 10 处调用点无需改动；这里兜住 rejection，避免 fire-and-forget 变成 unhandled rejection。
+  compileBackendProcess().catch((err) => {
+    console.error('[main] 后端 fork 失败:', err?.message || err)
+    markBackendFailed()
+  })
 }
 
 // 向所有已存在的渲染窗口广播 from-main 事件

@@ -145,3 +145,22 @@ contextBridge.exposeInMainWorld('electron', {
     }
   },
 })
+
+// --- 主密钥预取（启动期握手优化）---
+// 渲染层首次握手要用 get-master-key 取回 K_master，那是一次跨进程 IPC（实测 18~30ms）。
+// 放在页面模块顶层 fire-and-forget 时，结果仍未必赶得上握手；这里提前到 document-start
+// 发起（早于任何渲染层脚本），并把同一个 promise 暴露给页面复用。
+// 不新增 IPC 通道（仍是已有的 get-master-key handle），不改 ipc-policy.json。
+let masterKeyPromise = null
+const preloadMasterKey = () => {
+  if (!masterKeyPromise) {
+    // 白名单外的窗口不发起。失败时收敛成 null 并清空缓存，允许后续重试；
+    // 同时避免「没人 await 的 rejected promise」变成 unhandled rejection。
+    masterKeyPromise = validInvokeChannels.includes('get-master-key')
+      ? ipcRenderer.invoke('get-master-key').catch(() => { masterKeyPromise = null; return null })
+      : Promise.resolve(null)
+  }
+  return masterKeyPromise
+}
+preloadMasterKey()
+contextBridge.exposeInMainWorld('__MASTER_KEY__', { get: preloadMasterKey })

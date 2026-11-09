@@ -83,17 +83,44 @@ function resolveSkillsDir() {
 // - 首启：文件不存在 → 生成随机 32 字节 → 加密写 userData/data/db-master.key。
 // - 之后：解密文件复用同一把钥匙，保证持久库可连续打开。
 // - 兜底：safeStorage 不可用（非 Windows 等）时仅返回运行期随机值，不落明文文件。
+// - 46 适配：同步的 isEncryptionAvailable / encryptString / decryptString 在 Electron 46
+//   移除，这里只用 isAsyncEncryptionAvailable / encryptStringAsync / decryptStringAsync。
+//   官方保证 encryptString 的旧密文可被 decryptStringAsync 解开，故本次迁移不换钥匙、旧库照常打开。
+//   异步加密器在 app ready 之后惰性初始化，所以调用点仍必须留在 whenReady 内（fork 不能提前）。
+
 let dbMasterKey = null
-function getDbMasterKey() {
-  if (dbMasterKey) return dbMasterKey
+// 单个在途 Promise：启动 fork、后端自动重连、数据目录搬迁重启都可能并发来取钥匙。
+// 同步版靠「先查缓存再赋值」天然幂等；异步化后不锁这一步，两个调用会各生成一把新钥匙，
+// 后者写回文件后旧库就再也打不开了。
+let dbMasterKeyPromise = null
+
+async function resolveDbMasterKey() {
   // 主密钥文件与数据库同目录存放，随数据目录一起迁移；解析用配置后的 dataDir，保证两者一致
   const keyFile = path.join(resolveDataDir(), 'db-master.key')
+  const randomKey = () => crypto.randomBytes(32).toString('hex')
   try {
-    if (fs.existsSync(keyFile) && safeStorage.isEncryptionAvailable()) {
+    const available = await safeStorage.isAsyncEncryptionAvailable()
+    if (fs.existsSync(keyFile) && available) {
       const blob = fs.readFileSync(keyFile)
       try {
-        dbMasterKey = safeStorage.decryptString(blob)
-        return dbMasterKey
+        const { result, shouldReEncrypt } = (await safeStorage.decryptStringAsync(blob)) || {}
+        // 异步版返回对象而不是字符串。拿到空值必须当失败处理，否则会用空密钥 fork 后端，
+        // 表现成「加密库打不开」，比解密抛错难查得多。这里只验非空，不改变原有明文格式口径。
+        if (typeof result !== 'string' || !result) throw new Error('解密结果为空')
+        if (shouldReEncrypt) {
+          // 密钥轮换或出现更高安全级别的密钥：明文不变，只把密文用新密钥重新加密写回。
+          // 覆盖前先备份；任一步失败都保留原密文，本次照常用解出的明文。
+          try {
+            const fresh = await safeStorage.encryptStringAsync(result)
+            const backupFile = `${keyFile}.bak-${Date.now()}`
+            fs.copyFileSync(keyFile, backupFile)
+            fs.writeFileSync(keyFile, fresh)
+            console.log('[main] DB 主密钥密文已按新安全级别重新加密，旧密文备份:', backupFile)
+          } catch (reErr) {
+            console.error('[main] DB 主密钥重加密失败，保留原密文:', reErr?.message || reErr)
+          }
+        }
+        return result
       } catch (err) {
         // 解密失败可能只是瞬时故障（DPAPI 异常/文件损坏）。覆盖旧文件会让原密钥永久丢失，
         // 因此先留一份带时间戳的备份；备份失败则宁可本次用运行期随机值也不覆盖。
@@ -103,26 +130,40 @@ function getDbMasterKey() {
           console.error('[main] DB 主密钥解密失败，已备份旧密钥文件后重新生成:', err?.message || err, '→', backupFile)
         } catch (backupErr) {
           console.error('[main] DB 主密钥解密失败且备份失败，为避免覆盖原密钥，本次使用运行期随机值:', backupErr?.message || backupErr)
-          dbMasterKey = crypto.randomBytes(32).toString('hex')
-          return dbMasterKey
+          return randomKey()
         }
       }
     }
-    dbMasterKey = crypto.randomBytes(32).toString('hex')
-    if (safeStorage.isEncryptionAvailable()) {
+    const key = randomKey()
+    if (available) {
       try {
         fs.mkdirSync(path.dirname(keyFile), { recursive: true })
-        fs.writeFileSync(keyFile, safeStorage.encryptString(dbMasterKey))
+        fs.writeFileSync(keyFile, await safeStorage.encryptStringAsync(key))
       } catch (err) {
         console.error('[main] DB 主密钥持久化失败，将仅本次运行有效:', err?.message || err)
       }
     }
-    return dbMasterKey
+    return key
   } catch (err) {
     console.error('[main] DB 主密钥初始化失败，使用运行期随机值:', err?.message || err)
-    dbMasterKey = crypto.randomBytes(32).toString('hex')
-    return dbMasterKey
+    return randomKey()
   }
+}
+
+async function getDbMasterKey() {
+  if (dbMasterKey) return dbMasterKey
+  if (!dbMasterKeyPromise) {
+    // resolveDbMasterKey 内部已兜住所有已知失败，这里再兜一层意外 reject：
+    // 关键是所有等待者拿到同一把钥匙，且失败后不要把 Promise 清掉重新解析出第二把。
+    dbMasterKeyPromise = resolveDbMasterKey()
+      .then((key) => { dbMasterKey = key; return key })
+      .catch((err) => {
+        console.error('[main] DB 主密钥解析异常，使用运行期随机值:', err?.message || err)
+        dbMasterKey = crypto.randomBytes(32).toString('hex')
+        return dbMasterKey
+      })
+  }
+  return dbMasterKeyPromise
 }
 
 module.exports = {

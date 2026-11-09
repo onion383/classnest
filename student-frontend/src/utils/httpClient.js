@@ -146,6 +146,8 @@ export function setupApiClient({
 }
 
 // 生产模式（app:// 协议）下无 Vite 代理，需指定完整后端地址；开发模式走 Vite 代理，保持相对路径。
+// 与 secureChannel.js 的 BASE 保持一致：回环地址统一用 127.0.0.1，避开 localhost → ::1 回退。
+// ⚠️ 必须与 apiUrl.js 的 base 同步：后端 set-cookie 是 host-only，两者不同域会让媒体请求丢 Cookie。
 export function backendBaseUrl() {
-  return import.meta.env.PROD ? 'http://localhost:3000' : ''
+  return import.meta.env.PROD ? 'http://127.0.0.1:3000' : ''
 }

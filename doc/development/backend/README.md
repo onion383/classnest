@@ -18,11 +18,11 @@ Express 5 服务，由主进程 `child_process.fork`（创建 Node 子进程）�
 
 入口：[`app.js`](../../../student-backend/app.js)。
 
-1. 顶部加载 `db`（数据库入口）→ `dbManager`（多库管理器，解析 `DB_MASTER_KEY`）→ `services/secureChannel`（安全通道服务，读 `SECURE_MASTER`），并立即挂载登录必需路由 `routes/auth`、`routes/account`。
+1. 顶部加载 `db`（数据库入口）→ `dbManager`（多库管理器，解析 `DB_MASTER_KEY`）→ `services/secureChannel`（安全通道服务，读 `SECURE_MASTER`），并在 `listen`（监听端口）之前同步挂载启动期必需路由：`routes/auth`、`routes/account`、`/api/dashboard`、`/api/students`，以及 `/api/secure`（安全通道）握手与静态资源。
 2. 中间件顺序：`cors()`（跨域资源共享中间件）→ Host（请求主机头）校验（仅放行 `localhost` / `127.0.0.1` / `[::1]`，否则 `403`（禁止访问））→ `express.json({ limit:'200mb' })`（JSON 请求体解析，上限 200MB）→ `requestDecrypt`（请求解密）+ `responseEncrypt`（响应加密）（仅当 `hasMaster()`（存在主密钥））→ `/api/secure`（安全通道）握手。
 3. 静态鉴权：`/uploads`、`/api/background` 经 `authStatic()`（静态资源鉴权，只校验 token 不校验角色）后托管 `dbManager.uploadsDir`（上传目录）/ `backgroundDir`（背景图目录）。
-4. 路由分两批：关键路由（登录即可用）同步挂载；其余在 `listen`（监听端口）回调里用 `setImmediate`（下一轮事件循环执行）逐个 `require`（加载模块）并挂载（把 `sharp`（图像处理库）/ `pdf-parse`（PDF 解析库）等重依赖的加载推到就绪信号之后）。
-5. `app.listen(port, '127.0.0.1')`（监听本机端口）成功后上报 `backend-ready`（后端就绪），再 `setImmediate` 调 `dbManager.warmup()`（后台暖机）。
+4. 路由分两批：第 1 点是 `listen` 之前同步挂载的启动期必需路由（`/api/dashboard` 也在其中，因为让路链下首屏请求会早于其余路由注册完成就到达）；其余 19 个路由在 `listen` 回调后由**让路链**逐个 `require`（加载模块）并挂载 —— 每次只排一个 `setImmediate`（下一轮事件循环执行）回调，在该回调内再排下一步。旧写法一次性把整个队列塞进 `setImmediate`，Node 会在同一轮 check 阶段把队列清空，连续同步 100~160ms，期间到达的首屏请求排不上；新写法让链跨越多个事件循环迭代，中途必经 `poll`（网络 I/O）阶段。`dashboard` 依赖的 7 个模块排在链首，`ai` / `multer` 等首屏用不到的排在链尾；统一错误兜底仍是最后一步，`deferredStarted` 防止端口占用递归重入时重复 `app.use`。
+5. `app.listen(port, '127.0.0.1')`（监听本机端口）成功后**先**上报 `backend-ready`（后端就绪），再启动让路链：第 0 步 `dbManager.warmup()`（打开 `index.db`，消化业务库冷开成本），随后 19 个 loader、错误兜底，最后打印「懒加载路由全部注册完成（队列 Nms）」。就绪信号先发是刻意的 —— 前端据此立刻发首屏请求，让路链保证它不必等链跑完；把就绪上报推迟到队列完成反而会让前端晚约 230ms 才发请求。
 6. `init.js` 不是初始化脚本，只导出 `mapType(sqlType)`（SQL 类型 → 中文类型名）；真正的建表在 [`schema/schema.js`](../../../student-backend/schema/schema.js) 的 `initSchema`（初始化表结构）。
 
 ### 3. 后端鉴权与安全
@@ -36,7 +36,7 @@ Express 5 服务，由主进程 `child_process.fork`（创建 Node 子进程）�
 ### 4. 后端错误处理与日志
 
 - 路由内校验失败返回 `4xx`（客户端错误状态码）+ `{ error }`（错误信息）；统一错误中间件在最末捕获，避免把栈信息回传给前端。
-- 后端日志由主进程重定向到 `userData/data/backend.log`（Electron 用户数据目录下的后端日志）；启动阶段关键节点打印 `[boot] +Nms ...`（启动日志前缀 + 毫秒）供启动计时对齐。
+- 后端日志由主进程重定向到 `userData/data/backend.log`（Electron 用户数据目录下的后端日志）；启动阶段关键节点打印 `[boot] +Nms ...`（启动日志前缀 + 毫秒）供启动计时对齐，含「核心模块 require 完成」「监听成功 = 就绪」「数据库 warmup 完成」「懒加载路由全部注册完成（队列 Nms）」与 `dashboard 首屏聚合 Nms（进入 N）`。后端日志与主进程 `startup.log` 的计时零点不同，只能各自做段内比较，不能跨文件相减绝对时刻。
 - 关闭信号：`app.js` 在 `process.on('exit')`（进程退出事件）调 `scanWorker.shutdown()`（关闭扫描子进程），避免 `fork`（创建）出的扫描进程变成孤儿。
 
 ### 5. 后端路由前缀 ↔ 前端页面

@@ -15,7 +15,7 @@
 
 | 项 | 实际值 | 说明 |
 | --- | --- | --- |
-| 框架 | Vue 3.5.44 | 组合式 API + `<script setup>`（组合式 API 简洁脚本）；可选 Vue 3.6 + `Vapor`（新渲染模式）通道（见 [build-and-branches.md](../topics/build-and-branches.md)） |
+| 框架 | Vue 3.5.45 | 组合式 API + `<script setup>`（组合式 API 简洁脚本）；可选 Vue 3.6 + `Vapor`（新渲染模式）通道（见 [build-and-branches.md](../topics/build-and-branches.md)） |
 | 构建 | Vite 8.3.4 | 多页面入口，`base:'./'`（相对路径基址），`build.target:'chrome120'`（目标浏览器版本） |
 | 样式 | Tailwind CSS 4.3.3 | `@tailwindcss/vite`（Vite 插件），无 `tailwind.config`，令牌用 `@theme`（主题变量声明）写在 [`src/styles/index.css`](../../../student-frontend/src/styles/index.css) |
 | 状态 | Pinia 4.1.0 | 仅一个 `store`（状态仓库）：[`src/stores/theme.js`](../../../student-frontend/src/stores/theme.js) |

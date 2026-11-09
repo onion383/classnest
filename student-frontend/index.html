@@ -8,7 +8,13 @@
     <link rel="icon" type="image/webp" href="/logo.webp">
 
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="preconnect" href="http://localhost:3000">
+    <!-- 这里刻意不加回环地址的 preconnect 预连接：打包版 HTML 解析早于后端 listen，
+         启动期提前连回环必然失败；同源请求本来也不需要预连接。别加回来。
+         更正（2026-11-09）：旧注释写的「同源预连接让首发握手固定多等约 210ms」已作废。
+         三包对比（localhost / IPv4 字面量 / 不加）慢簇 2/7 → 10/11 → 5/5，与预连接有无无关；
+         真因是主密钥预取让裸 fetch 早于后端 listen 发出，已由握手前等后端就绪修好，
+         见 doc/development/topics/performance.md 第 7 节。
+         回环地址仍统一用 IPv4 字面量 127.0.0.1，见 src/utils/httpClient.js 的 backendBaseUrl()。 -->
     <!-- 注意：这里不要手写 <link rel="modulepreload" href="/src/main.js">。
          构建时它会被解析成一个独立 chunk（与真正入口 chunk 不同名），
          导致启动多下载一个无人使用的小 chunk；入口及其静态依赖的 modulepreload

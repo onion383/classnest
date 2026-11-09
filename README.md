@@ -33,7 +33,7 @@ MIT开源授权，你几乎可以使用这个仓库里面的代码做任何事�
 
 ## 技术栈
 
-- **桌面端**：Electron 44，自定义 `app://` 安全协议加载前端，无边框窗口 + 系统亚克力材质，托盘常驻、单实例运行；窗口统一 `sandbox` + `contextIsolation`，IPC 走白名单。
+- **桌面端**：Electron 45，自定义 `app://` 安全协议加载前端，无边框窗口 + 系统亚克力材质，托盘常驻、单实例运行；窗口统一 `sandbox` + `contextIsolation`，IPC 走白名单。
 
 - **前端**：Vue 3.5（Vite 8 + Tailwind CSS 4 + Pinia 4 + Vue Router 5）；另带 Vue 3.6 + Vapor 预览通道（同一份源码可切换编译）。
 

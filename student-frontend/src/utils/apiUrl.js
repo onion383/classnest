@@ -8,7 +8,8 @@ import { AUTH_API } from './apiPaths.js'
 export function apiUrl(path) {
   if (!path) return ''
   if (/^https?:\/\//.test(path) || path.startsWith('data:') || path.startsWith('blob:')) return path
-  const base = import.meta.env.PROD ? 'http://localhost:3000' : ''
+  // 与 httpClient.backendBaseUrl / secureChannel.BASE 同步：统一回环 IPv4，避免两个域并存。
+  const base = import.meta.env.PROD ? 'http://127.0.0.1:3000' : ''
   return base + path
 }
 

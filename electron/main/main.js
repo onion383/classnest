@@ -64,7 +64,7 @@ const _profReq = (p) => {
 }
 
 // 内存采样与主密钥派生已分别迁至 perf.js / config.js 内部使用，main.js 不再直接引用
-const { resolveCompileCacheDir, getMasterKey, saveAppConfig, resolveDataDir, resolveThumbsDir, resolveSkillsDir } = _profReq('./main.config')
+const { resolveCompileCacheDir, getMasterKey, saveAppConfig, resolveDataDir, resolveThumbsDir, resolveSkillsDir, getDbMasterKey } = _profReq('./main.config')
 const { setupRendererCodeCache, setupAppProtocol } = _profReq('./main.protocol')
 const { applyBackgroundMaterial } = _profReq('./main.window-material')
 const { buildWebPreferences } = _profReq('./main.web-prefs')
@@ -250,8 +250,8 @@ if (!app.isPackaged) require('./main.inpLog').registerInpLogIpc()
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
 // 注意：后端 fork 不能提前到这里（ready 之前）。fork 的 env 需要 DB_MASTER_KEY，而该值来自
-// safeStorage 解密的 db-master.key；Windows 上 safeStorage.isEncryptionAvailable() 只有
-// ready 之后才返回 true，提前调用会走进「生成随机新密钥」分支，导致加密库无法打开。
+// safeStorage 解密的 db-master.key；异步加密器在 ready 之前不可用（isAsyncEncryptionAvailable()
+// 要在 ready 之后惰性初始化），提前调用会走进「生成随机新密钥」分支，导致加密库无法打开。
 // 因此后端仍在 whenReady 内、建窗之后启动（见下方 app.whenReady 处）。
 
 // 用户又尝试启动一次（重复点击图标/快捷键）时，唤起已存在的主窗口而不是新开
@@ -378,12 +378,25 @@ function createMainWindow() {
   // 仅记录「首次加载」：重启前端（webContents.reload）会重新打这些日志，若继续记录，
   // 其 elapsed 以主进程已运行的时长为基准，会把重启前的时间也一并算进启动耗时——故首屏完成后停收。
   let rendererStartupLogged = false
-  // 例外：占位页移除（界面真正可见）必然发生在 did-finish-load 之后，必须放行才能记录；
-  // 但只认第一次，避免 reload 再打一遍把时间线污染成两份。
-  let splashDropLogged = false
+  // 例外：这几条的事件时刻本来就可能晚于 did-finish-load（占位页移除必然晚于它；样式/主题样式/
+  // 首页数据也可能在资源加载收尾之后才完成），必须放行才能记录，否则时间线只能看到「占位页移除」
+  // 却不知道之前卡在哪一环。每个标签只认第一次，避免 reload 再打一遍把时间线污染成两份。
+  // 「路由就绪」同样常晚于 did-finish-load：不在清单里时它会被整条丢弃，于是「路由就绪 → 首页数据就绪」
+  // 这段耗时只能靠前后两点反推，看不出路由本身等了多久。
+  const LATE_STARTUP_LABELS = [
+    '占位页移除', '路由就绪', '样式就绪', '主题样式就绪',
+    '首页数据发起', '首页数据就绪', '首页数据失败', '首屏请求汇总',
+    '握手开始', '握手完成', '握手失败',
+  ]
+  const lateStartupLogged = new Set()
   win.webContents.on('console-message', (event, level, message) => {
     const isSplashDrop = message.startsWith('[startup] 占位页移除')
-    if (rendererStartupLogged && !(isSplashDrop && !splashDropLogged)) return
+    // 去掉 '[startup] ' 前缀与尾部 '@<epoch>' 后再比对放行清单
+    const labelOfMsg = message.startsWith('[startup] ')
+      ? message.slice('[startup] '.length).replace(/ @\d{10,}$/, '')
+      : ''
+    const lateHit = LATE_STARTUP_LABELS.find((k) => labelOfMsg.startsWith(k)) || ''
+    if (rendererStartupLogged && !(lateHit && !lateStartupLogged.has(lateHit))) return
     if (message.startsWith('[startup]')) {
       // 渲染层自报时刻协议：日志尾部带「@<epoch 毫秒>」表示该行由渲染层发出，
       // 数值为事件真实发生时刻（performance.timeOrigin + performance.now()）。
@@ -391,7 +404,7 @@ function createMainWindow() {
       const selfAt = / @(\d{10,})$/.exec(message)
       const at = selfAt ? Number(selfAt[1]) : null
       const label = message.replace('[startup] ', '').replace(/ @\d{10,}$/, '')
-      if (isSplashDrop) splashDropLogged = true
+      if (lateHit) lateStartupLogged.add(lateHit)
       if (at !== null) startupTimer.markAt(label, at)
       else startupTimer.mark(label)
       // 口径统一（2026-10-31）：占位页移除 = 启动完成，日志与性能面板同一个锚点。
@@ -522,6 +535,12 @@ app.whenReady().then(() => {
     app.quit()
     return
   }
+
+  // 46 适配：DB 主密钥改走 safeStorage 的异步 API，异步加密器要等 ready 之后才可用。
+  // 这里只「发起」不 await：解密与建窗、渲染层加载并行，真正 fork（约 +89ms）时通常已解析完。
+  // 不能等 fork 时才发起 —— 那会让 startBackend 完成这个打点早于实际 fork，污染启动基线。
+  // getDbMasterKey() 内部有单飞 Promise 与失败兜底，不会 reject；重复调用只会复用同一把钥匙。
+  void getDbMasterKey()
 
   // ========== 安装后预热（--warmup）==========
   // 由安装器在装完文件之后调用一次（见 inno/setup.iss 的 [Run] 段），随后立即退出。
@@ -957,7 +976,7 @@ async function waitBackendReady(timeout = 15000) {
   const start = Date.now()
   for (;;) {
     try {
-      const res = await fetch('http://localhost:3000/api/accounts')
+      const res = await fetch('http://127.0.0.1:3000/api/accounts')
       if (res.ok) {
         const data = await res.json().catch(() => ({}))
         return Array.isArray(data.accounts) ? data.accounts : []

@@ -16,7 +16,7 @@ const fakeElectron = {
     getPath: (name) => (name === 'userData' ? path.join(os.tmpdir(), 'classnest-probe-userdata') : os.tmpdir()),
     getAppPath: () => ROOT,
   },
-  safeStorage: { isEncryptionAvailable: () => false },
+  safeStorage: { isAsyncEncryptionAvailable: async () => false, encryptStringAsync: async (s) => Buffer.from(s), decryptStringAsync: async (b) => ({ result: b.toString(), shouldReEncrypt: false }) },
   BrowserWindow: { fromWebContents: () => ({ isDestroyed: () => false }) },
   ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: () => {} },
   dialog: {

@@ -137,7 +137,7 @@ classnest/
 
 ### 2. 回环 HTTP 加密握手
 
-1. **主密钥（认证锚点）**：主进程 `getMasterKey()` 每次运行生成 32 字节随机 `SECURE_MASTER`（进程内复用；后端崩溃重启仍复用），经 fork `env` 注入后端，经 `preload` 的 `--secure-channel` 标记告知渲染层。不落盘、不进传输。
+1. **主密钥（认证锚点）**：主进程 `getMasterKey()` 每次运行生成 32 字节随机 `SECURE_MASTER`（进程内复用；后端崩溃重启仍复用），经 fork `env` 注入后端；渲染层经白名单 IPC `get-master-key` 取回，`preload` 的 `--secure-channel` 标记只用于告知「安全通道已启用」。主密钥不落盘、不进 HTTP（超文本传输协议）报文，但确实经由主进程与渲染层之间的 IPC（进程间通信）传送，这一点不要混淆。为把它移出握手关键路径，`preload.js` 在页面脚本之前（`document-start`）发起该 IPC，并把在途 `promise` 经 `window.__MASTER_KEY__.get()` 交给渲染层复用；取不到时回退现场 `invoke`，安全模型与授权表不变。2026-11-09 在裸 `fetch` 之前加的 `await waitForBackendReady(1500)`（等待后端就绪）只改请求发出时刻，不改报文、密钥来源与认证参数，安全中性；预取使主密钥变为 `window.__MASTER_KEY__` 全局可读、驻留起点提前到 `document-start`，但 `get-master-key` 本就在白名单且授权表未变，属纵深防御轻微削弱，不是新开的远程入口（前提仍是攻击者已能在渲染层执行 JS）。
 2. **握手**：前端 `POST /api/secure/handshake` 提交临时公钥 → 后端 `performHandshake` 生成 P-256 临时密钥对 → ECDH 求共享密 → `HKDF-SHA256(ikm=共享密, salt=K_master, info='campus-secure-v1', 32)` 派生会话密钥 → 返回 `{ sessionId, pub }`。
 3. **数据面**：请求体 `{ session, d }`，`d = base64(iv).base64(tag).base64(ciphertext)`；`requestDecrypt` 解密后写回 `req.body` 并记 `req.sessionId`；`responseEncrypt` 只对加密会话的 JSON 回包 `{ d: seal(...) }`。
 4. **会话**：存内存，TTL 15 分钟（`SESSION_TTL_MS`）；豁免路径 `/api/secure`、`/uploads`、`/api/background`。

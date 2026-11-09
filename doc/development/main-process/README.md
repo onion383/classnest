@@ -34,7 +34,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 
 - `main.js` 在模块加载期调用 `app.requestSingleInstanceLock()` 得到 `gotSingleInstanceLock`；`app.whenReady` 内若为 `false` 直接 `app.quit()`。
 - 监听 `app.on('second-instance')`：用户重复点击图标时，先 `tray.destroyTray()`，若主窗口存在则 `restore/show/focus`（最小化时先还原），否则调用 `createMainWindow()` 重建。
-- 注意：后端 fork 不能提前到 `ready` 之前——其 `env` 需要 `DB_MASTER_KEY`，而该值来自 `safeStorage` 解密；Windows 上 `safeStorage.isEncryptionAvailable()` 只有 `ready` 之后才为 `true`，提前调用会误走「生成随机新密钥」分支导致加密库打不开。因此 fork 放在 `whenReady` 内、建窗之后。
+- 注意：后端 fork 不能提前到 `ready` 之前——其 `env` 需要 `DB_MASTER_KEY`，而该值来自 `safeStorage` 解密；异步加密器由 `isAsyncEncryptionAvailable()` 在 `ready` 之后惰性初始化，提前调用会误走「生成随机新密钥」分支导致加密库打不开。因此 fork 放在 `whenReady` 内、建窗之后（ready 后立即发起主密钥预热，与建窗并行，fork 前只等已解析的缓存）。
 
 #### 2.2 app:// 自定义协议（不采用 file:// 的原因）
 
@@ -227,7 +227,7 @@ electron/
 - **IPC 结果必须三态互斥**：`ipcMain.handle`（Electron 请求-响应通道注册）的返回体统一走 `main.ipc-contract.js`（结果契约层）的 `ok()` / `fail()` / `canceled()`。**「用户取消」与「执行失败」必须能区分**：取消是用户的正常选择（前端安静吞掉），失败是要提示用户的错误（前端必须弹提示）。两者共用一个 `canceled:true`（取消标记）表达时，失败会被当成取消而静默 —— 这正是批 13 修掉的 B01-06。新增 handler 时用 `contract.safe()`（异常转成失败**返回值**）或 `contract.safeReject()`（保留 reject 语义但换成可读 message），二选一取决于前端现有代码是 `try/catch` 还是读返回值。
 - **`webSecurity`（网页安全策略开关）仅开发模式关闭**，生产必须开启，禁止在打包后关闭网页安全策略。
 - **主窗口系「不透明 + 系统材质」，桌面组件「渲染层自绘磨砂」**：亚克力 / 云母材质在透明窗口上会被禁用，主窗口 / 迁移窗口 / 进度窗口仍遵循 `transparent:false`（不透明窗口）+ `backgroundMaterial`（系统背景材质），浮窗（工具箱）是唯一使用 `transparent:true`（透明窗口）的窗口。桌面组件要的是稳定的「桌面被模糊」观感（`DWM`（Windows 桌面窗口管理器）材质只做壁纸亮度采样 + 强着色、观感随 build 变），改为「壁纸图 + CSS 全局模糊 + 奶白遮罩」自绘（见 [widgets.md](../widgets.md)），不依赖系统材质，挂桌面层（`WS_CHILD`（子窗口样式））时同样可用。
-- **safeStorage 时序**：`DB_MASTER_KEY`（数据库主密钥）依赖 `safeStorage`（Electron 安全存储），只能在 `app ready`（应用就绪事件）之后生成 / `fork`（派生子进程），切勿提前到模块加载期。主密钥文件 `db-master.key` 与数据库同目录存放，会随数据目录一起迁移。
+- **safeStorage 时序**：`DB_MASTER_KEY`（数据库主密钥）依赖 `safeStorage`（Electron 安全存储），只能在 `app ready`（应用就绪事件）之后生成 / `fork`（派生子进程），切勿提前到模块加载期。主密钥文件 `db-master.key` 与数据库同目录存放，会随数据目录一起迁移。Electron 45 起同步方法弃用、46 移除，现只用 `isAsyncEncryptionAvailable()` / `encryptStringAsync()` / `decryptStringAsync()`；官方保证旧 `encryptString()` 密文可被异步解密解开（已用真实 45.2.3 二进制对本机 `db-master.key` 验证），因此迁移不换钥匙、旧库照常打开。
 - **写配置必须抛错**：`config.saveAppConfig`（保存应用配置的函数）写失败会抛出，调用方（如目录搬迁）应据此中止，避免「数据在新目录、配置却指向已删除旧目录」的错位状态。
 - **主动停止后端与自动重启**：任何需要重启后端的操作（目录搬迁、缩略图目录变更、加密转换、重连）都应先 `backend.stopBackendProcess()`（停止后端子进程，其内部已摘除自动重启监听并停心跳），再 `backend.startBackend()`（启动后端子进程），避免 `fork`（派生子进程）出两个后端。
 - **迁移/加密流程的窗口数保护**：执行前先创建进度窗口再关闭其它窗口，保证窗口数不为 0，避免触发 `window-all-closed`（所有窗口关闭事件）导致应用提前退出；同时 `tray.beginCloseWithoutMenu()`（托盘放行关闭主窗口的方法）放行主窗口关闭。

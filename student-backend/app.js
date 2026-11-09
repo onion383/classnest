@@ -105,6 +105,11 @@ app.get('/api/setup/semester-prefill', (req, res) => {
 });
 app.use('/api', authRoutes);
 app.use('/api/account', accountRoutes);
+// 首屏聚合接口：登录页/首页最早的一条业务请求，必须在 listen 之前就挂好。
+// 原先它排在懒加载队列最后一个 loader，队列被拆成逐 tick 让路后，它可能在
+// 队列跑完前就到达 —— 路由不存在会直接 404，前端首屏就拿不到数据。
+// 这里只 require 一个很轻的 Router；9 个业务读函数仍在 handler 内按需 require。
+app.use('/api/dashboard', auth(['teacher']), require('./routes/dashboard'));
 app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students', {
   protectedColumns: ['学号', '姓名'],
   extraRoutes: (router) => {
@@ -195,6 +200,8 @@ app.use(express.static(path.join(__dirname, '../dist')));
 // 统一错误出口只装一次：startServer 在端口被占用时会递归重入，
 // 若每次都 app.use 会在栈里堆叠多个错误中间件（第一个处理完就结束，不会出错，但没必要）。
 let errorHandlerInstalled = false;
+// 让路链同理：重入时不能把 warmup / 20 个 loader 再排一遍（会重复 app.use）。
+let deferredStarted = false;
 
 // 端口冲突时自动重试（应用退出后旧进程可能未完全释放端口）
 function startServer(port) {
@@ -213,37 +220,51 @@ function startServer(port) {
     // 就绪信号后立即后台暖机：把「require sqlite 原生模块 + 打开 index/default 库并 initSchema」
     // 的一次性冷启动成本放到首个用户请求到达前悄悄完成，避免登录/首屏请求干等 cold start 而转圈。
     // 暖机失败静默，后续请求照常懒加载兜底，不影响功能。
-    setImmediate(() => {
+    // 这里只**定义**步骤、不排队：下面统一由 runStep 串成一条每次只跑一步的链，
+    // 每步之间事件循环能回到 poll 阶段处理网络请求（见文件末尾「让路链」说明）。
+    const warmupStep = () => {
       // warmup 会加载 sqlite 原生模块、打开加密库并 initSchema —— 它不阻塞「就绪」信号，
       // 却直接决定第一个请求能不能立刻返回，也就是首屏数据什么时候到，因此单独计时。
       const _warmT0 = Date.now();
       try { dbManager.warmup(); } catch (_) { /* 暖机失败不影响正常懒加载路径 */ }
       try { console.log(`[boot] +${Date.now() - _bootT0}ms 数据库 warmup 完成（本段 ${Date.now() - _warmT0}ms）`); } catch (_) { /* 忽略 */ }
-    });
+    };
 
     // 非关键路由懒加载：服务器就绪后再逐个注册，不阻塞就绪信号。
-    // 每个路由的 require() 在 setImmediate 回调中执行，分散到不同事件循环 tick，
-    // 避免启动时加载大量 JS 文件与 .node 原生模块（如 album 的 sharp、ai 的 pdf-parse 等）。
-    // 用户登录后导航到对应页面时，路由早已注册完毕，无感知。
+    // 原先这里用 for 循环把 20 个 loader 一次性塞进 setImmediate 队列 —— Node 会在
+    // **同一轮 check 阶段把整个队列清空**，于是连续同步执行约 100~160ms，期间到达的
+    // HTTP 请求连 accept 都进不去（实测启动期 OPTIONS 预检等了整整一个队列）。
+    // 现在改成「一次只跑一步、跑完再排下一步」的让路链：每步之间事件循环会经过
+    // poll 阶段，握手这类不依赖路由模块的请求可以立刻被处理，不必陪着 require 干等。
+    // 大量 JS 与 .node 原生模块（album 的 sharp、ai 的 pdf-parse 等）总量不变，
+    // 只是不再独占事件循环；路由仍会在用户登录后导航过去之前注册完毕。
     const deferredLoaders = [
+      // ---- 首屏关键路径：/api/dashboard 的 7 个读函数会 require 这些模块 ----
+      // 让路链按数组顺序逐步执行，排前面 = 首屏请求到达时它们已加载完。
+      // 分 tick 让路后首屏可能提前到达；若模块还没轮到，dashboard 的 handler
+      // 会自己同步 require（功能不坏，但那笔成本就落进首屏等待里）。
+      // 所以把首屏依赖集中在链首，把完全用不到的重模块挤到链尾。
       () => { app.use('/api/schedule', auth(['teacher']), require('./routes/schedule')); },
-      () => { app.use('/api/seats', auth(['teacher']), require('./routes/seats')); },
       () => { app.use('/api/leaves', auth(['teacher']), require('./routes/leaves')); },
       () => { app.use('/api/album', auth(['teacher']), require('./routes/album')); },
-      () => { app.use('/api/group-manage', auth(['teacher']), require('./routes/groupManage')); },
       () => { app.use('/api/scores', auth(['teacher']), require('./routes/scores')); },
       () => { app.use('/api/duty', auth(['teacher']), require('./routes/duty')); },
+      () => { app.use('/api/activities', auth(['teacher']), require('./routes/activities')); },
+      () => { app.use('/api/countdowns', auth(['teacher']), require('./routes/countdowns')); },
+      // ---- 首屏不需要：用户导航到对应页面之前注册完即可 ----
+      () => { app.use('/api/seats', auth(['teacher']), require('./routes/seats')); },
+      () => { app.use('/api/group-manage', auth(['teacher']), require('./routes/groupManage')); },
       () => { app.use('/api/widget-settings', auth(['teacher']), require('./routes/widgetSettings')); },
       () => { app.use('/api/undo', auth(['teacher']), require('./routes/undo/undo')); },
       () => { app.use('/api/search', auth(['teacher']), require('./routes/search')); },
-      () => { app.use('/api/activities', auth(['teacher']), require('./routes/activities')); },
-      () => { app.use('/api/countdowns', auth(['teacher']), require('./routes/countdowns')); },
       () => { app.use('/api/cadres', auth(['teacher']), require('./routes/cadres')); },
       // 数据管理：设置页的「表清单 / 取表数据 / 打 zip」，只读业务表，无写路径
       () => { app.use('/api/data', auth(['teacher']), require('./routes/dataExport')); },
       () => { app.use('/api/ai', auth(['teacher']), require('./routes/ai/ai')); },
-      // 首屏聚合接口：把首页 9 个接口合并为 1 次请求（依赖上面各路由已注册，故放最后）
-      () => { app.use('/api/dashboard', auth(['teacher']), require('./routes/dashboard')); },
+      // 首屏聚合接口已提前到 listen 之前注册（见「关键路由」区），不再排进让路链：
+      // 让路链下它可能在其余 loader 跑完之前就收到请求，路由必须先存在，否则 404。
+      // 它的 9 个读函数在 handler 内 require，模块尚未加载时会自行同步加载，
+      // Node 模块缓存保证不会和链里的 require 重复加载。
       // fee-records 含 multer（文件上传处理），一起延迟加载
       () => {
         const multer = require('multer');
@@ -321,22 +342,30 @@ function startServer(port) {
       },
     ];
 
-    // 逐个注册，每个 defer 到下一个事件循环 tick
-    for (const loader of deferredLoaders) {
-      setImmediate(loader);
-    }
+    // 逐个注册 —— 改为「让路链」，统一在下方（所有步骤定义完之后）启动。
+    // ⚠️ 旧写法是 for 循环一次性把 20 个 loader 全塞进 setImmediate 队列：
+    // Node 会在**同一轮 check 阶段把整个队列清空**，这些 require 紧挨着连续跑完，
+    // 期间到达的网络请求要排队等到队列结束（首个请求往往就是其中之一）。
+    // 新写法每次只排一个回调、在回调里再排下一个：check 阶段只清空「进入该阶段时」
+    // 的 immediate 队列，回调内部新排的会留到下一轮，于是链跨越多个事件循环迭代，
+    // 中间必经 poll 阶段，网络请求有机会被 accept / 处理。
+    // ⚠️ 代价：链运行期间部分路由尚未注册。启动期只有 handshake / dashboard 会被访问，
+    // 两者都已在 listen 之前挂好；其余路由在用户登录后导航过去之前早已注册完毕。
+    // 队列总耗时仍由下方「懒加载路由全部注册完成」打点记录，输出格式与口径不变。
 
     // 统一错误出口。**必须是最后一个注册的中间件** —— Express 按注册顺序匹配，
     // 错误中间件只能接住「在它之后注册」的路由抛出的错误。
-    // 这里同样用 setImmediate 排进上面那个队列：FIFO 保证它在全部路由之后执行；
-    // 而 Node 事件循环里 check 阶段（setImmediate）早于 poll 阶段（网络 I/O），
-    // 所以它还赶在第一个请求到达之前装好，不存在「先来的请求没有兜底」的窗口。
+    // 现在它作为让路链的最后一步之一执行：链跑完时全部路由已注册，顺序约束仍成立。
+    // 链中途到达的请求若命中已注册路由并抛错，会落到 Express 默认错误处理器（500）；
+    // 启动期只会访问 handshake / dashboard，前者自带 try/catch，后者每个读函数都有 safe() 兜底，
+    // 所以不存在「先来的请求没有兜底」的实际窗口。
     //
     // 有了它，路由里不再需要
     //    ... 
     // 这种样板：Express 5 会自动捕获 async handler 的 rejected promise，
     // 同步 throw 本来就会被捕获，两者最终都落到这里。
-    setImmediate(() => {
+    // 这里也只**定义**步骤，由下方 runStep 排进让路链。
+    const errorHandlerStep = () => {
       if (errorHandlerInstalled) return;
       errorHandlerInstalled = true;
       app.use((err, req, res, next) => {
@@ -351,7 +380,32 @@ function startServer(port) {
         // 若将来要避免 SQL 语句 / 文件路径外露，只需改这一行。
         res.status(status).json({ error: (err && err.message) || '服务器内部错误' });
       });
-    });
+    };
+
+    // 队列完成打点：排在链的最后一环，执行时「懒加载路由已全部注册、兜底已装好」。
+    // 输出格式与旧版完全一致；「队列 Xms」仍从第一个 loader 起算（不含 warmup）。
+    // 旧口径下它≈首个请求最早能被完整处理的时刻；现在请求可以提前插队，
+    // 这个数字只表示「后台 require 链自己跑完要多久」，不再是请求的等待上限。
+    const finishStep = () => {
+      try { console.log(`[boot] +${Date.now() - _bootT0}ms 懒加载路由全部注册完成（队列 ${Date.now() - _deferT0}ms）`); } catch (_) { /* 忽略 */ }
+    };
+
+    // ===== 让路链启动 =====
+    // 端口冲突时 startServer 会递归重入，这里保证链只排一次（否则路由会被重复 app.use）。
+    if (deferredStarted) return;
+    deferredStarted = true;
+    const steps = [warmupStep, ...deferredLoaders, errorHandlerStep, finishStep];
+    let stepIdx = 0;
+    let _deferT0 = 0;
+    const runStep = () => {
+      // 旧口径：_deferT0 记在「deferredLoaders 全部入队」那一刻，不含 warmup。
+      // 链里第 0 步是 warmup，第 1 步起才是 loader，故在跑第 1 步前记时。
+      if (stepIdx === 1) _deferT0 = Date.now();
+      const step = steps[stepIdx++];
+      try { step(); } catch (err) { console.error('[defer] 让路链某步失败:', err); }
+      if (stepIdx < steps.length) setImmediate(runStep);
+    };
+    setImmediate(runStep);
   });
 
   server.on('error', (err) => {

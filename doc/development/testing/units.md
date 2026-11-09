@@ -84,6 +84,7 @@ classnest/
 | [`updateIntegrity.test.js`](../../../testjs/units/updateIntegrity.test.js) | 更新下载校验：https 强制、大小与 sha256 核对、缺 digest 时降级为仅大小 | 纯函数 |
 | [`main-ipc-contract.test.js`](../../../testjs/units/main-ipc-contract.test.js) | 主进程 IPC 契约的**行为**断言：① `ok`/`fail`/`canceled` 三态互斥且带可读 message；② `safe()` 把异常转成失败**返回值**、`safeReject()` 保留 reject 语义；③ `save-file` 真写盘失败（指向不存在的目录触发 ENOENT）必须回 `fail` 而不是伪装成取消；④ 选区会话残留时「先还原再重新开始」、看门狗常量存在且被调用；⑤ `normalizeAssetFileName` 挡住 `'.'` / `'..'` / 含分隔符的名字，且归一化后仍落在缓存目录内；⑥ 导航等待在窗口销毁 / 超时两条路都会收尾；⑦ 鼠标穿透态挂在窗口实例上；⑧ 前端 `saveFile.js` 对「失败」抛错、对「取消」返回空串 | 用 `require.cache` 注入假 electron，**直接 require 真实模块**（不复现逻辑），前端部分走 ESM 动态 `import()` |
 | [`disposables.test.js`](../../../testjs/units/disposables.test.js) | 「资源随作用域释放」底座语义：登记的定时器/周期器在 `dispose()` 后不再触发、`listen` 与 `removeEventListener` 严格配对（capture 选项原样传回）、`defer` 是可替换的防抖语义（连排三次只触发一次）、`dispose` 幂等且单个清理函数抛错不连累其它资源、作用域停止后定时器确实不再触发（用 Vue `effectScope` 模拟组件卸载） | 前端是 ESM，用 `pathToFileURL` + 动态 `import()` |
+| [`db-master-key.test.js`](../../../testjs/units/db-master-key.test.js) | **数据库主密钥 safeStorage 异步化（Electron 46 适配）的行为回归**：①只用异步 API（替身故意不提供同步方法，退回同步必挂）；②并发取钥匙靠单飞 Promise 只解析一次 —— 异步化后若两处 fork 各生成一把新钥匙，后者写回文件会让旧加密库再也打不开；③旧密文二次加载必须复用同一把钥匙；④ `shouldReEncrypt` 时明文不变、先备份再用新密文写回；⑤解密失败时备份成功才重新生成，备份失败绝不覆盖原密文；⑥异步解密返回空结果当失败处理，不许拿空密钥去起后端；⑦静态对账 fork 两条分支都用预取的 `dbKey`、入口有 ready 后预热 | `require.cache` 注入假 electron + 真跑 `electron/main/main.config.js`（不复现逻辑）；每个用例独立 userData 临时目录并在 `after` 清理；变异验证（可用性检查改回同步 API）会让 6 条用例变红；8 条用例 |
 
 新增：在 `units/` 建 `*.test.js`，用 `node:test` 的 `test()` 编写，无需改配置。
 

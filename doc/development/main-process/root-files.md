@@ -34,7 +34,7 @@ classnest/
 
 | 文件 | 职责 | 关键导出 / IPC 通道 | 依赖与被依赖 |
 | --- | --- | --- | --- |
-| [`preload.js`](../../../electron/preload.js) | 预加载脚本。用 `contextBridge` 暴露 `window.electron`（`send/on/off/once/invoke`）与 `window.__SECURE_CHANNEL__`，通过白名单约束收发通道 | `window.electron`、`window.__SECURE_CHANNEL__`；白名单：`validSendChannels`、`validInvokeChannels`、`validReceiveChannels` | 依赖 electron(contextBridge/ipcRenderer)；被各窗口 `webPreferences.preload` 引用 |
+| [`preload.js`](../../../electron/preload.js) | 预加载脚本。用 `contextBridge` 暴露 `window.electron`（`send/on/off/once/invoke`）与 `window.__SECURE_CHANNEL__`，通过白名单约束收发通道；另在页面脚本之前（`document-start`）发起 `get-master-key`，把在途 `promise` 经 `window.__MASTER_KEY__.get()` 交给渲染层握手复用 | `window.electron`、`window.__SECURE_CHANNEL__`、`window.__MASTER_KEY__`；白名单：`validSendChannels`、`validInvokeChannels`、`validReceiveChannels` | 依赖 electron(contextBridge/ipcRenderer)；被各窗口 `webPreferences.preload` 引用 |
 | [`ipc-channels.json`](../../../electron/ipc-channels.json) | IPC 通道名单单一来源：`send` / `invoke` / `receive` 三组通道名，打包时经 `additionalArguments` 注入渲染进程 | 无模块导出（JSON 数据） | 被 `preload.js` 读取校验；新增通道必须同步这里 |
 | [`ipc-policy.json`](../../../electron/ipc-policy.json) | IPC 授权表单一来源：通道 → 允许的窗口角色（`main`/`widget`/`desktop-widget`/`setup`/`migration`），由 `testjs/probe/ipc-policy-gen.mjs` 从渲染层静态 import 图推导 | 无模块导出（JSON 数据，**生成物**，勿手改） | 被 `main.ipc-auth.js` 读取；主进程据此裁剪 preload 白名单并做运行时校验 |
 | [`startup.html`](../../../electron/startup.html) | 打包模式下引导窗口的静态占位页（纯内联 HTML/CSS，展示「班集 启动中…」，不依赖 JS，保证「秒出画面」） | 无 | 被 `main.js` 的 `createSetupWindow` 经 `app://local/setup.html` 使用（同源占位） |

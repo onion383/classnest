@@ -123,7 +123,7 @@ flowchart LR
 
 ## 注意事项
 
-- 不要提前于 `app ready`（Electron 应用就绪事件）读取 `DB_MASTER_KEY`（数据库主密钥）：`safeStorage`（Electron 安全存储）在 Windows 上就绪后才可用，否则会误生成随机新密钥，导致旧库打不开。
+- 不要提前于 `app ready`（Electron 应用就绪事件）读取 `DB_MASTER_KEY`（数据库主密钥）：`safeStorage`（Electron 安全存储）的异步加密器在就绪后才初始化，否则会误生成随机新密钥，导致旧库打不开。主进程侧现统一走 `isAsyncEncryptionAvailable()` / `encryptStringAsync()` / `decryptStringAsync()`（同步版 46 移除），并用单飞 Promise 保证并发只解析一次；旧 `encryptString()` 密文可被异步解密解开，升级不换钥匙。
 - 改库密钥 / 目录前先 `backend.stopBackendProcess()`（停止后端子进程），等进程真正退出再操作（Windows 上文件句柄释放有延迟）。
 - 新增列必须同时更新 `initSchema`（建表 / 补列的初始化函数）与相关路由的 `INSERT`（写库语句）/ `UNDO`（撤销载荷），否则移动、撤销会丢字段（如相册的 `exif_date`（拍摄时间）/ `date_src`（时间来源））。
 

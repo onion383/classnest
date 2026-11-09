@@ -216,7 +216,7 @@ function registerDialogsIpc(opts = {}) {
       if (isDev) {
         imageUrl = `/api/background/${fileName}`
       } else {
-        imageUrl = `http://localhost:3000/api/background/${fileName}`
+        imageUrl = `http://127.0.0.1:3000/api/background/${fileName}`
       }
       return contract.ok({ url: imageUrl, fileName })
     } catch (err) {

@@ -386,18 +386,42 @@ if (splashEl) {
   //   true  = 只在首页(Dashboard)做骨架屏。占位页不再等首页数据，首次导航一就绪即移除，
   //           「数据还在路上」这段等待改由首页自身的骨架屏承接；其余页面照常直接渲染。
   //   false = 旧方案：占位页一直等到首页 9 个接口返回后才移除（整窗被多挡一段接口往返）。当前取 false。
-  // 回退方式：把常量改回 true 即可（新分支代码原样保留）。
+  // 启用新方案：把常量改成 true；要回退则改回 false（两套分支代码原样保留，不用改动别处）。
   const HOME_SKELETON_ONLY = false
+
+  // 启动归因打点：占位页依赖的三条路各自何时完成。
+  // 只解决「不知道卡在哪一环」——以前时间线上只有「Vue 挂载」和「占位页移除」两个点，
+  // 中间那几百毫秒无法归因（是等样式、等主题 CSS，还是等首页数据）。
+  // 输出格式与其它启动日志一致（尾部 @<epoch> 供主进程按真实发生时刻打点）；
+  // 这几条会被主进程的 LATE_STARTUP_LABELS 放行，因此即便晚于 did-finish-load 也能记录。
+  const splashMark = (name) => {
+    try {
+      console.log(`[startup] ${name} @${Math.round(performance.timeOrigin + performance.now())}`)
+    } catch (_) { /* 打点失败绝不能影响启动 */ }
+  }
 
   // 首屏内容就绪 = 首次导航完成 + 样式已应用 + （旧方案下，落地业务首页时）首页数据已到。
   // 新方案只等路由与样式：首页数据不再阻塞占位移除，未到的部分由 DashboardView 骨架屏先顶上，
   // 避免占位页长时间挡在整窗前。ensureDashboardData 各请求均有 .catch() 兜底，不会永久卡住。
   const whenSplashReady = router.isReady().catch(() => {}).then(() => {
+    splashMark('路由就绪')
     const onHome = router.currentRoute.value.path === '/' && getToken()
-    const dataReady = (onHome && !HOME_SKELETON_ONLY)
-      ? Promise.race([ensureDashboardData().catch(() => {}), new Promise((r) => setTimeout(r, 2000))])
+    const waitData = onHome && !HOME_SKELETON_ONLY
+    // 打点包在两条路上：成功/失败都记，避免「数据没回来」被误读成「没等数据」
+    const dataTask = waitData
+      ? ensureDashboardData().then(
+          () => splashMark('首页数据就绪'),
+          () => splashMark('首页数据失败'),
+        )
       : Promise.resolve()
-    return Promise.all([whenStylesReady(), dataReady, themeStylesReady])
+    const dataReady = waitData
+      ? Promise.race([dataTask, new Promise((r) => setTimeout(r, 2000))])
+      : Promise.resolve()
+    return Promise.all([
+      whenStylesReady().then(() => splashMark('样式就绪')),
+      dataReady,
+      themeStylesReady.then(() => splashMark('主题样式就绪')),
+    ])
   })
 
   whenSplashReady.then(() => { splashReady = true; dropSplash() })

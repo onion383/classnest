@@ -19,8 +19,10 @@
 // --vdom 同理翻译成 VUE_VAPOR=0，只在与 --vue36 同用时有效。
 // 其余参数（含 build 子命令）原样透传。
 //
-// 注意：cwd 必须是 student-frontend —— vite.config.js 用 import.meta.dirname 解析
-// splash/ 与 dist/ 路径，换 cwd 会解析错。
+// 调用位置随意：从仓库根要写全路径 node student-frontend/dev-vite.js build；
+// cd 进 student-frontend 后写 node dev-vite.js build 与之等价。
+// 本启动器已把子进程 cwd 固定为脚本所在目录（见下方 cwd: dir），
+// 且 vite.config.js 用 import.meta.dirname 解析 splash/ 与 dist/，与调用方 cwd 无关。
 // =========================================================================
 import path from 'node:path'
 import { spawn } from 'node:child_process'

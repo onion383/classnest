@@ -36,7 +36,7 @@
 | `pinia` | 4.1.0 | MIT | Copyright (c) 2019-present Eduardo San Martin Morote |
 | `pinyin-match` | 1.2.10 | MIT | Copyright (c) 2020 All contributors to pinyin-match |
 | `sortablejs` | 1.15.7 | MIT | Copyright (c) 2019 All contributors to Sortable |
-| `vue` | 3.5.44 | MIT | Copyright (c) 2018-present, Yuxi (Evan) You |
+| `vue` | 3.5.45 | MIT | Copyright (c) 2018-present, Yuxi (Evan) You |
 | `vue-router` | 5.4.0 | MIT | Copyright (c) 2019-present Eduardo San Martin Morote |
 | `xlsx` | 0.20.3 | Apache-2.0 | SheetJS Community Edition；版权归 SheetJS LLC |
 | `vite` | 8.3.4 | MIT | 版权归 Vite contributors |
@@ -67,7 +67,7 @@
 | --- | --- | --- | --- |
 | `koffi` | 3.3.3 | MIT | Copyright (C) 2026 Niels Martignène |
 | `ui-ux-pro-max-cli` | 2.15.0 | MIT（`package.json` 声明） | 包内未附 LICENSE 文件 |
-| `electron` | 44.9.3 | MIT | Copyright (c) Electron contributors |
+| `electron` | 45.2.3 | MIT | Copyright (c) Electron contributors |
 | `electron-builder` | 26.17.0 | MIT | Copyright (c) 2015 Loopline Systems |
 | `@electron/rebuild` | 4.2.1 | MIT | Copyright (c) Contributors to the Electron project |
 | `concurrently` | 10.0.6 | MIT | Copyright (c) 2015 Kimmo Brunfeldt |

@@ -55,7 +55,7 @@
 | 资源 | 位置 | 许可证 | 说明 |
 | --- | --- | --- | --- |
 | FFmpeg（LGPL 版） | [`resources/ffmpeg/`](../../../resources/ffmpeg/) | LGPL-2.1 | 视频封面抓帧；`COPYING.LGPLv2.1` 随目录 |
-| Noto Sans SC | [`student-frontend/public/NotoSansSC-6.ttf(.gz)`](../../../student-frontend/public/) | SIL OFL 1.1 | PDF 中文嵌入；仓库未单独收录 OFL 全文，见 [licenses.md](./licenses.md) |
+| Noto Sans SC | [`student-frontend/public/NotoSansSC-6.ttf(.gz)`](../../../student-frontend/public/) | SIL OFL 1.1 | PDF 中文嵌入；OFL 全文见 [`licenses/SIL-OFL-1.1.txt`](./licenses/SIL-OFL-1.1.txt) |
 | 安装器素材 | [`electron/installer-assets/`](../../../electron/installer-assets/) | 自有 | 图标、协议文本、背景图 |
 | 第三方许可声明 | 安装包内 `third-party-licenses.zip` | Chromium 各组件的许可 | 由 `afterPack.js` 压缩原 `LICENSES.chromium.html` |
 

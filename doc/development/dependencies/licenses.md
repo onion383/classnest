@@ -15,7 +15,7 @@
 | BSD-2-Clause | [`licenses/BSD-2-Clause.txt`](./licenses/BSD-2-Clause.txt) | `student-backend/node_modules/mammoth/LICENSE` |
 | BSD-3-Clause | [`licenses/BSD-3-Clause.txt`](./licenses/BSD-3-Clause.txt) | `student-backend/node_modules/bcryptjs/LICENSE` |
 | LGPL-2.1 | [`licenses/LGPL-2.1.txt`](./licenses/LGPL-2.1.txt) | `resources/ffmpeg/COPYING.LGPLv2.1` |
-| SIL OFL 1.1 | 仓库未收录全文 | 见第 4 节 |
+| SIL OFL 1.1 | [`licenses/SIL-OFL-1.1.txt`](./licenses/SIL-OFL-1.1.txt) | SIL 官网 [`OFL.txt`](https://openfontlicense.org/documents/OFL.txt)；仅取许可证正文，去掉前面的示例占位版权头 |
 
 ---
 
@@ -77,7 +77,7 @@
 | `eslint-plugin-vue` | 10.11.1 | MIT | Copyright (c) 2017 Toru Nagashima |
 | `globals` | 17.13.0 | MIT | Copyright (c) Sindre Sorhus |
 | FFmpeg | LGPL 版 | LGPL-2.1 | 全文在 [`licenses/LGPL-2.1.txt`](./licenses/LGPL-2.1.txt)（源 `resources/ffmpeg/COPYING.LGPLv2.1`） |
-| Noto Sans SC | — | SIL OFL 1.1 | 仓库未收录 OFL 全文；官方原文 <https://openfontlicense.org/open-font-license-official-text/>。分发字体时须随附该许可与版权声明，不得单独以字体名售卖 |
+| Noto Sans SC | — | SIL OFL 1.1 | 全文在 [`licenses/SIL-OFL-1.1.txt`](./licenses/SIL-OFL-1.1.txt)（源 SIL 官网 `OFL.txt`）。分发字体时须随附该许可与版权声明，不得单独以字体名售卖 |
 | Chromium / Electron 组件 | 随 Electron 版本 | 各自许可 | 安装包内 `third-party-licenses.zip`（由 `electron/afterPack.js` 在打包后压缩 `LICENSES.chromium.html` 生成） |
 
 ### 4. MPL-2.0 说明（DOMPurify）
@@ -91,6 +91,7 @@
 
 - 升级依赖后重跑本文件的核对：`package.json` 的 `license` 字段 + 包内 `LICENSE` 首条 Copyright。
 - 新增 Apache-2.0 / LGPL / OFL 类依赖时，确认随包分发许可文本，不允许删除 `third-party-licenses.zip`。
-- 许可证全文只从包内文件复制，不手写、不删改。
+- 许可证全文只从包内文件或官方原文页复制，不手写、不删改。
+- Noto Sans SC 以子集 `.ttf(.gz)` 随包、包内没有 LICENSE，故 OFL 全文取自 SIL 官网提供的 `OFL.txt`；仅收录许可证正文，前面的示例占位版权头不属于条款，不随附。
 
 ---

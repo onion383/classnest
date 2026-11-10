@@ -18,11 +18,46 @@ function readGridArray(table, column) {
 // 整体覆盖网格某列：原样 JSON 序列化。
 // 座位/课表是二维数组，值日表是 {项目:{星期:[人名]}} 对象，统一原样存储，不做强转。
 function writeGridArray(table, column, value) {
+  // 座位整块快照可以带几何：{ seats, types }。
+  // 只写 seats 的话，撤销「设置空位」只会把人搬回去、洞还留着 —— 人和洞的位置当场错位。
+  // 老记录（直接存数组）继续走下面的原样写入，不必迁移历史撤销记录。
+  if (column === 'seats' && value && typeof value === 'object' && !Array.isArray(value)) {
+    const patch = { seats: JSON.stringify(Array.isArray(value.seats) ? value.seats : []) }
+    if (Array.isArray(value.types)) patch.types = JSON.stringify(value.types)
+    if (store.isDoc(table)) {
+      store.setDoc(table, patch)
+      return
+    }
+    const keys = Object.keys(patch)
+    db.prepare(`UPDATE "${table}" SET ${keys.map((k) => `"${k}" = ?`).join(', ')} WHERE id = 1`)
+      .run(...keys.map((k) => patch[k]))
+    return
+  }
   if (store.isDoc(table)) {
     store.setDoc(table, { [column]: JSON.stringify(value) })
     return
   }
   db.prepare(`UPDATE "${table}" SET "${column}" = ? WHERE id = 1`).run(JSON.stringify(value))
+}
+// 座位表的**行数/列数**随整块快照一起回写（插入/删除走廊行、走廊列都会改变 rows/cols）。
+// 为什么必须成对写：types 的行数/列数就是几何，读库按 rows/cols 去裁它 ——
+// 只回写 types（少一行/一列）而 rows/cols 还是多的，会走到 routes/seats.js 的
+// gridShapeMismatch 分支：越界那行被补成「座位」或整块降级成 []，
+// 走廊位置对不上，下次启动的一次性迁移还会把矩阵再展开一遍。
+// 表名走白名单，不接收调用方的任意字符串；列名是写死的两条语句（不拼 SQL）。
+const GEOMETRY_COUNT_TABLES = new Set(['seat_layout', 'seat_template'])
+function writeGeometryCounts(table, rows, cols) {
+  if (!GEOMETRY_COUNT_TABLES.has(table)) return
+  const patch = {}
+  if (Number.isInteger(rows)) patch.rows = rows
+  if (Number.isInteger(cols)) patch.cols = cols
+  if (!Object.keys(patch).length) return
+  if (store.isDoc(table)) {
+    store.setDoc(table, patch)
+    return
+  }
+  if (Number.isInteger(rows)) db.prepare(`UPDATE "${table}" SET rows = ? WHERE id = 1`).run(rows)
+  if (Number.isInteger(cols)) db.prepare(`UPDATE "${table}" SET cols = ? WHERE id = 1`).run(cols)
 }
 // 单元格展示文案：value 可能是纯值（座位 id/姓名、人名），也可能是课表 {course} 对象，
 // 统一取可读文本；null/undefined 视为「空」。
@@ -112,6 +147,7 @@ function applyGroupSnapshot(dimId, groups) {
 module.exports = {
   readGridArray,
   writeGridArray,
+  writeGeometryCounts,
   cellText,
   tableCols,
   rowKeys,

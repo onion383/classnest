@@ -64,12 +64,15 @@
             <th
               v-for="(col, colIdx) in displayHeaders"
               :key="colIdx"
-              :class="['bg-primary text-text-inverse border border-border px-2 py-1 text-center', col !== '走廊' ? 'cursor-pointer' : 'cursor-default bg-text-muted', { 'dt-col-src-hidden': colDragIdx === colIdx }, colIdx === todayColIdx ? 'grid-col-today' : '']"
+              :class="['bg-primary text-text-inverse border border-border px-2 py-1 text-center', col !== '走廊' ? 'cursor-pointer' : 'cursor-default bg-text-muted', { 'dt-col-src-hidden': colDragIdx === colIdx }, colIdx === todayColIdx ? 'grid-col-today' : '', colLabelMenu ? 'cursor-context-menu' : '']"
               :style="col === '走廊' ? 'width: 60px;' : ''"
+              @contextmenu="onColLabelContextMenu($event, colIdx)"
             >
               <div v-if="col !== '走廊'" class="grid-col-head">
                 <div class="flex items-center justify-center gap-1">
-                  <span class="drag-handle cursor-grab text-text-inverse/70 hover:text-text-inverse" title="按住拖动列" @mousedown.prevent.stop="onColHandleDown($event, colIdx)" @contextmenu.stop.prevent>⠿</span>
+                  <!-- 画笔模式下只做 invisible（保留宽度），不能用 v-if 摘掉：
+                       手柄占了约 18px，一摘所有列头变窄 → 整张表列宽重排，进画笔就像换了一张表。 -->
+                  <span :class="['drag-handle cursor-grab text-text-inverse/70 hover:text-text-inverse', paintMode ? 'invisible' : '']" title="按住拖动列" @mousedown.prevent.stop="onColHandleDown($event, colIdx)" @contextmenu.stop.prevent>⠿</span>
                   <span class="grid-col-label">{{ col }}</span>
                 </div>
                 <!--
@@ -132,7 +135,7 @@
                 </td>
 
                 <!-- 行号列（绿色背景；首子行跨行合并居中显示分组名，可拖拽排序） -->
-                <td v-if="hideMetaColumns && showRowNumber && row._rowHeaderRowSpan !== 0" class="bg-primary text-text-inverse border border-border text-center text-sm font-bold align-middle" style="width: 110px; vertical-align: middle;" :rowspan="row._rowHeaderRowSpan > 0 ? row._rowHeaderRowSpan : undefined">
+                <td v-if="hideMetaColumns && showRowNumber && row._rowHeaderRowSpan !== 0" class="bg-primary text-text-inverse border border-border text-center text-sm font-bold align-middle" :class="rowLabelMenu ? 'cursor-context-menu' : ''" style="width: 110px; vertical-align: middle;" :rowspan="row._rowHeaderRowSpan > 0 ? row._rowHeaderRowSpan : undefined" @contextmenu="onRowLabelContextMenu($event, rowIdx, row)">
                   <div class="flex items-center justify-center gap-1">
                     <span v-if="!disableRowDrag && row._rowHeaderRowSpan !== 0 && canDragRow(row)" class="drag-handle select-none text-text-inverse/70"
                     :class="rowDragLocked ? 'cursor-not-allowed' : 'cursor-grab hover:text-text-inverse'"
@@ -146,17 +149,28 @@
 
                 <!-- 数据单元格 -->
                 <template v-for="(cell, colIdx) in row.cells" :key="colIdx">
-                  <!-- 走廊单元格也要登记 ref：列让位时它需要跟着一起平移来填补空白
-                       （列宽不等时，只把邻列挪进「固定槽位」会在槽尾留一条空隙）。 -->
-                  <td v-if="cell._isAisle && cell._aisleRowSpan" :rowspan="cell._aisleRowSpan" :data-col-idx="colIdx" :ref="el => setCellRef(rowIdx, colIdx, el)" class="border border-border bg-text-muted text-center align-middle" style="width: 60px; vertical-align: middle; font-size: 1.125rem; line-height: 1.2;">
-                     <div style="writing-mode: vertical-lr; text-orientation: upright; display: inline-block;">走廊</div></td>
+                  <!-- 走廊单元格（两种合并形态，都登记 ref 供列让位平移）：
+                       · _aisleRowSpan > 0 —— 竖走廊（整列），首行跨多行、文字竖排；
+                       · _aisleColSpan > 0 —— 横走廊（整行），一格跨全部列、文字横排居中。
+                       横走廊那格**不登记** ref/data-col-idx：它跨列，参与单列让位平移没有意义；
+                       列让位各处都写了 `if (!refs) continue`，缺这一格是安全的。
+
+                       **走廊格刻意不画边框（无 border 类）**：走廊与走廊相邻处不能有线，
+                       横竖走廊相交才是一整块灰区（画了边框就在交叉处留一条线）。
+                       走廊块与座位/空位/行标签的边界，由**对方那一格**的 border 提供，
+                       外沿由表格外层容器的 1px 边框兜住 —— 所以不会缺轮廓。
+                       要给走廊块加轮廓，请改外层容器，别把 border 加回这里。 -->
+                  <td v-if="cell._isAisle && (cell._aisleRowSpan > 0 || cell._aisleColSpan > 0)" :rowspan="cell._aisleRowSpan > 0 ? cell._aisleRowSpan : undefined" :colspan="cell._aisleColSpan > 0 ? cell._aisleColSpan : undefined" :data-col-idx="cell._aisleColSpan > 0 ? undefined : colIdx" :ref="cell._aisleColSpan > 0 ? null : (el => setCellRef(rowIdx, colIdx, el))" class="grid-aisle-cell bg-text-muted text-center align-middle" :class="paintMode ? 'cursor-not-allowed' : ''" :style="cell._aisleColSpan > 0 ? { height: '40px', minHeight: '40px', verticalAlign: 'middle' } : { width: '60px', verticalAlign: 'middle', fontSize: '1.125rem', lineHeight: '1.2' }">
+                     <div :style="cell._aisleColSpan > 0
+                       ? 'display: inline-block; letter-spacing: 0.5em; text-indent: 0.5em; font-size: 1rem;'
+                       : 'writing-mode: vertical-lr; text-orientation: upright; display: inline-block;'">走廊</div></td>
                   <td v-else-if="cell._isAisleHidden" style="display: none;"></td>
                   <td
                     v-else
                     :data-row-id="anchorPrefix && row._lessonIdx != null ? anchorPrefix + ':' + row._lessonIdx + ':' + colIdx : undefined"
                     data-data-cell
                     :ref="el => setCellRef(rowIdx, colIdx, el)"
-                    :class="['border border-border px-2 py-2 text-center transition-colors relative', colDragIdx === colIdx ? 'dt-col-src-hidden' : '', colIdx === todayColIdx ? 'grid-cell-today' : '', isDragTarget(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isCellSelected(rowIdx, colIdx) && !isEditing(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isEditing(rowIdx, colIdx) ? 'ring-2 ring-info ring-inset' : '', row._isReadonly ? '' : 'cursor-pointer', cell._bg != null ? 'cell-heat' : '', isEditing(rowIdx, colIdx) ? 'cell-editing' : '']"
+                    :class="['border border-border px-2 py-2 text-center transition-colors relative', colDragIdx === colIdx ? 'dt-col-src-hidden' : '', colIdx === todayColIdx ? 'grid-cell-today' : '', !paintMode && isDragTarget(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', !paintMode && isCellSelected(rowIdx, colIdx) && !isEditing(rowIdx, colIdx) ? 'bg-info/10 outline outline-2 outline-info' : '', isEditing(rowIdx, colIdx) ? 'ring-2 ring-info ring-inset' : '', paintMode ? 'cursor-crosshair' : cell._blank ? 'cursor-not-allowed' : (row._isReadonly ? '' : 'cursor-pointer'), cell._blank ? 'cell-hole' : '', cell._bg != null ? 'cell-heat' : '', isEditing(rowIdx, colIdx) ? 'cell-editing' : '']"
                     :style="{
                       '--cell-heat-bg': cell._bg != null ? cell._bg : undefined,
                       '--cell-heat-fg': cell._fg != null ? cell._fg : undefined,
@@ -184,7 +198,10 @@
                       />
                     </div>
                     <template v-else>
-                      {{ cell.course || '' }}
+                      <!-- 空位：画一个明确的「空位」标，而不是留一格白 —— 留白会被当成「还没填」 -->
+                      <span v-if="cell._blank" class="cell-hole-mark" aria-hidden="true">空位</span>
+                      <!-- 画笔模式下名字淡到 30%：判断「哪格该空」靠的正是谁坐在那儿，不能直接藏起来 -->
+                      <span v-else :class="['cell-text', paintMode && cell.course ? 'cell-text-faded' : '']">{{ cell.course || '' }}</span>
                     </template>
                   </td>
                 </template>
@@ -325,9 +342,21 @@ const props = defineProps({
     maxHeight: { type: Number, default: 560 },
     rowHeaderLabel: { type: String, default: '行号' },  // 新增：行号/首列表头文案（座位用「行号」，值日用「劳动项目」）
     disableRowDrag: { type: Boolean, default: false },  // 新增：禁用行号列的整行拖拽排序（值日多行分组时关闭，避免拖单个子行）
+    // 画笔模式（座位「设置空位」）：单击即切换格子类型，**不进入编辑、不框选、不拖拽**。
+    // 做成 prop 而不是让调用方自己在外面拦事件：拖拽/框选/长按换位都挂在 td 的 mousedown 上，
+    // 外面拿不到那次事件，只能靠组件内部提前短路（否则点一格会同时触发框选和挖洞）。
+    paintMode: { type: Boolean, default: false },
+    // 行标签右键菜单：opt-in。为 true 时行号那一格右键不再弹浏览器默认菜单，
+    // 改为 emit('row-label-menu')，由调用方决定摆什么菜单（座位表：整行走廊）。
+    // 做成 prop 而不是无条件接管：课表/动态表/值日表右键行号没有任何菜单可给，
+    // 无条件 preventDefault 只会让用户失去「复制/检查」这些浏览器自带能力。
+    rowLabelMenu: { type: Boolean, default: false },
+    // 列头右键菜单：与 rowLabelMenu 同理，opt-in。为 true 时列头右键 emit('col-label-menu')，
+    // 由调用方决定摆什么菜单（座位表：插入/删除走廊列）。
+    colLabelMenu: { type: Boolean, default: false },
 })
 // retry：加载失败态里的「重试」被按下，由父组件重新拉数据。
-const emit = defineEmits(['update:cells', 'swapRows', 'swapColumns', 'update:row-meta', 'cell-dblclick', 'retry'])
+const emit = defineEmits(['update:cells', 'swapRows', 'swapColumns', 'update:row-meta', 'cell-dblclick', 'paint-cell', 'retry', 'row-label-menu', 'col-label-menu'])
 
 // 模板 ref（与模板 ref="xxx" 同名自动绑定；gridTable 也挂在 ctx 上供拖拽模块取矩形）
 const gridTable = ref(null)
@@ -421,6 +450,13 @@ const ctx = {
   maxHeight: toRef(props, 'maxHeight'),
   rowHeaderLabel: toRef(props, 'rowHeaderLabel'),
   disableRowDrag: toRef(props, 'disableRowDrag'),
+  paintMode: toRef(props, 'paintMode'),
+  // 必须映射：方法体里读的是 ctx.rowLabelMenu.value，漏了这行右键会直接抛
+  // TypeError（undefined.value），菜单永远不弹 —— 而且模板上光标、事件都在，
+  // 看不出「少了一行 ctx 映射」。
+  rowLabelMenu: toRef(props, 'rowLabelMenu'),
+  // 同上：colLabelMenu 也必须映射，漏了列头右键直接抛 TypeError
+  colLabelMenu: toRef(props, 'colLabelMenu'),
   // 单元格拖拽虚影 / 行列拖拽挂载句柄 / 测量与动画定时器（原挂在实例 data 上，无响应式需求）
   _cellGhost: null,
   _cellGhostMoveHandler: null,
@@ -505,6 +541,24 @@ Object.assign(ctx, {
   candidateBaseList, candidateLabelCache, selectionCoords, rowDragLocked,
 })
 
+// 显示行下标 → 数据行下标。
+// 表格的 rows 里可能夹着不承载数据的行（座位表最前面那行「讲台」_isPodium、
+// 值日表的分隔行 _isSeparator）。v-for 拿到的是**显示下标**，而业务侧要改的
+// types/seats 矩阵用的是**数据下标** —— 两个差着前面有几个装饰行。
+// 构造行的一方会把数据行号写在 _lessonIdx 上（见 buildSeatLikeRows），这里直接取；
+// 没有该字段就说明这行本身就是数据行，回退显示下标。
+function dataRowIdxOf(row, displayIdx) {
+  return row && row._lessonIdx != null ? row._lessonIdx : displayIdx
+}
+
+// 空位格（座位表里被墙/门占掉、types 恒为 HOLE 的格）。
+// 它不是座位：不给编辑入口，也不给拖拽换位入口 —— 任何写入都会造出
+// 「seats 有名字 / types 还是洞」的错位状态，界面上看不出来、排表和导出却按洞处理。
+function isHoleCell(row, colIdx) {
+  const cell = row && row.cells ? row.cells[colIdx] : null
+  return !!(cell && cell._blank)
+}
+
 const methods = {
     ...useGridViewDrag(ctx),
     // 测量表格完整内容高度（scrollHeight 不被容器裁剪），判断是否超出 maxHeight。
@@ -545,12 +599,49 @@ const methods = {
     setCellRef(rowIdx, colIdx, el) { if (el) { if (!ctx.cellRefs.value[rowIdx]) ctx.cellRefs.value[rowIdx] = {}; ctx.cellRefs.value[rowIdx][colIdx] = el; } },
     // 行是否可拖（只看行本身类型；编辑中与否由 rowDragLocked 决定「锁定」而非「隐藏」）
     canDragRow(row) {
+      if (ctx.paintMode.value) return false; // 画笔下拖行会搬数据但搬不走洞，直接禁用
       return !row._isSeparator && !row._mergeCells && !row._isReadonly && !row._isPodium;
+    },
+    // 行标签右键：只有 opt-in 的调用方（座位表）才接管，其余表格保持浏览器默认菜单
+    onRowLabelContextMenu(event, rowIdx, row) {
+      if (!ctx.rowLabelMenu.value) return;
+      // 吞咽默认菜单（即使下面要早退），否则同一张表上右键行为不一致
+      event.preventDefault();
+      event.stopPropagation();
+      // 装饰行（讲台/分隔/合并表头）没有数据行号，dataRowIdx 会回退成显示下标 ——
+      // 于是「设为整行走廊」落到第一排学生头上。这类行右键什么都不做。
+      // **不能拦 _isReadonly**：走廊行本身就是 readonly，它恰恰需要右键「取消整行走廊」。
+      if (!row || row._isPodium || row._isSeparator || row._mergeCells) return;
+      // rowIdx 是**显示行下标**（座位表第 0 行是「讲台」，数据行从它下面开始），
+      // 业务侧改 types/seats 要的是**数据行下标**（row._lessonIdx，讲台/分隔行没有）。
+      // 两个都发出去：谁改数据用 dataRowIdx，谁定位 DOM 用 rowIdx。
+      emit('row-label-menu', { rowIdx, dataRowIdx: dataRowIdxOf(row, rowIdx), row, x: event.clientX, y: event.clientY });
+    },
+    // 列头右键：与行标签同理，opt-in。colIdx 是**网格列下标**（含走廊列），与 types 同下标 ——
+    // 调用方拿它直接改 types/seats，不需要任何换算（列拖动只改 transform，不改 DOM 顺序）。
+    onColLabelContextMenu(event, colIdx) {
+      if (!ctx.colLabelMenu.value) return;
+      event.preventDefault();
+      event.stopPropagation();
+      // 走廊列不早退：它恰恰是右键的主要对象（删除这条走廊）
+      emit('col-label-menu', { colIdx, x: event.clientX, y: event.clientY });
     },
     onCellMouseDown(event, rowIdx, colIdx) {
       if (event.button !== 0) return;
       const row = ctx.rows.value[rowIdx];
       if (ctx.editingCell.value || row._isSeparator || row._mergeCells || row._isPodium) return;
+      // 画笔模式：一按即切换，不启动框选/长按换位。
+      // 用 mousedown 而不是 click：点下去就有反馈，且不会等到 mouseup 才响应
+      //（长按换位也是 mousedown 起手，不在这里短路就会「一边挖洞一边准备换位」）。
+      if (ctx.paintMode.value) {
+        // 同上：画笔改的是 types 矩阵，必须用数据行下标。直接用 rowIdx 会整体错一位 ——
+        // 点第 1 行，洞画到第 2 行（讲台行占了显示的第 0 行）。
+        emit('paint-cell', { rowIdx, dataRowIdx: dataRowIdxOf(row, rowIdx), colIdx, row, cell: row.cells[colIdx] });
+        return;
+      }
+      // 空位格既不启动框选也不启动长按换位：拖一个学生进来等于往洞里塞人（见 isHoleCell）。
+      // 放在画笔判断之后：画笔模式下点空位是合法操作（点第二下取消该洞）。
+      if (isHoleCell(row, colIdx)) return;
       ctx.selecting.value = true; ctx.selectionStart.value = { row: rowIdx, col: colIdx }; ctx.selectionEnd.value = { row: rowIdx, col: colIdx };
       ctx.longPressActive.value = false; ctx.clearLongPress();
       ctx.longPressTimer.value = setTimeout(() => {
@@ -562,6 +653,8 @@ const methods = {
       const row = ctx.rows.value[rowIdx]; if (!row || row._isSeparator || row._mergeCells || row._isPodium) return;
       if (ctx.selecting.value) ctx.selectionEnd.value = { row: rowIdx, col: colIdx };
       else if (ctx.longPressActive.value && ctx.dragSource.value) {
+        // 落点是空位格时不给落点框：松手就 swapCells，学生会住进洞里（见 isHoleCell）
+        if (isHoleCell(row, colIdx)) { ctx.dragTarget.value = null; return; }
         if (ctx.dragSource.value.row !== rowIdx || ctx.dragSource.value.col !== colIdx) ctx.dragTarget.value = { row: rowIdx, col: colIdx };
         else ctx.dragTarget.value = null;
       }
@@ -589,7 +682,12 @@ const methods = {
       emit('update:cells', newRows);
     },
     onCellDoubleClick(event, rowIdx, colIdx) {
+      if (ctx.paintMode.value) return; // 画笔模式下双击不编辑（编辑提交只写 seats，会把刚挖的洞覆盖掉）
       const row = ctx.rows.value[rowIdx]; if (!row || row._isSeparator || row._mergeCells || row._isReadonly || row._isPodium) return;
+      // 空位格不可编辑：它不是座位（异形教室里被墙/门占掉的位置），types 恒为 HOLE。
+      // 放过双击只会得到「空位里坐着一个人」—— seats 有名字、types 仍是洞，
+      // 界面上看不出来（格子里还写着「空位」），但排表和导出会把这个学生算丢。
+      if (isHoleCell(row, colIdx)) return;
       // 必须先存再切：原先把保存排进 requestAnimationFrame，而紧接着几行就把
       // editingCell 指向了新格 —— 回调真正执行时读到的已经是新格，旧格刚敲的内容直接丢
       // （审查 v4 · B09-04）。saveEditCell 只读 ctx 状态、同步 emit，没有必须延后的理由。
@@ -719,7 +817,8 @@ const {
   onEditInput, onEditBlur, cancelEdit, candidateSelect,
   candidateHighlightNext, candidateHighlightPrev, candidateSelectHighlighted,
   isCellSelected, isDragTarget, isEditing, getCandidateLabel,
-  getCellColor, getCellTextColor, onRowHandleDown, onColHandleDown,
+  getCellColor, getCellTextColor, onRowHandleDown, onColHandleDown, onRowLabelContextMenu,
+  onColLabelContextMenu,
 } = methods
 
 watch(rowsKeySig, () => { ctx.openRowsAnimWindow(); ctx.scheduleMeasure(); })
@@ -792,6 +891,41 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .drag-handle { font-size: 14px; user-select: none; opacity: 0.6; }
+/* ---- 空位（types=2）：斜纹 + 虚线框 ----
+   刻意不用实底色：空位是「这里没有桌子」，要和「空着的座位」区分开。
+   斜纹 + 虚线在深浅主题下都成立。 */
+.cell-hole {
+  background-color: var(--color-surface-hover, #f3f4f6);
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0 6px,
+    color-mix(in srgb, var(--color-border, #e5e7eb) 70%, transparent) 6px 7px
+  );
+  box-shadow: inset 0 0 0 1px var(--color-border, #e5e7eb);
+}
+/* 空位标记**绝对定位**：它是纯装饰，不能参与布局。
+   表格是 auto 布局，任何一格的内容变宽都会撑宽整列 —— 挖一个洞就把那一列顶宽，
+   等于「画空位」这个动作在改表格几何。绝对定位让它不占宽也不占高（高度由下面 ::after 兜）。 */
+.cell-hole-mark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--color-text-muted, #9ca3af);
+  pointer-events: none;
+}
+/* 空位格因为没有文字内容，整行都是空位时行高会塌到只剩 padding。
+   用一个不可见的行内块把高度撑到和有名字的格子一致（约一个字高）。 */
+.cell-hole::after {
+  content: '';
+  display: block;
+  height: 1.3rem;
+}
+/* 画笔模式下名字淡到 30%：判断「哪格该空」靠的正是谁坐在那儿，不能藏。 */
+.cell-text-faded { opacity: 0.3; }
 .drag-handle:hover { opacity: 1; }
 /* ---- 列头里的日期副行 ----
    星期名在上、具体日期（2026.3.1）在下，两行叠在一个表头格子里。

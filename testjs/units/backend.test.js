@@ -112,7 +112,9 @@ test('播种：槽位行数与默认配置正确', () => {
   assert.equal(dutyItems.daily[0].name, '擦黑板')
 
   const seat = conn.prepare('SELECT mode, rows, cols FROM seat_layout').get()
-  assert.deepEqual({ ...seat }, { mode: 'single', rows: 6, cols: 7 })
+  // 默认仍是「6 行 × 7 个座位列」，但 cols 现在的口径是**网格列数**（含走廊列）：
+  // 单人桌布局下 7 个座位列展开成 7 + 6 条走廊 = 13 列。见 schema/seatGridMigration.js。
+  assert.deepEqual({ ...seat }, { mode: 'single', rows: 6, cols: 13 })
 
   const draft = conn.prepare('SELECT saved_at FROM duty_draft').get()
   assert.equal(draft.saved_at, '') // 无草稿
@@ -285,8 +287,21 @@ test('slotStore：逻辑名映射与可写列白名单', () => {
   assert.deepEqual(store.columnsOf('schedule').sort(), ['cells', 'settings'])
   assert.deepEqual(
     store.columnsOf('seat_layout').sort(),
-    ['aisle_cols', 'cols', 'groups_config', 'mode', 'rows', 'seats', 'settings'],
+    ['aisle_cols', 'cols', 'desk_pattern', 'groups_config', 'mode', 'rows', 'seats', 'settings', 'types'],
   )
+  // 格子类型矩阵（types）必须同时出现在 current/template/draft/weight 四处：
+  // 只加一处的话，走另一条入口保存仍然会静默丢字段。
+  // weight 也要（矩阵化后权重与座位同形）：它的 types 既是几何依据，
+  // 也是「这一行已经迁过」的标记 —— 漏了白名单，权重保存会把它写丢掉，
+  // 下次启动的一次性迁移会把已经是网格的权重再展开一遍（走廊翻倍）。
+  for (const name of ['seat_layout', 'seat_template', 'seat_draft', 'seat_weight']) {
+    assert.ok(store.columnsOf(name).includes('types'), `${name} 的可写列必须包含 types`)
+  }
+  // 桌型序列只在三张**座位表**上（weight 没有桌概念：它按格子存权重，不表达谁跟谁同桌）
+  for (const name of ['seat_layout', 'seat_template', 'seat_draft']) {
+    assert.ok(store.columnsOf(name).includes('desk_pattern'), `${name} 的可写列必须包含 desk_pattern`)
+  }
+  assert.ok(!store.columnsOf('seat_weight').includes('desk_pattern'), '权重表不该有桌型')
   assert.deepEqual(store.columnsOf('duty_draft').sort(), ['cells', 'conditions', 'saved_at', 'settings'])
   assert.deepEqual(store.columnsOf('duty_weight').sort(), ['settings', 'weights'])
 })
@@ -422,14 +437,16 @@ test('normalizeSeats：二维数组原样通过；扁平对象数组规范化为
 })
 
 test('normalizeSeats：坐标与行列数超限直接拒绝（防 OOM）', () => {
-  // 扁平数组不能按超大 row/col 分配矩阵
+  // 扁平数组不能按超大 row/col 分配矩阵。
+  // 列上限是**网格列数** 60（含走廊列）：走廊是真实列之后，30 个座位列在单人桌
+  // 布局下会展开成 59 列，用「座位列数」的 30 去卡数据坐标会把合法布局判成越界。
   assert.throws(() => s.normalizeSeats([{ row: 51, col: 1, student_id: 1 }]), /超出上限/)
-  assert.throws(() => s.normalizeSeats([{ row: 1, col: 31, student_id: 1 }]), /超出上限/)
-  // 二维数组同样受 50×30 上限约束
+  assert.throws(() => s.normalizeSeats([{ row: 1, col: 61, student_id: 1 }]), /超出上限/)
+  // 二维数组同样受 50×60 上限约束
   assert.throws(() => s.normalizeSeats(Array.from({ length: 51 }, () => [])), /行数超出上限/)
-  assert.throws(() => s.normalizeSeats([Array(31).fill(null)]), /列数超出上限/)
+  assert.throws(() => s.normalizeSeats([Array(61).fill(null)]), /列数超出上限/)
   // 上限本身合法
-  assert.equal(s.normalizeSeats([{ row: 50, col: 30, student_id: 1 }])[49][29], 1)
+  assert.equal(s.normalizeSeats([{ row: 50, col: 60, student_id: 1 }])[49][59], 1)
 })
 
 // =========================================================================

@@ -6,27 +6,23 @@
         <label class="block text-sm font-medium">行数</label>
         <input v-model.number="localRows" type="number" min="1" max="50" class="w-full border px-3 py-2 rounded" />
       </div>
-      <div class="mb-3">
-        <label class="block text-sm font-medium">列数</label>
+      <div class="mb-4">
+        <div class="flex items-center gap-1.5 mb-1">
+          <label class="block text-sm font-medium">座位列数</label>
+          <AppHelp text="只数「坐人的列」，不含走廊。走廊列由座位模式自动加在列间：单座每列后一条，双座每两列后一条，混合桌初始与双座相同。" aria-label="座位列数说明" />
+        </div>
         <input v-model.number="localCols" type="number" min="1" max="30" class="w-full border px-3 py-2 rounded" />
       </div>
-      <div class="mb-3">
+      <div class="mb-4">
         <label class="block text-sm font-medium mb-1">座位模式</label>
-        <div class="flex gap-4">
-          <label class="flex items-center gap-1 cursor-pointer">
-            <input type="radio" v-model="localMode" value="single" /> 单桌
-          </label>
-          <label class="flex items-center gap-1 cursor-pointer">
-            <input type="radio" v-model="localMode" value="double" /> 同桌
-          </label>
-        </div>
-      </div>
-      <div class="mb-4 flex items-center justify-between gap-2">
-        <div class="flex items-center gap-1.5">
-          <span class="text-sm font-medium">显示走廊</span>
-          <AppHelp text="单桌：每列间有走廊；同桌：每两列为一组，组间有走廊。" aria-label="显示走廊说明" />
-        </div>
-        <AppSwitch v-model="localShowAisle" aria-label="显示走廊" />
+        <select v-model="localMode" class="w-full border px-3 py-2 rounded bg-surface text-text">
+          <option value="single">单座</option>
+          <option value="double">双座</option>
+          <option value="mixed">混合桌</option>
+        </select>
+        <p v-if="localMode === 'mixed'" class="mt-2 text-xs text-text-muted leading-relaxed">
+          初始按双座排布。列头右键可「拆成两张单人桌」或「与右侧一列同桌」，桌子之间会自动插入 / 删除走廊。
+        </p>
       </div>
       <div class="flex justify-end gap-2">
         <button @click="$emit('cancel')" class="bg-surface-hover px-4 py-2 rounded text-text">取消</button>
@@ -41,16 +37,15 @@ import { ref, watch } from 'vue'
 import { useNotification } from '../../composables/useNotification.js'
 import '../../styles/dialog-transition.css'
 import AppHelp from '../base/AppHelp.vue'
-import AppSwitch from '../base/AppSwitch.vue'
 import DialogShell from '../base/DialogShell.vue'
 
 defineOptions({ name: 'SeatSettingsDialog' })
 const props = defineProps({
   visible: Boolean,
   rows: { type: Number, required: true },
+  // 座位列数（不含走廊列）。换算成网格总列数由 useSeatGrid.saveSettings 负责。
   cols: { type: Number, required: true },
-  mode: { type: String, default: 'single' },
-  showAisle: { type: Boolean, default: true }
+  mode: { type: String, default: 'single' }
 })
 const emit = defineEmits(['save', 'cancel'])
 const { error: notifyError } = useNotification()
@@ -58,14 +53,12 @@ const { error: notifyError } = useNotification()
 const localRows = ref(props.rows)
 const localCols = ref(props.cols)
 const localMode = ref(props.mode)
-const localShowAisle = ref(props.showAisle)
 
 watch(() => props.visible, (val) => {
   if (val) {
     localRows.value = props.rows
     localCols.value = props.cols
     localMode.value = props.mode
-    localShowAisle.value = props.showAisle
   }
 })
 // 同桌模式下列数必须为偶数（每两列为一组）；切到同桌时自动把奇数取整为偶数
@@ -95,8 +88,7 @@ function save() {
   emit('save', {
     rows: localRows.value,
     cols: localCols.value,
-    mode: localMode.value,
-    showAisle: localShowAisle.value
+    mode: localMode.value
   })
 }
 </script>

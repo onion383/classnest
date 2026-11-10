@@ -1,5 +1,12 @@
 // ===== 智能排表：网格工具 + 统一条件流水线 =====
 // 纯代码搬运自 SmartArrangementDialog.vue 的 methods，未改写逻辑；经 ctx 闭包调用（script setup）。
+//
+// 坐标口径（异形网格改造后）：本文件的算法一律在 **dense** 空间运行 ——
+// 只有座位列、连续下标，行数与网格一致。压/展开由调用方（options.buildInitialSeats /
+// buildSeatsOut）经 ctx 完成，算法内部不需要知道走廊在哪一列。
+// 原先这里自带一份 generateColHeaders / getDisplayColCount / isAisleCol 公式拷贝，
+// 用于在预览里「渲染期插走廊列」；走廊成为真实列后那三份拷贝已删除，改为
+// 共用 composables/useSeatGrid.geometry.js（唯一几何来源）。
 // Fisher-Yates 洗牌（组块置换模块也复用）
 function shuffle(arr) {
   const a = [...arr]
@@ -13,28 +20,6 @@ export { shuffle }
 // ctx 契约：状态 ref（.value 访问）与跨模块方法（运行时解析）。
 export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
   return {
-    // ==================== 网格工具（与座位网格保持一致的显示算法） ====================
-    generateColHeaders(cols, mode, showAisle) {
-      const headers = []
-      if (!showAisle) { for (let i = 0; i < cols; i++) headers.push(`列${i + 1}`); return headers }
-      if (mode === 'single') {
-        for (let i = 0; i < cols; i++) { headers.push(`列${i + 1}`); if (i < cols - 1) headers.push('走廊') }
-      } else {
-        for (let i = 0; i < cols; i++) { headers.push(`列${i + 1}`); if ((i + 1) % 2 === 0 && i < cols - 1) headers.push('走廊') }
-      }
-      return headers
-    },
-    getDisplayColCount(cols, mode, showAisle) {
-      if (!showAisle) return cols
-      if (mode === 'single') return cols + (cols - 1)
-      else return cols + Math.floor((cols - 1) / 2)
-    },
-    isAisleCol(displayIdx, cols, mode, showAisle) {
-      if (!showAisle) return false
-      const totalDisplay = ctx.getDisplayColCount(cols, mode, showAisle)
-      if (mode === 'single') return displayIdx % 2 === 1
-      else return displayIdx >= 2 && (displayIdx - 2) % 3 === 0 && displayIdx < totalDisplay
-    },
 
     // ==================== 统一条件流水线（一层平铺，线性执行） ====================
     // 依据当前条件列表构建一张新的座位网格。
@@ -61,6 +46,8 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
     },
 
     // 初始化网格：从原座位表填满学生，未出现的学生补到空位
+    // 只碰「可用格」（types 为座位的格子）：行走廊 / 空位在 dense 里仍是格子，
+    // 不排除的话「全部同学」补位会把学生塞进走廊。
     initGrid() {
       const grid = Array.from({ length: ctx.rows.value }, () => new Array(ctx.cols.value).fill(null))
       const used = new Set()
@@ -73,6 +60,7 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
       }
       for (let r = 0; r < ctx.rows.value; r++) {
         for (let c = 0; c < ctx.cols.value; c++) {
+          if (!ctx.isUsable(r, c)) continue
           const val = ctx.baseSeats.value?.[r]?.[c]
           let s = null
           if (typeof val === 'number') {
@@ -97,18 +85,32 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
         let k = 0
         for (let r = 0; r < ctx.rows.value && k < rest.length; r++) {
           for (let c = 0; c < ctx.cols.value && k < rest.length; c++) {
+            if (!ctx.isUsable(r, c)) continue
             if (!grid[r][c]) { grid[r][c] = rest[k++]; used.add(rest[k - 1].id) }
           }
         }
       }
       return grid
     },
+    // 全部可选格（dense 坐标）：走廊格 / 空位格不参与任何条件的作用域
     allCells() {
       const cells = []
-      for (let r = 0; r < ctx.rows.value; r++) for (let c = 0; c < ctx.cols.value; c++) cells.push({ r, c })
+      for (let r = 0; r < ctx.rows.value; r++) {
+        for (let c = 0; c < ctx.cols.value; c++) {
+          if (ctx.isUsable(r, c)) cells.push({ r, c })
+        }
+      }
       return cells
     },
 
+    // dense 列坐标下，两列是否属于同一张桌。走廊被压掉后「隔走廊的两列」在 dense 里
+    // 就是相邻下标，只看 c+1 会把它们当成同桌 —— 混合桌拆开后必须靠桌号表区分。
+    // pure single/double 下桌号与老「算奇偶」完全等价（见 arrange-desk-mixed.test.js）。
+    isDeskmateCols(ca, cb) {
+      if (Math.abs(ca - cb) !== 1) return false
+      const desk = ctx.deskIndex.value
+      return desk[ca] != null && desk[ca] >= 0 && desk[ca] === desk[cb]
+    },
     // 几何切块规则：column 一列（每列一块）| whole 一大组（整块）| six 相邻六位(3行×2列) | four 相邻四位(2行×2列)
     //             | student 同学（一人一格一块）| deskmate 同桌（同行左右相邻两人一块）
     shapeSpans(shape) {
@@ -124,9 +126,12 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
       if (shape === 'deskmate') {
         const map = new Map()
         for (const p of region) {
-          const k = p.r + ',' + Math.floor(p.c / 2)
+          // 纯单座保留历史口径（每 2 列一块）；其余按桌号切 —— double 下桌号恰好
+          // 等于 floor(c/2)，mixed 拆桌后每列自成一桌，不会再隔着走廊凑成一对。
+          const key = ctx.mode.value === 'single' ? Math.floor(p.c / 2) : (ctx.deskIndex.value[p.c] ?? -1)
+          const k = p.r + ',' + key
           let b = map.get(k)
-          if (!b) { b = { br: p.r, bc: Math.floor(p.c / 2), pos: [] }; map.set(k, b) }
+          if (!b) { b = { br: p.r, bc: key, pos: [] }; map.set(k, b) }
           b.pos.push(p)
         }
         return [...map.values()]
@@ -155,7 +160,7 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
         let i = 0
         while (i < cols.length) {
           const c = cols[i]
-          if (ctx.mode.value !== 'single' && c % 2 === 0 && inRow.has(c + 1)) {
+          if (ctx.mode.value !== 'single' && ctx.isDeskmateCols(c, c + 1) && inRow.has(c + 1)) {
             slots.push([{ r, c }, { r, c: c + 1 }])
             i += 2
           } else {

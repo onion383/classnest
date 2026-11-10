@@ -4,6 +4,7 @@ const { db } = require('../../../../db');
 const { READ_TABLES } = require('../../ai.constants');
 const { tableColumns } = require('../../ai.helpers');
 const { AGG_FNS } = require('../tools.schema');
+const { gridToDenseCols } = require('../../../../services/seatGrid');
 const {
   pinyinMatch, aiParseJson, unpackDutyModeCol, dutyModeLabel, studentIdNameMap,
 } = require('./executors.common');
@@ -234,19 +235,23 @@ const SEARCH_TABLE_SEARCHERS = {
   leave_records: (ctx) => db.prepare('SELECT id, 姓名, 类型, 开始时间, 结束时间, 状态 FROM leave_records').all().filter((r) => ctx.hit(r['姓名'], r.student_id)),
   cadre_members: (ctx) => db.prepare('SELECT id, student_id, student_name FROM cadre_members').all().filter((r) => ctx.hit(r.student_name, r.student_id)),
   group_members: (ctx) => db.prepare('SELECT id, group_id, member_name, remark FROM group_members').all().filter((r) => ctx.hit(r.member_name, null)),
-  // 座位表：一格一人；值是数字(id)或姓名
+  // 座位表：一格一人；值是数字(id)或姓名。
+  // 位置按**座位列序号**报（列号不含走廊），与页面表头一致
   seat_layout: (ctx) => {
-    const row = db.prepare('SELECT seats FROM seat_layout WHERE id = 1').get();
+    const row = db.prepare('SELECT seats, cols, types FROM seat_layout WHERE id = 1').get();
     if (!row) return [];
     const seats = aiParseJson(row.seats, []) || [];
+    const types = aiParseJson(row.types, []) || [];
     const out = [];
     for (let r = 0; r < seats.length; r++) {
       const line = Array.isArray(seats[r]) ? seats[r] : [];
+      const dense = gridToDenseCols(Math.max(line.length, Number(row.cols) || 0), types);
       for (let c = 0; c < line.length; c++) {
         const v = line[c];
         if (v == null || v === '') continue;
+        if (dense[c] < 0) continue;
         const isNum = typeof v === 'number';
-        if (ctx.hit(isNum ? null : v, isNum ? v : null)) out.push({ 排: r + 1, 列: c + 1, 值: v, 姓名: isNum ? (ctx.idName[v] || `#${v}`) : String(v) });
+        if (ctx.hit(isNum ? null : v, isNum ? v : null)) out.push({ 排: r + 1, 列: dense[c] + 1, 值: v, 姓名: isNum ? (ctx.idName[v] || `#${v}`) : String(v) });
       }
     }
     return out;

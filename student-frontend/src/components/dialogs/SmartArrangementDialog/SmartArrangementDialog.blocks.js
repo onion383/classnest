@@ -211,8 +211,8 @@ export function useSmartArrangementBlocks(ctx) {
         const nc = ca + dc
         if (!inRegion([ra, nc])) continue
         if (grid[ra][nc] !== null) continue
-        // 双人桌模式下必须组成偶数列开头的同桌对（隔走廊不算同桌）
-        if (ctx.mode.value !== 'single' && Math.min(ca, nc) % 2 !== 0) continue
+        // 非单座模式必须同桌：混排下隔着走廊的两列在 dense 里相邻，但不是同桌
+        if (ctx.mode.value !== 'single' && !ctx.isDeskmateCols(ca, nc)) continue
         grid[ra][nc] = movedStudent
         grid[pb[0]][pb[1]] = null
         return true
@@ -292,6 +292,9 @@ export function useSmartArrangementBlocks(ctx) {
       const allowInner = node.innerOrder === 'yes'
       const wOf = (r, c) => (typeof weights[r]?.[c] === 'number' ? weights[r][c] : 0)
       const lOf = s => (s && s.id != null && typeof ledger[s.id] === 'number') ? ledger[s.id] : 0
+      // 权重上界只用于「装不下」的罚分尺度，取 1 兜底（权重全为 0 时罚分仍要能拉开差距）
+      let maxW = 1
+      for (const row of weights) for (const v of row) if (typeof v === 'number' && Math.abs(v) > maxW) maxW = Math.abs(v)
 
       let doneTotal = 0, allTotal = 0
       for (const region of regions) {
@@ -301,6 +304,10 @@ export function useSmartArrangementBlocks(ctx) {
         const blocks = ctx.splitRegion(region, unit)
         const active = blocks.map(b => ({ pos: b.pos })).filter(b => b.pos.length > 0)
         if (active.length < 2 || students.length < 2) { doneTotal += students.length; continue }
+        // 位置总数恒 ≥ 学生总数（学生本来就坐在这些格子上）。真对不上时整块跳过：
+        // 宁可这次不调位置，也不能把人写丢
+        const slotTotal = active.reduce((t, b) => t + b.pos.length, 0)
+        if (students.length > slotTotal) { doneTotal += students.length; continue }
 
         // 每组块：当前学生（按位置原序）与该块各位置的权重
         const groups = active.map(b => ({
@@ -308,6 +315,11 @@ export function useSmartArrangementBlocks(ctx) {
           posW: b.pos.map(p => wOf(p.r, p.c))
         }))
 
+        // 块大小可能不等（'six' 按 3 行切，最后一块常常只有 2/4 格），所以「学生组 i → 位置块 j」
+        // 有可能装不下（人数 > 格子数）。这类配对必须重罚：正常代价的上界是 Σ账本 × 最大权重，
+        // 罚分取这个上界 × 溢出人数，保证「少溢出一个人」的解永远优于「多溢出一个人」的解，
+        // 从而优先选出装得下的配对（块大小全相等时溢出恒为 0，罚分不生效、结果不变）。
+        const costBound = students.reduce((t, s) => t + Math.abs(lOf(s)), 0) * Math.max(1, maxW) + 1
         // 把「学生组 i」放到「位置块 j」的代价（可调整组内排序时按 账本降序×权重升序 的最优配对计）
         const costOf = (i, j) => {
           let ls = groups[i].studs.map(lOf)
@@ -319,7 +331,8 @@ export function useSmartArrangementBlocks(ctx) {
           let sum = 0
           const m = Math.min(ls.length, ws.length)
           for (let k = 0; k < m; k++) sum += ls[k] * ws[k]
-          return sum
+          const spill = ls.length - ws.length
+          return spill > 0 ? sum + spill * costBound : sum
         }
 
         // 求组→块的最优一一对应：组数少时暴力枚举全排列，多时用贪心
@@ -359,20 +372,38 @@ export function useSmartArrangementBlocks(ctx) {
           }
         }
 
-        // 落盘：组块整体移位；允许时组内再按 账本降序→低权重位置 落座
+        // 落盘：组块整体移位；允许时组内再按 账本降序→低权重位置 落座。
+        // 关键：不能按「目标块的位置数」截断学生 —— 块大小不等时多出来的人会变成 undefined，
+        // 既不落盘也不报错，直接从座位表里消失（静默丢人）。所以超出目标块容量的学生记为
+        // spill，等本轮所有位置清空、写完后再补进仍空着的格子（总位置数恒 ≥ 总人数，补得下）。
         const writes = []
+        const spill = []
+        const slotAll = []
         for (let i = 0; i < n; i++) {
           const target = active[best[i]].pos
           const studs = [...groups[i].studs]
-          if (allowInner) {
-            studs.sort((a, b) => lOf(b) - lOf(a))
-            const posSorted = [...target].sort((a, b) => wOf(a.r, a.c) - wOf(b.r, b.c))
-            posSorted.forEach((p, k) => writes.push([p, studs[k] || null]))
-          } else {
-            target.forEach((p, k) => writes.push([p, studs[k] || null]))
+          if (allowInner) studs.sort((a, b) => lOf(b) - lOf(a))
+          // 允许组内排序时，账本高的学生优先拿权重低的位置
+          const slots = allowInner
+            ? [...target].sort((a, b) => wOf(a.r, a.c) - wOf(b.r, b.c))
+            : target
+          for (let k = 0; k < studs.length; k++) {
+            if (k < slots.length) writes.push([slots[k], studs[k]])
+            else spill.push(studs[k])
+          }
+        }
+        // 先清空本轮所有格再写：块与块之间互相搬运时，边写边清会覆盖掉还没搬走的学生
+        for (const b of active) {
+          for (const p of b.pos) {
+            grid[p.r][p.c] = null
+            slotAll.push(p)
           }
         }
         for (const [p, v] of writes) grid[p.r][p.c] = v
+        for (const p of slotAll) {
+          if (!spill.length) break
+          if (grid[p.r][p.c] === null) grid[p.r][p.c] = spill.shift()
+        }
         doneTotal += students.length
       }
       ctx.trackSatisfaction(node.uid, doneTotal, allTotal)

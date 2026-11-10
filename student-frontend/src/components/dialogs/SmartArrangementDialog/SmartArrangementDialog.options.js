@@ -2,6 +2,7 @@
 // 纯代码搬运自 SmartArrangementDialog.vue 的 methods，未改写逻辑。
 import { useSeatDraft } from '../../../composables/useSeatDraft.js'
 import { useNotification } from '../../../composables/useNotification.js'
+import { buildSeatLikeRows, fromDenseSeats } from '../../../composables/useSeatGrid.geometry.js'
 import { nextTick } from 'vue'
 export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
   return {
@@ -15,14 +16,14 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
       }
       return null
     },
-    // 是否同桌：同一行左右紧邻，且双人桌模式下必须是偶数列开头的同桌对（隔走廊不算同桌）
+    // 是否同桌：同一行左右紧邻且属于同一张桌。
+    // 纯单座保留老语义（相邻即同桌）；其余一律查桌号表 —— 混合桌拆开后
+    // 「隔着走廊的两列」在 dense 里相邻，但已不是同桌。
     isTwoAdjacent(pa, pb) {
       if (pa[0] !== pb[0]) return false
       if (Math.abs(pa[1] - pb[1]) !== 1) return false
-      if (ctx.mode.value !== 'single') {
-        return Math.min(pa[1], pb[1]) % 2 === 0
-      }
-      return true
+      if (ctx.mode.value === 'single') return true
+      return ctx.isDeskmateCols(Math.min(pa[1], pb[1]), Math.max(pa[1], pb[1]))
     },
     // 是否在附近（前后左右 + 斜对角，即切比雪夫距离 <= 1）
     isTwoNearby(pa, pb) {
@@ -119,13 +120,18 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
     // ==================== 选项列表（范围 / 单位 / 关系 / 方式等） ====================
     // 范围与单位同源：原分组选项 + 同学 / 同桌
     groupOptions() {
+      // 混排里「2 列」可能是一张双人桌，也可能是两张单人桌；四/六位块宽固定 2 列，
+      // 会把同桌切到两个块里（方案 11.4）。纯 single/double 与「混合桌初始全双桌」
+      // 不置灰，行为完全不变；只有 1 人桌与 2 人桌并存才禁用。
+      const off = !!ctx.nonUniformDesk.value
+      const hint = off ? '（混排暂不支持）' : ''
       return [
         { value: 'student', label: '同学' },
         { value: 'deskmate', label: '同桌' },
         { value: 'column', label: '一列' },
         { value: 'whole', label: '一大组' },
-        { value: 'four', label: '相邻四位' },
-        { value: 'six', label: '相邻六位' }
+        { value: 'four', label: '相邻四位' + hint, disabled: off },
+        { value: 'six', label: '相邻六位' + hint, disabled: off }
       ]
     },
     // 分组方式（仅相邻六位支持 Z字形 / 上下交换形）
@@ -228,9 +234,12 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
       const src = ctx.baseSeats.value
       for (let r = 0; r < ctx.rows.value; r++) {
         const row = src?.[r] || []
-        for (let c = 0; c < ctx.cols.value; c += 2) {
+        let c = 0
+        while (c < ctx.cols.value) {
+          // 纯单座保留老的「每 2 列一对」；其余按桌号分组，单人桌就是一个人。
+          const paired = ctx.mode.value === 'single' ? true : ctx.isDeskmateCols(c, c + 1)
           const a = row[c]
-          const b = row[c + 1]
+          const b = paired ? row[c + 1] : undefined
           const sa = typeof a === 'number' ? ctx.students.value.find(s => s.id === a) : null
           const sb = typeof b === 'number' ? ctx.students.value.find(s => s.id === b) : null
           if (sa && sb) {
@@ -244,6 +253,7 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
             singles.push(sb)
             used.add(sb.id)
           }
+          c += paired ? 2 : 1
         }
       }
       const orphans = ctx.students.value.filter(s => !used.has(s.id))
@@ -251,35 +261,32 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
     },
 
     // 构建 GridView 预览用的显示行
+    // 预览是**网格**视角（走廊是真实列 / 行走廊是真实行），数据来自 dense 的预览网格：
+    // 用 gridToDense 把网格列换算成 dense 列下标，走廊列取不到值。
+    // 表格几何不再由本模块自己按公式插列 —— 直接用座位页那套 buildSeatLikeRows。
     buildPreviewRows(seats) {
-      const displayCols = ctx.getDisplayColCount(ctx.cols.value, ctx.mode.value, ctx.showAisle.value)
-      const result = []
-      result.push({ _rowKey: 'podium', label: '讲  台', _isPodium: true, _isReadonly: true, cells: [] })
-      for (let r = 0; r < ctx.rows.value; r++) {
-        const rowCells = []
-        let realCol = 0
-        for (let d = 0; d < displayCols; d++) {
-          if (ctx.isAisleCol(d, ctx.cols.value, ctx.mode.value, ctx.showAisle.value)) {
-            if (r === 0) rowCells.push({ course: '走廊', _isAisle: true, _aisleRowSpan: ctx.rows.value, _isAisleHidden: false })
-            else rowCells.push({ course: '', _isAisle: false, _isAisleHidden: true })
-          } else {
-            const student = seats[r]?.[realCol]
-            rowCells.push({ course: student?.姓名 || '', _isAisle: false, _isAisleHidden: false, _studentId: student?.id ?? null })
-            realCol++
-          }
-        }
-        result.push({ _rowKey: `row_${r}`, label: `第${r + 1}行`, cells: rowCells, _isReadonly: true, _lessonIdx: r, _periodRowSpan: 0, periodLabel: '' })
-      }
-      return result
+      const toDense = ctx.gridToDense.value
+      const rows = buildSeatLikeRows(ctx.rows.value, ctx.gridCols.value, ctx.gridTypes.value, (r, c) => {
+        const k = toDense[c]
+        const student = k >= 0 ? seats[r]?.[k] : null
+        return { course: student?.姓名 || '', extra: { _studentId: student?.id ?? null } }
+      })
+      // 预览整表只读：buildSeatLikeRows 是给座位页（可编辑）用的，普通行默认可编辑；
+      // 弹窗里点格子不能改数据（改了也不进 buildSeatsOut，只会让预览和结果对不上）。
+      for (const row of rows) if (!row._isPodium) row._isReadonly = true
+      return rows
     },
 
-    // 预览学生对象网格 → 座位表数据：元素为班级学生 id、新同学名字(字符串)或 null
+    // 预览学生对象网格 → 座位表数据：元素为班级学生 id、新同学名字(字符串)或 null。
+    // 输出是**网格矩阵**（与库里的 seats 同构）：走廊列 / 空位格恒 null，
+    // 由 fromDenseSeats 按座位列序号填回，几何由 types 单独表达。
     buildSeatsOut() {
-      return ctx.previewSeats.value.map(row => row.map(s => {
+      const dense = ctx.previewSeats.value.map(row => row.map(s => {
         if (!s) return null
         // 真实 id(>=0)的班级学生存 id；新同学(伪对象，负 id 或无 id 对象)存原名
         return (s.id != null && s.id >= 0) ? s.id : (s.姓名 || null)
       }))
+      return fromDenseSeats(dense, ctx.rows.value, ctx.gridCols.value, ctx.gridTypes.value)
     },
 
     // 把草稿里的条件还原成界面条件：重新分配 uid、补默认字段、忽略已不存在的条件类型
@@ -312,9 +319,10 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
             return copy
           }),
           rows: ctx.rows.value,
-          cols: ctx.cols.value,
+          // 草稿与座位表同口径：网格列数 + types，恢复时才认得出走廊画在哪
+          cols: ctx.gridCols.value,
           mode: ctx.mode.value,
-          showAisle: ctx.showAisle.value
+          types: ctx.gridTypes.value
         })
         // 刚保存的这份就是当前预览结果：后续「确定」需先确认会清空草稿
         ctx.draftInUse.value = true
@@ -331,6 +339,8 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
 
     // 「确定」：本次结果来自草稿时先弹确认框（正式应用会清空草稿），确认后才真正应用
     confirm() {
+      // 双保险：按钮已按 seatShortage 置灰，这里再挡一次（Enter / 程序调用绕过置灰）
+      if (ctx.seatShortage && ctx.seatShortage.value > 0) return
       if (ctx.draftInUse.value) {
         ctx.draftConfirmVisible.value = true
         return

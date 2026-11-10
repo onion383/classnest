@@ -151,15 +151,14 @@ async function load() {
     if (seq.isCurrent(my)) loading.value = false
   }
 }
-// 座位表：与座位页同款几何（讲台行 + 走廊列），数值格把学生 id 还原成姓名
+// 座位表：与座位页同款几何（讲台行 + 真实走廊列 + 空位），数值格把学生 id 还原成姓名。
+// 几何来自 types（网格矩阵），不再按 mode/showAisle 自己插走廊列 —— 插两次就会翻倍。
 async function buildSeat(row) {
   const rowsN = Number(row.rows) || 0
   const colsN = Number(row.cols) || 0
   if (!rowsN || !colsN) return null
-  const mode = row.mode || 'single'
-  const settings = parse(row.settings, {}) || {}
-  const showAisle = settings.showAisle !== false
   const seats = parse(row.seats, []) || []
+  const types = parse(row.types, []) || []
   const map = await getStudentMap()
   const valueAt = (r, c) => {
     const v = seats[r] && seats[r][c]
@@ -168,24 +167,22 @@ async function buildSeat(row) {
     return { course: name }
   }
   return {
-    colHeaders: generateColHeaders(colsN, mode, showAisle),
-    rows: buildSeatLikeRows(rowsN, colsN, mode, showAisle, valueAt),
+    colHeaders: generateColHeaders(colsN, types),
+    rows: buildSeatLikeRows(rowsN, colsN, types, valueAt),
     hideMetaColumns: true, showRowNumber: true, rowHeaderLabel: '行号', showPeriodColumn: false,
   }
 }
-// 座位权重表：几何同座位表，数值格放权重数字
+// 座位权重表：几何与座位表同一套 types，数值格放权重数字
 function buildSeatWeight(row) {
   const rowsN = Number(row.rows) || 0
   const colsN = Number(row.cols) || 0
   if (!rowsN || !colsN) return null
-  const mode = row.mode || 'single'
-  const settings = parse(row.settings, {}) || {}
-  const showAisle = settings.showAisle !== false
+  const types = parse(row.types, []) || []
   const weights = parse(row.weights, []) || []
   const valueAt = (r, c) => { const v = weights[r] && weights[r][c]; return { course: v == null ? '' : String(v) } }
   return {
-    colHeaders: generateColHeaders(colsN, mode, showAisle),
-    rows: buildSeatLikeRows(rowsN, colsN, mode, showAisle, valueAt),
+    colHeaders: generateColHeaders(colsN, types),
+    rows: buildSeatLikeRows(rowsN, colsN, types, valueAt),
     hideMetaColumns: true, showRowNumber: true, rowHeaderLabel: '行号', showPeriodColumn: false,
   }
 }

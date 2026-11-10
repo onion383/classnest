@@ -304,11 +304,18 @@ function assertSlotElements(arr, name, depth) {
 // name 为 ≤20 文本、每个元素至少有 student_id 或 name。
 // 注意：越界（超 rows/cols）与 id 是否真实存在属于依赖既有数据的校验，由 businessRules 负责。
 const SEAT_NAME_MAX = 20;
-// 座位矩阵上限：本模块是这两个常量的**唯一来源**，routes/seats.js 与
-// routes/undo/undo.executors.js 都从这里导入，不要再在别处写死 50/30。
+// 座位矩阵上限：本模块是这几个常量的**唯一来源**，routes/seats.js 与
+// routes/undo/undo.executors.js 都从这里导入，不要再在别处写死 50/30/60。
 // 扁平数组若按 row/col 直接分配矩阵，必须在此处设上限，否则超大坐标可造成 OOM。
 const SEAT_MAX_ROWS = 50;
+// 「座位列数」上限：设置里填的数量，不含走廊列。
 const SEAT_MAX_COLS = 30;
+// 「网格列数」上限：数据坐标里的实际列数，**含走廊列**。
+// 走廊从「渲染期虚拟插入」变成「矩阵里的真实列」之后，这两个数不再相等：
+// 单人桌布局下 30 个座位列会展开成 59 个网格列。共用一个常量必然错一边 ——
+// 用 30 卡数据列会把合法布局判成越界；用 60 卡用户输入又会放过
+// 「填 60 个座位列，展开后必然被截断」这种输入。
+const SEAT_MAX_GRID_COLS = 60;
 
 function assertSeatCell(cell, name, r, c) {
   if (cell == null) return;
@@ -352,8 +359,8 @@ function flatSeatsToMatrix(arr, name) {
   });
   const maxR = Math.max(...items.map((it) => it.r));
   const maxC = Math.max(...items.map((it) => it.c));
-  if (maxR > SEAT_MAX_ROWS || maxC > SEAT_MAX_COLS) {
-    throw new Error(`字段「${name}」座位坐标超出上限（最多 ${SEAT_MAX_ROWS} 行 × ${SEAT_MAX_COLS} 列），收到 row=${maxR}, col=${maxC}`);
+  if (maxR > SEAT_MAX_ROWS || maxC > SEAT_MAX_GRID_COLS) {
+    throw new Error(`字段「${name}」座位坐标超出上限（最多 ${SEAT_MAX_ROWS} 行 × ${SEAT_MAX_GRID_COLS} 列），收到 row=${maxR}, col=${maxC}`);
   }
   const matrix = Array.from({ length: maxR }, () => Array(maxC).fill(null));
   items.forEach((it) => { matrix[it.r - 1][it.c - 1] = it.val; });
@@ -370,7 +377,7 @@ function cleanSeatGrid(value, name) {
   if (allMatrix) {
     if (arr.length > SEAT_MAX_ROWS) throw new Error(`字段「${name}」行数超出上限（最多 ${SEAT_MAX_ROWS} 行），收到 ${arr.length} 行`);
     arr.forEach((row, r) => {
-      if (row.length > SEAT_MAX_COLS) throw new Error(`字段「${name}」第 ${r + 1} 行列数超出上限（最多 ${SEAT_MAX_COLS} 列），收到 ${row.length} 列`);
+      if (row.length > SEAT_MAX_GRID_COLS) throw new Error(`字段「${name}」第 ${r + 1} 行列数超出上限（最多 ${SEAT_MAX_GRID_COLS} 列），收到 ${row.length} 列`);
       row.forEach((cell, c) => assertSeatCell(cell, name, r, c));
     });
     return arr;
@@ -380,6 +387,52 @@ function cleanSeatGrid(value, name) {
 }
 // 供写库入口（seats.js）在裁剪前先规范化
 function normalizeSeats(value, name = 'seats') { return cleanSeatGrid(value, name); }
+
+// ======================== 座位格子类型矩阵（types） ========================
+// 与 seats 同尺寸：0 = 座位，1 = 走廊，2 = 空位。
+//
+// 为什么是满矩阵而不是稀疏的 holes: [[0,4],[2,1]]：
+//   · 稀疏数组只能表达「空位」一种，走廊没地方放；
+//   · 它和 rows/cols 是两份数据，裁行裁列时要额外校验，容易不同步。
+//   满矩阵和 seats 同构，切、裁、复制、撤销都能复用同一套代码。
+//
+// 缺省值与 null 一律当 0（座位）—— 绝不能当走廊：一次读库失败就会把整张表渲染成一堵灰墙。
+const SEAT_CELL = { SEAT: 0, AISLE: 1, HOLE: 2 };
+const SEAT_CELL_NAME = { 0: '座位', 1: '走廊', 2: '空位' };
+
+// 规范化 types：尺寸必须与 rows×cols 严格一致，值域校验。
+//
+// 为什么不学 seats 那样「超出截断、不足补 null」：
+//   seats 补 null 的语义是「空座位」，补了不改变任何判断；而 types 补 0（座位）
+//   会把一条合法的整列走廊变成「半截走廊」—— 补出来的那几行是座位、上面几行是走廊，
+//   结构校验随即报「走廊只能整行或整列」，错误信息指向的位置用户根本没碰过。
+//   前端本来传的就是完整矩阵，尺寸不符只说明有 bug，直接说不一致比静默修正有用。
+function normalizeCellTypes(value, rows, cols, name = 'types') {
+  const arr = parseJsonShape(value, 'array', name);
+  if (arr.length !== rows) {
+    throw new Error(`字段「${name}」有 ${arr.length} 行，应与座位行数 ${rows} 一致`);
+  }
+  const out = [];
+  for (let r = 0; r < rows; r++) {
+    const src = arr[r];
+    if (!Array.isArray(src)) throw new Error(`字段「${name}」第 ${r + 1} 行应为数组`);
+    if (src.length !== cols) {
+      throw new Error(`字段「${name}」第 ${r + 1} 行有 ${src.length} 格，应与座位列数 ${cols} 一致`);
+    }
+    const line = [];
+    for (let c = 0; c < cols; c++) {
+      const raw = src[c];
+      if (raw == null) { line.push(SEAT_CELL.SEAT); continue; }
+      const v = Number(raw);
+      if (!Number.isInteger(v) || !Object.prototype.hasOwnProperty.call(SEAT_CELL_NAME, v)) {
+        throw new Error(`字段「${name}」第 ${r + 1} 行第 ${c + 1} 列应为 0/1/2（座位/走廊/空位），收到：${JSON.stringify(raw)}`);
+      }
+      line.push(v);
+    }
+    out.push(line);
+  }
+  return out;
+}
 
 // 整数数组元素校验（如 aisle_cols）
 function assertIntElements(arr, name) {
@@ -576,6 +629,7 @@ module.exports = {
   MAX_JSON_LEN,
   SEAT_MAX_ROWS,
   SEAT_MAX_COLS,
+  SEAT_MAX_GRID_COLS,
   COLUMN_RULES,
   cleanText,
   cleanByType,
@@ -588,6 +642,9 @@ module.exports = {
   strictDate,
   roundTo,
   normalizeSeats,
+  normalizeCellTypes,
+  SEAT_CELL,
+  SEAT_CELL_NAME,
   assertSeatCell,
   sanitizeField,
 };

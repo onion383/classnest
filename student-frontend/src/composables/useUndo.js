@@ -71,12 +71,22 @@ export function recordGridCellUndo(key, table, row, col, oldVal, newVal, label, 
 // ==================== 记录一条网格整块覆盖撤销 ====================
 // 用于整行/整列换位等批量操作，oldArr/newArr 为整个网格（数组或对象）快照。
 // label：可选，传递时用于通知条展示详细文案（默认「整块变更」，后端有兜底维度文案）
-export function recordGridSnapshotUndo(key, table, oldArr, newArr, label) {
+// opts：可选
+//   oldRows / newRows —— 座位表「插入/删除行走廊」会改变行数。后端 grid_snapshot 只回写
+//     JSON 列、不认行数，撤掉一次「插入一行」之后库里会变成「types 少一行、rows 还是多的」，
+//     读回时被裁掉/降级，破坏「types 与 rows 必须同时写」这条不变量。
+//   origin —— 批次标识。两张座位表要一起插一行（几何是共享的），撤销也得一步退完；
+//     同 origin 的记录会被后端整批回退（见 routes/undo/undo.js 的 /table/:key/undo）。
+export function recordGridSnapshotUndo(key, table, oldArr, newArr, label, opts = null) {
   const payload = { table, oldValue: oldArr, newValue: newArr }
+  if (opts && opts.oldRows !== undefined) payload.oldRows = opts.oldRows
+  if (opts && opts.newRows !== undefined) payload.newRows = opts.newRows
   if (label) payload.label = label
+  const origin = (opts && opts.origin) || ''
   try {
-    pushUndo({ key, type: 'grid_snapshot', label: label || '整块变更', payload })
-      .then(() => refreshUndoStatus(true))
+    pushUndo({ key, type: 'grid_snapshot', label: label || '整块变更', payload, origin })
+      // 批次内不逐条刷：由调用方在整批登记完后 flushUndoStatus 刷一次
+      .then(() => { if (!origin) refreshUndoStatus(true) })
       .catch(() => warnUndoFailed(label || '整块变更'))
   } catch {
     warnUndoFailed(label || '整块变更')

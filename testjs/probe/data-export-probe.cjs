@@ -32,11 +32,24 @@ dbManager.withDb(slug, () => {
     .run(JSON.stringify([{ path: '/uploads/c.pdf', name: '采购单.pdf', size: 1200, kind: 'pdf' }]))
   db.prepare("INSERT INTO leave_records (position, student_id, 姓名, 类型, 开始时间, 结束时间, 状态) VALUES (1,1,'张三','病假','2026-11-02 08:00','2026-11-03 18:00','已返校')").run()
   // 座位：二维数组，数字是 student_id，字符串是临时学生（种子已有 current 行，故用 REPLACE）
-  db.prepare("INSERT OR REPLACE INTO seat_slots (kind, rows, cols, seats) VALUES ('current', 2, 3, ?)")
-    .run(JSON.stringify([[1, 2, ''], ['', '王五', '']]))
-  // 值日：{项目:{星期:[人名]}}
-  db.prepare("INSERT OR REPLACE INTO duty_slots (kind, days, items, cells) VALUES ('current', ?, '[]', ?)")
-    .run(JSON.stringify(['周一', '周二', '周三']), JSON.stringify({ 扫地: { 周一: ['张三'], 周三: ['李四', '王五'] }, 擦窗: { 周二: ['张三'] } }))
+  // 座位：走廊是 seats 里的**真实列**（types 里标 1），不再是渲染期插的虚拟列。
+  // 2 行 × 5 列，第 2/4 列是走廊 → 座位列 3 个（列1/列2/列3）；
+  // 第 2 行第 3 个座位列挖成空位（types=2）→ 导出必须写「空位」而不是留白
+  db.prepare("INSERT OR REPLACE INTO seat_slots (kind, rows, cols, seats, types) VALUES ('current', 2, 5, ?, ?)")
+    .run(
+      JSON.stringify([[1, null, 2, null, null], [null, null, '王五', null, null]]),
+      JSON.stringify([[0, 1, 0, 1, 0], [0, 1, 0, 1, 2]])
+    )
+  // 值日：列名与 cells 都按模式分键（{daily,big}）。
+  // 列名是**全局配置**，存在 kind='settings' 那行；current 行的 days 列根本没人读
+  // —— 种错行的话导出会退回默认周一到周五，看起来「有值」但列头是错的。
+  db.prepare("UPDATE duty_slots SET days = ? WHERE kind = 'settings'")
+    .run(JSON.stringify({ daily: ['周一', '周二', '周三'], big: [] }))
+  db.prepare("INSERT OR REPLACE INTO duty_slots (kind, cells) VALUES ('current', ?)")
+    .run(JSON.stringify({
+      daily: { 扫地: { 周一: ['张三'], 周三: ['李四', '王五'] }, 擦窗: { 周二: ['张三'] } },
+      big: {},
+    }))
   db.prepare("INSERT INTO semesters (name, start_date, end_date, is_current) VALUES ('2026 秋','2026-09-01','2027-01-20',1)").run()
   const dim = db.prepare("INSERT INTO group_dimensions (name) VALUES ('学习小组')").run().lastInsertRowid
   const g = db.prepare("INSERT INTO groups (dimension_id, name) VALUES (?, '第一组')").run(dim).lastInsertRowid
@@ -68,7 +81,11 @@ const server = app.listen(0, '127.0.0.1', async () => {
     const list = (await (await fetch(`${base}/tables`)).json()).tables
     console.log(`\n[1] 表清单 ${list.length} 条`)
     for (const t of list) console.log(`  ${t.label.padEnd(8, '　')} ${t.key.padEnd(16)} ${t.count} 行`)
-    check('表数量 = 19', list.length === 19, String(list.length))
+    // 20 = 学生/成绩/班费/请假/座位/值日/值日大扫除/课程/学期/小组/班干/活动/
+    //      倒计时/相册索引/相册照片/课程历史/撤销记录/AI 对话/AI 消息/应用设置
+    check('表数量 = 20', list.length === 20, String(list.length))
+    check('表 key 不重复（重复会在 byKey 里静默丢一张）',
+      new Set(list.map((t) => t.key)).size === list.length, String(new Set(list.map((t) => t.key)).size))
 
     // 拼音首字母给设置页的搜索框用（输入 xs 要能搜到「学生名单」）。
     // 判据按「表名里的中/英文字数」核对长度 —— 以后改表名忘了改 py 会直接被抓到。
@@ -97,7 +114,7 @@ const server = app.listen(0, '127.0.0.1', async () => {
     console.log('\n[3] 断言')
     check('学生名单 2 行', byKey.students.rows.length === 2)
     check('学生名单不含 id/is_provisional', !('id' in byKey.students.rows[0]) && !('is_provisional' in byKey.students.rows[0]))
-    // 座位是二维网格，不是「行/列/姓名」明细：3 列 + single 模式 → 列1/走廊/列2/走廊/列3
+    // 座位是二维网格，不是「行/列/姓名」明细：走廊列按 types 标「走廊」，座位列按序号标「列N」
     const seatHeaders = byKey.seats.fields.map((f) => f.name).join(',')
     check('座位列头按「列 / 走廊」交替', seatHeaders === '行号,列1,走廊,列2,走廊,列3', seatHeaders)
     check('座位行数 = 讲台 + 2 行', byKey.seats.rows.length === 3, String(byKey.seats.rows.length))
@@ -106,9 +123,15 @@ const server = app.listen(0, '127.0.0.1', async () => {
     check('座位把 student_id 换成了姓名', byKey.seats.rows[1].列1 === '张三' && byKey.seats.rows[1].列2 === '李四')
     check('座位保留临时学生姓名', byKey.seats.rows[2].列2 === '王五')
     check('走廊列只在第一行写「走廊」', byKey.seats.rows[1].走廊 === '走廊' && byKey.seats.rows[2].走廊 === '')
+    // 空位留白就和「空着的座位」分不出来了；导出表是拿去看布局的
+    check('空位导出成「空位」而不是留白', byKey.seats.rows[2].列3 === '空位', JSON.stringify(byKey.seats.rows[2]))
+    check('同一列的空座位仍是留白', byKey.seats.rows[1].列3 === '', JSON.stringify(byKey.seats.rows[1]))
     const duty = byKey.duties.rows.find((r) => r.项目 === '扫地')
     check('值日按天展开、多个人名顿号连接', duty && duty.周三 === '李四、王五', JSON.stringify(duty))
     check('值日只出现配置里的 3 天', Object.keys(duty).length === 4, Object.keys(duty).join(','))
+    // 大扫除的列名是「任务分组 + 数量」的纯函数（种子默认 3 个大组），不落库
+    const bigCols = byKey.dutiesBig.fields.map((f) => f.name).join(',')
+    check('大扫除列名由「任务分组 + 数量」派生', bigCols === '项目,第1大组,第2大组,第3大组,全部', bigCols)
     check('班费收据逐行列出路径', byKey.fees.rows[0].收据.includes('a.jpg') && byKey.fees.rows[0].收据.includes('\n'))
     // 收据有两种存的形状：老数据是纯路径字符串，新数据是 { path, name, size, kind }
     const feeJson = JSON.stringify(byKey.fees.rows.map((r) => r.收据))

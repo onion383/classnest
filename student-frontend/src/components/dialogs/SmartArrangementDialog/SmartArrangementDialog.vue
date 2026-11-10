@@ -1,7 +1,7 @@
 <template>
   <DialogShell :visible="visible" :z-index="50" overlay-class="bg-black/30">
     <div class="bg-surface rounded-lg p-5 shadow-card dialog-card flex flex-col overflow-hidden" style="width: 960px; height: 800px; max-width: 90vw; max-height: 90vh;">
-      <h3 class="text-lg font-bold mb-4">🧠 智能排表</h3>
+      <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><IconGlyph name="brain" :size="18" /> 智能排表</h3>
 
       <!-- 新同学确认：座位表里有班级学生信息表不存在的名字时提示 -->
       <NewComerConfirm :visible="showNewPrompt" :names="strangers" action="排表" @participate="onParticipate" @not="onNot" />
@@ -30,7 +30,7 @@
       <div class="mb-3">
         <div class="flex items-center justify-between mb-2">
           <label class="text-sm font-medium block">排表条件</label>
-          <button @click="startArrange" :disabled="poolEmpty" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm disabled:opacity-40 disabled:cursor-not-allowed">{{ arranged ? '🔀 换一换' : '▶ 开始排表' }}</button>
+          <button @click="startArrange" :disabled="poolEmpty" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm disabled:opacity-40 disabled:cursor-not-allowed">{{ arranged ? '换一换' : '开始排表' }}</button>
         </div>
         <div
           class="border border-dashed border-border rounded-lg p-2 bg-surface/55 backdrop-blur-md"
@@ -130,8 +130,9 @@
           :disabled="!arranged || savingDraft"
           class="bg-surface-hover px-4 py-2 rounded text-text border border-border mr-auto disabled:opacity-40 disabled:cursor-not-allowed"
         >{{ savingDraft ? '保存中…' : '保存草稿' }}</button>
+        <span v-if="seatShortage > 0" class="text-sm text-danger">座位不够：还差 {{ seatShortage }} 个（可用 {{ usableCount }} / 待排 {{ poolSize }}），请先在座位表里减少空位或多加行列</span>
         <button @click="cancel" class="bg-surface-hover px-4 py-2 rounded text-text border border-border">取消</button>
-        <button @click="confirm" class="bg-info text-text-inverse px-4 py-2 rounded border-none">确定</button>
+        <button @click="confirm" :disabled="seatShortage > 0" class="bg-info text-text-inverse px-4 py-2 rounded border-none disabled:opacity-40 disabled:cursor-not-allowed">确定</button>
       </div>
     </div>
   </DialogShell>
@@ -143,10 +144,12 @@ import GridView from '../../tables/GridView/GridView.vue';
 import NewComerConfirm from '../NewComerConfirm.vue';
 import ConfirmDialog from '../../base/ConfirmDialog.vue';
 import AppSelect from '../../base/AppSelect.vue';
+import IconGlyph from '../../base/IconGlyph.vue';
 import { useSeatDraft } from '../../../composables/useSeatDraft.js'
 import { useSmartArrangementPipeline } from './SmartArrangementDialog.pipeline.js'
 import { useSmartArrangementBlocks } from './SmartArrangementDialog.blocks.js'
 import { useSmartArrangementOptions } from './SmartArrangementDialog.options.js'
+import { seatColumnIndices, gridToDenseCols, normalizeTypes, generateColHeaders, toDenseSeats, alignDraftSeats, deskIndexOfDense, deriveDeskPattern, CELL } from '../../../composables/useSeatGrid.geometry.js'
 import { useRowSortDrag } from '../../../composables/useRowSortDrag.js'
 import '../../../styles/dialog-transition.css'
 import DialogShell from '../../base/DialogShell.vue'
@@ -155,13 +158,15 @@ defineOptions({ name: 'SmartArrangementDialog' })
 const props = defineProps({
   visible: Boolean,
   rows: { type: Number, default: 6 },
+  // 网格总列数（含走廊列）；「座位列数」由 types 反推，不再单独传
   cols: { type: Number, default: 7 },
   mode: { type: String, default: 'single' },
-  showAisle: { type: Boolean, default: true },
+  // 格子类型矩阵（rows×cols，0=座位 1=走廊 2=空位），与 seats 同下标
+  types: { type: Array, default: () => [] },
   students: { type: Array, default: () => [] },
-  // 当前未改动的座位表（二维数组，元素为学生 id 或 null），用于初始/条件变更时预览
+  // 当前未改动的座位表（二维网格，元素为学生 id 或 null；走廊/空位格为 null）
   initialSeats: { type: Array, default: () => [] },
-  // 位置权重矩阵（rows×cols）与「座位指数账本」（学生 id → 截至今日之前累计的座位权重），供「位置公平」使用
+  // 位置权重矩阵（rows×cols，网格口径）与「座位指数账本」（学生 id → 截至今日之前累计的座位权重），供「位置公平」使用
   weights: { type: Array, default: () => [] },
   ledger: { type: Object, default: () => ({}) }
 })
@@ -283,8 +288,42 @@ const dataSourceOptions = [
   { value: 'all', label: '全部同学' },
 ]
 
-// 排表基准座位：有草稿用草稿，否则用父组件传入的当前座位表
-const baseSeats = computed(() => draftSeats.value || props.initialSeats)
+// ==================== 几何：网格 ↔ 算法（dense）坐标 ====================
+// 座位表在库里是**网格**（走廊是真实列），排表算法按 dense 坐标工作（只保留座位列、
+// 连续下标）—— 算法里 `%2 == 0 为同桌` 这类判据在任意走廊布局下才能继续成立。
+// 转换只发生在本弹窗的进出口：这里压，buildSeatsOut 展开。算法侧零改动。
+const gridTypes = computed(() => normalizeTypes(props.types, props.rows, props.cols))
+// dense 列 → 网格列
+const seatIdx = computed(() => seatColumnIndices(props.cols, gridTypes.value))
+// 网格列 → dense 列（走廊列 -1），预览时按网格列取 dense 数据用
+const gridToDense = computed(() => gridToDenseCols(props.cols, gridTypes.value))
+// dense 版 types：把「行走廊 / 空位」从算法的可选格集合里排除
+const denseTypes = computed(() => {
+  const idx = seatIdx.value
+  const out = []
+  for (let r = 0; r < props.rows; r++) out.push(idx.map(c => gridTypes.value[r]?.[c] ?? CELL.SEAT))
+  return out
+})
+function isUsable(r, c) {
+  return denseTypes.value[r]?.[c] === CELL.SEAT
+}
+// 9.1：可用座位数 < 待排人数时禁止确认。
+// 放行的后果不是「排得难看」——pipeline 的 rest 放不下的人会被**静默丢掉**，
+// 点一次确定就把座位表写残了，而且界面看着是排好的。
+const usableCount = computed(() => {
+  let n = 0
+  for (let r = 0; r < props.rows; r++) {
+    for (let c = 0; c < seatIdx.value.length; c++) if (isUsable(r, c)) n++
+  }
+  return n
+})
+const poolSize = computed(() => (dataSource.value === 'all' ? props.students.length : tableStudents.value.length))
+const seatShortage = computed(() => Math.max(0, poolSize.value - usableCount.value))
+
+// 排表基准座位（网格口径）：有草稿用草稿，否则用父组件传入的当前座位表
+const baseGridSeats = computed(() => draftSeats.value || props.initialSeats)
+// 算法坐标空间：压掉走廊列
+const baseSeats = computed(() => toDenseSeats(baseGridSeats.value, props.cols, gridTypes.value))
 // 座位表里有名字但班级学生信息表里不存在的名字集合
 // 座位表数据：班级学生存 id(数字)，未被识别的自由文本名字(新同学)以字符串形式存储
 const strangerNames = computed(() => {
@@ -328,8 +367,15 @@ const previewKey = computed(() => {
   const sig = conditions.value.map(c => c.key + ':' + c.uid).join('-') || 'empty'
   return props.visible ? `arrange-${props.rows}-${props.cols}-${sig}-${previewVersion.value}` : 'closed'
 })
-const previewColHeaders = computed(() =>
-  ctx.generateColHeaders(props.cols, props.mode, props.showAisle))
+// 混排桌型：把网格桌号投影到算法（dense）坐标。走廊列被压掉后，
+// 「隔着一条走廊的两列」在 dense 里看起来就是相邻下标，必须靠桌号才能区分它们不是同桌。
+const denseDeskIndex = computed(() => deskIndexOfDense(props.cols, gridTypes.value, props.mode))
+const deskPattern = computed(() => deriveDeskPattern(props.cols, gridTypes.value, props.mode))
+// 只有「1 人桌与 2 人桌同时存在」才是真混排：混合桌初始全双桌、纯 single/double
+// 都不置灰四/六位（方案 11.4 要求纯模式行为完全不变）。
+const nonUniformDesk = computed(() =>
+  props.mode === 'mixed' && deskPattern.value.includes(1) && deskPattern.value.includes(2))
+const previewColHeaders = computed(() => generateColHeaders(props.cols, gridTypes.value))
 const previewRows = computed(() => ctx.buildPreviewRows(previewSeats.value))
 // 底部条件按钮（六类条件，拖到上方即添加，可重复添加）
 const conditionButtons = computed(() =>
@@ -337,6 +383,8 @@ const conditionButtons = computed(() =>
 
 // 跨模块共享的上下文：状态为 ref（模块内 .value 访问），临时字段与方法直接挂上；
 // 三个 useXxx 的返回方法在下方 Object.assign 回填，模块间经 ctx 互相调用（运行时解析）
+// 坐标口径：ctx.rows / ctx.cols / ctx.baseSeats / ctx.weights 一律是**算法侧 dense**；
+// 网格口径另给 ctx.gridCols / ctx.gridTypes / ctx.gridToDense（预览与落库用）。
 const ctx = {
   conditions, nextUid, previewSeats, previewVersion, arranged, satisfaction,
   dragIdx, dragOverIdx,
@@ -344,13 +392,20 @@ const ctx = {
   dataSource,
   baseSeats, strangerNames, strangers, tableStudents,
   rows: toRef(props, 'rows'),
-  cols: toRef(props, 'cols'),
+  cols: computed(() => seatIdx.value.length),
   mode: toRef(props, 'mode'),
-  showAisle: toRef(props, 'showAisle'),
   students: toRef(props, 'students'),
-  initialSeats: toRef(props, 'initialSeats'),
-  weights: toRef(props, 'weights'),
+  weights: computed(() => toDenseSeats(props.weights, props.cols, gridTypes.value)),
   ledger: toRef(props, 'ledger'),
+  gridCols: toRef(props, 'cols'),
+  gridTypes,
+  gridToDense,
+  denseTypes,
+  deskIndex: denseDeskIndex,
+  nonUniformDesk,
+  isUsable,
+  usableCount,
+  seatShortage,
   emit,
 }
 const pipeline = useSmartArrangementPipeline(ctx, CONDITION_REGISTRY)
@@ -399,7 +454,9 @@ watch(() => props.visible, async (v) => {
   if (draft.exists) {
     // restoring 期间暂缓 conditions 监听，避免恢复条件本身把 arranged 重置为未排表
     restoring.value = true
-    draftSeats.value = draft.seats
+    // 草稿的几何可能与当前座位表设置已经不同（排完草稿后又改过行列/桌子模式）：
+    // 必须先按座位列序号搬过来，否则走廊与座位会整体错位
+    draftSeats.value = alignDraftSeats(draft, props.rows, props.cols, gridTypes.value)
     draftInUse.value = true
     ctx.restoreConditions(draft.conditions)
     await nextTick()

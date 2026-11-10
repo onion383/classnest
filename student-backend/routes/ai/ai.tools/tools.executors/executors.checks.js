@@ -2,6 +2,7 @@
 // 纯代码搬运自 ../executors.js，行为不变。门面装配见 tools.js。
 const { db } = require('../../../../db');
 const store = require('../../../../services/slotStore');
+const { gridToDenseCols } = require('../../../../services/seatGrid');
 const {
   aiParseDate, aiParseJson, aiTodayStr, studentIdNameMap,
   unpackDutyModeCol, dutyModeLabel, aiLooksMultiCourse,
@@ -88,17 +89,22 @@ const CONFLICT_LABELS = {
 const CONFLICT_RULES = {
   // 座位表：同一人坐多个位置
   seat_duplicate: () => {
-    const row = db.prepare('SELECT seats FROM seat_layout WHERE id = 1').get();
+    const row = db.prepare('SELECT seats, cols, types FROM seat_layout WHERE id = 1').get();
     if (!row) return [];
     const seats = aiParseJson(row.seats, []) || [];
+    const types = aiParseJson(row.types, []) || [];
     const idName = studentIdNameMap();
     const pos = {};
     for (let r = 0; r < seats.length; r++) {
       const line = Array.isArray(seats[r]) ? seats[r] : [];
+      // 列号必须按「座位列序号」报：网格下标把走廊列也算进去，
+      // 一张 7 座位列的座位表会报出「第3行第13列」，而页面上写的是「列7」。
+      const dense = gridToDenseCols(Math.max(line.length, Number(row.cols) || 0), types);
       for (let c = 0; c < line.length; c++) {
         const v = line[c];
         if (v == null || v === '') continue;
-        (pos[String(v)] = pos[String(v)] || []).push({ 排: r + 1, 列: c + 1 });
+        if (dense[c] < 0) continue;
+        (pos[String(v)] = pos[String(v)] || []).push({ 排: r + 1, 列: dense[c] + 1 });
       }
     }
     return Object.keys(pos).filter((k) => pos[k].length > 1).map((k) => ({

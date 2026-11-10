@@ -8,6 +8,9 @@
 
 const { db } = require('../db');
 const { resolveNames } = require('./provisionalStudents');
+const { SEAT_CELL } = require('./sanitize');
+// 报座位位置时按「座位列序号」算列号（走廊不计入），与页面表头/导出/检索同口径
+const { gridToDenseCols } = require('./seatGrid');
 // 列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
 const dutyConfig = require('./dutyConfig');
 
@@ -33,10 +36,14 @@ function studentNameSet() {
 }
 
 // —— 座位：数字格子（即学生 id）必须真实存在，且「一人一座」不得重复 ——
-function assertSeatRefs(seats, name) {
+// types 可选：给了就按「座位列序号」报列（走廊不计入列号），与页面表头/导出/检索口径一致。
+function assertSeatRefs(seats, name, types) {
   if (!Array.isArray(seats)) return;
   const ids = studentIdSet();
   const seen = new Map(); // 学生 id -> 已占位置描述
+  const width = seats.reduce((mx, row) => (Array.isArray(row) ? Math.max(mx, row.length) : mx), 0);
+  const dense = Array.isArray(types) && types.length ? gridToDenseCols(width, types) : null;
+  const colNo = (c) => (dense && dense[c] >= 0 ? dense[c] + 1 : c + 1);
   seats.forEach((row, r) => {
     if (!Array.isArray(row)) return;
     row.forEach((cell, c) => {
@@ -44,11 +51,48 @@ function assertSeatRefs(seats, name) {
       if (!ids.has(cell)) throw new Error(`字段「${name}」引用了不存在的学生（id=${cell}）`);
       // 一人一座：同一学生 id 不能出现在两个位置，否则必然有学生没座位
       if (seen.has(cell)) {
-        throw new Error(`座位表一名学生只能占一个座位：id=${cell} 同时出现在 ${seen.get(cell)} 与 第${r + 1}行第${c + 1}列`);
+        throw new Error(`座位表一名学生只能占一个座位：id=${cell} 同时出现在 ${seen.get(cell)} 与 第${r + 1}行第${colNo(c)}列`);
       }
-      seen.set(cell, `第${r + 1}行第${c + 1}列`);
+      seen.set(cell, `第${r + 1}行第${colNo(c)}列`);
     });
   });
+}
+
+// —— 座位格子类型矩阵（types）：形状 + 值域 + 「走廊只能整行或整列」——
+// 形状/值域在 services/sanitize.js 的 normalizeCellTypes 里已经做过一遍，这里再校一次，
+// 是因为写库路径不止 routes/seats.js 一条（AI 整块写入直接走 validateRow，不经过裁剪）。
+// 「整行/整列」这条只有这里能守：允许「一列里一半是走廊」的话，排表侧把走廊列压掉
+// 得到的就不再是矩形，「双人桌从偶数列开始」那一整套判据会当场失效。
+function assertSeatTypes(types, rows, cols) {
+  if (!Array.isArray(types) || !types.length) return;
+  if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || cols < 1) return;
+  const name = 'types';
+  if (types.length !== rows) {
+    throw new Error(`字段「${name}」有 ${types.length} 行，应与座位行数 ${rows} 一致`);
+  }
+  for (let r = 0; r < rows; r++) {
+    const line = types[r];
+    if (!Array.isArray(line)) throw new Error(`字段「${name}」第 ${r + 1} 行应为数组`);
+    if (line.length !== cols) {
+      throw new Error(`字段「${name}」第 ${r + 1} 行有 ${line.length} 格，应与座位列数 ${cols} 一致`);
+    }
+    for (let c = 0; c < cols; c++) {
+      const v = Number(line[c]);
+      if (!Number.isInteger(v) || v < SEAT_CELL.SEAT || v > SEAT_CELL.HOLE) {
+        throw new Error(`字段「${name}」第 ${r + 1} 行第 ${c + 1} 列应为 0/1/2（座位/走廊/空位），收到：${JSON.stringify(line[c])}`);
+      }
+    }
+  }
+  const rowAllAisle = types.map((line) => line.every((v) => Number(v) === SEAT_CELL.AISLE));
+  const colAllAisle = Array.from({ length: cols }, (_, c) => types.every((line) => Number(line[c]) === SEAT_CELL.AISLE));
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (Number(types[r][c]) !== SEAT_CELL.AISLE) continue;
+      if (!rowAllAisle[r] && !colAllAisle[c]) {
+        throw new Error(`走廊只能整行或整列设置：第 ${r + 1} 行第 ${c + 1} 列是走廊，但该行与该列都不是整行/整列走廊`);
+      }
+    }
+  }
 }
 
 // —— 值日：解析 duty_settings 里的劳动项目（按模式分键 { daily: [...], big: [...] }）——
@@ -157,6 +201,57 @@ function assertLeaveWindow(start, end) {
   }
 }
 
+// —— 可用座位数不能少于学生数（9.1）——
+// 只在「本次提交比库里更少」时拦：老库里本来就可能坐不下（名册涨了、行被删过），
+// 那是历史状态，不该让用户连改一格都存不进去；但把座位**改得更少**到坐不下，
+// 一定是这次操作造成的，必须拦 —— 否则排表会静默丢掉排不下的学生。
+function countUsableSeats(types) {
+  let n = 0;
+  for (const line of types) {
+    if (!Array.isArray(line)) continue;
+    for (const v of line) if (Number(v) === SEAT_CELL.SEAT) n++;
+  }
+  return n;
+}
+function assertSeatCapacity(types) {
+  if (!Array.isArray(types) || !types.length) return;
+  const need = studentIdSet().size;
+  if (!need) return;
+  const usable = countUsableSeats(types);
+  if (usable >= need) return;
+  let prevUsable = 0;
+  try {
+    const rec = db.prepare('SELECT types FROM seat_layout WHERE id = 1').get();
+    const prev = toObj(rec && rec.types);
+    if (Array.isArray(prev)) prevUsable = countUsableSeats(prev);
+  } catch (_) {
+    // 读不到旧几何就不拦：宁可不拦，也别让一次读取失败卡住正常保存
+    return;
+  }
+  if (usable >= prevUsable) return;
+  throw new Error(`可用座位只有 ${usable} 个，学生有 ${need} 人：还差 ${need - usable} 个座位，请减少空位或多加行列`);
+}
+
+// —— 空位格不许有数据 ——
+// 空位（types=2）是「这里没有桌子」，不是「这里可以放人」。两者一旦脱节：
+//   · 界面渲染空位分支不显示名字 → 那个人看起来凭空消失
+//   · 座位指数按 types 判可用格 → 他的权重静默少算
+//   · 智能排表按 usable 过滤 → 把他当成「未入座」重新塞一个座位
+// 全部是不报错的静默错误，所以必须在写库前拦。
+function assertHolesEmpty(seats, types) {
+  if (!Array.isArray(types) || !types.length || !Array.isArray(seats)) return;
+  for (let r = 0; r < types.length; r++) {
+    const line = types[r];
+    if (!Array.isArray(line)) continue;
+    for (let c = 0; c < line.length; c++) {
+      if (Number(line[c]) !== SEAT_CELL.HOLE) continue;
+      const v = Array.isArray(seats[r]) ? seats[r][c] : null;
+      if (v === null || v === undefined || v === '') continue;
+      throw new Error(`第 ${r + 1} 行第 ${c + 1} 列被设为空位，但格子里还有学生（${v}）：请先把该学生移走，再设置空位`);
+    }
+  }
+}
+
 // —— 统一入口 ——
 // table：目标表；values：本次要写入的列值（可只含部分列）；
 // existing：该行旧值（更新时传入，用于补齐 values 里没出现的列）。
@@ -165,6 +260,7 @@ function validateRow(table, values, existing) {
 
   if (table === 'seat_layout' || table === 'seat_template') {
     const seats = toObj(pick('seats'));
+    const types = toObj(pick('types'));
     const rows = Number(pick('rows'));
     const cols = Number(pick('cols'));
     // 尺寸越界：座位行数 / 每行格数不得超过设定的行×列
@@ -174,7 +270,11 @@ function validateRow(table, values, existing) {
         if (Array.isArray(r) && r.length > cols) throw new Error(`座位第 ${i + 1} 行有 ${r.length} 格，超出设定的 ${cols} 列`);
       });
     }
-    assertSeatRefs(seats, 'seats');
+    assertSeatTypes(types, rows, cols);
+    assertSeatRefs(seats, 'seats', types);
+    assertHolesEmpty(seats, types);
+    // 容量守卫只管当前座位表：模板是布局样板，不绑定本班人数
+    if (table === 'seat_layout') assertSeatCapacity(types);
   } else if (table === 'duty_layout' || table === 'duty_template') {
     assertDutyRefs(pick('cells'), 'cells');
   } else if (table === 'leave_records') {
@@ -182,4 +282,4 @@ function validateRow(table, values, existing) {
   }
 }
 
-module.exports = { validateRow, assertLeaveWindow, assertSeatRefs, assertDutyRefs };
+module.exports = { validateRow, assertLeaveWindow, assertSeatRefs, assertSeatTypes, assertHolesEmpty, assertSeatCapacity, assertDutyRefs };

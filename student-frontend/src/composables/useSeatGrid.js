@@ -4,58 +4,16 @@ import { recordGridCellUndo, recordGridSnapshotUndo, newUndoBatchId, flushUndoSt
 import { useNotification } from './useNotification.js'
 import { createSerialSaver } from '../utils/serialSaver.js'
 import { createRowReuseCache } from '../utils/rowReuse.js'
+import {
+  CELL, normalizeTypes, columnKinds, seatColumnIndices, rowIsAisle,
+  generateColHeaders, buildSeatLikeRows, applyEditedRows, reshapeGeometry,
+  usableSeatCount, toggleHole, clearHoles, insertAisleRow, removeGridRow, SEAT_MAX_ROWS,
+  insertAisleColumn, removeGridColumn, SEAT_MAX_GRID_COLS,
+} from './useSeatGrid.geometry.js'
 
-// ==================== 座位网格几何辅助（纯函数，座位表与权重表共用） ====================
-export function generateColHeaders(cols, mode, showAisle) {
-  const headers = []
-  if (!showAisle) { for (let i = 0; i < cols; i++) headers.push(`列${i + 1}`); return headers }
-  if (mode === 'single') {
-    for (let i = 0; i < cols; i++) { headers.push(`列${i + 1}`); if (i < cols - 1) headers.push('走廊') }
-  } else {
-    for (let i = 0; i < cols; i++) { headers.push(`列${i + 1}`); if ((i + 1) % 2 === 0 && i < cols - 1) headers.push('走廊') }
-  }
-  return headers
-}
-
-export function getDisplayColCount(cols, mode, showAisle) {
-  if (!showAisle) return cols
-  if (mode === 'single') return cols + (cols - 1)
-  else return cols + Math.floor((cols - 1) / 2)
-}
-
-export function isAisleCol(displayIdx, cols, mode, showAisle) {
-  if (!showAisle) return false
-  const totalDisplay = getDisplayColCount(cols, mode, showAisle)
-  if (mode === 'single') return displayIdx % 2 === 1
-  else return displayIdx >= 2 && (displayIdx - 2) % 3 === 0 && displayIdx < totalDisplay
-}
-
-// 构造与座位表同构的显示行（讲台行 + 走廊列 + 数据格）。
-// valueAt(rowIdx, realCol) 返回 { course, extra? }；extra 会并入数据格属性（如 _studentId）。
-export function buildSeatLikeRows(rows, cols, mode, showAisle, valueAt) {
-  const displayCols = getDisplayColCount(cols, mode, showAisle)
-  const result = []
-  result.push({ _rowKey: 'podium', label: '讲  台', _isPodium: true, _isSeparator: false, _mergeCells: false, _isReadonly: true, cells: [] })
-  for (let r = 0; r < rows; r++) {
-    const rowCells = []
-    let realCol = 0
-    for (let d = 0; d < displayCols; d++) {
-      if (isAisleCol(d, cols, mode, showAisle)) {
-        if (r === 0) {
-          rowCells.push({ course: '走廊', _isAisle: true, _aisleRowSpan: rows, _isAisleHidden: false })
-        } else {
-          rowCells.push({ course: '', _isAisle: false, _isAisleHidden: true })
-        }
-      } else {
-        const v = valueAt(r, realCol) || {}
-        rowCells.push({ course: v.course, _isAisle: false, _isAisleHidden: false, ...(v.extra || {}) })
-        realCol++
-      }
-    }
-    result.push({ _rowKey: `row_${r}`, label: `第${r + 1}行`, cells: rowCells, _isReadonly: false, _lessonIdx: r, _periodRowSpan: 0, periodLabel: '' })
-  }
-  return result
-}
+// 几何纯函数（types 规整 / 表头 / 显示行 / dense 互转）都在 useSeatGrid.geometry.js，
+// 这里转发出去保持既有导入点不变（SeatView / AiGridPreview / useSeatDraft 都从这里取）。
+export * from './useSeatGrid.geometry.js'
 
 export function useSeatGrid(apiBase, options = {}) {
   // undo.{key, table}：开启撤销记录；cellBase 为单格更新接口（如 /api/seats/master/cell）
@@ -66,10 +24,11 @@ export function useSeatGrid(apiBase, options = {}) {
   // 表格永远停在「判定中」占位，看起来像卡住了。提到外面让表格能显示告警 + 重试。
   const loadError = ref(false)
   const rows = ref(6)
+  // 网格总列数（含走廊列）。设置弹窗里的「座位列数」是另一个口径，见 seatColsToGrid。
   const cols = ref(7)
   const seats = ref([])
+  const types = ref([])
   const mode = ref('single')
-  const showAisle = ref(true)
   const settings = ref({})
   const settingsVisible = ref(false)
   const currentEditExcludeIds = ref([])
@@ -77,9 +36,9 @@ export function useSeatGrid(apiBase, options = {}) {
   const reuseRows = createRowReuseCache()
 
   // ==================== Computed ====================
-  const colHeaders = computed(() => generateColHeaders(cols.value, mode.value, showAisle.value))
+  const colHeaders = computed(() => generateColHeaders(cols.value, types.value))
 
-  const displayRows = computed(() => reuseRows(buildSeatLikeRows(rows.value, cols.value, mode.value, showAisle.value, (r, c) => {
+  const displayRows = computed(() => reuseRows(buildSeatLikeRows(rows.value, cols.value, types.value, (r, c) => {
     const seatVal = seats.value[r]?.[c]
     let displayName = ''
     if (seatVal === null || seatVal === undefined) {
@@ -105,10 +64,13 @@ export function useSeatGrid(apiBase, options = {}) {
       if (row._isPodium) return { '行号': '讲台', _isPodium: true, label: '讲  台' }
       const obj = { '行号': row.label }
       row.cells.forEach((cell, idx) => {
-        const headerName = headers[idx] || `列${idx+1}`
+        const headerName = headers[idx] || `列${idx + 1}`
         if (cell._isAisle || cell._isAisleHidden) {
           obj[headerName] = '走廊'
           obj._aisleCell = true
+        } else if (cell._blank) {
+          // 与后端 tSeats 同口径：空位写「空位」，留白会跟「空着的座位」混淆
+          obj[headerName] = '空位'
         } else {
           obj[headerName] = cell.course || ''
         }
@@ -118,31 +80,19 @@ export function useSeatGrid(apiBase, options = {}) {
   })
 
   // ==================== 核心方法 ====================
+  // 一格的文本落成什么值：候选框里明确点选的学生直接用它的 id（同名正式/临时也能区分）；
+  // 手输的名字没有 _studentId，退回按姓名解析；仍解析不到就暂存姓名（等名字同步后下次保存再转 id）。
+  function resolveCellValue(cell) {
+    const name = cell?.course?.trim() || ''
+    const pickedId = Number.isInteger(cell?._studentId) ? cell._studentId : null
+    const studentId = pickedId != null ? pickedId : getStudentId(name)
+    if (studentId != null) return studentId
+    if (name === '') return null
+    return name
+  }
+
   function syncCellsToSeats(newRows) {
-    const newSeats = []
-    for (let r = 0; r < newRows.length; r++) {
-      const row = newRows[r]
-      if (row._isPodium) continue
-      const seatRow = []
-      for (let d = 0; d < row.cells.length; d++) {
-        if (isAisleCol(d, cols.value, mode.value, showAisle.value)) continue
-        const cell = row.cells[d]
-        const name = cell?.course?.trim() || ''
-        // 候选框里明确点选的学生：直接用它的 id（同名正式/临时也能区分）。
-        // 手输的名字没有 _studentId，退回按姓名解析；仍解析不到就暂存姓名（等名字同步后下次保存再转 id）。
-        const pickedId = Number.isInteger(cell?._studentId) ? cell._studentId : null
-        const studentId = pickedId != null ? pickedId : getStudentId(name)
-        if (studentId != null) {
-          seatRow.push(studentId)
-        } else if (name === '') {
-          seatRow.push(null)
-        } else {
-          seatRow.push(name)
-        }
-      }
-      newSeats.push(seatRow)
-    }
-    seats.value = newSeats
+    seats.value = applyEditedRows(seats.value, newRows, cols.value, types.value, resolveCellValue)
   }
 
   async function load() {
@@ -150,10 +100,10 @@ export function useSeatGrid(apiBase, options = {}) {
       const res = await axios.get(apiBase)
       rows.value = res.data.rows
       cols.value = res.data.cols
-      seats.value = res.data.seats || []
       mode.value = res.data.mode || 'single'
+      seats.value = res.data.seats || []
+      types.value = normalizeTypes(res.data.types, rows.value, cols.value)
       settings.value = res.data.settings || {}
-      showAisle.value = settings.value.showAisle !== false
       loaded.value = true
       loadError.value = false
     } catch (e) { console.error(e); loadError.value = true }
@@ -162,9 +112,10 @@ export function useSeatGrid(apiBase, options = {}) {
   // 串行保存器：每次编辑都 PUT 整块座位，连续操作会并发发出多个 PUT —— 后端按到达顺序写库，
   // 先发的可能后到，库里最后留下的是**更旧**的状态。串行器保证同一时刻只有一个在途，
   // 在途期间的改动合并成一轮、用最新 seats 再存一次。
+  // types 必须一起提交：后端在「已有 types」时拒绝单独改 cols 的写入（防静默截掉走廊列）。
   const saver = createSerialSaver(() => axios.put(apiBase, {
     rows: rows.value, cols: cols.value, seats: seats.value,
-    mode: mode.value, settings: { showAisle: showAisle.value },
+    mode: mode.value, types: types.value,
   }))
 
   async function save() {
@@ -247,77 +198,159 @@ export function useSeatGrid(apiBase, options = {}) {
     if (fromIdx === toIdx) return
     const seatFrom = fromIdx - 1, seatTo = toIdx - 1
     if (seatFrom < 0 || seatTo < 0 || seatFrom >= seats.value.length || seatTo >= seats.value.length) return
+    // 行走廊行不参与交换：拖了只会移动数据、不会移动走廊，两者的相对位置就错了
+    if (rowIsAisle(types.value, seatFrom) || rowIsAisle(types.value, seatTo)) return
     const prev = seats.value.map(r => [...r])
+    const prevTypes = types.value.map(r => [...r])
     const s = [...seats.value]
     // 移动语义：取出源行后插入目标位置，中间行顺移（与拖动时的让位预览一致）
     const [moved] = s.splice(seatFrom, 1)
     s.splice(seatTo, 0, moved)
     seats.value = s
+    // 几何必须跟着行一起搬：这一行上的空位（没有桌子）属于这一行，
+    // 只搬 seats 会有学生落到原处留下的洞上 —— 洞里有一个人，界面看不出来。
+    const t = [...types.value]
+    const [movedTypes] = t.splice(seatFrom, 1)
+    t.splice(seatTo, 0, movedTypes)
+    types.value = t
     // 与 onCellsUpdate 统一：保存成功后才登记撤销；失败以库中数据回滚。
     const ok = await save()
     if (!ok) { await load(); return }
-    if (undo) recordGridSnapshotUndo(undo.key, undo.table, prev, s)
+    if (undo) recordGridSnapshotUndo(undo.key, undo.table, { seats: prev, types: prevTypes }, { seats: s, types: t })
   }
 
-  async function onSwapColumns(fromDisplayIdx, toDisplayIdx) {
-    const map = []
-    let real = 0
-    const total = getDisplayColCount(cols.value, mode.value, showAisle.value)
-    for (let d = 0; d < total; d++) {
-      if (!isAisleCol(d, cols.value, mode.value, showAisle.value)) map[d] = real++
-      else map[d] = -1
-    }
-    const from = map[fromDisplayIdx], to = map[toDisplayIdx]
-    if (from === -1 || to === -1) return
+  async function onSwapColumns(fromCol, toCol) {
+    if (fromCol === toCol) return
+    const kinds = columnKinds(cols.value, types.value)
+    if (kinds[fromCol] !== 'seat' || kinds[toCol] !== 'seat') return
+    // 含走廊格的列（局部走廊 / 行列表交叉）不动：只搬 seats 不搬 types 会让走廊与数据错位
+    const hasAisleCell = (c) => (types.value || []).some(line => Array.isArray(line) && line[c] === CELL.AISLE)
+    if (hasAisleCell(fromCol) || hasAisleCell(toCol)) return
     const prev = seats.value.map(r => [...r])
+    const prevTypes = types.value.map(r => [...r])
     // 移动语义：源列取出后插入目标位置，中间列的数据顺移（表头固定不动）
-    const newSeats = seats.value.map(r => {
-      const nr = [...r]
-      const [moved] = nr.splice(from, 1)
-      nr.splice(to, 0, moved)
+    const move = (line) => {
+      const nr = [...line]
+      const [moved] = nr.splice(fromCol, 1)
+      nr.splice(toCol, 0, moved)
       return nr
-    })
+    }
+    const newSeats = seats.value.map(move)
     seats.value = newSeats
+    // 同理：这一列上的空位跟着列一起走，否则洞留在原地、学生被搬到洞上
+    const newTypes = types.value.map(move)
+    types.value = newTypes
     // 与 onCellsUpdate 统一：保存成功后才登记撤销；失败以库中数据回滚。
     const ok = await save()
     if (!ok) { await load(); return }
-    if (undo) recordGridSnapshotUndo(undo.key, undo.table, prev, newSeats)
+    if (undo) recordGridSnapshotUndo(undo.key, undo.table, { seats: prev, types: prevTypes }, { seats: newSeats, types: newTypes })
   }
 
-  function onCellDblClick({ rowIdx, colIdx: displayColIdx }) {
+  function onCellDblClick({ rowIdx, colIdx }) {
     const row = displayRows.value[rowIdx]
     if (!row || row._isReadonly || row._isPodium) return
-    const cell = row.cells[displayColIdx]
-    if (cell._isAisle || cell._isAisleHidden) return
-    const seatRowIdx = rowIdx - 1
+    const cell = row.cells[colIdx]
+    if (cell._isAisle || cell._isAisleHidden || cell._blank) return
+    const seatRowIdx = row._lessonIdx
     if (seatRowIdx < 0 || seatRowIdx >= seats.value.length) return
-    let realCol = 0
-    for (let d = 0; d < displayColIdx; d++) {
-      if (!isAisleCol(d, cols.value, mode.value, showAisle.value)) realCol++
-    }
     const occupied = new Set()
     seats.value.forEach((r, ri) => {
       r.forEach((id, ci) => {
-        if (id && !(ri === seatRowIdx && ci === realCol)) occupied.add(id)
+        if (id && !(ri === seatRowIdx && ci === colIdx)) occupied.add(id)
       })
     })
     currentEditExcludeIds.value = Array.from(occupied)
   }
 
-  async function saveSettings({ rows: newRows, cols: newCols, mode: newMode, showAisle: newShowAisle }) {
+  // 设置：newCols 是「座位列数」（用户视角），内部换算成网格总列数再落库。
+  // 几何决策（含「手绘空位必须跟着座位列序号搬」）全在 reshapeGeometry 里：
+  // 这里只做接线，不要再自己拼 formulaTypes —— 那会把空位全冲掉，且无任何提示。
+  async function saveSettings({ rows: newRows, cols: newCols, mode: newMode }) {
+    const next = reshapeGeometry(seats.value, cols.value, types.value, newRows, newCols, newMode)
     rows.value = newRows
-    cols.value = newCols
+    cols.value = next.gridCols
     mode.value = newMode
-    showAisle.value = newShowAisle
-    const newSeats = []
-    for (let r = 0; r < newRows; r++) {
-      const row = seats.value[r] ? [...seats.value[r]].slice(0, newCols) : []
-      while (row.length < newCols) row.push(null)
-      newSeats.push(row)
-    }
-    seats.value = newSeats
+    types.value = next.types
+    seats.value = next.seats
     settingsVisible.value = false
     await save()
+  }
+
+  // ==================== 设置空位（画笔）====================
+  // 画笔模式下 types 就地改（界面立刻能看到洞），但**不落库**：
+  // 用户可能点错好几格，必须能「退出/取消」一次回到进入前的状态。
+  // 所以进入时留一份快照，取消用它回滚、确认用它登记撤销。
+  const holeMode = ref(false)
+  // 非响应式：只给回滚/对比用，不需要参与渲染
+  let holeSnapshot = null
+  const usableSeats = computed(() => usableSeatCount(types.value))
+
+  function enterHoleMode() {
+    holeSnapshot = {
+      types: JSON.parse(JSON.stringify(types.value)),
+      seats: (seats.value || []).map((r) => (Array.isArray(r) ? [...r] : [])),
+    }
+    holeMode.value = true
+  }
+
+  // 退出画笔。revert=true 表示取消：把 types/seats 恢复到进入前。
+  function exitHoleMode(revert = true) {
+    if (revert && holeSnapshot) {
+      // 拷贝：快照本身要保持干净，否则「退出 → 再进入 → 退出」会用上一次的快照回滚
+      types.value = holeSnapshot.types.map((r) => [...r])
+      seats.value = holeSnapshot.seats.map((r) => [...r])
+    }
+    holeSnapshot = null
+    holeMode.value = false
+  }
+
+  // 点一格：座位 ↔ 空位。返回 { ok, reason }，由调用方决定怎么提示
+  // （校验规则在 geometry.toggleHole 里，纯函数可单测）。
+  function toggleHoleAt(rowIdx, colIdx) {
+    if (!holeMode.value) return { ok: false, reason: 'idle' }
+    const line = types.value[rowIdx]
+    if (!Array.isArray(line)) return { ok: false, reason: 'outside' }
+    const res = toggleHole(types.value, seats.value, rowIdx, colIdx)
+    if (!res.ok) return res
+    types.value = res.types
+    // 空位格必须没有数据：挖洞成功后把该格清掉（toggleHole 已保证挖之前是空的，
+    // 这里再写一次是为了「从别处搬来的人」这类不一致数据也能自愈）
+    if (res.to === CELL.BLANK && Array.isArray(seats.value[rowIdx])) seats.value[rowIdx][colIdx] = null
+    return { ok: true, to: res.to }
+  }
+
+  function clearAllHoles() {
+    if (!holeMode.value) return
+    types.value = clearHoles(types.value)
+  }
+
+  // 确认空位：一次整块提交（seats + types）。
+  // 不能走单格 PATCH —— 那条路只写 seats，几何不会跟着走（见 routes/seats.js 的注释）。
+  async function confirmHoleMode() {
+    const before = holeSnapshot
+    const nextTypes = types.value
+    const nextSeats = seats.value
+    holeMode.value = false
+    holeSnapshot = null
+    if (!before) return true
+    const changed = JSON.stringify(before.types) !== JSON.stringify(nextTypes)
+    if (!changed) return true
+    const ok = await save()
+    if (!ok) {
+      // 保存失败：回滚到进入前的几何，否则界面留着一份库里没有的「洞」
+      types.value = before.types.map((r) => [...r])
+      seats.value = before.seats.map((r) => [...r])
+      return false
+    }
+    if (undo) {
+      recordGridSnapshotUndo(
+        undo.key, undo.table,
+        { seats: before.seats, types: before.types },
+        { seats: nextSeats, types: nextTypes },
+        '设置空位'
+      )
+    }
+    return true
   }
 
   // 整块替换座位并保存。
@@ -332,10 +365,156 @@ export function useSeatGrid(apiBase, options = {}) {
     return ok
   }
 
+  // 行走廊：行标签右键「上方/下方插入走廊」与「删除这条走廊」。
+  // 与空位一样走**整块**保存（seats + types 一起提交），单格 PATCH 那条路只写 seats，
+  // rows/types 不会跟着走。插入/删除都会改变 rows —— 必须连 rows 一起落库，
+  // 否则后端按旧 rows 裁 types，界面上的新走廊下次读回来就没了。
+  // 返回 { ok, reason }：reason 区分「超上限」和「保存失败」，方便调用方给准确提示。
+  async function insertAisleRowAt(at, opts = {}) {
+    if (rows.value + 1 > SEAT_MAX_ROWS) return { ok: false, reason: 'limit' }
+    const before = snapshotGeometry()
+    const next = insertAisleRow(types.value, seats.value, rows.value, cols.value, at)
+    types.value = next.types
+    seats.value = next.seats
+    rows.value = next.rows
+    const ok = await save()
+    if (!ok) {
+      restoreGeometry(before)
+      return { ok: false, reason: 'save' }
+    }
+    recordGeometryUndo(before, '插入走廊行', opts)
+    return { ok: true, rows: next.rows }
+  }
+
+  async function removeRowAt(at, opts = {}) {
+    const next = removeGridRow(types.value, seats.value, rows.value, cols.value, at)
+    // rows ≤ 1 或越界：删了就没有几何了，调用方按「不能删」处理
+    if (!next) return { ok: false, reason: 'invalid' }
+    const before = snapshotGeometry()
+    types.value = next.types
+    seats.value = next.seats
+    rows.value = next.rows
+    const ok = await save()
+    if (!ok) {
+      restoreGeometry(before)
+      return { ok: false, reason: 'save' }
+    }
+    recordGeometryUndo(before, '删除走廊行', opts)
+    return { ok: true, rows: next.rows, removedSeats: next.removedSeats }
+  }
+
+  // 列走廊：列头右键「左侧/右侧插入走廊」与「删除这条走廊」。与行版完全对称 ——
+  // 同样整块保存（types + seats + cols 一起提交），同样返回 { ok, reason } 让调用方
+  // 区分「超上限」和「保存失败」。删除列的 removedSeats 是该列原本坐着的人。
+  async function insertAisleColAt(at, opts = {}) {
+    // opts.mode：拆桌/合并桌子时会把模式切成 mixed（「动过合并按钮就显示混合桌」）。
+    // 它跟几何同一笔 save —— 分两次请求会出现「列已经插了、模式还是单座」的中间态。
+    // 撤销不需要管 mode：mixed 按走廊分桌，几何退回后桌型自然也跟着退回。
+    const beforeMode = mode.value
+    if (opts.mode) mode.value = opts.mode
+    if (cols.value + 1 > SEAT_MAX_GRID_COLS) { mode.value = beforeMode; return { ok: false, reason: 'limit' } }
+    const before = snapshotGeometry()
+    const next = insertAisleColumn(types.value, seats.value, rows.value, cols.value, at)
+    types.value = next.types
+    seats.value = next.seats
+    cols.value = next.cols
+    const ok = await save()
+    if (!ok) {
+      restoreGeometry(before)
+      mode.value = beforeMode
+      return { ok: false, reason: 'save' }
+    }
+    recordGeometryUndo(before, '插入走廊列', opts)
+    return { ok: true, cols: next.cols }
+  }
+
+  async function removeColAt(at, opts = {}) {
+    // opts.mode：拆桌/合并桌子时会把模式切成 mixed（「动过合并按钮就显示混合桌」）。
+    // 它跟几何同一笔 save —— 分两次请求会出现「列已经插了、模式还是单座」的中间态。
+    // 撤销不需要管 mode：mixed 按走廊分桌，几何退回后桌型自然也跟着退回。
+    const beforeMode = mode.value
+    if (opts.mode) mode.value = opts.mode
+    const next = removeGridColumn(types.value, seats.value, rows.value, cols.value, at)
+    // cols ≤ 1 或越界：删了就没有几何了
+    if (!next) { mode.value = beforeMode; return { ok: false, reason: 'invalid' } }
+    const before = snapshotGeometry()
+    types.value = next.types
+    seats.value = next.seats
+    cols.value = next.cols
+    const ok = await save()
+    if (!ok) {
+      restoreGeometry(before)
+      mode.value = beforeMode
+      return { ok: false, reason: 'save' }
+    }
+    recordGeometryUndo(before, '删除走廊列', opts)
+    return { ok: true, cols: next.cols, removedSeats: next.removedSeats }
+  }
+
+  function snapshotGeometry() {
+    return {
+      rows: rows.value,
+      cols: cols.value,
+      types: (types.value || []).map((line) => [...line]),
+      seats: (seats.value || []).map((line) => (Array.isArray(line) ? [...line] : [])),
+    }
+  }
+
+  function restoreGeometry(snap) {
+    rows.value = snap.rows
+    cols.value = snap.cols
+    types.value = snap.types
+    seats.value = snap.seats
+  }
+
+  // 撤销登记：oldRows/newRows（以及列版的 oldCols/newCols）必须一起带上 ——
+  // 后端 grid_snapshot 只回写 JSON 列，不认行数/列数；不带的话撤掉一次插入之后
+  // 库里是「types 少一行/一列、rows 或 cols 还是多的」，读回被裁/降级。
+  // opts.origin：两张座位表一起插入时共用一个批次标识 —— 一次 Ctrl+Z 整批退回一步，
+  // 否则按一次只撤一张表，界面看着没反应（撤的那张不是当前显示的）。
+  function recordGeometryUndo(before, label, opts = {}) {
+    if (!undo) return
+    recordGridSnapshotUndo(
+      undo.key, undo.table,
+      { seats: before.seats, types: before.types },
+      { seats: seats.value, types: types.value },
+      label,
+      {
+        oldRows: before.rows, newRows: rows.value,
+        oldCols: before.cols, newCols: cols.value,
+        origin: opts.origin || '',
+      }
+    )
+  }
+
+  // 该行当前有几名学生（删除行前用于确认提示；走廊里不该有人，也一并统计）
+  function rowStudentCount(r) {
+    const line = seats.value?.[r]
+    return Array.isArray(line) ? line.filter((v) => v != null && v !== '').length : 0
+  }
+
+  // 该列当前有几名学生（删除列前用于确认提示）
+  function colStudentCount(c) {
+    let n = 0
+    for (const line of seats.value || []) {
+      if (!Array.isArray(line)) continue
+      const v = line[c]
+      if (v != null && v !== '') n++
+    }
+    return n
+  }
+
   return {
-    loaded, loadError, rows, cols, seats, mode, showAisle, settings, settingsVisible, currentEditExcludeIds,
+    loaded, loadError, rows, cols, seats, types, mode, settings, settingsVisible, currentEditExcludeIds,
     colHeaders, displayRows, exportFields, exportRows,
     load, save, saveSeats, onCellsUpdate, onSwapRows, onSwapColumns, onCellDblClick, saveSettings,
-    generateColHeaders, getDisplayColCount, isAisleCol
+    generateColHeaders, seatColumnIndices,
+    // 设置空位（画笔）
+    holeMode, usableSeats, enterHoleMode, exitHoleMode, toggleHoleAt, clearAllHoles, confirmHoleMode,
+    // 整行走廊（行标签右键）—— 插入/删除整行，不是「把某行覆盖成走廊」
+    insertAisleRowAt, removeRowAt, rowStudentCount,
+    // 整列走廊（列头右键）—— 与行版对称
+    insertAisleColAt, removeColAt, colStudentCount,
+
   }
 }

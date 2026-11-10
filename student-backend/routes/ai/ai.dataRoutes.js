@@ -12,6 +12,7 @@ const { tableColumns, displayColumns, serializeColVal, clearTableColumnsCache } 
 const { safeJson } = require('../../utils/json');
 const { localDateStr, mondayOf } = require('../../utils/date');
 const { toModeMap } = require('../../services/dutyMode');
+const { seatSnapshotPayload } = require('../../services/seatSnapshot');
 // 工具相关常量/执行器惰性加载：仅在真正处理对应路由时才 require
 const tools = () => require('./ai.tools/tools');
 
@@ -80,20 +81,13 @@ function snapshotBeforeWrite(table, row) {
     return;
   }
   // 座位快照：保留几何与分组等全部字段
-  const mode = row.mode || 'single';
+  // 字段表统一取自 services/seatSnapshot.js —— 这里曾经只手抄了 seats，
+  // 于是 AI 整块写座位表前的自动快照丢掉了 types，回看历史时走廊列显示成空座位。
   store.histUpsert('seat', {
     weekStart: week,
     snapDate,
-    mode,
-    payload: {
-      mode,
-      rows: row.rows,
-      cols: row.cols,
-      seats: safeJson(row.seats, []),
-      aisleCols: [],
-      groupsConfig: [],
-      settings: safeJson(row.settings, {}),
-    },
+    mode: row.mode || 'single',
+    payload: seatSnapshotPayload(row),
   });
 }
 

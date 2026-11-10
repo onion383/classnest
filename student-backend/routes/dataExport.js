@@ -19,6 +19,7 @@ const { safeJson } = require('../utils/json');
 const { buildZip } = require('../services/zipWriter');
 // 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
 const dutyConfig = require('../services/dutyConfig');
+const { SEAT_CELL, columnLabels, rowIsAisle } = require('../services/seatGrid');
 const dbManager = require('../dbManager/dbManager');
 const fs = require('fs');
 const path = require('path');
@@ -172,51 +173,26 @@ function tLeaves() {
   return table(cols, rows);
 }
 
-// ---------- 座位网格（与前端 composables/useSeatGrid.js 同一套规则）----------
+// ---------- 座位网格 ----------
 // 座位本来就是二维网格，导出必须是一张网（行号 + 列头 + 走廊列），
 // 拆成「座位行/座位列/姓名」明细等于把布局信息丢了。
-// 下面四个函数与 useSeatGrid.js 的 generateColHeaders / getDisplayColCount /
-// isAisleCol / buildSeatLikeRows 逐条对应 —— 改任何一边都要同步另一边。
-function seatDisplayColCount(cols, mode, showAisle) {
-  if (!showAisle) return cols;
-  return mode === 'single' ? cols + (cols - 1) : cols + Math.floor((cols - 1) / 2);
-}
-
-function seatIsAisleCol(displayIdx, cols, mode, showAisle) {
-  if (!showAisle) return false;
-  const total = seatDisplayColCount(cols, mode, showAisle);
-  if (mode === 'single') return displayIdx % 2 === 1;
-  return displayIdx >= 2 && (displayIdx - 2) % 3 === 0 && displayIdx < total;
-}
-
-function seatColHeaders(cols, mode, showAisle) {
-  const headers = [];
-  if (!showAisle) {
-    for (let i = 0; i < cols; i++) headers.push(`列${i + 1}`);
-    return headers;
-  }
-  if (mode === 'single') {
-    for (let i = 0; i < cols; i++) {
-      headers.push(`列${i + 1}`);
-      if (i < cols - 1) headers.push('走廊');
-    }
-  } else {
-    for (let i = 0; i < cols; i++) {
-      headers.push(`列${i + 1}`);
-      if ((i + 1) % 2 === 0 && i < cols - 1) headers.push('走廊');
-    }
-  }
-  return headers;
-}
+//
+// 走廊现在已是 seats 里的**真实列**，几何由 types 矩阵表达（0=座位 1=走廊 2=空位，
+// 与前端 composables/useSeatGrid.js 同构）。这里只做「遍历 + 转文本」，
+// 不再按 mode/showAisle 推导走廊位置 —— 原先那三个镜像函数（seatDisplayColCount /
+// seatIsAisleCol / 按公式拼表头的 seatColHeaders）随异形网格改造删除：
+// 留着它们就会在网格数据上**再插一遍**走廊列，导出列数直接翻倍。
+// 表头/行走廊判定统一走 services/seatGrid.js，别在本文件再复制一份。
 
 // 座位：seats 是二维数组，值可能是 student_id（数字）或手工录入的姓名（字符串）。
-// 整张表按页面布局输出：第一行讲台，其余每行「第N行」，走廊列只在第一行写「走廊」
-// （页面上是 rowspan 合并，导出用重复的空格代替合并）。
+// 整张表按页面布局输出：第一行讲台，其余每行「第N行」。
+// 竖走廊只在第一行写「走廊」（页面上是 rowspan 合并，导出用空格代替合并）；
+// 横走廊（整行都是走廊）整行每列都写「走廊」，否则那一行会是一条看不出含义的空行。
 function tSeats() {
-  const row = get("SELECT mode, rows, cols, seats FROM seat_slots WHERE kind = 'current'");
-  const mode = (row && row.mode) || 'single';
+  const row = get("SELECT mode, rows, cols, seats, types FROM seat_slots WHERE kind = 'current'");
   const seats = safeJson(row ? row.seats : null, [], 'seat_slots.seats');
   const seatRows = Array.isArray(seats) ? seats : [];
+  const types = safeJson(row ? row.types : null, [], 'seat_slots.types');
 
   // 实际列数取「声明值」和「最长一行」的较大者：历史数据里 seats 可能比 cols 宽，
   // 只信 cols 会把右边几列整段截掉
@@ -227,11 +203,9 @@ function tSeats() {
   let rows = Number(row && row.rows) || 0;
   if (seatRows.length > rows) rows = seatRows.length;
 
-  // 页面没有「隐藏走廊」开关，useSeatGrid 里 showAisle 恒为 true
-  const showAisle = true;
   const nameById = studentNameMap();
-  const colHeaders = seatColHeaders(cols, mode, showAisle);
-  const displayCols = seatDisplayColCount(cols, mode, showAisle);
+  const colHeaders = columnLabels(cols, types);
+  const aisleRow = (r) => rowIsAisle(types, r);
 
   const out = [];
   // 讲台行：导出器按 _isPodium 识别，且要求第一列表头是「行号」才会合并成一格
@@ -240,18 +214,23 @@ function tSeats() {
   for (let r = 0; r < rows; r++) {
     const line = seatRows[r] || [];
     const obj = { 行号: `第${r + 1}行` };
-    let realCol = 0;
-    for (let d = 0; d < displayCols; d++) {
-      const header = colHeaders[d] || `列${d + 1}`;
-      if (seatIsAisleCol(d, cols, mode, showAisle)) {
-        obj[header] = r === 0 ? '走廊' : '';
+    const wholeRowAisle = aisleRow(r);
+    for (let c = 0; c < cols; c++) {
+      const header = colHeaders[c] || `列${c + 1}`;
+      if (types[r] && types[r][c] === SEAT_CELL.AISLE) {
+        obj[header] = (wholeRowAisle || r === 0) ? '走廊' : '';
         continue;
       }
-      const v = line[realCol];
+      // 空位要写成「空位」：留白的话导出表和「这个座位还没人」完全一样，
+      // 用户拿导出的表对布局根本分不出「这儿没桌子」和「这儿空着」
+      if (types[r] && types[r][c] === SEAT_CELL.HOLE) {
+        obj[header] = '空位';
+        continue;
+      }
+      const v = line[c];
       obj[header] = v === null || v === undefined || v === ''
         ? ''
         : (typeof v === 'number' ? (nameById[v] || '') : String(v));
-      realCol += 1;
     }
     out.push(obj);
   }

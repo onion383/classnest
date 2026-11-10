@@ -14,14 +14,39 @@
               <ViewSwitch v-model="seatView" :options="seatViewOptions" />
             </div>
 
-            <!-- 工具栏：随切换段变化。两段均可「智能排表」「导入」，顺序与当前座位一致 -->
-            <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
-              <button @click="openSettings(seatView)" @mouseenter="prefetch(loadSettingsDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
-              <button @click="openArrangement(seatView)" @mouseenter="prefetch(loadArrangementDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="brain" :size="14" tint="current" /> 智能排表</button>
-              <button @click="seatView === 'active' ? refreshActive() : refreshMaster()" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
-              <button @click="openImport(seatView)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> {{ seatView === 'active' ? '从模板导入' : '从实行导入' }}</button>
-              <button @click="openExcelImport(seatView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
-              <button @click="seatView === 'active' ? openActiveExport() : openMasterExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
+            <!-- 工具栏外壳：两种状态的高度一致，切换时靠它定住高度，下方表格不跟着跳。
+                 两个工具栏用 out-in 过渡（同一时刻只占一份位置），见 <style> 里的 .opbar-swap。
+
+                 配色跟隔壁（值日/小组/活动/成绩/请假）保持一致，只用绿与暖橙两个族，不用 bg-info：
+                   绿 primary = 执行操作（设置 / 智能排表 / 从模板导入 / 确认空位）
+                   橙 warning = 进/出画笔模式（设置空位 / 退出），也是 Excel 导入导出与刷新所在族
+                   红 danger  = 批量清除（全清空位），画笔模式里靠它与「退出」区分
+                 不用 bg-info 的原因：它在 glass 下是蓝（与全站暖色工具栏打架），在 base 下又与
+                 bg-text-muted 完全同值（#e9eeec），两头都不对。也不用 bg-text-muted 实心灰：
+                 全站只有座位表这么用过，一排浅玻璃里显得又实又脏。 -->
+            <div class="mb-4 min-h-[2.5rem]">
+              <Transition name="opbar-swap" mode="out-in">
+                <!-- 画笔模式工具栏：进入后顶掉常规工具栏（这期间设置/排表/导入都没意义，
+                     留着就是让用户误点 —— 一改几何，刚画的洞就和数据错位了）。 -->
+                <div v-if="painting" key="paint" class="flex flex-wrap items-center gap-3 opbar">
+                  <button @click="confirmHoleMode" :disabled="paintShortage > 0" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed" style="min-width: 7rem;"><IconGlyph name="check" :size="14" tint="current" /> 确认空位</button>
+                  <button @click="clearAllHoles" class="bg-danger text-text-inverse px-4 py-2 rounded flex items-center gap-1.5" style="min-width: 7rem;"><IconGlyph name="refresh" :size="14" tint="current" /> 全清空位</button>
+                  <button @click="cancelHoleMode" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5" style="min-width: 7rem;"><IconGlyph name="close" :size="14" tint="current" /> 退出（ESC）</button>
+                  <span class="text-sm text-text-muted">点一格设为空位，再点一下取消；走廊格不能设。</span>
+                  <span v-if="paintShortage > 0" class="text-sm text-danger">还差 {{ paintShortage }} 个座位（可用 {{ paintUsable }} / 学生 {{ allStudents.length }}）</span>
+                </div>
+
+                <!-- 工具栏：随切换段变化。两段均可「智能排表」「导入」，顺序与当前座位一致 -->
+                <div v-else key="normal" class="flex flex-wrap items-center gap-3 opbar">
+                  <button @click="openSettings(seatView)" @mouseenter="prefetch(loadSettingsDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
+                  <button @click="openArrangement(seatView)" @mouseenter="prefetch(loadArrangementDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="brain" :size="14" tint="current" /> 智能排表</button>
+                  <button @click="enterHoleModeFor(seatView)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="layoutGrid" :size="14" tint="current" /> 设置空位</button>
+                  <button @click="seatView === 'active' ? refreshActive() : refreshMaster()" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
+                  <button @click="openImport(seatView)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> {{ seatView === 'active' ? '从模板导入' : '从实行导入' }}</button>
+                  <button @click="openExcelImport(seatView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
+                  <button @click="seatView === 'active' ? openActiveExport() : openMasterExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
+                </div>
+              </Transition>
             </div>
 
             <!-- 临时表（当前座位）：表头先渲染（列头来自 useSeatGrid 默认几何，数据到位后自动校正），
@@ -43,6 +68,12 @@
                 :emptyReady="activeLoaded"
                 :loadError="activeError"
                 errorText="座位表加载失败"
+                :paintMode="activeGrid.holeMode.value"
+                :rowLabelMenu="true"
+                :colLabelMenu="true"
+                @paint-cell="onActivePaintCell"
+                @row-label-menu="onActiveRowLabelMenu"
+                @col-label-menu="onActiveColLabelMenu"
                 @cell-dblclick="onActiveCellDblClick"
                 @update:cells="onActiveCellsUpdate"
                 @swapRows="onActiveSwapRows"
@@ -70,6 +101,12 @@
                 :emptyReady="masterLoaded"
                 :loadError="masterError"
                 errorText="座位模板加载失败"
+                :paintMode="masterGrid.holeMode.value"
+                :rowLabelMenu="true"
+                :colLabelMenu="true"
+                @paint-cell="onMasterPaintCell"
+                @row-label-menu="onMasterRowLabelMenu"
+                @col-label-menu="onMasterColLabelMenu"
                 @cell-dblclick="onMasterCellDblClick"
                 @update:cells="onMasterCellsUpdate"
                 @swapRows="onMasterSwapRows"
@@ -204,7 +241,6 @@
       :rows="activeRows"
       :cols="activeCols"
       :mode="activeMode"
-      :showAisle="activeShowAisle"
       @save="saveActiveSettings"
       @cancel="activeSettingsVisible = false"
     />
@@ -216,7 +252,6 @@
       :rows="masterRows"
       :cols="masterCols"
       :mode="masterMode"
-      :showAisle="masterShowAisle"
       @save="saveMasterSettings"
       @cancel="masterSettingsVisible = false"
     />
@@ -258,6 +293,37 @@
       @cancel="importConfirmVisible = false"
     />
 
+    <!-- 行标签右键菜单：插入 / 删除行走廊（座位表专有，其它表格不接管右键） -->
+    <ContextMenu
+      :visible="rowMenuVisible"
+      :x="rowMenuX"
+      :y="rowMenuY"
+      :items="rowMenuItems"
+      @close="rowMenuVisible = false"
+    />
+
+    <!-- 列头右键菜单：整列走廊（与行版对称，共用同一个确认框） -->
+    <ContextMenu
+      :visible="colMenuVisible"
+      :x="colMenuX"
+      :y="colMenuY"
+      :items="colMenuItems"
+      @close="colMenuVisible = false"
+    />
+
+    <!-- 删除行走廊确认：行里仍有学生时才弹（正常走廊行没人，可用撤销恢复） -->
+    <ConfirmDialog
+      v-if="aisleConfirmMounted"
+      :visible="aisleConfirmVisible"
+      title="删除这条走廊"
+      :message="aisleConfirmMessage"
+      type="confirm"
+      :showCancel="true"
+      confirmText="删除"
+      @confirm="confirmAisleRemove"
+      @cancel="aisleConfirmVisible = false"
+    />
+
     <!-- 智能排表弹窗（按 arrangeTarget 决定作用于当前座位或座位模板） -->
     <SmartArrangementDialog
       v-if="smartArrangementMounted"
@@ -265,7 +331,7 @@
       :rows="arrangeRows"
       :cols="arrangeCols"
       :mode="arrangeMode"
-      :showAisle="arrangeShowAisle"
+      :types="arrangeTypes"
       :students="allStudents"
       :initial-seats="arrangeSeats"
       :weights="weightWeights"
@@ -309,15 +375,22 @@ import axios from 'axios'
 import { shiftDateStr, localDateStr } from '../utils/dateTime.js'
 import { getSemesterStart } from '../utils/semesterStart.js'
 import GridView from '../components/tables/GridView/GridView.vue'
+import ContextMenu from '../components/base/ContextMenu.vue'
 import EmptySnapshot from '../components/base/EmptySnapshot.vue'
 import Tabs from '../components/base/Tabs.vue'
 import ViewSwitch from '../components/base/ViewSwitch.vue'
 import WeekSwitcher from '../components/base/WeekSwitcher.vue'
 import StatBarList from '../components/base/StatBarList.vue'
-import { useSeatGrid, buildSeatLikeRows, isAisleCol, getDisplayColCount } from '../composables/useSeatGrid.js'
+import {
+  useSeatGrid, buildSeatLikeRows, generateColHeaders,
+  CELL, seatColumnIndices, gridColsToSeat, remapSeatsToGeometry, rowIsAisle,
+  clearNonSeatWeights, usableSeatCount, insertAisleRow, SEAT_MAX_ROWS,
+  insertAisleColumn, columnKinds, SEAT_MAX_GRID_COLS, deskActionsOfCol,
+} from '../composables/useSeatGrid.js'
 import { createSerialSaver } from '../utils/serialSaver.js'
 import { createRowReuseCache } from '../utils/rowReuse.js'
-import { useUndoShortcut, recordGridSnapshotUndo } from '../composables/useUndo.js'
+import { useUndoShortcut, recordGridSnapshotUndo, newUndoBatchId, flushUndoStatus } from '../composables/useUndo.js'
+import { useDisposables } from '../utils/disposables.js'
 import { useNotification } from '../composables/useNotification.js'
 import { syncStudentNamesFromRows } from '../composables/useSyncStudentNames.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
@@ -360,22 +433,11 @@ const seatViewOptions = [
   { value: 'master', label: '模板表' }
 ]
 
-// 真实列（不含走廊列）→ GridView 单元格的显示列（含走廊列）：定位串统一用真实列，
-// 目标页按自身几何（mode/是否显示走廊）换算成显示列，与单元格 data-row-id 对齐。
-function displayColOfReal(realCol, cols, mode, showAisle) {
-  const total = getDisplayColCount(cols, mode, showAisle)
-  let real = 0
-  for (let d = 0; d < total; d++) {
-    if (isAisleCol(d, cols, mode, showAisle)) continue
-    if (real === realCol) return d
-    real++
-  }
-  return realCol
-}
-
-// 跨页定位：标题栏全局搜索 / AI 改动明细点「座位」结果跳转 /seats?focus=seat:<行>:<真实列>
+// 跨页定位：标题栏全局搜索 / AI 改动明细点「座位」结果跳转 /seats?focus=seat:<行>:<列>
 // （seat=当前座位 / seatt=座位模板 / seatw=权重表）→ 先切到座位页签并选中对应视图，
-// 再把真实列换算成显示列，滚动到该格子并闪动高亮。
+// 再滚动到该格子并闪动高亮。
+// 列号现在是**网格列下标**（与单元格 data-row-id 同源）：走廊是真实列，
+// 不再需要「真实列 → 显示列」换算。
 function _applyRowFocus() {
   applyRouteRowFocus(rowFocusHost, {
     parse: (key) => {
@@ -388,13 +450,7 @@ function _applyRowFocus() {
       if (m[1] === 'seat' && !activeLoaded.value) return null
       if (m[1] === 'seatt' && !masterLoaded.value) return null
       if (m[1] === 'seatw' && !weightLoaded.value) return null
-      const isTpl = m[1] === 'seatt'
-      const isWeight = m[1] === 'seatw'
-      const cols = isTpl ? masterCols.value : (isWeight ? weightCols.value : activeCols.value)
-      const mode = isTpl ? masterMode.value : (isWeight ? weightMode.value : activeMode.value)
-      const showAisle = isTpl ? masterShowAisle.value : (isWeight ? weightShowAisle.value : activeShowAisle.value)
-      const dc = displayColOfReal(Number(m[3]), cols, mode, showAisle)
-      return `${m[1]}:${m[2]}:${dc}`
+      return key
     }
   })
 }
@@ -447,8 +503,8 @@ const activeError = activeGrid.loadError
 const activeRows = activeGrid.rows
 const activeCols = activeGrid.cols
 const activeSeats = activeGrid.seats
+const activeTypes = activeGrid.types
 const activeMode = activeGrid.mode
-const activeShowAisle = activeGrid.showAisle
 const activeSettingsVisible = activeGrid.settingsVisible
 const currentEditExcludeIds = activeGrid.currentEditExcludeIds
 const activeColHeaders = activeGrid.colHeaders
@@ -461,8 +517,8 @@ const masterError = masterGrid.loadError
 const masterRows = masterGrid.rows
 const masterCols = masterGrid.cols
 const masterSeats = masterGrid.seats
+const masterTypes = masterGrid.types
 const masterMode = masterGrid.mode
-const masterShowAisle = masterGrid.showAisle
 const masterSettingsVisible = masterGrid.settingsVisible
 const currentMasterEditExcludeIds = masterGrid.currentEditExcludeIds
 const masterColHeaders = masterGrid.colHeaders
@@ -472,7 +528,7 @@ const masterExportRows = masterGrid.exportRows
 
 // ==================== 方法别名 ====================
 const loadActive = activeGrid.load
-const { success: notifySuccess, error: notifyError } = useNotification()
+const { success: notifySuccess, error: notifyError, warning: notifyWarning } = useNotification()
 
 async function refreshActive() {
   try {
@@ -490,30 +546,43 @@ async function refreshMaster() {
 // ==================== 座位范围缩小确认 ====================
 // 三张表（当前座位 / 座位模板 / 权重表）共用同一套「设置」（行列/模式/走廊）：
 // 改任一处即同步套用到另一张座位表，并让权重表按新尺寸重整，保证权重对两表都可用。
-// 当新的行数/列数比现状小，且被裁剪掉的区域里仍有座位数据（任一张表）时，弹确认框决定是否舍弃
+// 当新的行数/座位列数比现状小，且被裁剪掉的区域里仍有座位数据（任一张表）时，弹确认框决定是否舍弃
+// settings.cols 是「座位列数」（设置弹窗口径），与 seats 里的网格列不同口径：
+// 裁掉的座位列从第 newSeatCols 个（座位序号）开始，按座位列下标去查数据。
 const shrinkConfirmVisible = ref(false)
 const shrinkPending = ref(null)
-function hasTrimmedData(grid, { rows: nr, cols: nc }) {
+function hasTrimmedData(grid, { rows: nr, cols: newSeatCols }) {
   const cur = grid.seats.value
   const curRows = cur.length
   if (!curRows) return false
-  const curCols = cur[0].length
+  const curSeatCols = seatColumnIndices(grid.cols.value, grid.types.value)
   if (nr < curRows) {
     for (let r = nr; r < curRows; r++)
-      for (let c = 0; c < curCols; c++)
+      for (const c of curSeatCols)
         if (cur[r]?.[c] != null && cur[r][c] !== '') return true
   }
-  if (nc < curCols) {
-    for (let r = 0; r < curRows; r++)
-      for (let c = nc; c < curCols; c++)
-        if (cur[r]?.[c] != null && cur[r][c] !== '') return true
+  for (let r = 0; r < curRows; r++) {
+    for (let k = newSeatCols; k < curSeatCols.length; k++) {
+      const v = cur[r]?.[curSeatCols[k]]
+      if (v != null && v !== '') return true
+    }
   }
   return false
 }
 // 把同一套设置套用到两张座位表，并让权重表按新尺寸重整后落库
 async function applySharedSettings(settings) {
+  // 旧几何与旧权重先快照：saveSettings 会同步改 cols/types，watch 会立刻按新尺寸
+  // 把 weightWeights 裁一遍（按网格下标，几何一变就错位），所以重映射必须基于快照。
+  const prevCols = weightCols.value
+  const prevTypes = weightTypes.value
+  const prevWeights = weightWeights.value.map(r => [...r])
+  // 两张表一起改：设置是共享的，只改「当前显示」那张会让两张表几何分叉，
+  // 而权重表只能跟其中一套几何 —— 分叉之后切视图权重就整体错位。
   await Promise.all([activeGrid.saveSettings(settings), masterGrid.saveSettings(settings)])
-  resizeWeights()
+  if (!weightLoaded.value) return
+  // 权重与座位数据同一套搬法：按座位列序号对齐（见 remapSeatsToGeometry）
+  weightWeights.value = remapSeatsToGeometry(
+    prevWeights, prevCols, prevTypes, weightRows.value, weightCols.value, weightTypes.value)
   await saveWeight()
 }
 async function requestSaveSettings(settings) {
@@ -555,6 +624,446 @@ const onActiveSwapColumns = activeGrid.onSwapColumns
 const onActiveCellDblClick = activeGrid.onCellDblClick
 const saveMasterSettings = (s) => requestSaveSettings(s)
 
+// ==================== 设置空位（画笔）====================
+// 画笔状态挂在各自的 useSeatGrid 实例上（两张表各自独立），这里只按当前视图选择一张。
+const paintGrid = computed(() => (seatView.value === 'active' ? activeGrid : masterGrid))
+const painting = computed(() => paintGrid.value.holeMode.value)
+const paintUsable = computed(() => paintGrid.value.usableSeats.value)
+// 只有「当前座位表」受容量约束：模板是布局样板，没必要凑够本班人数
+const paintShortage = computed(() => (seatView.value === 'active'
+  ? Math.max(0, allStudents.value.length - paintUsable.value)
+  : 0))
+
+function enterHoleModeFor(view) {
+  const target = view === 'active' ? activeGrid : masterGrid
+  const other = view === 'active' ? masterGrid : activeGrid
+  // 另一张表若还停在画笔模式：先丢弃它的未提交改动。
+  // 两张表共用同一套几何（设置是共享的），一张没提交、另一张又进去改，会互相覆盖。
+  if (other.holeMode.value) other.exitHoleMode(true)
+  target.enterHoleMode()
+}
+// 注意：这里都先取到局部变量再调方法，不写 `paintGrid.value.xxx()` ——
+// 那个形状会被 expose-contract 判据当成「组件实例代理调用」，要求方法被 defineExpose。
+// paintGrid 是 composable 对象（不是组件 ref），不存在这个问题，但没必要让扫描器误报。
+function cancelHoleMode() {
+  const g = paintGrid.value
+  g.exitHoleMode(true)
+}
+function clearAllHoles() {
+  const g = paintGrid.value
+  g.clearAllHoles()
+}
+async function confirmHoleMode() {
+  if (paintShortage.value > 0) {
+    notifyError(`还差 ${paintShortage.value} 个座位（可用 ${paintUsable.value} 个 / 学生 ${allStudents.value.length} 人）`)
+    return
+  }
+  const g = paintGrid.value
+  const ok = await g.confirmHoleMode()
+  if (!ok) return
+  notifySuccess('空位已保存')
+  await syncWeightGeometry()
+}
+function paintCell(grid, { rowIdx, dataRowIdx, colIdx }) {
+  // 必须用 dataRowIdx：表格显示的第 0 行是「讲台」，直接用显示行号会把洞画到下面一格。
+  // 老调用方（没有 dataRowIdx）回退显示行号，行为与之前一致。
+  const res = grid.toggleHoleAt(dataRowIdx ?? rowIdx, colIdx)
+  if (res.ok) return
+  if (res.reason === 'occupied') {
+    const name = typeof res.value === 'number' ? getStudentName(res.value) : String(res.value || '')
+    notifyError(`这一格有学生${name ? `（${name}）` : ''}，请先把他移走再设为空位`)
+  } else if (res.reason === 'aisle') {
+    notifyWarning('走廊格不能设为空位')
+  }
+}
+const onActivePaintCell = (payload) => paintCell(activeGrid, payload)
+const onMasterPaintCell = (payload) => paintCell(masterGrid, payload)
+
+// ESC 退出画笔（等同「退出」按钮：丢弃未确认的改动）
+const paintDisposables = useDisposables()
+paintDisposables.listen(window, 'keydown', (e) => {
+  if (e.key !== 'Escape' || !painting.value) return
+  e.preventDefault()
+  cancelHoleMode()
+})
+// 切视图/切页签时退出画笔：不退出的话那张表会一直停在画笔模式，
+// 下次回来点格子会直接挖洞（而用户以为自己只是看了看）
+function abortPainting() {
+  if (activeGrid.holeMode.value) activeGrid.exitHoleMode(true)
+  if (masterGrid.holeMode.value) masterGrid.exitHoleMode(true)
+  rowMenuVisible.value = false
+}
+watch(seatView, abortPainting)
+watch(activeTab, abortPainting)
+
+/* ==================== 行走廊（行标签右键） ====================
+ * 两个动作都是**插入 / 删除整行**，不改动被右键那一行：
+ *   · 在上方 / 下方插入走廊 —— 新走廊占一行，下面各排整体后移，原来的学生位置不变
+ *   · 删除这条走廊 —— 行数 -1（旧版本「把某行覆盖成走廊」留下的行也能这样删掉）
+ * 早先的做法是「把这一行变成走廊」，会把那一排学生直接移出座位表；而用户多数
+ * 只是想「在这儿加一条过道」，不该顺手动他排好的学生。
+ * 走廊由 types 表达，保存走整块提交（seats + types + rows）。
+ * 只在当前座位 / 座位模板两张表上开放 —— 权重表没有「走廊」语义。 */
+const rowMenuVisible = ref(false)
+const rowMenuX = ref(0)
+const rowMenuY = ref(0)
+const rowMenuRowIdx = ref(-1)
+const rowMenuTarget = ref('active')
+
+const rowMenuGrid = computed(() => (rowMenuTarget.value === 'master' ? masterGrid : activeGrid))
+const rowMenuIsAisle = computed(() => rowIsAisle(rowMenuGrid.value.types.value, rowMenuRowIdx.value))
+
+// 走廊行多一项「删除这条走廊」：删除是「撤销一次插入」，不提供「变回座位行」——
+// 那会让行数变多，几何反而比插入前更复杂（用户想加座位应该去设置里改行数）。
+const rowMenuItems = computed(() => {
+  const items = [
+    { label: '在上方插入走廊', action: () => applyAisleInsert('above') },
+    { label: '在下方插入走廊', action: () => applyAisleInsert('below') },
+  ]
+  if (rowMenuIsAisle.value) items.push({ label: '删除这条走廊', action: () => askAisleRemove() })
+  return items
+})
+
+function openRowMenu(payload, target) {
+  rowMenuTarget.value = target
+  // 同 paintCell：改 types 用数据行号（讲台行不算），否则操作会落到下一行
+  rowMenuRowIdx.value = payload.dataRowIdx ?? payload.rowIdx
+  rowMenuX.value = payload.x
+  rowMenuY.value = payload.y
+  rowMenuVisible.value = true
+}
+
+const onActiveRowLabelMenu = (payload) => openRowMenu(payload, 'active')
+const onMasterRowLabelMenu = (payload) => openRowMenu(payload, 'master')
+
+// 删除走廊前的确认框（走廊格本来没人，只有历史脏数据才会走到这里）
+const aisleConfirmMounted = ref(false)
+const aisleConfirmVisible = ref(false)
+const aisleConfirmMessage = ref('')
+watch(() => aisleConfirmVisible.value, (v) => { if (v) aisleConfirmMounted.value = true })
+
+// 权重矩阵同步插 / 删一行。
+// weightRows 是「当前显示段 rows」的派生，rows 一变，watch(weightRows) 里的 resizeWeights
+// 就按网格下标裁补 —— 它不认识「中间插了一行」，直接改 rows 会把下面各行的权重整体上移一格。
+// 所以必须**先**把矩阵对齐，再让座位表改 rows（对齐之后 resizeWeights 就是无损重建）。
+// 返回被移走的那一行，便于失败时原样插回。
+function shiftWeightRows(at, delta) {
+  if (!weightLoaded.value) return null
+  const width = weightCols.value
+  const blank = () => new Array(width).fill(null)
+  const src = weightWeights.value
+  const out = []
+  let removed = null
+  for (let r = 0; r < src.length; r++) {
+    if (delta < 0 && r === at) { removed = Array.isArray(src[r]) ? [...src[r]] : blank(); continue }
+    if (delta > 0 && r === at) out.push(blank())
+    out.push(Array.isArray(src[r]) ? [...src[r]] : blank())
+  }
+  if (delta > 0 && at >= src.length) out.push(blank())
+  weightWeights.value = out
+  return removed
+}
+
+function restoreWeightRow(at, line) {
+  if (!weightLoaded.value) return
+  const width = weightCols.value
+  const out = weightWeights.value.map((r) => (Array.isArray(r) ? [...r] : new Array(width).fill(null)))
+  out.splice(at, 0, line ? [...line] : new Array(width).fill(null))
+  weightWeights.value = out
+}
+
+async function applyAisleInsert(where) {
+  rowMenuVisible.value = false
+  if (rowMenuRowIdx.value < 0) return
+  const at = where === 'above' ? rowMenuRowIdx.value : rowMenuRowIdx.value + 1
+  // 容量预判：插入一条走廊 = 这一排座位消失。坐不下就别让用户白点一次
+  // （后端 assertSeatCapacity 也会拦，但那句「座位保存失败」看不出是座位不够）。
+  // 用**当前座位表**算：容量守卫只约束 seat_layout，模板是布局样板，不绑本班人数。
+  const preview = insertAisleRow(
+    activeGrid.types.value, activeGrid.seats.value, activeGrid.rows.value, activeGrid.cols.value, at)
+  const usable = usableSeatCount(preview.types)
+  const need = allStudents.value.length
+  if (need - usable > 0) {
+    notifyError(`插入走廊后可用座位只有 ${usable} 个，还差 ${need - usable} 个（学生 ${need} 人）`)
+    return
+  }
+  shiftWeightRows(at, +1)
+  // 两张座位表一起插：几何是共享的（设置改一处两张表都跟着走），只插当前这张会让 rows 分叉，
+  // 下次进页面「统一设置」会按当前表把另一张 reshape 回去 —— 那条刚插的走廊就静默消失了。
+  // 两笔共用一个撤销批次：不然按一次 Ctrl+Z 只撤掉其中一张（还往往是没在显示的那张），
+  // 用户看到界面毫无变化，会以为撤销坏了。
+  const origin = newUndoBatchId()
+  const results = await Promise.all([
+    activeGrid.insertAisleRowAt(at, { origin }),
+    masterGrid.insertAisleRowAt(at, { origin }),
+  ])
+  if (results.some((r) => !r.ok)) {
+    shiftWeightRows(at, -1)
+    // 成功那张表可能已经落库：三张表全部按库里真实状态拉一遍，别让界面留着一半新一半旧
+    await Promise.all([loadActive(), loadMaster(), loadWeight()])
+    notifyError(results.some((r) => r.reason === 'limit')
+      ? `座位行数已达上限（${SEAT_MAX_ROWS} 行）`
+      : '插入走廊失败')
+    return
+  }
+  flushUndoStatus()
+  await syncWeightGeometry()
+  notifySuccess(where === 'above' ? '已在上方插入走廊' : '已在下方插入走廊')
+}
+
+// 确认框弹着的时候用户可能又去右键别的行（rowMenuRowIdx 会被覆盖），
+// 所以把「要删哪一行」在弹框前存下来，确认时用它，别再读 rowMenuRowIdx。
+const aisleRemoveAt = ref(-1)
+// 同一个确认框服务「删行走廊」与「删列走廊」：点确认时按 kind 分流，
+// 不要各开一个 ref 各配一个弹窗（两份状态会让「点了确认没反应」这种问题多一倍）
+const aisleConfirmKind = ref('row')
+const aisleRemoveCol = ref(-1)
+
+function askAisleRemove() {
+  rowMenuVisible.value = false
+  const at = rowMenuRowIdx.value
+  const g = rowMenuGrid.value
+  if (at < 0) return
+  if (g.rows.value <= 1) {
+    notifyWarning('至少要保留一行，无法再删')
+    return
+  }
+  const n = g.rowStudentCount(at)
+  if (!n) { applyAisleRemove(at); return }
+  aisleRemoveAt.value = at
+  aisleConfirmKind.value = 'row'
+  // 行标签对走廊行已经显示「走廊」，这里跟着用同一个说法，别再冒出「第 N 行」
+  //（那行标签上根本没有数字，用户对不上是哪一个）
+  aisleConfirmMessage.value = `这条走廊里有 ${n} 名学生，删除它会让他们离开座位表（可用撤销恢复）。确定吗？`
+  aisleConfirmVisible.value = true
+}
+
+function confirmAisleRemove() {
+  aisleConfirmVisible.value = false
+  if (aisleConfirmKind.value === 'col') {
+    applyAisleColRemove(aisleRemoveCol.value)
+    return
+  }
+  applyAisleRemove(aisleRemoveAt.value)
+}
+
+async function applyAisleRemove(at) {
+  rowMenuVisible.value = false
+  if (!Number.isInteger(at) || at < 0) return
+  const g = rowMenuGrid.value
+  if (g.rows.value <= 1) { notifyWarning('至少要保留一行，无法再删'); return }
+  const removed = shiftWeightRows(at, -1)
+  const origin = newUndoBatchId()
+  const results = await Promise.all([
+    activeGrid.removeRowAt(at, { origin }),
+    masterGrid.removeRowAt(at, { origin }),
+  ])
+  if (results.some((r) => !r.ok)) {
+    restoreWeightRow(at, removed)
+    await Promise.all([loadActive(), loadMaster(), loadWeight()])
+    notifyError('删除走廊失败')
+    return
+  }
+  flushUndoStatus()
+  await syncWeightGeometry()
+  notifySuccess('已删除这条走廊')
+}
+
+/* ==================== 整列走廊（列头右键） ====================
+ * 与行版对称：插入一条走廊列，**不动左右两列的学生**（他们只是网格下标后移一格，
+ * 座位列序号不变，所以权重矩阵也不需要重映射）。删除走廊列时整列一起消失。
+ * 走廊由 types 表达，保存走整块提交（seats + types + cols）。
+ * 只在当前座位 / 座位模板两张表上开放 —— 权重表没有「走廊」语义。 */
+const colMenuVisible = ref(false)
+const colMenuX = ref(0)
+const colMenuY = ref(0)
+const colMenuColIdx = ref(-1)
+const colMenuTarget = ref('active')
+
+const colMenuGrid = computed(() => (colMenuTarget.value === 'master' ? masterGrid : activeGrid))
+// colIdx 是网格列下标（含走廊列），与 types 同下标，直接拿去查 columnKinds 即可
+const colMenuIsAisle = computed(() => {
+  const g = colMenuGrid.value
+  return columnKinds(g.cols.value, g.types.value)[colMenuColIdx.value] === 'aisle'
+})
+
+// 桌型动作全部由「走廊在哪」派生（几何纯函数），菜单不再自己拼判据：
+// 拆桌 = 在两列之间插一条走廊，合并 = 删掉中间那条走廊。
+// **两侧都要给**：拆完之后，被拆出来的左半张桌与右半张桌都该能右键「合并同桌」；
+// 只判右侧的话，右键右半张桌会删掉再右边那条走廊，把隔壁那列并过来。
+const colMenuDeskActions = computed(() => {
+  const g = colMenuGrid.value
+  return deskActionsOfCol(g.cols.value, g.types.value, g.mode.value, colMenuColIdx.value)
+})
+
+const colMenuItems = computed(() => {
+  const items = [
+    { label: '在左侧插入走廊', action: () => applyAisleColInsert('left') },
+    { label: '在右侧插入走廊', action: () => applyAisleColInsert('right') },
+  ]
+  if (colMenuIsAisle.value) {
+    items.push({ label: '删除这条走廊', action: () => askAisleColRemove() })
+  } else {
+    const { splitAt, mergeLeftAt, mergeRightAt } = colMenuDeskActions.value
+    // 这两项本质上就是「插/删一条走廊」，但会顺带把模式切成 mixed ——
+    // 用户要求「只要动了合并按钮，设置里就显示混合桌」。
+    if (splitAt >= 0) {
+      items.push({
+        label: '拆成两张单人桌（插入走廊）',
+        action: () => applyAisleColInsert('right', { at: splitAt, mode: 'mixed', success: '已拆成两张单人桌' }),
+      })
+    }
+    // 方向写进文案：混排里左右两边可能都能合，不写方向用户不知道会并哪一列
+    if (mergeRightAt >= 0) {
+      items.push({ label: '与右侧一列合并同桌', action: () => applyDeskMerge(mergeRightAt) })
+    }
+    if (mergeLeftAt >= 0) {
+      items.push({ label: '与左侧一列合并同桌', action: () => applyDeskMerge(mergeLeftAt) })
+    }
+  }
+  return items
+})
+function openColMenu(payload, target) {
+  colMenuTarget.value = target
+  colMenuColIdx.value = payload.colIdx
+  colMenuX.value = payload.x
+  colMenuY.value = payload.y
+  colMenuVisible.value = true
+}
+
+const onActiveColLabelMenu = (payload) => openColMenu(payload, 'active')
+const onMasterColLabelMenu = (payload) => openColMenu(payload, 'master')
+
+// 权重矩阵插 / 删一列。与 shiftWeightRows 同一个理由：weightCols 是 cols 的派生，
+// cols 一变 watch 里的 resizeWeights 就按网格下标裁补 —— 它不认识「中间插了一列」，
+// 直接改 cols 会把右边各列权重整体左移一格。所以**先**对齐矩阵，再让座位表改 cols。
+// 返回被删掉的那一列（每行一个值），失败时原样插回。
+function shiftWeightCols(at, delta) {
+  if (!weightLoaded.value) return null
+  const width = weightCols.value
+  const height = Math.max(weightRows.value, (weightWeights.value || []).length)
+  const blank = () => new Array(width).fill(null)
+  const out = []
+  let removed = null
+  for (let r = 0; r < height; r++) {
+    const line = Array.isArray(weightWeights.value[r]) ? [...weightWeights.value[r]] : blank()
+    while (line.length < width) line.push(null)
+    if (delta < 0) {
+      const [v] = line.splice(at, 1)
+      if (!removed) removed = []
+      removed.push(v ?? null)
+    } else {
+      line.splice(at, 0, null)
+    }
+    out.push(line)
+  }
+  weightWeights.value = out
+  return removed
+}
+
+function restoreWeightCol(at, removed) {
+  if (!weightLoaded.value) return
+  const width = weightCols.value
+  weightWeights.value = weightWeights.value.map((r, i) => {
+    const line = Array.isArray(r) ? [...r] : new Array(width).fill(null)
+    while (line.length < width) line.push(null)
+    line.splice(at, 0, removed?.[i] ?? null)
+    return line
+  })
+}
+
+async function applyAisleColInsert(where, opts = {}) {
+  colMenuVisible.value = false
+  if (colMenuColIdx.value < 0) return
+  // 拆桌动作会带 at（几何纯函数算出的那条走廊位置），普通左/右插入仍按右键列推
+  const at = Number.isInteger(opts.at)
+    ? opts.at
+    : (where === 'left' ? colMenuColIdx.value : colMenuColIdx.value + 1)
+  // 容量预判：多一条走廊列 = 每排少一个座位。用当前座位表算（容量守卫只约束 seat_layout）
+  const preview = insertAisleColumn(
+    activeGrid.types.value, activeGrid.seats.value, activeGrid.rows.value, activeGrid.cols.value, at)
+  const usable = usableSeatCount(preview.types)
+  const need = allStudents.value.length
+  if (need - usable > 0) {
+    notifyError(`插入走廊后可用座位只有 ${usable} 个，还差 ${need - usable} 个（学生 ${need} 人）`)
+    return
+  }
+  shiftWeightCols(at, +1)
+  // 两张座位表一起插（几何共享，只插一张下次进页面会被「统一设置」reshape 回去），
+  // 两笔共用一个撤销批次（一次 Ctrl+Z 整批退回）
+  const origin = newUndoBatchId()
+  const results = await Promise.all([
+    activeGrid.insertAisleColAt(at, { origin, ...opts }),
+    masterGrid.insertAisleColAt(at, { origin, ...opts }),
+  ])
+  if (results.some((r) => !r.ok)) {
+    shiftWeightCols(at, -1)
+    await Promise.all([loadActive(), loadMaster(), loadWeight()])
+    notifyError(results.some((r) => r.reason === 'limit')
+      ? `座位列数已达上限（${SEAT_MAX_GRID_COLS} 列）`
+      : '插入走廊失败')
+    return
+  }
+  flushUndoStatus()
+  await syncWeightGeometry()
+  notifySuccess(opts.success || (where === 'left' ? '已在左侧插入走廊' : '已在右侧插入走廊'))
+}
+
+function applyDeskMerge(at) {
+  const g = colMenuGrid.value
+  if (g.colStudentCount(at) > 0) {
+    notifyWarning('这条走廊里有学生，请先清空再合并')
+    return
+  }
+  applyAisleColRemove(at, { mode: 'mixed', success: '已合并同桌' })
+}
+
+function askAisleColRemove() {
+  colMenuVisible.value = false
+  const at = colMenuColIdx.value
+  const g = colMenuGrid.value
+  if (at < 0) return
+  if (g.cols.value <= 1) {
+    notifyWarning('至少要保留一列，无法再删')
+    return
+  }
+  const n = g.colStudentCount(at)
+  if (!n) { applyAisleColRemove(at); return }
+  aisleRemoveCol.value = at
+  aisleConfirmKind.value = 'col'
+  aisleConfirmMessage.value = `这条走廊里有 ${n} 名学生，删除它会让他们离开座位表（可用撤销恢复）。确定吗？`
+  aisleConfirmVisible.value = true
+}
+
+async function applyAisleColRemove(at, opts = {}) {
+  colMenuVisible.value = false
+  if (!Number.isInteger(at) || at < 0) return
+  const g = colMenuGrid.value
+  if (g.cols.value <= 1) { notifyWarning('至少要保留一列，无法再删'); return }
+  const removed = shiftWeightCols(at, -1)
+  const origin = newUndoBatchId()
+  const results = await Promise.all([
+    activeGrid.removeColAt(at, { origin, ...opts }),
+    masterGrid.removeColAt(at, { origin, ...opts }),
+  ])
+  if (results.some((r) => !r.ok)) {
+    restoreWeightCol(at, removed)
+    await Promise.all([loadActive(), loadMaster(), loadWeight()])
+    notifyError('删除走廊失败')
+    return
+  }
+  flushUndoStatus()
+  await syncWeightGeometry()
+  notifySuccess(opts.success || '已删除这条走廊')
+}
+
+// 点页面任意处收起右键菜单（Menu 自己只监听滚动/缩放）。
+// 用 click 而不是 mousedown：右键本身不触发 click，菜单刚弹出不会被自己关掉。
+paintDisposables.listen(document, 'click', () => {
+  rowMenuVisible.value = false
+  colMenuVisible.value = false
+})
+
 function openSettings(target) {
   if (target === 'active') {
     activeSettingsVisible.value = true
@@ -566,10 +1075,11 @@ function openSettings(target) {
 const smartArrangementVisible = ref(false)
 // 智能排表目标：'active' 临时表（当前座位） / 'master' 模板表（座位模板）
 const arrangeTarget = ref('active')
+// 排表弹窗与座位表同口径（网格坐标 + types）：走廊是真实列，弹窗自己负责压/展开。
 const arrangeRows = computed(() => (arrangeTarget.value === 'active' ? activeRows.value : masterRows.value))
-const arrangeCols = computed(() => (arrangeTarget.value === 'active' ? activeCols.value : masterCols.value))
 const arrangeMode = computed(() => (arrangeTarget.value === 'active' ? activeMode.value : masterMode.value))
-const arrangeShowAisle = computed(() => (arrangeTarget.value === 'active' ? activeShowAisle.value : masterShowAisle.value))
+const arrangeCols = computed(() => (arrangeTarget.value === 'active' ? activeCols.value : masterCols.value))
+const arrangeTypes = computed(() => (arrangeTarget.value === 'active' ? activeTypes.value : masterTypes.value))
 const arrangeSeats = computed(() => (arrangeTarget.value === 'active' ? activeSeats.value : masterSeats.value))
 function openArrangement(target) {
   arrangeTarget.value = target
@@ -631,16 +1141,9 @@ async function onImportData({ fields, rows }) {
   const headers = grid.colHeaders.value
   const rowsCount = Number(grid.rows.value) || 0
   const colsCount = Number(grid.cols.value) || 0
-  // 显示列 → 真实列（-1 表示走廊列，不接收导入值）
-  const realColMap = []
-  let real = 0
-  const totalDisplay = getDisplayColCount(colsCount, grid.mode.value, grid.showAisle.value)
-  for (let d = 0; d < totalDisplay; d++) {
-    if (isAisleCol(d, colsCount, grid.mode.value, grid.showAisle.value)) realColMap[d] = -1
-    else realColMap[d] = real++
-  }
 
-  // 以当前座位为底稿，只覆盖文件里出现的格子
+  // 以当前座位为底稿，只覆盖文件里出现的格子。
+  // 表头下标就是网格列下标（走廊是真实列），不需要任何换算。
   const next = []
   for (let r = 0; r < rowsCount; r++) {
     const src = grid.seats.value[r] || []
@@ -672,11 +1175,9 @@ async function onImportData({ fields, rows }) {
     }
     headers.forEach((h, d) => {
       if (h === '走廊') return
-      const realCol = realColMap[d]
-      if (realCol == null || realCol < 0) return
       const val = obj[h]
       if (val === undefined) return
-      next[r][realCol] = (val === '' || val === '走廊') ? null : val
+      next[r][d] = (val === '' || val === '走廊') ? null : val
       touched += 1
     })
   })
@@ -703,10 +1204,12 @@ async function applySmartArrangement(result) {
   const grid = toMaster ? masterGrid : activeGrid
   const undoTable = toMaster ? 'seat_template' : 'seat_layout'
   try {
+    // 弹窗产出的已是网格（走廊/空位格恒 null），与库里 seats 同构，直接落库
+    const nextSeats = result.seats
     // 记录整块快照，撤销可一键恢复智能排表前的布局
     const before = (grid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
-    await grid.saveSeats(result.seats)
-    recordGridSnapshotUndo('座位表', undoTable, before, result.seats, '智能排表')
+    await grid.saveSeats(nextSeats)
+    recordGridSnapshotUndo('座位表', undoTable, before, nextSeats, '智能排表')
     notifySuccess('已应用智能排表')
   } catch (e) {
     // 原实现在 catch 里仍调 notifySuccess('应用失败')：明明是失败却弹绿色成功条，
@@ -751,11 +1254,12 @@ async function doApplyActiveToMaster() {
   try {
     const before = (masterGrid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
     const src = (activeGrid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
-    // 同步尺寸与模式，使模板与当前座位完全一致
+    // 同步尺寸、模式与格子类型，使模板与当前座位完全一致
+    // （types 必须一起搬：只搬 seats 会让走廊列/空位对不上，写入直接被形状守卫拒掉）
     masterGrid.rows.value = activeGrid.rows.value
     masterGrid.cols.value = activeGrid.cols.value
     masterGrid.mode.value = activeGrid.mode.value
-    masterGrid.showAisle.value = activeGrid.showAisle.value
+    masterGrid.types.value = activeGrid.types.value.map(r => [...r])
     const ok = await masterGrid.saveSeats(src)
     // saveSeats 内部已提示失败并重新 load 回滚界面：
     // 这里不能再报成功，也不该登记一条根本没生效的撤销
@@ -773,7 +1277,7 @@ const WEIGHT_MIN = 0
 const WEIGHT_MAX = 1
 const weightLoaded = ref(false)
 const weightError = ref(false)
-const weightWeights = ref([]) // rows×cols 数字矩阵，null 表示空
+const weightWeights = ref([]) // rows×cols 数字矩阵（网格下标，与座位表同一套），null 表示空
 // 行对象复用缓存：编辑一格权重时只重建真正变化的那一行，避免整表重画
 const reuseWeightRows = createRowReuseCache()
 // 座位指数账本：学生 id → 截至「今日之前」累计的座位权重（供「位置公平」排表使用）
@@ -781,7 +1285,9 @@ const seatLedger = ref({})
 const weightRows = computed(() => (seatView.value === 'active' ? activeRows.value : masterRows.value))
 const weightCols = computed(() => (seatView.value === 'active' ? activeCols.value : masterCols.value))
 const weightMode = computed(() => (seatView.value === 'active' ? activeMode.value : masterMode.value))
-const weightShowAisle = computed(() => (seatView.value === 'active' ? activeShowAisle.value : masterShowAisle.value))
+// 权重表的几何（走廊/空位在哪）始终跟随当前显示段的座位表：几何只有**一个**真相源，
+// 权重表单独存一份只用于落库，读回来也不采信（见 loadWeight 注释）。
+const weightTypes = computed(() => (seatView.value === 'active' ? activeTypes.value : masterTypes.value))
 const weightColHeaders = computed(() => (seatView.value === 'active' ? activeColHeaders.value : masterColHeaders.value))
 // 表内最大值：热力图按「当前表内最大值」做相对映射（表内最高值最深蓝）
 const weightMax = computed(() => {
@@ -795,7 +1301,7 @@ const weightMax = computed(() => {
 
 
 const weightDisplayRows = computed(() => reuseWeightRows(buildSeatLikeRows(
-  weightRows.value, weightCols.value, weightMode.value, weightShowAisle.value,
+  weightRows.value, weightCols.value, weightTypes.value,
   (r, c) => {
     const w = weightWeights.value[r]?.[c]
     // 数字须以字符串传入，避免 0 被 GridView 的 `course || ''` 当空
@@ -823,6 +1329,8 @@ watch([weightRows, weightCols], resizeWeights)
 async function loadWeight() {
   try {
     const res = await axios.get(`${API_BASE}/seats/weight`)
+    // 只取数字矩阵；几何（types）不采信后端的副本 —— 回到「座位表是几何唯一真相源」，
+    // 两份 types 一旦分叉就会出现「改了座位设置、权重表还按老走廊摆」的错位。
     weightWeights.value = res.data.weights || []
     weightLoaded.value = true
     weightError.value = false
@@ -840,12 +1348,13 @@ async function refreshWeight() {
 // 权重表保存：与 DutyView.saveWeight 同口径——串行保存防并发乱序；
 // 失败必须提示并重拉回滚：界面已就地改过、库里没改，只 console 的话用户以为保存成功，
 // 刷新后权重改动「凭空消失」。
+// types 一起提交：后端在「已有 types」时拒绝单独改 cols 的写入。
 const weightSaver = createSerialSaver(() => axios.put(`${API_BASE}/seats/weight`, {
   mode: weightMode.value,
   rows: weightRows.value,
   cols: weightCols.value,
   weights: weightWeights.value,
-  settings: { showAisle: weightShowAisle.value }
+  types: weightTypes.value,
 }))
 async function saveWeight() {
   const ok = await weightSaver.request()
@@ -856,22 +1365,37 @@ async function saveWeight() {
   return false
 }
 
-// 编辑/交换单元格：跳过讲台行与走廊列，空或非数字 → null，其余转数字存储
+// 座位几何变了（整行走廊 / 空位画笔）之后同步权重表，做两件事：
+//  1. 按新 types 洗一遍权重矩阵：走廊格、空位格恒 null。界面上这些格子不显示权重
+//     （course 被替换成「走廊」/空位标记），所以残留的数字平时看不见 —— 一旦取消走廊
+//     它们就会"冒回来"，看着像新填的权重。
+//  2. 把新的 types 一起写回 seat_weight：库里那份几何副本平时不采信（读回时用座位表的），
+//     但它是后端形状守卫的依据，只在用户编辑权重时才更新会一直落后于座位表。
+// 权重还没加载成功时直接返回：拿空矩阵写回去等于把整张权重表清空。
+async function syncWeightGeometry() {
+  if (!weightLoaded.value) return
+  weightWeights.value = clearNonSeatWeights(
+    weightWeights.value, weightRows.value, weightCols.value, weightTypes.value)
+  await saveWeight()
+}
+
+// 编辑单元格：按网格下标写入，走廊/空位格恒为 null（几何由 types 表达，不放权重）。
+// 空或非数字 → null，其余限定 0–1。
 function onWeightCellsUpdate(newRows) {
   const prev = weightWeights.value.map(r => [...r])
-  const next = []
+  const next = weightWeights.value.map(r => (Array.isArray(r) ? [...r] : []))
   for (const row of newRows) {
-    if (row._isPodium) continue
-    const rowVals = []
-    for (let d = 0; d < row.cells.length; d++) {
-      if (isAisleCol(d, weightCols.value, weightMode.value, weightShowAisle.value)) continue
-      const raw = row.cells[d]?.course
+    const r = row._lessonIdx
+    if (r == null || r < 0) continue
+    if (!Array.isArray(next[r])) next[r] = new Array(weightCols.value).fill(null)
+    for (let c = 0; c < row.cells.length; c++) {
+      const t = weightTypes.value[r]?.[c]
+      if (t === CELL.AISLE || t === CELL.BLANK) { next[r][c] = null; continue }
+      const raw = row.cells[c]?.course
       const text = (raw == null ? '' : String(raw)).trim()
       const num = text === '' ? null : Number(text)
-      // 限定 0–1：非数字记空，超范围收窄到边界
-      rowVals.push(Number.isFinite(num) ? Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, num)) : null)
+      next[r][c] = Number.isFinite(num) ? Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, num)) : null
     }
-    next.push(rowVals)
   }
   weightWeights.value = next
   recordGridSnapshotUndo('座位表', 'seat_weight', prev, next, '编辑权重')
@@ -883,6 +1407,9 @@ function onWeightSwapRows(fromIdx, toIdx) {
   if (fromIdx === toIdx) return
   const from = fromIdx - 1, to = toIdx - 1
   if (from < 0 || to < 0 || from >= weightWeights.value.length || to >= weightWeights.value.length) return
+  // 行走廊行不参与交换（与座位表同规则：只搬数据不搬走廊会错位）
+  const aisleRow = (r) => (weightTypes.value[r] || []).every(v => v === CELL.AISLE)
+  if (aisleRow(from) || aisleRow(to)) return
   const prev = weightWeights.value.map(r => [...r])
   const next = weightWeights.value.map(r => [...r])
   // 移动语义：取出源行插入目标位置
@@ -893,20 +1420,17 @@ function onWeightSwapRows(fromIdx, toIdx) {
   saveWeight()
 }
 
-function onWeightSwapColumns(fromDisplayIdx, toDisplayIdx) {
-  const cols = weightCols.value, mode = weightMode.value, showAisle = weightShowAisle.value
-  const total = getDisplayColCount(cols, mode, showAisle)
-  const map = []
-  let real = 0
-  for (let d = 0; d < total; d++) map[d] = isAisleCol(d, cols, mode, showAisle) ? -1 : real++
-  const from = map[fromDisplayIdx], to = map[toDisplayIdx]
-  if (from === -1 || to === -1 || from == null || to == null || from === to) return
+function onWeightSwapColumns(fromCol, toCol) {
+  if (fromCol === toCol) return
+  // 走廊列与「含走廊格的列」都不参与（列下标即网格下标，无需换算）
+  const colHasAisle = (c) => (weightTypes.value || []).some(line => Array.isArray(line) && line[c] === CELL.AISLE)
+  if (colHasAisle(fromCol) || colHasAisle(toCol)) return
   const prev = weightWeights.value.map(r => [...r])
   // 移动语义：取出源列插入目标位置（表头固定不动）
   const next = weightWeights.value.map(r => {
     const nr = [...r]
-    const [moved] = nr.splice(from, 1)
-    nr.splice(to, 0, moved)
+    const [moved] = nr.splice(fromCol, 1)
+    nr.splice(toCol, 0, moved)
     return nr
   })
   weightWeights.value = next
@@ -948,11 +1472,16 @@ const weightAlgoMounted = ref(false)
 watch(() => weightAlgoVisible.value, v => { if (v) weightAlgoMounted.value = true })
 function openWeightSettings() { weightAlgoVisible.value = true }
 
-// 算法产出的权重矩阵写回权重表（并记录撤销）
+// 算法产出的权重矩阵写回权重表（并记录撤销）。
+// 走廊列/空位格一律清成 null：算法只按 rows×cols 算几何均值，它不知道哪列是走廊，
+// 留着这些数会被后续「按权重回看」当成合法权重读走（座位指数里靠 seats 为 null 兜住了，
+// 但存着一堆走廊权重本身没有意义，且改几何后还会被搬到座位列上）。
 function onApplyWeightAlgorithm(matrix) {
   const prev = weightWeights.value.map(r => [...r])
-  weightWeights.value = matrix
-  recordGridSnapshotUndo('座位表', 'seat_weight', prev, matrix, '生成中心权重')
+  const cleaned = (Array.isArray(matrix) ? matrix : []).map((row, r) =>
+    (Array.isArray(row) ? row : []).map((v, c) => (weightTypes.value[r]?.[c] === CELL.SEAT ? v : null)))
+  weightWeights.value = cleaned
+  recordGridSnapshotUndo('座位表', 'seat_weight', prev, cleaned, '生成中心权重')
   saveWeight()
   weightAlgoVisible.value = false
   notifySuccess('已生成并应用中心权重')
@@ -962,7 +1491,7 @@ function onApplyWeightAlgorithm(matrix) {
 const historyWeeks = ref([])
 const historyCurrentWeek = ref('')
 const historySnapshot = ref(null)
-const historyData = ref({ mode: 'single', rows: 0, cols: 0, seats: [], showAisle: true })
+const historyData = ref({ mode: 'single', rows: 0, cols: 0, seats: [], types: [] })
 const historyLoading = ref(false)
 // 当前回看快照的代表日期（该周最后一天），以及座位指数所需的按天快照序列
 const historySnapDate = ref('')
@@ -972,43 +1501,28 @@ const slideDir = ref('next')
 function onSwitchWeek(dir) { slideDir.value = dir }
 
 const historyColHeaders = computed(() => {
-  const { cols: c, mode: m, showAisle: sa } = historyData.value
+  const { cols: c, types: t } = historyData.value
   // 快照未到位（cols=0）时兜底用当前座位表列头，让表头先行渲染；快照到了再按其几何校正
   if (!c) return activeColHeaders.value
-  return activeGrid.generateColHeaders(c, m, sa)
+  return generateColHeaders(c, t)
 })
 
+// 历史快照与座位表同一套几何（types 由迁移与快照写入一起持久化），直接复用构造器；
+// 整表只读（历史不能就地编辑）。
 const historyDisplayRows = computed(() => {
-  const { seats: hSeats, rows: r, cols: c, mode: m, showAisle: sa } = historyData.value
-  const displayCols = activeGrid.getDisplayColCount(c, m, sa)
-  const result = []
-  for (let row = 0; row < r; row++) {
-    const rowCells = []
-    let realCol = 0
-    for (let d = 0; d < displayCols; d++) {
-      if (activeGrid.isAisleCol(d, c, m, sa)) {
-        if (row === 0) {
-          rowCells.push({ course: '走廊', _isAisle: true, _aisleRowSpan: r, _isAisleHidden: false })
-        } else {
-          rowCells.push({ course: '', _isAisle: false, _isAisleHidden: true })
-        }
-      } else {
-        const seatVal = hSeats[row]?.[realCol]
-        let displayName = ''
-        if (seatVal === null || seatVal === undefined) {
-          displayName = ''
-        } else if (typeof seatVal === 'number') {
-          displayName = getStudentName(seatVal) || ''
-        } else {
-          displayName = seatVal
-        }
-        rowCells.push({ course: displayName, _isAisle: false, _isAisleHidden: false, _studentId: seatVal })
-        realCol++
-      }
+  const { seats: hSeats, rows: r, cols: c, types: t } = historyData.value
+  return buildSeatLikeRows(r, c, t, (row, col) => {
+    const seatVal = hSeats?.[row]?.[col]
+    let displayName = ''
+    if (seatVal === null || seatVal === undefined) {
+      displayName = ''
+    } else if (typeof seatVal === 'number') {
+      displayName = getStudentName(seatVal) || ''
+    } else {
+      displayName = seatVal
     }
-    result.push({ _rowKey: `row_${row}`, label: `第${row + 1}行`, cells: rowCells, _isReadonly: true, _lessonIdx: row, _periodRowSpan: 0, periodLabel: '' })
-  }
-  return result
+    return { course: displayName, extra: { _studentId: seatVal } }
+  }).map(row => ({ ...row, _isReadonly: true }))
 })
 
 async function fetchHistoryWeeks(options) {
@@ -1047,11 +1561,13 @@ async function loadHistorySnapshot(options) {
         rows: res.data.rows,
         cols: res.data.cols,
         seats: res.data.seats,
-        showAisle: (res.data.settings && res.data.settings.showAisle) || false
+        // 快照里的几何随 payload 一起存（迁移与 /snapshot 写入都会带），
+        // 缺失时 normalizeTypes 降级成全座位 —— 不至于把整张历史表画崩
+        types: res.data.types || [],
       }
     } else {
       historySnapDate.value = ''
-      historyData.value = { mode: 'single', rows: 0, cols: 0, seats: [], showAisle: false }
+      historyData.value = { mode: 'single', rows: 0, cols: 0, seats: [], types: [] }
     }
   } catch (e) {
     if (my === historySeq) console.error(e)
@@ -1275,8 +1791,14 @@ onMounted(async () => {
   await Promise.all([loadActive(), loadMaster(), loadWeight()])
   // 统一三张表设置：以当前座位（临时表）为准。若座位模板存在超出该范围的座位数据，
   // 暂不同步，交由用户通过「设置」确认后再统一（避免静默丢弃模板数据）。
-  const s = { rows: activeRows.value, cols: activeCols.value, mode: activeMode.value, showAisle: activeShowAisle.value }
-  const differ = masterRows.value !== s.rows || masterCols.value !== s.cols || masterMode.value !== s.mode || masterShowAisle.value !== s.showAisle
+  // 注意口径：设置是「座位列数」，storage 里是网格列数，比较前先反算。
+  const s = {
+    rows: activeRows.value,
+    cols: gridColsToSeat(activeCols.value, activeTypes.value),
+    mode: activeMode.value,
+  }
+  const masterSeatCols = gridColsToSeat(masterCols.value, masterTypes.value)
+  const differ = masterRows.value !== s.rows || masterSeatCols !== s.cols || masterMode.value !== s.mode
   if (differ && !hasTrimmedData(masterGrid, s)) await applySharedSettings(s)
   fetchAllStudents()
   // 启动时静默补全历史快照（今天及之前），失败不打扰用户
@@ -1287,6 +1809,16 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* 工具栏切换（常规 ↔ 画笔）：淡出淡入 + 轻微上下位移。
+   mode="out-in" 让两个工具栏不同时占位，高度由外层容器 min-h 兜住，下方表格不跟着跳。
+   0.14s 是折中：再长会像「点了没反应」，再短看不出过渡。
+   全局「动画总开关」（html.no-animations 把 transition-duration 压到 0.001ms）会自动接管，
+   所以这里不用再写 prefers-reduced-motion。 */
+.opbar-swap-enter-active,
+.opbar-swap-leave-active { transition: opacity 0.14s ease, transform 0.14s ease; }
+.opbar-swap-enter-from { opacity: 0; transform: translateY(-6px); }
+.opbar-swap-leave-to   { opacity: 0; transform: translateY(6px); }
+
 /* 历史表格周切换滑动动画：新旧表同向并行滑动（推拉感），不影响 WeekSwitcher */
 .history-content { width: 100%; }
 /* 过渡容器：grid 叠放新旧表（同一格），容器高度取两者较大值，切换时高度不塌陷、下方操作栏不跳动；

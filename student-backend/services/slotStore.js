@@ -25,10 +25,12 @@ const SPEC = {
   duty_weight: { table: 'duty_slots', kind: 'weight', columns: ['weights', 'settings'] },
   duty_draft: { table: 'duty_slots', kind: 'draft', columns: ['cells', 'settings', 'conditions', 'saved_at'] },
 
-  seat_layout: { table: 'seat_slots', kind: 'current', columns: ['mode', 'rows', 'cols', 'seats', 'aisle_cols', 'groups_config', 'settings'] },
-  seat_template: { table: 'seat_slots', kind: 'template', columns: ['mode', 'rows', 'cols', 'seats', 'aisle_cols', 'groups_config', 'settings'] },
-  seat_draft: { table: 'seat_slots', kind: 'draft', columns: ['mode', 'rows', 'cols', 'seats', 'aisle_cols', 'groups_config', 'settings', 'conditions', 'saved_at'] },
-  seat_weight: { table: 'seat_slots', kind: 'weight', columns: ['mode', 'rows', 'cols', 'weights', 'settings'] },
+  // types：与 seats 同尺寸的格子类型矩阵（0 座位 / 1 走廊 / 2 空位）。
+  // 漏写这里 = 整列被白名单挡掉，PUT 不报错、GET 永远读到旧值（静默丢字段）。
+  seat_layout: { table: 'seat_slots', kind: 'current', columns: ['mode', 'rows', 'cols', 'seats', 'types', 'desk_pattern', 'aisle_cols', 'groups_config', 'settings'] },
+  seat_template: { table: 'seat_slots', kind: 'template', columns: ['mode', 'rows', 'cols', 'seats', 'types', 'desk_pattern', 'aisle_cols', 'groups_config', 'settings'] },
+  seat_draft: { table: 'seat_slots', kind: 'draft', columns: ['mode', 'rows', 'cols', 'seats', 'types', 'desk_pattern', 'aisle_cols', 'groups_config', 'settings', 'conditions', 'saved_at'] },
+  seat_weight: { table: 'seat_slots', kind: 'weight', columns: ['mode', 'rows', 'cols', 'weights', 'types', 'settings'] },
 };
 
 function isDoc(name) {

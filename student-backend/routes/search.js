@@ -210,8 +210,10 @@ const SCHEDULE_TABLES = [
 ]
 const DEFAULT_DAYS = ['周一', '周二', '周三', '周四', '周五']
 
-// 座位表：seats 是二维 JSON（seats[行][真实列] = 学生 id 或姓名）。focus 形如 `seat:行:真实列`
-// （真实列不含走廊列），由目标页按自身几何换算成显示列后定位到对应单元格。
+// 座位表：seats 是二维 JSON（seats[行][列] = 学生 id 或姓名，走廊格为 null）。
+// 异形网格改造后 cols 是**网格总列数**（含走廊列），走廊是真实列，
+// 所以 focus 里的列号直接就是数组下标，目标页不需要任何换算。
+// 但给人看的「列N」仍按座位列序号（跳走廊），见下方 seatNo 的算法。
 const SEAT_TABLES = [
   { table: 'seat_layout', group: '座位 · 当前座位', anchor: 'seat' },
   { table: 'seat_template', group: '座位 · 座位模板', anchor: 'seatt' },
@@ -461,19 +463,35 @@ router.get('/', (req, res) => {
     }
     for (const st of SEAT_TABLES) {
       let row = null
-      try { row = db.prepare(`SELECT seats FROM ${st.table} WHERE id = 1`).get() } catch (_) { continue }
+      try { row = db.prepare(`SELECT seats, types FROM ${st.table} WHERE id = 1`).get() } catch (_) { continue }
       if (!row) continue
       let seats = []
       seats = safeJson(row.seats, [], `${st.table}.seats`)
       if (!Array.isArray(seats) || !seats.length) continue
+      const types = safeJson(row.types, [], `${st.table}.types`)
+      // 座位列序号：整列都是走廊的列不占号（与页面表头「列N」同一口径）。
+      // 走廊格的值本身就是 null，不会成为命中项；但**列号**必须按座位列数，
+      // 否则搜索结果会写「列13」而页面只有 7 个座位列，人找不到。
+      let maxCols = 0
+      for (const line of seats) if (Array.isArray(line) && line.length > maxCols) maxCols = line.length
+      const seatNo = []
+      let seatSeq = 0
+      for (let c = 0; c < maxCols; c++) {
+        let allAisle = Array.isArray(types) && types.length > 0
+        for (let r = 0; r < types.length; r++) {
+          if (!Array.isArray(types[r]) || types[r][c] !== 1) { allAisle = false; break }
+        }
+        seatNo.push(allAisle ? 0 : ++seatSeq)
+      }
       const items = []
       for (let r = 0; r < seats.length && items.length < PER_GROUP; r++) {
         const line = Array.isArray(seats[r]) ? seats[r] : []
         for (let c = 0; c < line.length && items.length < PER_GROUP; c++) {
           const name = nameOfSeat(line[c]).trim()
           if (!name || !allTermsHit(name, terms, pm)) continue
-          // focus 用真实列（不含走廊列），目标页据此换算显示列
-          items.push({ id: r + ':' + c, label: name, sub: `第${r + 1}行 · 列${c + 1}`, focus: st.anchor + ':' + r + ':' + c })
+          if (seatNo[c] === 0) continue
+          // focus 用**网格列下标**（走廊已是真实列，目标页不再做任何换算）
+          items.push({ id: r + ':' + c, label: name, sub: `第${r + 1}行 · 列${seatNo[c]}`, focus: st.anchor + ':' + r + ':' + c })
         }
       }
       if (items.length) groups.push({ table: st.table, group: st.group, emoji: '🪑', route: '/seats', items })

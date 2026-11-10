@@ -7,10 +7,10 @@
 const { db } = require('../../db')
 const dbManager = require('../../dbManager/dbManager')
 const { moveToTrash, restoreToOriginal, deleteThumb } = require('../../albumOps')
-const { SEAT_MAX_ROWS, SEAT_MAX_COLS } = require('../../services/sanitize')
+const { SEAT_MAX_ROWS, SEAT_MAX_GRID_COLS } = require('../../services/sanitize')
 const { renameStudentRefs } = require('../../services/studentRename')
 const {
-  readGridArray, writeGridArray, cellText,
+  readGridArray, writeGridArray, writeGeometryCounts, cellText,
   insertRow, deleteRowById, updateRowById, writeDocCols, rowName,
   applyAlbumOrder, applyGroupSnapshot,
 } = require('./undo.helpers')
@@ -178,8 +178,9 @@ const executors = {
     validate({ table, row, col }) {
       if (!(table in GRID_SOURCES)) return '网格表无效'
       if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0) return '参数不完整'
-      // 与 /api/seats 的 50×30 上限保持一致，避免撤销记录把越界坐标写回 JSON 网格。
-      if (row >= SEAT_MAX_ROWS || col >= SEAT_MAX_COLS) return `坐标超出范围（最多 ${SEAT_MAX_ROWS} 行 × ${SEAT_MAX_COLS} 列）`
+      // 与 /api/seats 的 50×60 上限保持一致，避免撤销记录把越界坐标写回 JSON 网格。
+      // 列上限是**网格列数**（含走廊列），不是设置里的「座位列数」。
+      if (row >= SEAT_MAX_ROWS || col >= SEAT_MAX_GRID_COLS) return `坐标超出范围（最多 ${SEAT_MAX_ROWS} 行 × ${SEAT_MAX_GRID_COLS} 列）`
       return null
     },
     apply({ table, row, col, value }) {
@@ -203,13 +204,26 @@ const executors = {
 
   // 整块覆盖（网络 JSON 列，用于整行/列换位等批量操作）：
   // payload { table, oldValue, newValue }（oldValue/newValue 为整个 JSON 数组）
+  // 可选 oldRows/newRows/oldCols/newCols：座位表「插入/删除走廊行、走廊列」会改变行数/列数，
+  // 它们必须与 types 同一笔回写（见 writeGeometryCounts 注释）。
+  // 不带这几个字段的老记录（整行/列换位、设置空位）行为完全不变。
   grid_snapshot: {
     validate({ table }) {
       if (!(table in GRID_SOURCES)) return '网格表无效'
       return null
     },
-    undo({ table, oldValue }) { writeGridArray(table, GRID_SOURCES[table], oldValue) },
-    redo({ table, newValue }) { writeGridArray(table, GRID_SOURCES[table], newValue) },
+    undo({ table, oldValue, oldRows, oldCols }) {
+      db.transaction(() => {
+        writeGridArray(table, GRID_SOURCES[table], oldValue)
+        writeGeometryCounts(table, oldRows, oldCols)
+      })()
+    },
+    redo({ table, newValue, newRows, newCols }) {
+      db.transaction(() => {
+        writeGridArray(table, GRID_SOURCES[table], newValue)
+        writeGeometryCounts(table, newRows, newCols)
+      })()
+    },
     describe(p, mode) {
       if (p.label) return p.label
       const dim = (b) => Array.isArray(b) ? `${b.length} 行` : (b && typeof b === 'object' ? `${Object.keys(b).length} 项` : '')

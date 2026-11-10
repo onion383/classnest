@@ -37,7 +37,7 @@ const SEAT_STUDENTS = [
 ]
 const SEAT_BASE = [[1, 2], [null, null]]
 
-function seatCtx(dataSource) {
+function seatCtx(dataSource, usable) {
   return {
     rows: { value: 2 },
     cols: { value: 2 },
@@ -47,6 +47,8 @@ function seatCtx(dataSource) {
     strangerNames: { value: new Set() },
     dataSource: { value: dataSource },
     satisfaction: { value: {} },
+    // 异形网格改造后：算法只碰「可用格」（types=座位）。全座位布局时恒 true。
+    isUsable: typeof usable === 'function' ? usable : () => true,
   }
 }
 
@@ -67,6 +69,18 @@ test('座位排表 · 全部同学：没入座的同学补进空位', async () =
   const grid = pipeline.initGrid()
   const ids = grid.flat().filter(Boolean).map(s => s.id).sort()
   assert.deepEqual(ids, [1, 2, 3, 4], '名册 4 人全部入座')
+})
+
+test('座位排表 · 走廊行/空位格不参与排表：补位与条件作用域都跳过它们', async () => {
+  const { useSmartArrangementPipeline } = await loadSeat()
+  // 只有第 0 行可用（第 1 行整行是走廊）
+  const ctx = seatCtx('all', (r) => r === 0)
+  const pipeline = useSmartArrangementPipeline(ctx, {})
+  const grid = pipeline.initGrid()
+  assert.equal(grid.flat().filter(Boolean).length, 2, '只有 2 个可用格能坐人')
+  assert.deepEqual(grid[1], [null, null], '走廊行必须保持空 —— 学生不能排进走廊')
+  // 条件的作用域同样不该包含走廊格，否则随机/分组会把「走廊」当空座位来换位
+  assert.deepEqual(pipeline.allCells(), [{ r: 0, c: 0 }, { r: 0, c: 1 }])
 })
 
 // ==================== 值日排表 ====================

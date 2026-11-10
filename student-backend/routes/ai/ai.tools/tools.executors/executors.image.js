@@ -6,6 +6,8 @@ const {
 } = require('./executors.common');
 // 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
 const dutyConfig = require('../../../../services/dutyConfig');
+// 座位列头/行走廊判定：走廊是真实列，列号必须按座位列序号算（见 services/seatGrid.js）
+const { columnLabels, rowIsAisle } = require('../../../../services/seatGrid');
 
 // 课表行标签：优先按 settings.sections 的节次结构取 lesson 行，退化为 periods/pass 序号
 function buildScheduleRowLabels(settings, cells) {
@@ -52,19 +54,33 @@ function buildScheduleImage() {
   return { target: 'schedule', title: '课程表', columns: ['节次', ...days], rows };
 }
 function buildSeatImage() {
-  const row = db.prepare('SELECT seats FROM seat_layout WHERE id = 1').get();
+  const row = db.prepare('SELECT seats, cols, types FROM seat_layout WHERE id = 1').get();
   if (!row) return null;
   const seats = aiParseJson(row.seats, []) || [];
   if (!seats.length) return null;
-  const cols = seats.reduce((mx, r) => Math.max(mx, Array.isArray(r) ? r.length : 0), 0);
+  const types = aiParseJson(row.types, []) || [];
+  // 列数取「声明值 / 最长一行 / types 宽度」的最大者：只按 seats 算会把右侧
+  // 还没坐人的座位列（以及靠右的走廊列）整段截掉，图上就少了一截
+  const seatWidth = seats.reduce((mx, r) => Math.max(mx, Array.isArray(r) ? r.length : 0), 0);
+  const typesWidth = types.reduce((mx, r) => Math.max(mx, Array.isArray(r) ? r.length : 0), 0);
+  const cols = Math.max(seatWidth, typesWidth, Number(row.cols) || 0);
   const idName = studentIdNameMap();
-  const columns = ['', ...Array.from({ length: cols }, (_, c) => `第${c + 1}列`)];
+  // 表头按 types 生成：走廊列标「走廊」，座位列按座位列序号标「列N」。
+  // 直接拿网格下标当列号会导出一张「列1 走廊 列2 走廊 列3…」、且走廊列全是空格的图，
+  // 用户（和模型自己）会把走廊读成「没人坐的座位」。
+  const labels = columnLabels(cols, types);
+  const columns = ['', ...labels];
   const rows = seats.map((r, i) => {
     const line = [`第${i + 1}排`];
     const arr = Array.isArray(r) ? r : [];
     for (let c = 0; c < cols; c++) {
       const v = arr[c];
-      line.push(v == null || v === '' ? '' : (typeof v === 'number' ? (idName[v] || `#${v}`) : String(v)));
+      if (v == null || v === '') {
+        // 整行走廊在排布图里写成「走廊」，否则这一排看起来只是一条空行
+        line.push(rowIsAisle(types, i) ? '走廊' : '');
+        continue;
+      }
+      line.push(typeof v === 'number' ? (idName[v] || `#${v}`) : String(v));
     }
     return line;
   });

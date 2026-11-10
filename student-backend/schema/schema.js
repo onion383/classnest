@@ -20,6 +20,7 @@ const { migrateDuty } = require('./schema.duty');
 const { migrateUndo } = require('./schema.undo');
 const { migrateCadre } = require('./schema.cadre');
 const { migrateHistory } = require('./schema.history');
+const { migrateSeatGrid } = require('./seatGridMigration');
 
 function initSchema(conn) {
   migrateCore(conn);
@@ -37,6 +38,9 @@ function initSchema(conn) {
   migrateUndo(conn);
   migrateCadre(conn);
   migrateHistory(conn);
+  // 座位几何矩阵化（dense → 网格 + types）的一次性迁移。
+  // 必须排在最后：它同时要写 seat_slots 和 domain_history，两张表都得先建好。
+  migrateSeatGrid(conn);
 }
 
 module.exports = { initSchema };

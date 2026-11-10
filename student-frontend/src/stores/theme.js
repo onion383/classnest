@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { resourceUrl, ensureMediaToken } from '../utils/apiUrl'
 import { loadThemeStyles, warmNightMode, isNightWarmEnabled } from '../styles/themeLoader'
 import { performThemeSwap, isThemeSwapInFlight } from '../styles/themeTransition'
+import { createLatest } from '../utils/latestOnly'
 import { SEND } from '../electronChannels.js'
 
 const THEME_KEY = 'app-theme'
@@ -217,10 +218,12 @@ export const useThemeStore = defineStore('theme', () => {
   // 等新 CSS 注入后再整篇重算一次 —— 这也是「首次切夜间明显更卡」的一部分原因。
   // 已解码过的底图 URL：切换时命中即同步放行（见 preloadModeBackground）
   const preloadedBackgrounds = new Set()
-  const preloadModeBackground = (target) => {
+  // theme 可显式传入「即将切到的主题」：setTheme 备料时 currentTheme 已是目标值，
+  // 但 webp 是否要解码取决于主题，显式传入比隐式读当前状态更不容易漏。
+  const preloadModeBackground = (target, theme = currentTheme.value) => {
     // glass 主题日夜各一张内置底图（applyTheme 里 --bg-image 会换成另一张）。
     // 提前解码，避免快照淡入结束后底图才「啪」地跳出来。自选底图日夜同一张，无需处理。
-    if (currentTheme.value !== 'glass' || backgroundImage.value) return Promise.resolve()
+    if (theme !== 'glass' || backgroundImage.value) return Promise.resolve()
     const url = target === 'night' ? DEFAULT_GLASS_BG_NIGHT : DEFAULT_GLASS_BG
     if (!url) return Promise.resolve()
     // 已解码过就直接同步返回：这条路径每次切换都要走一遍，
@@ -273,16 +276,50 @@ export const useThemeStore = defineStore('theme', () => {
     preloadModeBackground(mode.value === 'night' ? 'day' : 'night')
   }
 
-  const setTheme = (themeId) => {
+  // 切主题的序号守卫：备料（等目标主题 CSS / 底图）期间用户可能又点了别的卡片，
+  // 只让最后一次真正落地 DOM，避免先完成的那次把后点选的盖回去。
+  const themeSwap = createLatest()
+
+  const setTheme = async (themeId) => {
     // 挡住已移除/未知主题 id（旧 localStorage 数据、AI 改设置等旁路）：
     // 否则 data-theme 会落到一个没有任何主题 CSS 匹配的状态。
     if (!PRESET_IDS.includes(themeId)) {
       console.warn('[theme] 忽略未知主题 id:', themeId)
       return
     }
+    // 点已选中的卡片：不付一次全量样式重算，也不发一次无谓的同步 IPC
+    if (currentTheme.value === themeId) return
+
+    // ① 状态先行：卡片高亮当帧就变（与 commitMode 的 pendingMode 同理）。
+    //    此刻 data-theme 仍是旧值，页面配色等 ② 备齐后再落，避免「点下去没反应」。
+    //    之所以能这样做，是因为 currentTheme 已不再有 watch 自动写 DOM（见文件末尾）。
     currentTheme.value = themeId
     localStorage.setItem(THEME_KEY, themeId)
-    applyTheme()
+    const token = themeSwap.begin()
+
+    // ② 先把目标主题的 CSS 与底图备齐，再改 data-theme。
+    //    反过来会「按旧 CSS 全量重算一次 + CSS 注入后再整篇重算一次」，首次切到
+    //    尚未加载过的主题时尤其明显 —— 这正是 commitMode 里已经避开的顺序
+    //    （themeLoader.js 的空闲预热会缓存全部主题 CSS，命中时这里只是一个微任务）。
+    const targetMode = mode.value
+    await loadThemeStyles(themeId, targetMode)
+    await preloadModeBackground(targetMode, themeId)
+    // 备料期间日/夜若变了：补等新组合的 CSS（命中缓存时只是一个微任务），
+    // 免得落地后 applyTheme 再异步注入一份、又付一次全量重算。
+    if (mode.value !== targetMode) await loadThemeStyles(themeId, mode.value)
+    // 等待期间用户又选了别的主题：交给后来那次落地
+    if (!themeSwap.isCurrent(token)) return
+
+    // ③ 与日/夜切换共用同一段快照淡入：浏览器在改属性前后各拍一张整屏快照，
+    //    两帧之间只动快照层 opacity（合成器单层动画，成本与 DOM 规模无关）。
+    //    performThemeSwap 内部会用 withInstantStyles 把元素级过渡瞬时化 ——
+    //    glass 给所有 button / tr 的颜色与阴影过渡若跟着重绘 0.2s、且每层
+    //    backdrop-filter 每帧重采样，等于把上一轮优化掉的卡顿又付一遍。
+    //    即：过渡观感由快照提供，逐元素渐变仍瞬时结束，两者不叠加。
+    //    关掉「动画效果」时 snapshotTransitionAllowed() 自动退化为瞬时切换；
+    //    连点则由 performThemeSwap 的 inflight 混合度接着往回走（日/夜与主题
+    //    共用同一段过渡状态，因为浏览器同一时刻本就只有一个活跃过渡）。
+    performThemeSwap(() => applyTheme())
   }
 
   // 从 localStorage 重新读取全部持久化设置并重新应用。
@@ -385,7 +422,11 @@ export const useThemeStore = defineStore('theme', () => {
   // 监听系统深浅色变化
   darkMedia.addEventListener('change', onSystemModeChange)
 
-  watch(currentTheme, applyTheme)
+  // 不再监听 currentTheme 自动应用：currentTheme 的写入口只有 setTheme 与
+  // reloadFromStorage 两处，二者都显式应用过（启动期各入口也显式调 applyTheme）。
+  // 留着 watch 会让同一次切主题把 applyTheme 跑两遍（第二遍还带一次同步 IPC），
+  // 也会破坏 setTheme 的「状态先行、DOM 后落」——状态一变就抢先把 data-theme 写了。
+  // backgroundImage 的 watch 只负责持久化，应用仍由各 setter 显式触发，保持原样。
   watch(backgroundImage, (val) => {
     localStorage.setItem(BG_IMAGE_KEY, val)
   })

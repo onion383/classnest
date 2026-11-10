@@ -236,7 +236,7 @@ html.no-animations {
   scroll-behavior: auto !important;
 }
 
-/* ==================== 日/夜切换过渡（快照「先到位、再收尾」） ====================
+/* ==================== 主题 / 日/夜切换过渡（快照「先到位、再收尾」） ====================
    切换本身由 View Transitions 承担（见 styles/themeTransition.js）：
    浏览器在切换前后各拍一张整屏快照，两帧之间做 opacity 叠加。
    主线程只在中间付一次样式重算，叠加本身是合成器上的单层动画，成本与表格/行数无关。
@@ -315,7 +315,7 @@ html.no-animations::view-transition-new(root) {
 }
 
 /* 切换事务窗口：所有元素级过渡瞬时完成。
-   由 themeTransition.js 在改 data-mode 之前加类、两帧后摘除。
+   由 themeTransition.js 在改 data-mode / data-theme 之前加类、两帧后摘除。
    不加这层，上千个 button / tr 会同时做 0.2s 的颜色与阴影过渡，与快照淡入叠加，
    等于把「逐帧重绘 12 帧」再付一遍 —— 表格越多越明显。
    注意只压 transition，不动 animation：长时间运行的动画不该被切换打断重排。 */

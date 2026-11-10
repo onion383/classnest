@@ -1,7 +1,8 @@
 // 日/夜切换的过渡编排：把「可见的过渡」交给浏览器快照，把「逐元素过渡」瞬时化。
 //
-// 使用方：stores/theme.js 的 performThemeSwap(swap) 包住「改 data-mode」的那一下
-// （swap 里同步改状态与 DOM），它会自动瞬时化元素过渡并做快照淡入。
+// 使用方：stores/theme.js 的 commitMode / setTheme 用 performThemeSwap(swap)
+// 包住「改 data-mode / data-theme」的那一下（swap 里同步改状态与 DOM），
+// 它会自动瞬时化元素过渡并做快照淡入。
 //
 // 背景（见 styles/theme-night.css / styles/themeLoader.js）：
 //   theme-night.css 里近 200 条规则全部以 :root[data-mode="night"] 限定作用域，而

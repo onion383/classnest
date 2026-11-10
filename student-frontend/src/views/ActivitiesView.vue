@@ -17,14 +17,14 @@
         <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">
           <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
         </button>
-        <button @mouseenter="prefetch(loadExportExcel)" @click="openActivityExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">📥 导出活动</button>
+        <button @mouseenter="prefetch(loadExportExcel)" @click="openActivityExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme"><IconGlyph name="download" :size="14" tint="current" /> 导出活动</button>
       </div>
 
       <!-- 活动时间轴（带状态标签） -->
       <LeaveTimeline
         :nodes="activityTimelineNodes"
         :node-types="activityNodeTypes"
-        :title="'🗓️ 活动时间轴'"
+        :title="'活动时间轴'"
         :max-height="640"
         align-right
       >
@@ -61,7 +61,7 @@
       <!-- 工具栏 -->
       <div class="mb-4 flex items-center gap-3 opbar">
         <button @mouseenter="prefetch(loadAddCountdownDialog)" @click="openAddCountdown" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">＋ 添加倒计时</button>
-        <button @click="refreshCountdowns" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme">🔄 刷新</button>
+        <button @click="refreshCountdowns" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
         <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
           <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
         </button>
@@ -72,7 +72,7 @@
       <LeaveTimeline
         :nodes="countdownTimelineNodes"
         :node-types="countdownNodeTypes"
-        :title="'⏳ 倒计时列表'"
+        :title="'倒计时列表'"
         :max-height="640"
         align-right
       >

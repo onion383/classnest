@@ -26,7 +26,7 @@
     <polygon v-for="(a, i) in entry.shapes.polygons" :key="'pg' + i" v-bind="a" />
     <ellipse v-for="(a, i) in entry.shapes.ellipses" :key="'e' + i" v-bind="a" />
   </svg>
-  <span v-else class="icon-emoji" :class="{ 'icon-loading': isLoading }" :style="{ fontSize: size + 'px', lineHeight: 1 }">{{ entry.emoji }}</span>
+  <span v-else class="icon-emoji" :class="{ 'icon-loading': isLoading }" :style="emojiBoxStyle">{{ entry.emoji }}</span>
 </template>
 
 <script>
@@ -163,12 +163,28 @@ const entry = computed(() => {
   return { ...(hit || MAP.students), shapes: ICON_SHAPES[key] || ICON_SHAPES.students }
 })
 const isLoading = computed(() => props.name === 'loading')
+
+// 两档必须占同一个盒子，否则切换「图标样式」时按钮/标题会横向跳：
+//   SVG 档是 width/height=size 的固定方块；emoji 档是文字，宽度由字体度量决定
+//   （✕/↺ 这类符号约 0.5em，带 FE0F 变体选择符的又可能超过 1em），差几像素。
+// 固定宽高 + 居中即可让两档布局完全等价；line-height 取 size px 与原来的
+// `lineHeight: 1`（= 1em = fontSize）完全相同，所以垂直方向零变化。
+const emojiBoxStyle = computed(() => ({
+  width: props.size + 'px',
+  height: props.size + 'px',
+  fontSize: props.size + 'px',
+  lineHeight: props.size + 'px',
+}))
 </script>
 
 <style scoped>
 .icon-emoji {
   display: inline-block;
   flex-shrink: 0;
+  /* 宽度由 emojiBoxStyle 固定为 size；这里只负责把窄字形居中，
+     与 SVG 的 viewBox 居中对齐，避免符号型 emoji 看起来偏左 */
+  text-align: center;
+  white-space: nowrap;
 }
 /* loading 时旋转
    注意选择器：icon-loading 这个类打在 <svg> 根元素上（见模板里的 :class），

@@ -131,7 +131,7 @@
         class="fixed z-[20000] w-12 h-12 rounded-full bg-primary hover:bg-primary-hover text-text-inverse text-xl shadow-lg flex items-center justify-center cursor-move select-none transition-theme"
         :style="iconStyle"
         title="AI 助手（左键打开/关闭浮窗，右键菜单，可拖动）"
-      >🤖</button>
+      ><IconGlyph name="ai" :size="24" tint="current" /></button>
     </Teleport>
     <Teleport to="body">
       <!-- 复用工具箱的浮现/收回动画：整块面板从贴合图标的一侧缩放浮现 -->
@@ -159,7 +159,7 @@
             @click.stop
             class="flex items-center justify-between px-4 py-2.5 border-b border-border bg-surface-hover flex-shrink-0 cursor-move select-none"
           >
-            <span class="font-semibold text-text">🤖 AI 助手</span>
+            <span class="font-semibold text-text flex items-center gap-1.5"><IconGlyph name="ai" :size="16" /> AI 助手</span>
             <button
               type="button"
               @click.stop="assistantOpen = false"

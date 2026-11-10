@@ -115,7 +115,7 @@ export function useAiChat(ctx) {
         try { await axios.delete(`/api/ai/conversations/${ctx.conversationId.value}/messages/last-assistant`) } catch (_) { /* 删除失败不阻塞重试 */ }
       }
       ctx.messages.value.splice(i)
-      ctx.messages.value.push({ role: 'assistant', loading: true, content: '', _live: true, steps: [], processOpen: true })
+      ctx.messages.value.push({ role: 'assistant', loading: true, content: '', _live: true, steps: [], processOpen: true, isError: false })
       await ctx._streamReply()
     },
     // 点「回退」按钮：先弹确认框（提示 AI 更改的数据可能会丢失），确认后再执行
@@ -217,6 +217,8 @@ export function useAiChat(ctx) {
       if (cont) {
         // 续写同一助手消息：不新建气泡，记住续写起点（基础正文/已定步骤），本轮输出追加其后
         cont._live = true
+        // 续写复用旧气泡：上一轮若是错误消息，必须清掉标记，否则新回复会被当成错误
+        cont.isError = false
         cont.loading = false
         cont.processDone = false
         cont.processOpen = true
@@ -231,7 +233,7 @@ export function useAiChat(ctx) {
         cont.reasoning = ''
         await ctx._streamReply(cont)
       } else {
-        ctx.messages.value.push({ role: 'assistant', loading: true, content: '', _live: true, steps: [], processOpen: true })
+        ctx.messages.value.push({ role: 'assistant', loading: true, content: '', _live: true, steps: [], processOpen: true, isError: false })
         await ctx._streamReply()
       }
     },
@@ -347,7 +349,9 @@ export function useAiChat(ctx) {
                 ctx.messages.value = ctx.messages.value.filter((m) => m.role !== 'assistant' || !m.loading)
                 try { await ctx.loadConversationList() } catch (_) { /* 列表刷新失败不阻塞 */ }
               }
-              last.content = (cont && last._baseContent ? last._baseContent + '\n\n' : '') + '⚠️ ' + (evt.message || '请求失败')
+              last.content = (cont && last._baseContent ? last._baseContent + '\n\n' : '') + (evt.message || '请求失败')
+              // 错误消息不再靠「⚠️」文案前缀区分（图标模式下那是彩色 emoji），改用显式字段
+              last.isError = true
             } else if (evt.type === 'done') {
               last.reasoningStreaming = false
               last.processDone = true
@@ -384,7 +388,10 @@ export function useAiChat(ctx) {
           if (cont && last._id) await ctx.updateMessage(last._id, last.content, proc)
           else last._id = await ctx.persistMessage('assistant', last.content, undefined, proc)
         }
-        if (last.content === '' && !last.proposal && !last.ask && !last.exportFile && !last.exportImage) last.content = '⚠️ 未收到回复'
+        if (last.content === '' && !last.proposal && !last.ask && !last.exportFile && !last.exportImage) {
+          last.content = '未收到回复'
+          last.isError = true
+        }
         // 后台预计算 markdown HTML（不阻塞 UI）
         ctx._computeHtml(last)
       } catch (err) {
@@ -401,7 +408,8 @@ export function useAiChat(ctx) {
           }
           ctx._computeHtml(last)
         } else {
-          last.content = (cont && last._baseContent ? last._baseContent + '\n\n' : '') + '⚠️ ' + (err.response?.data?.error || err.message || '请求失败')
+          last.content = (cont && last._baseContent ? last._baseContent + '\n\n' : '') + (err.response?.data?.error || err.message || '请求失败')
+          last.isError = true
         }
       } finally {
         ctx.abortCtrl.value = null

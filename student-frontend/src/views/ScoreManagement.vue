@@ -49,7 +49,7 @@
         <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">
           <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
         </button>
-        <button @mouseenter="prefetch(loadExportExcel)" @click="openExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">📥 导出{{ isGroup ? '小组' : '个人' }}加分</button>
+        <button @mouseenter="prefetch(loadExportExcel)" @click="openExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme"><IconGlyph name="download" :size="14" tint="current" /> 导出{{ isGroup ? '小组' : '个人' }}加分</button>
       </div>
 
       <!-- 今日时间轴 -->
@@ -57,7 +57,7 @@
         :nodes="timelineNodes"
         :node-types="timelineNodeTypes"
         :type-options="['加分', '扣分']"
-        :title="isGroup ? '🗓️ 今日小组加减分时间轴' : '🗓️ 今日个人加减分时间轴'"
+        :title="isGroup ? '今日小组加减分时间轴' : '今日个人加减分时间轴'"
         :empty-text="isGroup ? '今天还没有小组加分' : '今天还没有人加分'"
         empty-action-text="去加分"
         empty-secondary-action-text="从 Excel 表格批量导入"

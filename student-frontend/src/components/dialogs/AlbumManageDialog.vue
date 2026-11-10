@@ -34,7 +34,7 @@
                 <template v-else>{{ a.folder_path }} · {{ a.photo_count || 0 }} 项</template>
               </p>
             </div>
-            <button v-if="a.kind !== 'virtual'" @click="openFolder(a)" class="text-text-muted hover:text-text px-2 py-1 text-sm flex-shrink-0" title="在文件管理器中打开">📂 打开文件夹</button>
+            <button v-if="a.kind !== 'virtual'" @click="openFolder(a)" class="text-text-muted hover:text-text px-2 py-1 text-sm flex-shrink-0 inline-flex items-center gap-1" title="在文件管理器中打开"><IconGlyph name="folder" :size="13" tint="current" /> 打开文件夹</button>
             <button @click="confirmDelete = a" class="bg-danger hover:bg-danger/80 text-text-inverse text-sm px-3 py-1.5 rounded flex-shrink-0 ml-4 transition-theme">删除</button>
           </div>
         </div>
@@ -63,6 +63,7 @@ import { reportError } from '../../utils/reportError.js'
 import { ref, nextTick, watch, onBeforeUnmount } from 'vue'
 import axios from 'axios'
 import DialogShell from '../base/DialogShell.vue'
+import IconGlyph from '../base/IconGlyph.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
 import ConfirmDialog from '../base/ConfirmDialog.vue'
 import { useNotification } from '../../composables/useNotification.js'

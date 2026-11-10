@@ -72,6 +72,11 @@
           <div class="cd-bottom">还有 <span class="cd-num tabular-nums">{{ nearestCountdown.days }}</span> 天</div>
         </template>
         <div v-else class="countdown-empty">暂无倒计时</div>
+        <!-- 与下方 7 张卡片同一套入口：空态「去XX」、有数据「转到XX页面」。
+             倒计时没有独立路由，管理入口在活动页的倒计时页签（?tab=countdown）。 -->
+        <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/activities?tab=countdown')">
+          {{ nearestCountdown ? '转到倒计时页面' : '去添加倒计时' }}
+        </button>
       </div>
     </div>
 
@@ -91,6 +96,11 @@
             </div>
             <div v-if="todayDuties.length === 0" class="text-center py-5 text-text-muted text-sm">今日暂无值日安排</div>
           </div>
+          <!-- 卡片底部入口：空态时是「去XX」的引导，有数据时是「转到XX页面」的跳转，同一个按钮同一个位置，
+               两种状态切换时高度不跳。卡片整体已可点击（.card-link），这里必须 @click.stop，否则会 push 两次。 -->
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/duty')">
+            {{ todayDuties.length ? '转到值日页面' : '去设置值日' }}
+          </button>
         </div>
 
         <!-- 班费剩余 -->
@@ -109,6 +119,10 @@
             <span class="text-text-muted">本月收入 <b :key="'fee-in-' + showFee" class="text-success fee-blur-in fee-amount-sm">{{ showFee ? formatMoney(monthIncome) : '••' }}</b></span>
             <span class="text-text-muted">本月支出 <b :key="'fee-out-' + showFee" class="text-warning fee-blur-in fee-amount-sm">{{ showFee ? formatMoney(monthExpense) : '••' }}</b></span>
           </div>
+          <!-- 班费没有「列表空态」：余额恒显示数字，无记录时是 0.00，所以只能按记录条数决定按钮文案 -->
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/fee')">
+            {{ fees.length ? '转到班费页面' : '去记一笔班费' }}
+          </button>
         </div>
 
         <!-- 今日课程 -->
@@ -124,6 +138,9 @@
             </div>
           </div>
           <div v-else class="text-center py-5 text-text-muted text-sm">今日无课程</div>
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/schedule')">
+            {{ todayCourseList.length ? '转到课程表页面' : '去设置课程表' }}
+          </button>
         </div>
       <!-- 今日加分 Top4 -->
         <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/scores')" title="跳转：加分管理">
@@ -137,6 +154,9 @@
             </div>
           </div>
           <div v-else class="text-center py-5 text-text-muted text-sm">今日暂无加分</div>
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/scores')">
+            {{ topScores.length ? '转到加分页面' : '去登记加分' }}
+          </button>
         </div>
 
         <!-- 今日活动（时间轴） -->
@@ -152,6 +172,9 @@
             </div>
           </div>
           <div v-else class="text-center py-5 text-text-muted text-sm">今日暂无活动</div>
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/activities')">
+            {{ todayActivities.length ? '转到活动中心' : '去添加活动' }}
+          </button>
         </div>
 
         <!-- 今日请假 -->
@@ -167,6 +190,9 @@
             </div>
           </div>
           <div v-else class="text-center py-5 text-text-muted text-sm">今日无请假</div>
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/leaves')">
+            {{ currentLeaveList.length ? '转到请假页面' : '去登记请假' }}
+          </button>
         </div>
 
         <!-- 班级相册（随机一张） -->
@@ -178,6 +204,9 @@
             <img :src="albumPhoto" alt="随机班级照片" class="w-full h-44 object-cover">
           </div>
           <div v-else class="text-center py-8 text-text-muted text-sm">暂无照片</div>
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/album')">
+            {{ albumPhoto ? '转到相册页面' : '去上传照片' }}
+          </button>
         </div>
     </div>
 
@@ -688,6 +717,27 @@ onBeforeUnmount(() => {
 .card-link:hover {
   border-color: rgba(59, 130, 246, 0.35);
   box-shadow: 0 4px 16px rgba(59, 130, 246, 0.10);
+}
+
+/* 看板卡片底部的入口按钮：空态写「去XX」，有数据写「转到XX页面」。
+   宽度按内容自适应、水平居中（`display:block` + `margin auto`），**不要** w-full 铺满卡片 ——
+   铺满时 7 张卡底部是 7 条整宽色带，跟卡片里的小字数据抢视觉。
+   配色与 EmptySnapshot 里「去设置」那颗完全同款（bg-info 实心蓝 + text-text-inverse）：
+   「占位页按钮统一蓝色」是既定口径，四套主题各自有现成配方 ——
+     base / base-accent → 饱和蓝底白字（accent 下 --color-info 跟随页面强调色）；
+     glass             → rgba(59,130,246,.36) 蓝色玻璃 + #1e40af 深蓝字 + 主题描边；
+     night             → theme-night.css 有专规则。
+   所以这里不写任何 color / background / border，只留尺寸：
+   写死色值就等于在主题之外开第五份副本。 */
+.card-go-btn {
+  display: block;
+  margin: 12px auto 0;
+  padding: 6px 20px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  /* Tailwind v4 的按钮默认 cursor 是 default，不是 pointer */
+  cursor: pointer;
 }
 
 /* 欢迎条右侧关键数据（在校 / 请假 / 课程）：可点击跳转，悬停给轻微底色反馈。

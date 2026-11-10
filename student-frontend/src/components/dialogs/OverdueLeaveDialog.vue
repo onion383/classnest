@@ -1,7 +1,7 @@
 <template>
   <DialogShell :visible="visible" :z-index="70" overlay-class="bg-black/30">
       <div class="bg-surface rounded-lg p-5 shadow-card dialog-card flex flex-col" style="width: 460px; max-width: 90vw;">
-        <h4 class="text-base font-bold mb-1">⏰ 发现假期已结束</h4>
+        <h4 class="text-base font-bold mb-1 flex items-center gap-2"><IconGlyph name="clock" :size="16" /> 发现假期已结束</h4>
         <p class="text-sm text-text-secondary mb-4">以下同学假期已经结束但尚未销假，请确认返校情况：</p>
         <div class="flex-1 overflow-auto space-y-3 mb-1" style="max-height: 340px;">
           <div
@@ -26,6 +26,7 @@
 <script setup vapor>
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
+import IconGlyph from '../base/IconGlyph.vue'
 
 defineOptions({ name: 'OverdueLeaveDialog' })
 defineProps({

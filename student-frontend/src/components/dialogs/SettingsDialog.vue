@@ -2,7 +2,7 @@
   <DialogShell :visible="visible" :z-index="10001" overlay-class="bg-black/50">
     <div class="bg-surface p-6 rounded-lg w-[750px] max-h-[85vh] flex flex-col shadow-card dialog-card relative">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-bold">⏱️ 作息时间设置</h3>
+        <h3 class="text-lg font-bold flex items-center gap-2"><IconGlyph name="timer" :size="18" /> 作息时间设置</h3>
         <button
           @click="importVisible = true"
           class="bg-warning text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5"

@@ -95,7 +95,7 @@
             </div>
             <!-- 文件预览 -->
             <div v-else class="relative border border-border rounded-lg bg-surface px-3 py-2 inline-flex items-center gap-2 max-w-full">
-              <span class="text-sm">📄</span>
+              <IconGlyph name="paperclip" :size="14" tint="current" />
               <span class="text-sm font-medium text-text truncate max-w-40">{{ attachedFile.name }}</span>
               <span class="text-xs text-text-muted flex-shrink-0">({{ attachedFile.sizeLabel }})</span>
               <button

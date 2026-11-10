@@ -2,7 +2,7 @@
   <DialogShell :visible="show" :z-index="10005" overlay-class="bg-black/50" @overlay="close">
       <div class="dialog-card bg-surface rounded-lg p-6 min-w-[32rem] w-auto min-h-[32rem] max-w-[calc(100vw-2rem)] border border-border shadow-lg flex flex-col relative" style="max-height: 90vh; overflow: visible;">
         <div class="flex items-center justify-between mb-5 flex-shrink-0">
-          <h3 class="text-lg font-extrabold text-text tracking-wide">🧠 AI 助手设置</h3>
+          <h3 class="text-lg font-extrabold text-text tracking-wide flex items-center gap-2"><IconGlyph name="brain" :size="18" /> AI 助手设置</h3>
           <button @click="close" class="dlg-close" title="关闭">✕</button>
         </div>
 
@@ -119,6 +119,7 @@ import { ref, computed, watch } from 'vue'
 import AppHelp from '../base/AppHelp.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
 import EmptySnapshot from '../base/EmptySnapshot.vue'
+import IconGlyph from '../base/IconGlyph.vue'
 import AppSelect from '../base/AppSelect.vue'
 import AppSwitch from '../base/AppSwitch.vue'
 import AddModelDialog from './AddModelDialog.vue'

@@ -256,7 +256,7 @@ export function useDynamicTableDrag(ctx) {
         // 多选：整批胶囊
         const selectedRows = ctx.rows.value.filter(r => ctx.selectedRowKeys.value.includes(r._rowKey) && !r._isNew && !r._isSeparator);
         const names = selectedRows.slice(0, 2).map(r => r['姓名'] || r['收支编码'] || '项目');
-        let text = '🚚 ' + names.join('、');
+        let text = names.join('、');
         if (selectedRows.length > 2) text += ` 等${selectedRows.length}项`;
         const pill = document.createElement('div');
         pill.textContent = text;

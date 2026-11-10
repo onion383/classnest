@@ -4,7 +4,7 @@
        @overlay 走「取消」——点遮罩和按 Esc 与点「取消」按钮同义，不会把预览结果写进小组。 -->
   <DialogShell :visible="visible" :z-index="50" overlay-class="bg-black/30" @overlay="cancel">
     <div class="bg-surface rounded-xl p-5 shadow-card dialog-card flex flex-col overflow-hidden" style="width: 860px; height: 620px; max-width: 90vw;">
-      <h3 class="text-lg font-bold mb-4">🧠 智能分组</h3>
+      <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><IconGlyph name="brain" :size="18" /> 智能分组</h3>
 
       <!-- 新同学确认：小组里有班级学生信息表不存在的名字时提示 -->
       <NewComerConfirm :visible="showNewPrompt" :names="strangers" action="分组" @participate="onParticipate" @not="onNot" />
@@ -28,7 +28,7 @@
       <div class="mb-3">
         <div class="flex items-center justify-between mb-2">
           <label class="text-sm font-medium block">排表条件</label>
-          <button @click="startArrange" :disabled="poolEmpty" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm disabled:opacity-40 disabled:cursor-not-allowed">{{ arranged ? '🔀 换一换' : '▶ 开始排表' }}</button>
+          <button @click="startArrange" :disabled="poolEmpty" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm disabled:opacity-40 disabled:cursor-not-allowed">{{ arranged ? '换一换' : '开始排表' }}</button>
         </div>
         <div
           class="border border-dashed border-border rounded-lg p-2 bg-surface/55 backdrop-blur-md"
@@ -145,6 +145,7 @@ import '../../../styles/dialog-transition.css'
 import DialogShell from '../../base/DialogShell.vue'
 import NewComerConfirm from '../NewComerConfirm.vue'
 import AppSelect from '../../base/AppSelect.vue'
+import IconGlyph from '../../base/IconGlyph.vue'
 import { useSmartGroupPipeline, buildRoster } from './SmartGroupDialog.pipeline.js'
 import { useSmartGroupConditions } from './SmartGroupDialog.conditions.js'
 import { useSmartGroupPreview } from './SmartGroupDialog.preview.js'

@@ -104,7 +104,7 @@ const props = defineProps({
   // 请假类型选项（用于筛选）
   typeOptions: { type: Array, default: () => [] },
   // 标题
-  title: { type: String, default: '🗓️ 请假时间轴' },
+  title: { type: String, default: '请假时间轴' },
   // 右侧对齐：把类型标签与操作按钮放到右侧（业务时间轴如加分/扣分使用）
   alignRight: { type: Boolean, default: false },
   // 时间轴列表最大高度（px），默认 420，业务方可按需调高

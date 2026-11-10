@@ -158,9 +158,12 @@ const navRef = ref(null)
 .nav-item .nav-emoji {
   flex-shrink: 0;
 }
-/* Emoji 图标：与 lucide 16px 图标视觉等宽，保持垂直居中对齐 */
+/* Emoji 图标：与 :size="16" 的 IconGlyph **物理等宽**。
+   原来写 20px，而 .nav-item 是 flex + gap:10px，切换图标样式时
+   文字会横向跳 4px；改成 16px 后两档盒子一致。
+   font-size 保留 14px 是视觉取舍（emoji 字形比线框图标饱满），不影响布局宽度。 */
 .nav-emoji {
-  width: 20px;
+  width: 16px;
   text-align: center;
   font-size: 14px;
   line-height: 1;

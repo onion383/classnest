@@ -62,8 +62,8 @@
       </template>
 
       <template v-else>
-        <div class="text-center py-8 text-text-muted font-semibold">
-          ✅ 没有发现重复数据。
+        <div class="text-center py-8 text-text-muted font-semibold flex items-center justify-center gap-1.5">
+          <IconGlyph name="check" :size="16" tint="current" /> 没有发现重复数据。
         </div>
         <div class="flex justify-center mt-4">
           <button @click="cancel" class="bg-surface-hover px-4 py-1.5 rounded text-text">关闭</button>
@@ -78,6 +78,7 @@ import DynamicTable from '../tables/DynamicTable/DynamicTable.vue';
 import { ref, computed, watch, nextTick } from 'vue'
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
+import IconGlyph from '../base/IconGlyph.vue'
 
 defineOptions({ name: 'DeduplicateDialog' })
 

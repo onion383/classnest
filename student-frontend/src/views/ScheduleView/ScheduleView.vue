@@ -207,13 +207,13 @@
             <template #actions>
               <button
                 @click="captureHistorySnapshot"
-                class="bg-primary text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer"
-              >📸 保存本周快照</button>
+                class="bg-primary text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer inline-flex items-center gap-1"
+              ><IconGlyph name="camera" :size="14" tint="current" /> 保存本周快照</button>
               <button
                 @click="requestDeleteHistorySnapshot"
                 :disabled="!canDeleteHistorySnapshot"
-                class="bg-danger text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              >🗑 删除本周快照</button>
+                class="bg-danger text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              ><IconGlyph name="trash" :size="14" tint="current" /> 删除本周快照</button>
             </template>
           </WeekSwitcher>
         </div>

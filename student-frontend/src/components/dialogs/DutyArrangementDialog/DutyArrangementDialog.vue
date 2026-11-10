@@ -1,7 +1,7 @@
 <template>
   <DialogShell :visible="visible" :z-index="50" overlay-class="bg-black/30">
     <div class="bg-surface rounded-lg p-5 shadow-card dialog-card flex flex-col overflow-hidden" style="width: 900px; height: 720px; max-width: 92vw;">
-      <h3 class="text-lg font-bold mb-1">🧹 值日智能排表</h3>
+      <h3 class="text-lg font-bold mb-1 flex items-center gap-2"><IconGlyph name="duty" :size="18" /> 值日智能排表</h3>
       <p class="text-xs text-text-muted mb-3">只有一级条件，按顺序从第一条执行到最后一条；越靠后的条件越重要，可部分覆盖前面的结果。结果仅预览，确认后才写回当前值日表。</p>
 
       <!-- 人数不足：总槽位 < 班级学生数时先确认 -->
@@ -31,7 +31,7 @@
       <div class="mb-3">
         <div class="flex items-center justify-between mb-2">
           <label class="text-sm font-medium block">排表条件</label>
-          <button @click="startArrange" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm">{{ arranged ? '🔀 换一换' : '▶ 开始排表' }}</button>
+          <button @click="startArrange" class="bg-primary text-text-inverse px-3 py-1.5 rounded border-none cursor-pointer text-sm">{{ arranged ? '换一换' : '开始排表' }}</button>
         </div>
         <div
           class="border border-dashed border-border rounded-lg p-2 bg-surface/55 backdrop-blur-md"
@@ -134,6 +134,7 @@
 import { ref, computed, watch, nextTick, toRef, onBeforeUnmount } from 'vue'
 import GridView from '../../tables/GridView/GridView.vue'
 import AppSelect from '../../base/AppSelect.vue'
+import IconGlyph from '../../base/IconGlyph.vue'
 import DialogShell from '../../base/DialogShell.vue'
 import ConfirmDialog from '../../base/ConfirmDialog.vue'
 import '../../../styles/dialog-transition.css'

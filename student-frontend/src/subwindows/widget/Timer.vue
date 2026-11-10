@@ -180,7 +180,7 @@ function start() {
       if (totalSeconds.value <= 0) {
         pause()
         // 倒计时归零要通知：否则用户不知道时间到了（浮窗可能不在前台）
-        hint.value = '⏰ 时间到'
+        hint.value = '时间到'
       }
     }
   }, 1000)
@@ -230,7 +230,10 @@ onUnmounted(() => {
 .tab {
   flex: 1;
   padding: 6px 0;
-  border: none;
+  /* glass 主题给所有 button 加了 1px 描边，选择器优先级高于 scoped 的 .tab，
+     会把 border:none 盖掉，让未选中的 tab 多一圈深色边框。同 index.css 的
+     .dtf-sort-btn 处理：提权清边框，并关掉主题叠的 ::before 发光描边。 */
+  border: 0 !important;
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--color-text-secondary, #6b7280);
@@ -238,6 +241,10 @@ onUnmounted(() => {
   cursor: pointer;
   font-weight: 500;
   transition: all 0.2s;
+}
+
+.tab::before {
+  display: none !important;
 }
 
 .tab.active {

@@ -91,7 +91,7 @@
           <!-- 含文件内容的消息：显示文件标签 + 用户文字 -->
           <template v-if="m.content && m.content.startsWith('文件「')">
             <div class="flex items-center gap-1 text-primary/80 text-xs mb-1">
-              <span class="text-xs">📄</span>
+              <IconGlyph name="paperclip" :size="12" tint="current" />
               <span class="font-medium truncate max-w-40">{{ extractFileName(m.content) }}</span>
             </div>
             <span>{{ extractUserText(m.content) || '（无内容）' }}</span>
@@ -114,7 +114,7 @@
         <div v-else class="markdown-body whitespace-pre-wrap break-words">{{ m.content }}</div>
         <!-- 已开启推理但本次没收到思考内容 → 说明该模型/接口不返回思维链 -->
         <p
-          v-if="m._live && m.role !== 'user' && !m.loading && activeReasoningOn && !m.reasoning && !hasReasonStep(m) && !m.proposal && m.content && !m.content.startsWith('⚠️')"
+          v-if="m._live && m.role !== 'user' && !m.loading && activeReasoningOn && !m.reasoning && !hasReasonStep(m) && !m.proposal && m.content && !m.isError"
           class="mt-1 text-[10px] text-text-muted"
         >未返回思考内容 · 当前模型可能不支持思考模式</p>
       </div>

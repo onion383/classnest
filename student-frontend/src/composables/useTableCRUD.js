@@ -503,18 +503,18 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
 
       if (clipboard.value && clipboard.value.ids.length > 0) {
         const pasteCount = clipboard.value.ids.length
-        items.push({ label: `📋 粘贴到上方 (${pasteCount})`, action: () => pasteRows('above', payload) })
-        items.push({ label: `📋 粘贴到下方 (${pasteCount})`, action: () => pasteRows('below', payload) })
+        items.push({ label: `粘贴到上方 (${pasteCount})`, action: () => pasteRows('above', payload) })
+        items.push({ label: `粘贴到下方 (${pasteCount})`, action: () => pasteRows('below', payload) })
       }
 
       items.push({ label: '在上面插入行', action: () => insertRowAbove(payload) })
       items.push({ label: '在下面插入行', action: () => insertRowBelow(payload) })
 
       const cutCount = selectedCount.value > 1 ? selectedCount.value : 1
-      items.push({ label: `✂️ 剪切 (${cutCount})`, action: () => cutRows(payload) })
+      items.push({ label: `剪切 (${cutCount})`, action: () => cutRows(payload) })
 
       const delCount = selectedCount.value > 1 ? selectedCount.value : 1
-      items.push({ label: `🗑️ 删除 (${delCount})`, action: () => deleteRows(payload) })
+      items.push({ label: `删除 (${delCount})`, action: () => deleteRows(payload) })
     } else if (type === 'newRow') {
       items.push({ label: '取消新行', action: () => { newRow.value = null } })
     }

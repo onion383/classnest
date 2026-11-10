@@ -21,7 +21,7 @@
                  智能排表/导入 两段均可用，顺序与当前值日一致 -->
             <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
               <button @click="settingsVisible = true" @mouseenter="prefetch(loadSettingsDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
-              <button @click="openArrange(dutyView)" @mouseenter="prefetch(loadArrangementDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded">🧠 智能排表</button>
+              <button @click="openArrange(dutyView)" @mouseenter="prefetch(loadArrangementDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="brain" :size="14" tint="current" /> 智能排表</button>
               <button @click="dutyView === 'active' ? refreshActive() : refreshMaster()" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="openImport(dutyView)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> {{ dutyView === 'active' ? '从模板导入' : '从实行导入' }}</button>
               <button @click="openExcelImport(dutyView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
@@ -237,13 +237,13 @@
             <template #actions>
               <button
                 @click="captureHistorySnapshot"
-                class="bg-primary text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer"
-              >📸 补存已过日期</button>
+                class="bg-primary text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer inline-flex items-center gap-1"
+              ><IconGlyph name="camera" :size="14" tint="current" /> 补存已过日期</button>
               <button
                 @click="requestDeleteHistorySnapshot"
                 :disabled="!canDeleteHistorySnapshot"
-                class="bg-danger text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              >🗑 删除本周快照</button>
+                class="bg-danger text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              ><IconGlyph name="trash" :size="14" tint="current" /> 删除本周快照</button>
             </template>
           </WeekSwitcher>
         </div>

@@ -14,6 +14,7 @@
 // =========================================================================
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -26,6 +27,9 @@ const loadDuty = () => import(pathToFileURL(path.join(
 const loadGroup = () => import(pathToFileURL(path.join(
   __dirname, '../../student-frontend/src/components/dialogs/SmartGroupDialog/SmartGroupDialog.pipeline.js',
 )).href)
+const loadArrangeOptions = () => import(pathToFileURL(path.join(
+  __dirname, '../../student-frontend/src/components/dialogs/SmartArrangementDialog/SmartArrangementDialog.options.js',
+)).href)
 
 // ==================== 座位排表 ====================
 // 名册 4 人，座位表只坐了 2 人（第 1 行两人，第 2 行空着）
@@ -37,18 +41,21 @@ const SEAT_STUDENTS = [
 ]
 const SEAT_BASE = [[1, 2], [null, null]]
 
-function seatCtx(dataSource, usable) {
+function seatCtx(dataSource, usable, extra = {}) {
   return {
     rows: { value: 2 },
     cols: { value: 2 },
     students: { value: SEAT_STUDENTS },
     baseSeats: { value: SEAT_BASE },
+    // 数据源能力位：table 模式不允许新同学参与（A5-01 的唯一判据）
+    allowNew: { value: dataSource !== 'table' },
     excludeNew: { value: false },
     strangerNames: { value: new Set() },
     dataSource: { value: dataSource },
     satisfaction: { value: {} },
     // 异形网格改造后：算法只碰「可用格」（types=座位）。全座位布局时恒 true。
     isUsable: typeof usable === 'function' ? usable : () => true,
+    ...extra,
   }
 }
 
@@ -81,6 +88,66 @@ test('座位排表 · 走廊行/空位格不参与排表：补位与条件作用
   assert.deepEqual(grid[1], [null, null], '走廊行必须保持空 —— 学生不能排进走廊')
   // 条件的作用域同样不该包含走廊格，否则随机/分组会把「走廊」当空座位来换位
   assert.deepEqual(pipeline.allCells(), [{ r: 0, c: 0 }, { r: 0, c: 1 }])
+})
+
+// A5-01：table 模式下 excludeNew 是上一轮「全部同学」的选择残留，不能拿它排除表内已有成员
+test('座位排表 · 现有排表表格：excludeNew 不能排除表内已有的新同学', async () => {
+  const { useSmartArrangementPipeline } = await loadSeat()
+  const ctx = seatCtx('table', undefined, {
+    baseSeats: { value: [[1, '钱七'], [null, null]] },
+    excludeNew: { value: true },
+    strangerNames: { value: new Set(['钱七']) },
+  })
+  const pipeline = useSmartArrangementPipeline(ctx, {})
+  const grid = pipeline.initGrid()
+  assert.ok(
+    grid.flat().some(s => s && s.姓名 === '钱七'),
+    'table 模式的语义是「以表里的内容为准」，名册外的钱七必须保留',
+  )
+})
+
+test('座位排表 · 全部同学：excludeNew 仍然排除新同学', async () => {
+  const { useSmartArrangementPipeline } = await loadSeat()
+  const ctx = seatCtx('all', undefined, {
+    baseSeats: { value: [[1, '钱七'], [null, null]] },
+    excludeNew: { value: true },
+    strangerNames: { value: new Set(['钱七']) },
+  })
+  const pipeline = useSmartArrangementPipeline(ctx, {})
+  const grid = pipeline.initGrid()
+  assert.ok(
+    !grid.flat().some(s => s && s.姓名 === '钱七'),
+    'all 模式下用户选择「不参与」，新同学必须被排除',
+  )
+})
+
+// A5-01：新人确认只在 allowNew 的数据源下弹
+function arrangeOptionsCtx(dataSource) {
+  return {
+    arranged: { value: false },
+    allowNew: { value: dataSource !== 'table' },
+    strangers: { value: ['王五'] },
+    showNewPrompt: { value: false },
+    excludeNew: { value: false },
+    generated: false,
+    generatePreview() { this.generated = true },
+  }
+}
+
+test('座位排表 · 现有排表表格：startArrange 不弹新人确认', async () => {
+  const { useSmartArrangementOptions } = await loadArrangeOptions()
+  const ctx = arrangeOptionsCtx('table')
+  useSmartArrangementOptions(ctx, {}).startArrange()
+  assert.equal(ctx.showNewPrompt.value, false, 'table 模式不该弹新人确认')
+  assert.equal(ctx.generated, true, '应直接生成预览')
+})
+
+test('座位排表 · 全部同学：startArrange 仍弹新人确认', async () => {
+  const { useSmartArrangementOptions } = await loadArrangeOptions()
+  const ctx = arrangeOptionsCtx('all')
+  useSmartArrangementOptions(ctx, {}).startArrange()
+  assert.equal(ctx.showNewPrompt.value, true, 'all 模式仍要先问新同学是否参与')
+  assert.equal(ctx.generated, false, '确认前不应生成预览')
 })
 
 // ==================== 值日排表 ====================
@@ -192,4 +259,34 @@ test('分组 · 全部同学 + 用户选择参与新同学：名册外的人附�
     dataSource: 'all', students: GROUP_STUDENTS, groups: GROUP_TABLE, includeNew: true,
   })
   assert.deepEqual(roster.map(s => s.姓名), ['张三', '李四', '赵六', '王五'], '王五作为新同学附在末尾')
+})
+
+test('分组 · 切数据源清空条件里的旧学生 id（A5-04）', async () => {
+  const { clearStudentSelections } = await loadGroup()
+  const stages = [
+    { type: 'relation', kind: 'together', a: 1, b: 2 },
+    { type: 'identity', kind: 'leader', studentId: 3 },
+    { type: 'gender', mode: 'balanced' },
+  ]
+  clearStudentSelections(stages)
+  assert.equal(stages[0].a, '', '关系条件 a 要清空')
+  assert.equal(stages[0].b, '', '关系条件 b 要清空')
+  assert.equal(stages[1].studentId, '', '身份条件 studentId 要清空')
+  assert.equal(stages[2].mode, 'balanced', '其它条件不受影响')
+})
+
+test('[静态] 切数据源统一复位（排表 excludeNew / 分组旧学生 id）', () => {
+  const read = (rel) => fs.readFileSync(path.join(__dirname, '../..', rel), 'utf8')
+  const arrangeSrc = read('student-frontend/src/components/dialogs/SmartArrangementDialog/SmartArrangementDialog.vue')
+  assert.match(
+    arrangeSrc,
+    /function onDataSourceChange\(\) \{[\s\S]{0,220}?excludeNew\.value = false/,
+    '排表切源必须复位 excludeNew / showNewPrompt',
+  )
+  const groupSrc = read('student-frontend/src/components/dialogs/SmartGroupDialog/SmartGroupDialog.vue')
+  assert.match(
+    groupSrc,
+    /function onDataSourceChange\(\) \{[\s\S]{0,320}?ctx\.resetStudentSelections\(\)/,
+    '分组切源必须走统一的旧学生选择清理入口',
+  )
 })

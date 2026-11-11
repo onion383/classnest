@@ -33,6 +33,7 @@ const { buildWebPreferences } = require('./main.web-prefs')
 const ipcAuth = require('./main.ipc-auth')
 // Windows 置底：把组件窗口的 z 序插到「Progman 之上、所有可见窗口之下」
 const desktopLayer = require('./main.desktop-layer')
+const { relayToWidgetWindows } = require('./widget-relay')
 
 const isDev = !app.isPackaged
 
@@ -775,11 +776,11 @@ function registerWidgetIpc(opts = {}) {
     }
   })
 
-  // 主应用 -> 小组件
+  // 主应用 -> 所有小组件窗口（工具箱浮窗 + 桌面挂件）。
+  // 桌面挂件此前收不到这条中继，业务数据变更只能等 5 分钟轮询；settings-changed
+  // 与新增的 data-changed 共用这一条路，不新增 IPC 通道名。
   ipcMain.on('to-widget', (event, data) => {
-    if (widgetWindow && !widgetWindow.isDestroyed()) {
-      widgetWindow.webContents.send('from-main', data)
-    }
+    relayToWidgetWindows(data, [widgetWindow, desktopWidgetWindow])
   })
 
   // 「小组件 -> 主应用」通道（to-main / from-widget）已删除：

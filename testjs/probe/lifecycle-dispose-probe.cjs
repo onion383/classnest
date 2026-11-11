@@ -160,9 +160,10 @@ console.log('\n【5】DesktopWidget.vue：调试监听器必须具名可移除')
   assert(/schedule\.value\s*=/.test(reset) && /students\.value\s*=/.test(reset),
     '登录态变化时必须清空业务数据（课表/学生等），否则旧用户数据外露')
   const main = readCode('subwindows/desktop-widget/main.js')
-  assert(/AUTH_CHANGED_EVENT/.test(main), '主进程入口必须在 token 变化时广播登录态变化')
-  assert(/resetUserScopedCaches\(\)/.test(main),
-    'token 变化时本窗口的用户级缓存也要作废（登出只清了主窗口那份注册表）')
+  // 判定已收口到 utils/authSync.js：入口只负责安装 + 让本窗口缓存的 token 失效
+  assert(/installAuthSync\(/.test(main), '桌面组件入口必须安装跨窗口登录态监听')
+  assert(/onTokenChanged[\s\S]{0,80}tokenPromise = null/.test(main),
+    'token 变化后本窗口缓存的 token 必须失效')
 }
 
 console.log('\n【6】useRowFocus：定位重试链必须可取消')

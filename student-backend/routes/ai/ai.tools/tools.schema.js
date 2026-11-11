@@ -1,6 +1,7 @@
 // ===== AI 工具 schema（下发给模型的工具定义，纯数据、无副作用） =====
 // 仅含 *Tool 常量与它们引用的共享常量；执行逻辑见 tools.executors/executors.js，装配与派发见 tools.js。
 const { READ_TABLES, WRITE_TABLES, JSON_WRITE_TABLES } = require('../ai.constants');
+const { AI_SEARCH_TABLES } = require('../../../schema/tableRegistry');
 
 // 各 propose_* 工具通用的可选参数说明：来源标记（供撤销记录区分「哪批是子助手带来的」）
 const SOURCE_DESC = '可选：若本次写入依据了 run_subagent 某子助手的核查结果，填「子助手名 · 任务」，如「数据体检员 · 清理重复项」；撤销记录里会据此标识来源。非子助手来源不要填。';
@@ -428,7 +429,7 @@ const searchAllTool = {
       type: 'object',
       properties: {
         query: { type: 'string', description: '要搜索的学生姓名、拼音或学号片段' },
-        tables: { type: 'array', items: { type: 'string', enum: ['students', 'score_records', 'leave_records', 'cadre_members', 'group_members', 'seat_layout', 'duty_layout'] }, description: '可选：只检索其中的某几张表；不传则检索全部' },
+        tables: { type: 'array', items: { type: 'string', enum: [...AI_SEARCH_TABLES] }, description: '可选：只检索其中的某几张表；不传则检索全部' },
         limit: { type: 'number', description: '每张表最多返回多少条明细，默认 50，上限 200' },
       },
       required: ['query'],

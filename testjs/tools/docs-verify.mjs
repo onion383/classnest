@@ -2,12 +2,12 @@
 // docs-verify.mjs —— 开发文档一致性校验（只读，不改任何文件）
 //
 // 目的：把「文档写的」与「源码里的」做机器比对，给出可复现的 PASS/FAIL。
-// 共 20 项断言（七组）：
+// 共七组断言（数量类一律从源码现算，不在脚本里写死）：
 //   1) 文档内部相对链接必须能解析（无死链）
 //   2) 源码文件必须被文档覆盖（组件/页面/composable/util/路由/服务/主进程模块）
 //   3) backend/routes.md 必须覆盖 routes/ 里实际注册的每个 (METHOD, path)
 //   4) 依赖版本与许可证标识必须与 package.json / node_modules 一致
-//   5) 文档里的关键计数必须与源码统计一致
+//   5) 文档里的关键计数必须与源码现算值一致（组件/组合式/utils/主进程/依赖/页面/导出表/测试文件/路由）
 //   6) npm 脚本、.env/运行时环境变量、IPC 通道必须与配置和源码一致
 //   7) Mermaid 图必须围栏闭合、首行是受支持的图表类型
 //
@@ -17,12 +17,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { countExpectations } from './docs-counts.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const DOC_DIR = path.join(ROOT, 'doc')
 const JSON_OUT = process.argv.includes('--json')
 const problems = []
 const checks = []
+// 3) 路由断言里现算出来的条数，供 5) 的「路由数对账」使用
+let routeCount = 0
 
 function rel(p) { return path.relative(ROOT, p).split(path.sep).join('/') }
 function exists(p) { try { return fs.existsSync(p) } catch { return false } }
@@ -53,7 +56,7 @@ function fail(name, detail) { checks.push({ name, ok: false, detail }); problems
     const text = read(f)
     for (const m of text.matchAll(/\]\((?![#])([^)]+)\)/g)) {
       const raw = m[1].trim()
-      if (!raw || /^(?:http|mailto):/.test(raw)) continue
+      if (!raw || /^(?:https?|mailto):/i.test(raw)) continue
       const target = raw.split('#')[0].trim()
       if (!target) continue
       const abs = path.resolve(path.dirname(f), target)
@@ -173,6 +176,7 @@ for (const s of suite) {
     for (const method of methods) for (const p of paths) claimed.add(`${method} ${p}`)
   }
   const missing = actual.filter((a) => !claimed.has(`${a.method} ${a.p}`))
+  routeCount = actual.length
   checks.push({ name: '后端路由断言', ok: missing.length === 0, detail: `实际 ${actual.length} 条，文档缺 ${missing.length}` })
   for (const a of missing) problems.push(`routes.md 缺接口：${a.method} ${a.p}（${a.file}）`)
 }
@@ -208,22 +212,24 @@ for (const s of suite) {
   for (const n of missingLic) problems.push(`licenses.md 缺：${n}`)
 }
 
-// 5) 关键计数 --------------------------------------------------------------
+// 5) 关键计数对账 ------------------------------------------------------------
+// 一律从源码现算，再取文档里写出的数字比对 —— 只检查「有没有写」等于没检查：
+// 源码涨到 81 而文档还写 76 时，原实现依然 PASS（这是 5-1 要修掉的漂移根源）。
 {
-  const count = (dir, filter) => walk(dir, filter).length
-  const expectations = [
-    { name: '组件数 76', file: path.join(DOC_DIR, 'development/frontend/components/README.md'), actual: count(path.join(ROOT, 'student-frontend/src/components'), (p) => p.endsWith('.vue')), re: /76 个/ },
-    { name: '组合式 26', file: path.join(DOC_DIR, 'development/frontend/composables.md'), actual: count(path.join(ROOT, 'student-frontend/src/composables'), (p) => p.endsWith('.js')), re: /26 个/ },
-    { name: 'utils 34', file: path.join(DOC_DIR, 'development/frontend/misc.md'), actual: count(path.join(ROOT, 'student-frontend/src/utils'), (p) => p.endsWith('.js')), re: /34 个/ },
-    { name: '主进程 main.*.js 23', file: path.join(DOC_DIR, 'development/main-process/README.md'), actual: count(path.join(ROOT, 'electron/main'), (p) => /main\.[A-Za-z-]+\.js$/.test(p)), re: /23 个/ },
-    { name: '后端依赖 12', file: path.join(DOC_DIR, 'development/dependencies/README.md'), actual: Object.keys(JSON.parse(read(path.join(ROOT, 'student-backend/package.json'))).dependencies).length, re: /12 个/ },
-    { name: '页面 15', file: path.join(DOC_DIR, 'development/frontend/views.md'), actual: (read(path.join(ROOT, 'student-frontend/src/router/index.js')).match(/path:\s*'/g) || []).length - 2, re: /15 个页面/ }
-  ]
+  const docNumber = (file, re) => {
+    const text = exists(file) ? read(file) : ''
+    const m = text.match(re)
+    return m ? Number(m[1]) : null
+  }
+  // 计数口径与 docs-sync 共用 docs-counts.mjs 一张表：verify 只「比」，sync 只「写」，
+  // 避免出现「校验和改数各抄一遍，改漏一处还以为是通过」。
+  const expectations = countExpectations(routeCount)
   for (const e of expectations) {
-    const text = exists(e.file) ? read(e.file) : ''
-    const ok = e.re.test(text)
-    checks.push({ name: `计数：${e.name}`, ok, detail: `源码 ${e.actual}，文档${ok ? '已标注' : '未标注'}` })
-    if (!ok) problems.push(`计数不符：${e.name}（源码 ${e.actual}）`)
+    const documented = docNumber(e.file, e.re)
+    const ok = documented === e.actual
+    const shown = documented == null ? '未标注' : String(documented)
+    checks.push({ name: `计数：${e.name}`, ok, detail: `源码 ${e.actual}，文档 ${shown}` })
+    if (!ok) problems.push(`计数不符：${e.name}（源码 ${e.actual}，文档 ${shown}）`)
   }
 }
 

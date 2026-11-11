@@ -172,7 +172,7 @@ preload 层区分不了「谁在调」；主进程只能逐 handler 手写 `even
 
 ### 1. 主进程目录树
 
-`electron/main/` 下共 **23 个 `main.*.js`** 模块 + `main.js` 入口：
+`electron/main/` 下共 **24 个 `main.*.js`** 模块 + `main.js` 入口：
 
 ```
 electron/
@@ -215,7 +215,7 @@ electron/
 | 覆盖范围 | 文档 | 主要内容 |
 | --- | --- | --- |
 | `electron/main/main.js` | [entry.md](./entry.md) | 入口编排：加载期顺序、主窗口、`whenReady`、引导/低版本提示、迁移与加密、入口 IPC、退出收尾 |
-| 23 个 `main.*.js` | [modules.md](./modules.md) | 逐模块职责、关键导出 / IPC 通道、依赖与被依赖 |
+| 24 个 `main.*.js` | [modules.md](./modules.md) | 逐模块职责、关键导出 / IPC 通道、依赖与被依赖 |
 | `electron/` 根文件与安装器资源 | [root-files.md](./root-files.md) | `preload.js`、`ipc-channels.json`、`ipc-policy.json`、`startup.html`、图标、`afterPack.js`、`inno/`、`installer-assets/` |
 
 ---

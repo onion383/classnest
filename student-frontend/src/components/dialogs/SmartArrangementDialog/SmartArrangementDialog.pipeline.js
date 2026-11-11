@@ -58,6 +58,9 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
         if (!pseudoCache[n]) pseudoCache[n] = { id: pseudoId--, 姓名: n }
         return pseudoCache[n]
       }
+      // 数据源能力位：只有「全部同学」才接受 excludeNew 过滤。
+      // table 模式下表内已有成员（含名册外名字）必须保留，不能因为上一轮选过「不参与」被排除。
+      const excludeStranger = n => ctx.allowNew.value && ctx.excludeNew.value && ctx.strangerNames.value.has(n)
       for (let r = 0; r < ctx.rows.value; r++) {
         for (let c = 0; c < ctx.cols.value; c++) {
           if (!ctx.isUsable(r, c)) continue
@@ -68,10 +71,10 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
           } else if (typeof val === 'string') {
             // 班级学生存 id，字符串名字均为"新同学"（未识别的自由文本）
             const n = val.trim()
-            if (n && !(ctx.excludeNew.value && ctx.strangerNames.value.has(n))) s = ensurePseudo(n)
+            if (n && !excludeStranger(n)) s = ensurePseudo(n)
           } else if (val && typeof val === 'object') {
             const n = String(val.姓名 || '').trim()
-            if (!(ctx.excludeNew.value && ctx.strangerNames.value.has(n))) {
+            if (!excludeStranger(n)) {
               s = n ? ensurePseudo(n) : val
             }
           }

@@ -113,6 +113,6 @@ test('仓库 CHANGELOG.md 符合解析契约', async () => {
 
   // 首个版本与当前首个发布内容对齐，避免迁移后数据悄悄改变
   assert.equal(entries[0].version, '0.1.0')
-  assert.equal(entries[0].date, '2026-11-10')
+  assert.equal(entries[0].date, '2026-11-16')
   assert.equal(entries[0].notes[0], '第一个预览版')
 })

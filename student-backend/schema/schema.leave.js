@@ -1,10 +1,11 @@
 // schema 拆分子文件：请假记录表 + 索引。
+// 外键声明：见 schema.score.js 头部说明（只声明、不开 PRAGMA）。
 function migrateLeave(conn) {
   conn.exec(`
     CREATE TABLE IF NOT EXISTS leave_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       position INTEGER DEFAULT 1,
-      student_id INTEGER,
+      student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
       姓名 TEXT,
       类型 TEXT,
       开始时间 TEXT,

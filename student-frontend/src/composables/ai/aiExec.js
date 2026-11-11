@@ -1,8 +1,8 @@
 import { reportError } from '../../utils/reportError.js'
 import axios from 'axios'
-import { pushUndo, undoById } from '../../api/undo.js'
+import { undoById } from '../../api/undo.js'
 import { useNotification } from '../useNotification.js'
-import { refreshUndoStatus } from '../useUndo.js'
+import { recordUndo as recordUndoSpec } from '../../utils/undoRecorder.js'
 import { useThemeStore } from '../../stores/theme.js'
 import { EXEC, DOC_UNDO_KEY } from './aiConstants.js'
 
@@ -318,11 +318,10 @@ export function useAiExec(ctx) {
     // 登记一条撤销记录，返回其 id（撤回按钮据此精确回退这次更改）
     // origin：AI 提案执行时传入的批次标识（供 AI 的 undo_change 工具整批回退）；手动编辑不传
     async _pushUndo(type, key, label, payload, origin) {
-      try {
-        const { data } = await pushUndo({ key, type, label, payload, origin })
-        refreshUndoStatus(true)
-        return data && data.id
-      } catch (_) { return null }
+      // 原先 try/catch 静默返回 null：AI 改完数据却没进撤销栈，用户完全不知道。
+      // 统一入口负责失败弱提示 + 刷新可用态；这里仍按原语义返回 null，
+      // 调用方据此放弃该条的精确撤回能力（不会误以为撤得回来）。
+      return recordUndoSpec({ key, type, label, payload, origin, refresh: true })
     },
     // 批量事务返回的单项结果 → 登记一条撤销记录（供撤回按钮逐条回退）
     // r：{ action:'add'|'update'|'delete'|'doc', table, id, row, before, after }

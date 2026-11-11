@@ -261,13 +261,16 @@ function groupLabel(gi) {
   return (g && g.name) || `第${gi + 1}组`
 }
 
-// 数据源切换：回到「开始排表」，预览回到当前分组的原样（结果缓存一并清掉）
+// 数据源切换：回到「开始排表」，预览回到当前分组的原样（结果缓存一并清掉）。
+// 同时清空条件里绑定的旧学生 id —— table / all 的名单不是同一批人，
+// 留着旧 id 会让关系/身份条件静默失效且下拉不回显（A5-04）。
 function onDataSourceChange() {
   arranged.value = false
   lastResult.value = null
   satisfaction.value = {}
   includeNew.value = false
   showNewPrompt.value = false
+  ctx.resetStudentSelections()
   previewGroups.value = buildGroupsPreview()
 }
 

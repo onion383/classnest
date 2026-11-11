@@ -23,7 +23,7 @@ classnest/
         │       ├── EmptySnapshot.vue  # 空态占位
         │       ├── IconGlyph.vue  # 统一图标
         │       ├── LeaveTimeline.vue  # 通用时间轴
-        │       ├── MediaViewer.vue  # 媒体查看器（图片/视频灯箱）
+        │       ├── MediaViewer.vue  # 媒体查看器
         │       ├── NotificationToast.vue  # 全局通知
         │       ├── SearchBar.vue  # 搜索面板
         │       ├── SearchDialog.vue  # 全局搜索弹窗
@@ -35,6 +35,8 @@ classnest/
         │       └── WeekSwitcher.vue  # 周切换条
         ├── composables/
         │   └── useNotification.js
+        ├── styles/
+        │   └── media-viewer.css
         └── subwindows/
             └── widget/
                 └── Note.vue
@@ -43,7 +45,7 @@ classnest/
 
 通用 props / emits（如 `visible`、`editingRecord`、`confirm`、`cancel`）的含义见 [components/README.md](./README.md) 的「通用对外接口标准」；本节只补充组件特有接口。
 
-21 个通用件，被各页面与弹窗复用。条目统一：定位 / 对外接口 / 内部实现 / 使用方与注意点。
+22 个通用件，被各页面与弹窗复用。条目统一：定位 / 对外接口 / 内部实现 / 使用方与注意点。
 
 ---
 
@@ -130,6 +132,12 @@ classnest/
 - **对外接口**：`props: nodes / typeOptions / title('🗓️ 请假时间轴') / alignRight(false) / maxHeight(420) / fillHeight(false) / emptyText('暂无匹配的时间轴记录') / emptyActionText / emptySecondaryActionText / loading`；`emits: emptyAction / emptySecondaryAction`；插槽 `content`、`ops`。
 - **内部实现**：按节点日期分组渲染，虚拟化省略（数据量有限）。
 - **使用方**：`LeaveManagement`、`ScoreManagement`、`ActivitiesView`。
+
+### [MediaViewer.vue](../../../../student-frontend/src/components/base/MediaViewer.vue) · 媒体查看器
+- **定位**：全屏查看图片 / 视频的通用灯箱（相册页与收据预览共用同一外观，样式在 [`styles/media-viewer.css`](../../../../student-frontend/src/styles/media-viewer.css)）。
+- **对外接口**：`props`（组件属性）：`visible`（显隐，默认 `false`）/ `items`（`[{ src, name, isVideo }]`，默认空数组）/ `index`（当前下标，默认 `0`）；`emits`（组件事件）：`update:visible`（显隐双向绑定）、`update:index`（翻页后回写下标）；插槽 `aside`（右侧信息区，`current` 为当前项）；`expose`：`close()`。
+- **内部实现**：图片支持滚轮缩放、拖拽平移、旋转 90° / 复位；视频支持播放、进度、倍速（0.5x–2x）；`mediaReady` 只在首帧就绪后加进入动画（冷加载时提前播会「先空一下再硬砸出来」）；`@click.self` 关闭、`Esc` 关闭、多图时左右翻页。
+- **使用方**：`ReceiptDialog`（图片 / 视频收据）。
 
 ### [NotificationToast.vue](../../../../student-frontend/src/components/base/NotificationToast.vue) · 全局通知
 - **定位**：右上角 toast 列表，带进度条与合并提示。

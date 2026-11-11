@@ -41,6 +41,16 @@ export function buildRoster({ dataSource, students = [], groups = [], includeNew
   return extras.length ? rosterStudents.concat(extras) : rosterStudents
 }
 
+// 数据源切换时清空条件里绑定的学生选择。
+// table / all 的名单不是同一批人：旧 id 在新名单里可能根本不存在，
+// 留着就会「条件静默失效 + 下拉不回显」（A5-04）。统一在这里清，避免每个切换点各写一遍。
+export function clearStudentSelections(stages) {
+  for (const st of stages || []) {
+    if (st.type === 'relation') { st.a = ''; st.b = '' }
+    else if (st.type === 'identity') st.studentId = ''
+  }
+}
+
 export function useSmartGroupPipeline(ctx) {
   return {
     // ==================== 流水线分组算法（核心） ====================

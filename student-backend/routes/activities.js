@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { db, renumber } = require('../db');
 const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../utils/sql');
+const { readRowsByIds } = require('../services/createdRows');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['时间', '主题', '地点', '简介', '参与人员'];
@@ -86,12 +87,15 @@ router.post('/import', (req, res) => {
     });
 
     const insertMany = db.transaction((items) => {
+      const ids = [];
       for (const item of items) {
-        insert.run(item.时间, item.主题, item.地点, item.参与人员, item.简介, item.created_at, item.position);
+        ids.push(Number(insert.run(item.时间, item.主题, item.地点, item.参与人员, item.简介, item.created_at, item.position).lastInsertRowid));
       }
+      return ids;
     });
-    insertMany(list);
-    res.json({ message: `成功导入 ${list.length} 条活动` });
+    const ids = insertMany(list);
+    // created = 本次真正新建的行，供前端登记可撤销的批量导入（Q2-06）
+    res.json({ message: `成功导入 ${list.length} 条活动`, created: readRowsByIds('activities', ids) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

@@ -128,8 +128,7 @@ import CadreTreeList from './CadreTreeList.vue'
 import CustomScrollbar from './base/CustomScrollbar.vue'
 import { useNotification } from '../composables/useNotification'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
-import { pushUndo } from '../api/undo'
-import { refreshUndoStatus } from '../composables/useUndo.js'
+import { recordUndo as recordUndoSpec } from '../utils/undoRecorder.js'
 
 // 导出弹窗懒加载：首次点开时才加载 ExportExcel 的代码块
 const loadExportExcel = () => import('./import-export/ExportExcel/ExportExcel.vue')
@@ -184,15 +183,10 @@ const api = (options = {}) => {
 // key 与 ClassroomView 的 Ctrl+Z 上下文保持一致：班干部 Tab 激活时父页面把上下文切到「班干部」，
 // 学生 Tab 下切回 'students'（见 ClassroomView 的 useUndoShortcut 动态 key）。
 const UNDO_KEY = '班干部'
-// 登记一条撤销记录；失败不影响主流程（与 useUndo.js 既有做法一致）
+// 登记一条撤销记录；失败不影响主流程，但必须让用户知道「本次无法撤销」。
+// 原先 .catch(() => {}) 会把登记失败彻底吞掉（Q2-10），现由统一入口负责反馈与刷新状态。
 function recordUndo(type, label, payload) {
-  try {
-    return pushUndo({ key: UNDO_KEY, type, label, payload })
-      .then(() => refreshUndoStatus(true))
-      .catch(() => {})
-  } catch {
-    return Promise.resolve()
-  }
+  return recordUndoSpec({ key: UNDO_KEY, type, label, payload })
 }
 // 职务行 / 担任学生行：只取真实列，树节点多带的 children/members 由后端按表结构过滤
 function cadreRow(n) {

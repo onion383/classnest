@@ -79,4 +79,4 @@ function readSkills(slug, names) {
   return out;
 }
 
-module.exports = { skillsDirRoot, normalizeSkillName, listSkills, skillExists, readSkill, writeSkill, deleteSkill, readSkills };
+module.exports = { skillsDirRoot, skillsDir, normalizeSkillName, listSkills, skillExists, readSkill, writeSkill, deleteSkill, readSkills };

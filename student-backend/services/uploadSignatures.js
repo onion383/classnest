@@ -131,4 +131,12 @@ function checkUpload(filePath, originalName, size) {
   return { ok: true, kind };
 }
 
-module.exports = { KINDS, EXT_TO_KIND, ALLOWED_EXT_RE, sniff, checkUpload, decodeFileName };
+// 落库/展示用的收据类型：ooxml / ole 都是 Office 文档，前端只认 office。
+// 校验用的细分 kind 不能合并（魔数要区分 zip 容器与 OLE 复合文档），
+// 所以在写入收据前用这里统一归一，避免每个调用点各写一份映射。
+const RECEIPT_KIND_ALIAS = { ooxml: 'office', ole: 'office' };
+function receiptKind(kind) {
+  return RECEIPT_KIND_ALIAS[kind] || kind;
+}
+
+module.exports = { KINDS, EXT_TO_KIND, ALLOWED_EXT_RE, sniff, checkUpload, decodeFileName, receiptKind };

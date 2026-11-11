@@ -379,6 +379,8 @@ const sortCond = useRowSortDrag({
   rowClass: 'cond-row-dragging',
   onMoved: () => ctx.resetArranged(),
 })
+// 挂到 ctx，供 options.js 里的新增/删除调用进出动画（与座位智能排表一致）
+ctx.sortCond = sortCond
 
 const {
   segmentsOf, getField, setField, removeCondition,

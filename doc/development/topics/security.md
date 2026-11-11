@@ -14,6 +14,7 @@ classnest/
 │   │   ├── main.backend.js  # env 注入
 │   │   ├── main.config.js  # getMasterKey
 │   │   ├── main.desktop-layer.js
+│   │   ├── main.ipc-auth.js
 │   │   ├── main.js
 │   │   ├── main.path-guard.js
 │   │   ├── main.privateWorkingSet.js

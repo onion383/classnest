@@ -465,13 +465,13 @@ import { prefetch } from '../utils/dialogPrefetch.js'
 import { ref, reactive, shallowReactive, computed, onMounted, onActivated, nextTick, watch, defineAsyncComponent } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { applyRowShift, clearShift } from '../composables/tableDragFx.js';
-import axios from 'axios';
 import Tabs from '../components/base/Tabs.vue';
 import CustomScrollbar from '../components/base/CustomScrollbar.vue';
 import AppSelect from '../components/base/AppSelect.vue';
 import EmptySnapshot from '../components/base/EmptySnapshot.vue';
 import { useNotification } from '../composables/useNotification';
 import { useUndoShortcut } from '../composables/useUndo.js';
+import { recordUndo as recordUndoSpec } from '../utils/undoRecorder.js';
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js';
 import { useDisposables } from '../utils/disposables.js';
 import { apiFetch } from '../utils/apiUrl.js';
@@ -508,14 +508,14 @@ const api = (path, options = {}) =>
 // 记录分组管理页的单元格撤销：key 统一为 group_manage（便于 Ctrl+Z 连续撤销跨表操作），
 // table 为实际数据表名（group_members / groups / group_dimensions），需在 undo.js ALLOWED_TABLES 内。
 function recordGroupUndo(table, rowId, field, old, val) {
-  try {
-    axios.post('/api/undo', {
-      key: 'group_manage',
-      type: 'cell_update',
-      label: `${field}：「${old == null ? '' : old}」→「${val == null ? '' : val}」`,
-      payload: { table, rowId, field, oldValue: old, newValue: val }
-    }).catch(() => {});
-  } catch { /* 撤销记录失败不影响主流程 */ }
+  // 原先这里绕开 API 层直接发登记请求，且把失败空吞：
+  // 单元格改了却没登记成功时用户毫不知情。统一入口会给出「本次无法撤销」弱提示。
+  return recordUndoSpec({
+    key: 'group_manage',
+    type: 'cell_update',
+    label: `${field}：「${old == null ? '' : old}」→「${val == null ? '' : val}」`,
+    payload: { table, rowId, field, oldValue: old, newValue: val }
+  })
 }
 
 // 当前维度全量快照（组+成员），用于结构变更撤销对比
@@ -535,22 +535,24 @@ function recordGroupStructure(before, after) {
   if (!Array.isArray(before) || !Array.isArray(after) || JSON.stringify(before) === JSON.stringify(after)) return;
   const dimId = activeDimId.value != null ? Number(activeDimId.value) : active.value?.dimension?.id;
   if (dimId == null) return;
-  try {
-    axios.post('/api/undo', {
-      key: 'group_manage',
-      type: 'group_snapshot',
-      label: '分组结构变更',
-      payload: { dimId, oldValue: before, newValue: after }
-    }).catch(() => {});
-  } catch { /* 撤销记录失败不影响主流程 */ }
+  return recordUndoSpec({
+    key: 'group_manage',
+    type: 'group_snapshot',
+    label: '分组结构变更',
+    payload: { dimId, oldValue: before, newValue: after }
+  })
 }
 useUndoShortcut('group_manage', {
-  onAfterUndo: (label) => {
-    if (activeDimId.value != null) selectDim(activeDimId.value);
+  // 撤销/重做可能恢复或删掉了「当前正在看的维度」，所以不能只按旧 id 拉详情：
+  // 还在就刷新它，不在了就回 bootstrap 重新选一个。
+  onAfterUndo: async (label) => {
+    if (activeDimId.value != null) await selectDim(activeDimId.value);
+    else await loadAll();
     success(label ? `已撤销：${label}` : '已撤销');
   },
-  onAfterRedo: (label) => {
-    if (activeDimId.value != null) selectDim(activeDimId.value);
+  onAfterRedo: async (label) => {
+    if (activeDimId.value != null) await selectDim(activeDimId.value);
+    else await loadAll();
     success(label ? `已重做：${label}` : '已重做');
   }
 });
@@ -1545,11 +1547,28 @@ async function doDelete() {
   const p = pendingDelete.value;
   if (!p) return;
   const isGroup = p.type === 'group';
-  // 仅小组删除做撤销（维度删除不含在内）；快照需基于删除前的维度结构
+  // 小组删除走 group_snapshot 撤销；维度删除走后端整包快照（见下）
   const before = isGroup ? buildGroupSnapshot() : null;
   try {
-    if (p.type === 'dimension') await api(`/dimensions/${p.id}`, { method: 'DELETE' });
-    else await api(`/groups/${p.id}`, { method: 'DELETE' });
+    if (p.type === 'dimension') {
+      const res = await api(`/dimensions/${p.id}`, { method: 'DELETE' });
+      const removed = res?.removed;
+      if (removed?.dimension) {
+        // 维度删除原先完全不可撤销：删掉一个维度，其下所有小组/成员只能手工重建。
+        // 后端把「维度行 + 小组行 + 成员行 + 删除前排序」整包带回，这里登记成一条命令。
+        await recordUndoSpec({
+          key: 'group_manage',
+          type: 'group_dimension_delete',
+          label: `删除分组维度「${removed.dimension.name || `#${removed.dimension.id}`}」`,
+          payload: removed,
+        });
+      }
+      // 当前维度已被删掉：不清空 activeDimId，loadAll 会去请求不存在的 id → 404，
+      // 页面停在旧数据上还弹一条「维度不存在」。
+      activeDimId.value = null;
+    } else {
+      await api(`/groups/${p.id}`, { method: 'DELETE' });
+    }
     confirmMsg.value = null;
     pendingDelete.value = null;
     showSettings.value = false;

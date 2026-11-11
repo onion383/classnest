@@ -26,7 +26,7 @@ classnest/
     │   │   ├── ai.budget.js  # AI 调用预算闸门：主对话与子助手共用的用量记账与限额
     │   │   ├── ai.config.js  # GET/PUT /config（读取/保存配置）、GET /models（模型列表）、POS…
     │   │   ├── ai.constants.js  # 读写表白名单
-    │   │   ├── ai.conversations.js  # POST /chat/stream（流式对话，SSE（服务器推送））、会话与消…
+    │   │   ├── ai.conversations.js  # POST /chat/stream（流式对话，SSE（服务器推送））、POST /conve…
     │   │   ├── ai.dataRoutes.js  # GET /records/:table（读表）、POST /doc（生成文档）、POST /…
     │   │   ├── ai.helpers.js  # 列元数据归一
     │   │   ├── ai.js  # AI 接口聚合
@@ -47,6 +47,7 @@ classnest/
     │   ├── cadres.js  # /api/cadres
     │   ├── countdowns.js  # 活动路由
     │   ├── dashboard.js  # /api/dashboard
+    │   ├── dataExport.js
     │   ├── duty.js  # /api/duty
     │   ├── dynamicTable.js  # 工厂
     │   ├── groupManage.js  # /api/group-manage
@@ -72,6 +73,7 @@ classnest/
 - **定位**：后端 HTTP 路由层（`student-backend/routes/`），负责挂载点、接口清单与每个接口的处理链。
 - **公共逻辑**：所有业务接口经 `auth(['teacher'])`（鉴权中间件，只允许教师角色）→ `JWT`（登录令牌）校验 → `dbManager.withDb`（按当前库执行回调的包装函数）绑定当前库；路由内做参数校验、`sanitize`（数据清洗）清洗、事务写库、撤销登记与统一 JSON 响应。
 - **局限**：不展开数据层加密/多库细节、安全通道握手、AI 提案与撤销执行器内部实现；这些见 [data-layer.md](./data-layer.md)、[topics/security.md](../topics/security.md)、[topics/ai.md](../topics/ai.md)。
+- **规模**：共 228 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
 
 
 ### 处理标准的写法
@@ -136,10 +138,13 @@ flowchart TD
 | 方法 | 路径 | 处理要点 |
 | --- | --- | --- |
 | GET | `/recovery-key` | 重新生成并返回恢复密钥（需登录） |
-| POST | `/export` | 导出备份包（加密库 + 登记信息） |
-| POST | `/restore` | 从备份包恢复 |
+| POST | `/export` | 导出备份包（v2：加密库 + 登记信息，整包 base64 一次返回） |
+| POST | `/export-zip` | 导出备份包 v3（流式 ZIP：库三件套 + `memory.md` + `uploads` / `ai-skills` / `album-trash` / `receipt-trash` / `snapshots` + 清单）。**无 `Content-Length`**，收据原件不读进内存；`bundle.json` 是第一个条目（前端只读 64KB 判断要不要口令）。写响应体阶段出错只能 `res.destroy()`，让客户端看到「下载不完整」 |
+| POST | `/restore` | 从备份包恢复（v2） |
+| POST | `/restore-zip` | 登录中从 v3 包恢复。顺序即全部重点：① 解到临时目录并逐项校验（此时一个现有文件都没动）→ ② 换库（复用 v2 的 `restoreBundle`）→ ③ 替换各目录，旧目录改名 `.bak-<时间戳>` 不删。超级隐私模式直接拒；落盘公共部分在 `services/bundleRestore.js` |
+| POST | `/restore-zip-offline` | 登录页离线恢复 v3 包（无鉴权，slug 直接从包内 `bundle.json` 取） |
 | GET / POST | `/db-encryption` | 查询/切换加密状态；POST 用 NDJSON 流逐步上报进度 |
-| POST | `/restore-offline` | 离线恢复（登录页使用） |
+| POST | `/restore-offline` | 离线恢复（v2，登录页使用） |
 | PUT | `/username` / `/password` | 改名（同步学生档案引用）/ 改密。`plain` / `nopass` 档 `users.password` 为空：改名**不校验密码**，改密即「设首个密码」；前端在这两档隐藏密码框与「修改密码」按钮，设密码只能走 `/security-level` |
 | GET / POST | `/security-level` | 读取/切换账号安全等级（`plain` / `nopass` / `password` / `privacy`） |
 | GET | `/privacy` | 查询超级隐私状态 |
@@ -181,7 +186,7 @@ flowchart TD
 `GET /`、`PUT /`、`PATCH /cell`、`PATCH /master/cell`、`GET/PUT /master`、`POST /apply-master`、`GET/PUT /settings`、`GET/PUT /weight`（权重表）、`GET/PUT/DELETE /draft`（排表草稿）、`GET /daily`（当日视图）、历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。**不复用** `historyRoutes`：`seat_history` 多出 mode/rows/cols/seats/aisle_cols/groups_config 等列。
 
 #### [`routes/duty.js`](../../../student-backend/routes/duty.js)（`/api/duty`） · 值日路由
-`GET/PUT /settings`、`GET/PUT /`、`PUT /save`、`GET/PUT /template`、`POST /apply-master`、`GET/PUT /weight`、`GET/PUT/DELETE /draft`、`GET /daily`；历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。模式 `daily` / `big` 由 `services/dutyMode.js` 解包。
+`GET/PUT /settings`、`GET/PUT /`、`PUT /save`、`GET/PUT /template`、`POST /apply-master`、`GET/PUT /weight`、`GET/PUT/DELETE /draft`、`GET /daily`、`GET /big-dates`（大扫除命中日：按 `cycle` + `weekday` 在学期内算出日期列表与「下一次」，非 `big` 模式返回空）；历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。模式 `daily` / `big` 由 `services/dutyMode.js` 解包，命中日算法在 `services/dutyCycle.js`。
 
 #### [`routes/leaves.js`](../../../student-backend/routes/leaves.js)（`/api/leaves`） · 请假路由
 `GET /`、`POST /`、`PUT /:id`、`POST /reorder`（记录排序）、`GET/POST /today-columns`（今日列配置）、`POST /import`（Excel 导入，按 `学号`/唯一 `姓名` 匹配学生）、`DELETE /:id`、`POST /:id/return`（销假）、`POST /:id/unreturn`（撤销销假）、`POST /:id/cancel`（取消请假）。
@@ -256,7 +261,7 @@ flowchart TD
 | DELETE | `/:id` | 删除单条记录 |
 | DELETE | `/` | 按 key 清空（`?key=all|key`） |
 
-执行器（[`undo.executors.js`](../../../student-backend/routes/undo/undo.executors.js)）按 `type` 注册 `validate/undo/redo/describe`：`cell_update`、`row_insert/update/delete`、`grid_cell`、`grid_snapshot`、`doc_update`、`album_order`、`group_snapshot`、`cadre_delete`、`cadre_order`、`cadre_import`、`photo_trash`、`album_delete/add`、`album_photo_move`。表名受 `ALLOWED_TABLES` 与 `GRID_SOURCES` 约束。
+执行器（[`undo.executors.js`](../../../student-backend/routes/undo/undo.executors.js)）按 `type` 注册 `validate/undo/redo/describe`：`cell_update`、`row_insert/update/delete`、`rows_batch_insert/delete`（一次导入 / 勾选删除整批一条记录）、`row_reorder`（按 `[{id,position}]` 精确回槽位）、`grid_cell`、`grid_snapshot`、`doc_update`、`album_order`、`group_snapshot`、`group_dimension_delete`、`student_cascade_delete`、`album_merge`、`cadre_delete`、`cadre_order`、`cadre_import`、`photo_trash`、`album_delete/add`、`album_photo_move`。表名受 `ALLOWED_TABLES` 与 `GRID_SOURCES` 约束。
 
 班干部（`/api/cadres`）的写操作按三种执行器登记，key 统一为 `班干部`：新增/改名/名额走 `row_insert`/`row_update`（`cadres` 在 `ALLOWED_TABLES` 内），删除职务走 `cadre_delete`（级联删成员 + 下级上移必须整批回滚），拖拽职务/成员走 `cadre_order`（同一动作会改多行 `sort_order`，整批一条记录），Excel 导入走 `cadre_import`（只回滚本次新建的行，接口经 `created` 返回清单）。
 
@@ -298,13 +303,14 @@ flowchart TD
 
 ### 9. 数据导出（[`routes/dataExport.js`](../../../student-backend/routes/dataExport.js)，`/api/data`）
 
-设置页「数据管理」的数据源与打包出口。只读业务表 + 内存打包，不写库。
+设置页「数据管理」的数据源与打包出口。只读业务表 + 流式打包，不写库。
 
-- `GET /tables` —— 表清单与行数（19 张业务表），前端据此渲染列表。每条带 `py`（表名拼音首字母，供搜索框用：输入 `xs` 能命中「学生名单」），**它必须跟 `label` 一起维护**，探针按「表名里的中/英文字数」核对长度。
+- `GET /tables` —— 表清单与行数（20 张业务表），前端据此渲染列表。每条带 `py`（表名拼音首字母，供搜索框用：输入 `xs` 能命中「学生名单」），**它必须跟 `label` 一起维护**，探针按「表名里的中/英文字数」核对长度。
 - `POST /sources { keys }` —— 取指定表的数据，返回 `{ fields, rows }`，形状与 `ExportExcel` 组件完全一致（前端因此能直接复用那套导出实现，不必重写格式逻辑）。
 - `POST /zip { entries: [{ name, data(base64) }], password, filename, receiptGroups?, includeReceipts? }` —— 把若干文件打成一个 zip 返回字节流（可选 ZipCrypto 加密）。前端用现有 `save-file` 通道落盘，所以**不需要新增 IPC 通道**。
+  - **流式**：条目边读边写进响应，任何时刻只持有一个 256KB 块；收据只登记磁盘路径（写入器里读盘），不在这里 `readFileSync` 进内存。响应**不设 `Content-Length`**（长度要等整包写完才知道，预置就等于把流式又变回「先拼完」）。
   - 收据文件有两条来源，二选一：`receiptGroups: [{ code, items: [{ path, name }] }]` 由**调用方分好组**（班费页用，导的是「我现在看到的数据」，含未保存行）；`includeReceipts: true` 由**后端按库里的 `fee_records` 自己分**（数据管理用，它手里只有表格化文本，没有收据原始路径）。
-  - 两者最终都落成 `收据文件/{收支编码}/{原文件名}`，编码为空落「未编号」；文件只在 uploads 根目录取（`basename` 压平），单个读失败只跳过它。
+  - 两者最终都落成 `收据文件/{收支编码}/{原文件名}`，编码为空落「未编号」；文件只在 uploads 根目录取（`basename` 压平），不存在的文件跳过。
 
 结构化列在服务端就展开成人读文本：座位是二维网格（讲台行 + 走廊列）、值日 `cells` 是 `{项目:{星期:[人名]}}`、
 快照 `payload` 是对象。`readable()` 负责转成「键: 值」并按列翻成中文键名 ——

@@ -91,4 +91,7 @@ module.exports = {
   thumbsDir: base.thumbsDir,
   trashDir: base.trashDir,
   skillsDirRoot: skills.skillsDirRoot,
+  // 备份包 v3 要按 slug 收集「这个账号自己的」文件：AI 技能目录是按 slug 分的
+  // （snapshotsDir 本文件上面已经导出过，别再加一行）
+  skillsDir: skills.skillsDir,
 };

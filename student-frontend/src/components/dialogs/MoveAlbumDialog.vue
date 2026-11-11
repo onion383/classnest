@@ -41,8 +41,7 @@ import axios from 'axios'
 import DialogShell from '../base/DialogShell.vue'
 import AppSelect from '../base/AppSelect.vue'
 import { useNotification } from '../../composables/useNotification.js'
-import { pushUndo } from '../../api/undo'
-import { warnUndoFailed } from '../../composables/useUndo.js'
+import { recordUndo as recordUndoSpec } from '../../utils/undoRecorder.js'
 import '../../styles/dialog-transition.css'
 
 const props = defineProps({
@@ -87,7 +86,7 @@ async function submit() {
     }, { headers: authHeaders() })
     const data = res.data || {}
     // 记录「移动照片索引」撤销：undo 把索引搬回来源、redo 再搬过去（只动索引，不动文件）
-    pushUndo({
+    recordUndoSpec({
       key: 'album',
       type: 'album_photo_move',
       label: `移动照片到「${data.target_album_name || ''}」`,
@@ -96,7 +95,7 @@ async function submit() {
         target_album_name: data.target_album_name || '',
         records: data.photos || [],
       },
-    }).catch(() => warnUndoFailed('移动照片'))
+    })
     useNotification().success(data.message || '已移动')
     emit('moved', data)
   } catch (err) {

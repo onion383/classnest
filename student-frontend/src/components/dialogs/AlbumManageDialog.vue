@@ -67,8 +67,7 @@ import IconGlyph from '../base/IconGlyph.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
 import ConfirmDialog from '../base/ConfirmDialog.vue'
 import { useNotification } from '../../composables/useNotification.js'
-import { pushUndo } from '../../api/undo'
-import { warnUndoFailed } from '../../composables/useUndo.js'
+import { recordUndo as recordUndoSpec } from '../../utils/undoRecorder.js'
 import { INVOKE } from '../../electronChannels.js'
 import '../../styles/dialog-transition.css'
 
@@ -126,14 +125,14 @@ async function addAlbum() {
     const res = await axios.post('/api/album', { name: newName.value, folder_path: newPath.value }, { headers: authHeaders() })
     useNotification().success('相册已添加，正在后台扫描照片…')
     // 记录「添加相册」撤销：undo 撤销添加（删索引+缩略图），redo 重新添加
-    pushUndo({
+    recordUndoSpec({
       key: 'album',
       type: 'album_add',
       label: `添加相册：${newName.value}`,
       payload: {
         album: { id: res.data.id, name: newName.value, folder_path: newPath.value, sort_order: res.data.id, created_at: '', updated_at: '' }
       }
-    }).catch(() => warnUndoFailed('添加相册'))
+    })
     newName.value = ''
     newPath.value = ''
     await loadAlbums()
@@ -184,12 +183,12 @@ async function reorderAlbums(ids) {
     await axios.put('/api/album/reorder', { ids }, { headers: authHeaders() })
     // 记录相册排序撤销（顺序确有变化才记录）
     if (oldOrder.length && JSON.stringify(oldOrder) !== JSON.stringify(ids)) {
-      pushUndo({
+      recordUndoSpec({
         key: 'album',
         type: 'album_order',
         label: '相册排序更新',
         payload: { oldOrder, newOrder: ids }
-      }).catch(() => warnUndoFailed('相册排序更新'))
+      })
     }
     // 按新顺序重新排列本地数据
     const map = new Map(albums.value.map(a => [a.id, a]))
@@ -218,7 +217,7 @@ async function doRemove() {
     } catch (_) { /* 抓取失败不阻塞删除 */ }
     await axios.delete(`/api/album/${a.id}`, { headers: authHeaders() })
     // 记录「删除相册」撤销：undo 还原相册+照片索引，redo 再次删除
-    pushUndo({
+    recordUndoSpec({
       key: 'album',
       type: 'album_delete',
       label: `删除相册：${a.name}`,
@@ -226,7 +225,7 @@ async function doRemove() {
         album: { id: a.id, name: a.name, folder_path: a.folder_path, sort_order: a.sort_order, created_at: a.created_at, updated_at: a.updated_at },
         photos: albumPhotos
       }
-    }).catch(() => warnUndoFailed('删除相册'))
+    })
     useNotification().success('相册已删除')
     await loadAlbums()
     nextTick(() => initSortable())

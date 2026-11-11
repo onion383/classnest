@@ -40,7 +40,7 @@ function migrateAi(conn) {
     );
     CREATE TABLE IF NOT EXISTS ai_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      conversation_id INTEGER NOT NULL,
+      conversation_id INTEGER NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
       role TEXT NOT NULL,
       content TEXT DEFAULT '',
       process_json TEXT DEFAULT '',

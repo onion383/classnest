@@ -4,6 +4,7 @@
 // （状态为 ref，模块内用 .value；临时字段与跨模块方法直接挂在 ctx 上）。
 // nextKey 由主组件以参数传入，避免循环依赖。
 import { nextTick } from 'vue'
+import { clearStudentSelections } from './SmartGroupDialog.pipeline.js'
 
 export function useSmartGroupConditions(ctx, nextKey) {
   return {
@@ -17,6 +18,10 @@ export function useSmartGroupConditions(ctx, nextKey) {
       // 高度从 0 展开：要等这一行渲染出来才量得到高度
       const at = ctx.stages.value.length - 1
       nextTick(() => { if (ctx.sortStage) ctx.sortStage.enterAt(at) })
+    },
+    // 数据源切换：清空关系条件 a/b 与身份条件 studentId（统一入口）
+    resetStudentSelections() {
+      clearStudentSelections(ctx.stages.value)
     },
     // 删除条件：先把高度收到 0 再真正移除（否则行「啪」地消失，上下的行也是瞬间补位）
     removeStage(index) {

@@ -3,6 +3,7 @@ const router = express.Router();
 const { db } = require('../db');
 const { now, cleanUp, buildInsert, buildUpdate } = require('../utils/sql');
 const { sanitizeField, normNumber } = require('../services/sanitize');
+const { readRowsByIds } = require('../services/createdRows');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['姓名', '学号', '类型', '项目', '分值', '原因', '加分时间', 'source', 'group_name', '成员数'];
@@ -146,16 +147,19 @@ router.post('/import', (req, res) => {
     });
 
     const insertMany = db.transaction((items) => {
+      const ids = [];
       for (const item of items) {
-        insert.run(
+        ids.push(Number(insert.run(
           item.student_id, item.姓名, item.学号, item.类型, item.项目,
           item.分值, item.原因, item.加分时间, item.created_at,
           item.source, item.group_name, item.成员数
-        );
+        ).lastInsertRowid));
       }
+      return ids;
     });
-    insertMany(list);
-    res.json({ message: `成功导入 ${list.length} 条加分记录` });
+    const ids = insertMany(list);
+    // created = 本次真正新建的行，供前端登记一条可撤销的批量导入（Q2-06）
+    res.json({ message: `成功导入 ${list.length} 条加分记录`, created: readRowsByIds('score_records', ids) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

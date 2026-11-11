@@ -12,6 +12,8 @@ const { hash: bcryptHash, compare: bcryptCompare } = require('../services/bcrypt
 const { SECRET, auth, TOKEN_SIGN_OPTS, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middleware/auth');
 const secureChannel = require('../services/secureChannel');
 const sessions = require('../services/sessions');
+// 恢复词重置密码 = 凭证变更，必须走统一动作层吊销该账号全部会话
+const { revokeAccountSessions } = require('../services/credentialChange');
 const { pickPhrase, deriveRestoreHash, normalizePhrase, formatPhrase, safeEqualHash, verifyRestoreHash } = require('../services/recoveryKey');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
 // 待确认注册草稿：有密码账号先生成恢复密钥，用户「抄写前 3 词」通过后才真正建库。
@@ -26,7 +28,7 @@ const albumThumbs = require('../albumThumbs');
 // 绑定后前端后续请求只需发送不含 token 的信道凭据，登录 token 不再随每次请求上线；
 // mediaToken 只用于 <img>/CSS 这类无法携带自定义头的静态资源，且不能调用业务 API。
 function issueSession(req, user, extra = {}) {
-  const sid = sessions.create(user.userId);
+  const sid = sessions.create(user.userId, user.dbSlug);
   const payload = { userId: user.userId, username: user.username, role: user.role, dbSlug: user.dbSlug, sid, ...extra };
   const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
   if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
@@ -65,6 +67,9 @@ router.get('/media-token', auth(), (req, res) => {
 // POST /logout  —— 主动退出登录
 // 把当前 token 的会话（sid）从名单里移除，原 token 立即失效：即使旧 token 被留用也验不过。
 // 只吊销本次登录的这一条会话，同账号在其它设备上的登录态不受影响。
+// 这是「窗口退出」而不是「凭证变更」：改密 / 恢复词重置 / 删账号才走
+// credentialChange 的统一动作层全量吊销。此处刻意保持单点，别改成 revokeAccountSessions ——
+// 否则关掉一个窗口会把同一账号的其它窗口一起踢下线（既有产品取舍）。
 router.post('/logout', auth(), (req, res) => {
   sessions.revoke(req.user && req.user.sid);
   // 解绑信道会话：换号登录后同一信道不会继续沿用上一个账号的 token
@@ -443,6 +448,9 @@ router.post('/recover-password', async (req, res) => {
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
+    // 密码已重置：该账号在其它窗口的旧 token 立即失效，要求重新登录
+    const row = resolved.conn.prepare('SELECT id FROM users WHERE username = ?').get(name);
+    revokeAccountSessions(row && row.id, resolved.slug);
     return res.json({ message: '密码已重置，可用新密码登录', username: name });
   }
 
@@ -454,7 +462,7 @@ router.post('/recover-password', async (req, res) => {
   }
   if (!resolved) return res.status(404).json({ error: '账号不存在' });
 
-  const user = resolved.conn.prepare('SELECT username, recovery_hash FROM users WHERE username = ?').get(name);
+  const user = resolved.conn.prepare('SELECT id, username, recovery_hash FROM users WHERE username = ?').get(name);
   if (!user || !user.recovery_hash) return res.status(404).json({ error: '该账号未设置恢复密钥' });
 
   // 归一化输入：仅保留汉字，兼容用户粘贴带序号（1.水 …）或带空格的格式
@@ -464,6 +472,9 @@ router.post('/recover-password', async (req, res) => {
 
   const passwordHash = await bcryptHash(String(newPassword), 10);
   resolved.conn.prepare('UPDATE users SET password = ? WHERE username = ?').run(passwordHash, user.username);
+  // 「请重新登录」以前只是一句提示：改完密码旧 token 的 sid 仍在名单里，30 天内照用。
+  // 这里真正吊销该账号全部会话，提示才与服务端状态一致。
+  revokeAccountSessions(user.id, resolved.slug);
   res.json({ message: '密码已重置，请重新登录', username: user.username });
 });
 

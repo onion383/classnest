@@ -1,4 +1,6 @@
 import { getToken, clearToken } from './utils/authStorage.js'
+// 跨窗口登录态同步：别的窗口登出/换号时，本窗口的登录代次与用户级缓存要一起作废
+import { installAuthSync } from './utils/authSync.js'
 import { createApp } from 'vue'
 // Vue 3.6 Vapor 混跑用的互操作插件。3.5 通道下这个模块是 null（见 vite.config.js 的
 // vaporInteropShim），所以下面必须判空——两个通道跑的是同一份入口代码。
@@ -37,8 +39,10 @@ window.electron?.on?.(RECEIVE.FROM_MAIN, (msg) => {
 //   - onAuthExpired：token 失效时清除过期 token、弹提示条并回到登录页（含时间戳去重）
 //   - onUnreachable：请求失败即让主进程探测一次，把每次失败操作变成探针
 //   - writeRetryGuard：主进程重连期间禁止写请求自动重发，避免重复落库
+//   - announceDataChanged：写成功后广播给桌面挂件刷新（只有主窗口是业务写入方）
 setupApiClient({
   baseURL: backendBaseUrl(),
+  announceDataChanged: true,
   onAuthExpired: (error, config) => {
     const url = (config?.url || '')
     const isAuthReq = /(login|register|restore|recover)/i.test(url)
@@ -63,6 +67,11 @@ setupApiClient({
     return m === 'get' || m === 'head'
   },
 })
+
+// 跨窗口登录态：本窗口自己登出时 storage 事件不会回到自己（clearAuth 直接清），
+// 但别的窗口（桌面组件/工具箱）换号时本窗口收得到 —— 由 authSync 统一换代次并广播，
+// 否则本窗口里的在途请求仍会把旧账号数据写回缓存（v6 · 2-3b 缺口）。
+installAuthSync()
 
 // 媒体凭据（<img>/CSS 用）：已有登录态时补一份/续期，避免首屏图片缺少受限凭据而 401。
 // 与启动流程并行执行，不阻塞首屏渲染。

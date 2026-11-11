@@ -42,6 +42,9 @@
 
 <script setup vapor>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import {
+  clamp, maxScrollOf, thumbHeightOf, thumbRangeOf, thumbTopOf, markTopOf, seekOf,
+} from './AlbumYearRuler.math.js'
 
 const props = defineProps({
   // 时间轴分组的偏移表 [{ date, offset }]，与 usePhotoTimeline 的 layout 同源
@@ -55,9 +58,7 @@ const props = defineProps({
 const emit = defineEmits(['seek'])
 
 // 手柄固定高度：不随内容比例变化 —— 照片多少、窗口多高，长出来的都是同一个形状。
-// 原来的写法是 clamp(clientH / total * trackH, 28, trackH)：照片一多就被压成 28px 的细针，
-// 照片少又能糊满整条，抓取手感随内容漂移，这也正是「大小不固定」的来源。
-const THUMB_H = 44
+// 常量与全部换算统一在 AlbumYearRuler.math.js（测试 import 同一份，防止复刻公式）。
 const MIN_GAP = 26 // 低于这个间距（px）的年份不显示文字
 
 const trackRef = ref(null)
@@ -75,26 +76,23 @@ let resizeObs = null
 // 松手时复位到 0，复位过程由 CSS 的 top 过渡补一段平滑滑回。
 const manualTop = ref(0)
 
-function clamp(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v
-}
-
-const maxScroll = computed(() => Math.max(0, (props.total || 0) - (props.clientH || 0)))
+const maxScroll = computed(() => maxScrollOf(props.total, props.clientH))
 
 // 手柄高度固定（只有轨道本身比手柄还短时才退让，避免溢出轨道）
-const thumbH = computed(() => Math.min(THUMB_H, Math.max(0, trackH.value)))
+const thumbH = computed(() => thumbHeightOf(trackH.value))
 
 // 手柄能走的行程 = 轨道高度 − 手柄自身高度。手柄顶点的活动区间就是它，
 // 顶格时手柄顶在轨道顶端，拖到底时手柄底边贴住轨道底边 —— 视觉上真的「完全」。
-const thumbRange = computed(() => Math.max(0, trackH.value - thumbH.value))
+const thumbRange = computed(() => thumbRangeOf(trackH.value))
 
 // 手柄位置：滚动进度 → 行程区间。
 // 没有可滚动内容时用 manualTop（纯手感，不影响任何滚动），否则跟真实滚动位置走。
-const thumbTop = computed(() => {
-  if (!thumbRange.value) return 0
-  if (!maxScroll.value) return clamp(manualTop.value, 0, thumbRange.value)
-  return clamp((props.scrollTop / maxScroll.value) * thumbRange.value, 0, thumbRange.value)
-})
+const thumbTop = computed(() => thumbTopOf({
+  trackH: trackH.value,
+  maxScroll: maxScroll.value,
+  scrollTop: props.scrollTop,
+  manualTop: manualTop.value,
+}))
 
 // 当前视口顶部所在的那一组（取偏移不超过 scrollTop 的最后一组）
 const currentItem = computed(() => {
@@ -120,16 +118,12 @@ const tipText = computed(() => {
    手柄中心会和那年的刻度线对不上。原来刻度用的是 offset / total，
    而手柄用的是 scrollTop / maxScroll —— 越靠底部偏得越多，是一条真错位。 */
 function markTop(offset) {
-  const h = trackH.value
-  if (!h) return 0
-  const ms = maxScroll.value
-  if (!ms) {
-    // 内容不足一屏：没有可滚动行程，刻度按内容比例铺满轨道（此时手柄停在顶端）
-    const t = props.total || 0
-    return t ? clamp((offset / t) * h, 0, h) : 0
-  }
-  // + thumbH/2：滚到该位置时手柄中心落在哪儿，刻度就画在哪儿
-  return clamp((offset / ms) * thumbRange.value + thumbH.value / 2, 0, h)
+  return markTopOf({
+    trackH: trackH.value,
+    maxScroll: maxScroll.value,
+    total: props.total,
+    offset,
+  })
 }
 
 /* 年份标签换行：年份（如 2026）四位数字约 22px 宽；「未知时间」四个汉字一行要 40px，
@@ -192,7 +186,7 @@ function applyFromEvent(e) {
     manualTop.value = top
     return
   }
-  emit('seek', (top / range) * maxScroll.value)
+  emit('seek', seekOf({ top, trackH: trackH.value, maxScroll: maxScroll.value }))
 }
 
 function onTrackPointerDown(e) {

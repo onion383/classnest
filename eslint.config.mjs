@@ -22,6 +22,7 @@
 import js from '@eslint/js'
 import pluginVue from 'eslint-plugin-vue'
 import globals from 'globals'
+import tableRegistry from './student-backend/schema/tableRegistry.js'
 
 // ---------- 共用规则：两档 ----------
 const SHARED_RULES = {
@@ -53,6 +54,34 @@ const SHARED_RULES = {
   // 给未声明的变量赋值会静默创建全局变量（CJS 非严格模式不报错）——
   // ai.conversations.js 的 `ask` 就是这么串到并发请求之间的。
   'no-implicit-globals': 'error',
+}
+
+// ---------- 架构守卫规则（v6 · 6-1） ----------
+// 表名清单散在业务层时，新增一张可撤销表必然漏改一处 —— 漏了不报错，只是静默少记录。
+// 名单从 registry 现算，不在配置里再抄一遍（否则规则自己就是第五份清单）。
+// 少数表名同时是业务词汇（`schedule` 也是「导出图片 / 图表的数据域」取值），
+// 单个出现时无法静态判定为表名清单，强行报错只会制造噪音；这类名字的清单由
+// architecture-guard 测试按「命中 2 个以上表名」兜住。
+const AMBIGUOUS_TABLE_NAMES = new Set(['schedule'])
+
+const TABLE_NAME_SELECTORS = tableRegistry.ALL_PHYSICAL.concat(tableRegistry.ALL_LOGICAL)
+  .filter((name) => !AMBIGUOUS_TABLE_NAMES.has(name))
+  .map((name) => `ArrayExpression > Literal[value="${name}"]`)
+
+const ARCH_RULES = {
+  'no-restricted-syntax': [
+    'error',
+    ...TABLE_NAME_SELECTORS.map((selector) => ({
+      selector,
+      message: '表名清单必须从 schema/tableRegistry.js 引用，不许在业务层手写数组',
+    })),
+    {
+      // 格子类型写魔法数字时，「走廊」和「空位」写反不会报错，只会让那个人从界面上消失。
+      // 只认直接比较字面量：右边是 SEAT_CELL.XXX 的正确写法不受影响。
+      selector: "BinaryExpression[operator=/^[!=]=$|^[!=]==$/][right.type='Literal'][left.object.object.name='types']",
+      message: '格子类型比较必须用 services/sanitize.js 的 SEAT_CELL 常量（0/1/2 是魔法数字）',
+    },
+  ],
 }
 
 export default [
@@ -104,6 +133,14 @@ export default [
       globals: { ...globals.node },
     },
     rules: SHARED_RULES,
+  },
+
+  // ---------- 业务层：架构守卫 ----------
+  // 只覆盖 services / routes / utils：schema 是建表事实来源（DDL 必须写表名），
+  // registry 自身就是名单，二者都不能套这条规则。
+  {
+    files: ['student-backend/services/**/*.js', 'student-backend/routes/**/*.js', 'student-backend/utils/**/*.js'],
+    rules: ARCH_RULES,
   },
 
   // ---------- preload 特例：跑在渲染进程里 ----------

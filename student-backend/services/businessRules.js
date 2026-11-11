@@ -14,6 +14,18 @@ const { gridToDenseCols } = require('./seatGrid');
 // 列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
 const dutyConfig = require('./dutyConfig');
 
+// 业务校验失败 = 用户数据填错了，不是服务器故障。
+// 带 status 让统一错误出口（app.js）回 400：此前这些错误全是裸 Error，一路 500，
+// 前端看到的「服务器错误」会把「少写了一个学生 / 时间填反了」误导成后端崩了，
+// 而单格 PATCH 又自己回 400 —— 同一类错误两个状态码。判据只在抛出处定义一次。
+class ValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ValidationError';
+    this.status = 400;
+  }
+}
+
 // —— 通用工具 ——
 function toObj(v) {
   if (v == null) return null;
@@ -48,14 +60,52 @@ function assertSeatRefs(seats, name, types) {
     if (!Array.isArray(row)) return;
     row.forEach((cell, c) => {
       if (typeof cell !== 'number') return;
-      if (!ids.has(cell)) throw new Error(`字段「${name}」引用了不存在的学生（id=${cell}）`);
+      if (!ids.has(cell)) throw new ValidationError(`字段「${name}」引用了不存在的学生（id=${cell}）`);
       // 一人一座：同一学生 id 不能出现在两个位置，否则必然有学生没座位
       if (seen.has(cell)) {
-        throw new Error(`座位表一名学生只能占一个座位：id=${cell} 同时出现在 ${seen.get(cell)} 与 第${r + 1}行第${colNo(c)}列`);
+        throw new ValidationError(`座位表一名学生只能占一个座位：id=${cell} 同时出现在 ${seen.get(cell)} 与 第${r + 1}行第${colNo(c)}列`);
       }
       seen.set(cell, `第${r + 1}行第${colNo(c)}列`);
     });
   });
+}
+
+// —— 单格写入的可写性（按「增量」判，不做全表重校）——
+// 整表 PUT 走 validateRow（全表重校）；单格 PATCH 只改一格。单格路径若也做全表重校，
+// 历史库里任何一处早已存在的不合规（越界行 / 幽灵 id / 洞里的人）都会让**每一次**拖动失败 ——
+// 用户反而失去唯一的自愈途径。所以这里只判「这一格」。
+// 判据与 assertSeatRefs / assertSeatCellsOccupiable 同源（同一 SEAT_CELL 常量、同一 dense 列号口径），
+// 不另写一套规则：新增的写入口只要调这一个函数，就不会再出现「某条路径少校验一项」。
+// 清空（null / 空串）永远放行 —— 把错放在空位或走廊里的人移走，是修复数据的前提。
+function assertSeatCellWritable(seats, types, row, col, value) {
+  const width = Math.max(
+    Array.isArray(seats) ? seats.reduce((mx, line) => (Array.isArray(line) ? Math.max(mx, line.length) : mx), 0) : 0,
+    col + 1,
+  );
+  const dense = Array.isArray(types) && types.length ? gridToDenseCols(width, types) : null;
+  const colNo = (c) => (dense && dense[c] >= 0 ? dense[c] + 1 : c + 1);
+
+  if (value == null || value === '') return;
+
+  const kind = Array.isArray(types) && Array.isArray(types[row]) ? Number(types[row][col]) : SEAT_CELL.SEAT;
+  if (seatKindBlocksStudent(kind)) {
+    throw new ValidationError(`第 ${row + 1} 行第 ${colNo(col)} 列${SEAT_KIND_BLOCK[kind].cellHint}`);
+  }
+
+  // 名字文本走 normalizeSeats 的形状校验，且不参与「一人一座」（名册外临时学生靠姓名入座）
+  if (typeof value !== 'number') return;
+  if (!studentIdSet().has(value)) throw new ValidationError(`座位引用了不存在的学生（id=${value}）`);
+
+  // 一人一座：同一 id 不能同时出现在两格（本次要写的那一格不算）
+  for (let r = 0; r < seats.length; r++) {
+    const line = seats[r];
+    if (!Array.isArray(line)) continue;
+    for (let c = 0; c < line.length; c++) {
+      if (r === row && c === col) continue;
+      if (line[c] !== value) continue;
+      throw new ValidationError(`座位表一名学生只能占一个座位：id=${value} 已在第 ${r + 1} 行第 ${colNo(c)} 列`);
+    }
+  }
 }
 
 // —— 座位格子类型矩阵（types）：形状 + 值域 + 「走廊只能整行或整列」——
@@ -68,18 +118,18 @@ function assertSeatTypes(types, rows, cols) {
   if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || cols < 1) return;
   const name = 'types';
   if (types.length !== rows) {
-    throw new Error(`字段「${name}」有 ${types.length} 行，应与座位行数 ${rows} 一致`);
+    throw new ValidationError(`字段「${name}」有 ${types.length} 行，应与座位行数 ${rows} 一致`);
   }
   for (let r = 0; r < rows; r++) {
     const line = types[r];
-    if (!Array.isArray(line)) throw new Error(`字段「${name}」第 ${r + 1} 行应为数组`);
+    if (!Array.isArray(line)) throw new ValidationError(`字段「${name}」第 ${r + 1} 行应为数组`);
     if (line.length !== cols) {
-      throw new Error(`字段「${name}」第 ${r + 1} 行有 ${line.length} 格，应与座位列数 ${cols} 一致`);
+      throw new ValidationError(`字段「${name}」第 ${r + 1} 行有 ${line.length} 格，应与座位列数 ${cols} 一致`);
     }
     for (let c = 0; c < cols; c++) {
       const v = Number(line[c]);
       if (!Number.isInteger(v) || v < SEAT_CELL.SEAT || v > SEAT_CELL.HOLE) {
-        throw new Error(`字段「${name}」第 ${r + 1} 行第 ${c + 1} 列应为 0/1/2（座位/走廊/空位），收到：${JSON.stringify(line[c])}`);
+        throw new ValidationError(`字段「${name}」第 ${r + 1} 行第 ${c + 1} 列应为 0/1/2（座位/走廊/空位），收到：${JSON.stringify(line[c])}`);
       }
     }
   }
@@ -89,7 +139,7 @@ function assertSeatTypes(types, rows, cols) {
     for (let c = 0; c < cols; c++) {
       if (Number(types[r][c]) !== SEAT_CELL.AISLE) continue;
       if (!rowAllAisle[r] && !colAllAisle[c]) {
-        throw new Error(`走廊只能整行或整列设置：第 ${r + 1} 行第 ${c + 1} 列是走廊，但该行与该列都不是整行/整列走廊`);
+        throw new ValidationError(`走廊只能整行或整列设置：第 ${r + 1} 行第 ${c + 1} 列是走廊，但该行与该列都不是整行/整列走廊`);
       }
     }
   }
@@ -157,20 +207,20 @@ function assertDutyRefs(cells, name) {
     const dayList = mode != null ? dayLists[mode] : unionDays;
     Object.keys(layer).forEach((item) => {
       if (itemNames.size && !itemNames.has(item)) {
-        throw new Error(`值日项目「${item}」不在设置的劳动项目里（字段「${name}」）`);
+        throw new ValidationError(`值日项目「${item}」不在设置的劳动项目里（字段「${name}」）`);
       }
       const daysObj = layer[item];
       if (!daysObj || typeof daysObj !== 'object' || Array.isArray(daysObj)) return;
       Object.keys(daysObj).forEach((day) => {
         if (dayList.length && !dayList.includes(day)) {
-          throw new Error(`值日列「${day}」不在设置的列名列表里（字段「${name}」）`);
+          throw new ValidationError(`值日列「${day}」不在设置的列名列表里（字段「${name}」）`);
         }
         const list = daysObj[day];
         if (!Array.isArray(list)) return;
         // 人数严格等于设置的 count（仅在确实配置了该项目人数时校验）
         const cnt = countMap.get(item);
         if (cnt != null && list.length !== cnt) {
-          throw new Error(`值日的「${item} · ${day}」应排 ${cnt} 人，实际 ${list.length} 人（字段「${name}」）`);
+          throw new ValidationError(`值日的「${item} · ${day}」应排 ${cnt} 人，实际 ${list.length} 人（字段「${name}」）`);
         }
         list.forEach((n) => {
           if (typeof n !== 'string') return;
@@ -188,7 +238,7 @@ function assertDutyRefs(cells, name) {
     results.forEach((r) => {
       // 已存在（含正式名册里的同名重名）都无需报错：名字本来就认得到
       if (!r || r.id || r.ambiguous) return;
-      throw new Error(`值日名单里的「${r.name}」无法登记为学生${r.error ? `（${r.error}）` : ''}（字段「${name}」）`);
+      throw new ValidationError(`值日名单里的「${r.name}」无法登记为学生${r.error ? `（${r.error}）` : ''}（字段「${name}」）`);
     });
   }
 }
@@ -197,7 +247,7 @@ function assertDutyRefs(cells, name) {
 function assertLeaveWindow(start, end) {
   if (!start || !end) return;
   if (normDT(end) <= normDT(start)) {
-    throw new Error(`请假的「结束时间」必须晚于「开始时间」（开始：${start}，结束：${end}）`);
+    throw new ValidationError(`请假的「结束时间」必须晚于「开始时间」（开始：${start}，结束：${end}）`);
   }
 }
 
@@ -229,25 +279,41 @@ function assertSeatCapacity(types) {
     return;
   }
   if (usable >= prevUsable) return;
-  throw new Error(`可用座位只有 ${usable} 个，学生有 ${need} 人：还差 ${need - usable} 个座位，请减少空位或多加行列`);
+  throw new ValidationError(`可用座位只有 ${usable} 个，学生有 ${need} 人：还差 ${need - usable} 个座位，请减少空位或多加行列`);
 }
 
-// —— 空位格不许有数据 ——
-// 空位（types=2）是「这里没有桌子」，不是「这里可以放人」。两者一旦脱节：
-//   · 界面渲染空位分支不显示名字 → 那个人看起来凭空消失
+// —— 格子类型决定「能不能坐人」：唯一判据表 ——
+// 座位(0) 可以坐人；走廊(1) 与空位(2) 都是「这里没有桌子」，写上学生就是脏数据。
+// 一旦脱节，三处静默出错：
+//   · 界面按 types 渲染 → 走廊/空位分支不显示名字，那个人看起来凭空消失
 //   · 座位指数按 types 判可用格 → 他的权重静默少算
 //   · 智能排表按 usable 过滤 → 把他当成「未入座」重新塞一个座位
-// 全部是不报错的静默错误，所以必须在写库前拦。
-function assertHolesEmpty(seats, types) {
+// 全部不报错，所以必须在写库前拦。
+//
+// 为什么做成一张表而不是两处 if：整表 PUT 与单格 PATCH 是两条写入口，
+// 规则写两遍就一定会分叉（历史上就是「单格只认空位、整表又只认空位，两边都漏走廊」）。
+// 新增「不可坐人」的格子类型只改这一处，两个入口自动同步。
+const SEAT_KIND_BLOCK = {
+  [SEAT_CELL.AISLE]: { name: '走廊', cellHint: '是走廊，不能安排学生' },
+  [SEAT_CELL.HOLE]: { name: '空位', cellHint: '是空位（这里没有桌子），不能安排学生：请先把该格改回座位' },
+};
+function seatKindBlocksStudent(kind) {
+  return Object.prototype.hasOwnProperty.call(SEAT_KIND_BLOCK, Number(kind));
+}
+
+// —— 走廊 / 空位格里不许有人（整表校验：PUT 与 AI 整块写入走这条）——
+// 报错文案是「被设为 X，但格子里还有学生」的方向：写明用户刚做的操作与残留数据。
+function assertSeatCellsOccupiable(seats, types) {
   if (!Array.isArray(types) || !types.length || !Array.isArray(seats)) return;
   for (let r = 0; r < types.length; r++) {
     const line = types[r];
     if (!Array.isArray(line)) continue;
     for (let c = 0; c < line.length; c++) {
-      if (Number(line[c]) !== SEAT_CELL.HOLE) continue;
+      if (!seatKindBlocksStudent(line[c])) continue;
       const v = Array.isArray(seats[r]) ? seats[r][c] : null;
       if (v === null || v === undefined || v === '') continue;
-      throw new Error(`第 ${r + 1} 行第 ${c + 1} 列被设为空位，但格子里还有学生（${v}）：请先把该学生移走，再设置空位`);
+      const name = SEAT_KIND_BLOCK[Number(line[c])].name;
+      throw new ValidationError(`第 ${r + 1} 行第 ${c + 1} 列被设为${name}，但格子里还有学生（${v}）：请先把该学生移走，再设置${name}`);
     }
   }
 }
@@ -265,14 +331,14 @@ function validateRow(table, values, existing) {
     const cols = Number(pick('cols'));
     // 尺寸越界：座位行数 / 每行格数不得超过设定的行×列
     if (Array.isArray(seats) && Number.isInteger(rows) && Number.isInteger(cols)) {
-      if (seats.length > rows) throw new Error(`座位行数（${seats.length}）超出设定的 ${rows} 行`);
+      if (seats.length > rows) throw new ValidationError(`座位行数（${seats.length}）超出设定的 ${rows} 行`);
       seats.forEach((r, i) => {
-        if (Array.isArray(r) && r.length > cols) throw new Error(`座位第 ${i + 1} 行有 ${r.length} 格，超出设定的 ${cols} 列`);
+        if (Array.isArray(r) && r.length > cols) throw new ValidationError(`座位第 ${i + 1} 行有 ${r.length} 格，超出设定的 ${cols} 列`);
       });
     }
     assertSeatTypes(types, rows, cols);
     assertSeatRefs(seats, 'seats', types);
-    assertHolesEmpty(seats, types);
+    assertSeatCellsOccupiable(seats, types);
     // 容量守卫只管当前座位表：模板是布局样板，不绑定本班人数
     if (table === 'seat_layout') assertSeatCapacity(types);
   } else if (table === 'duty_layout' || table === 'duty_template') {
@@ -282,4 +348,4 @@ function validateRow(table, values, existing) {
   }
 }
 
-module.exports = { validateRow, assertLeaveWindow, assertSeatRefs, assertSeatTypes, assertHolesEmpty, assertSeatCapacity, assertDutyRefs };
+module.exports = { ValidationError, validateRow, assertLeaveWindow, assertSeatRefs, assertSeatTypes, assertSeatCellsOccupiable, assertSeatCapacity, assertDutyRefs, assertSeatCellWritable };

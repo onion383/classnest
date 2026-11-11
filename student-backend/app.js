@@ -179,11 +179,18 @@ app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students',
         const rel = (req.body && req.body.relations) || {};
         let removed = null;
         db.transaction(() => {
-          removed = purgeStudentRelations(student, {
-            leave: !!rel.leave, score: !!rel.score, seat: !!rel.seat, duty: !!rel.duty,
-            group: !!rel.group, cadre: !!rel.cadre,
-          });
-          deleteRow('students', id);
+          // 把学生整行也放进 removed：撤销要重建这个学生，不能只靠前端传回的前端行
+          // （前端行可能是列表里的投影，缺列）。七处清理结果合成一条可撤销快照。
+          removed = {
+            student,
+            ...purgeStudentRelations(student, {
+              leave: !!rel.leave, score: !!rel.score, seat: !!rel.seat, duty: !!rel.duty,
+              group: !!rel.group, cadre: !!rel.cadre,
+            }),
+          };
+          // 关联已按用户勾选 purge 完，显式放行「删学生」的关联守卫：
+          // 用户可能故意保留某些关联（撤销要能整条还原），这是他的选择，不是漏清。
+          deleteRow('students', id, { allowStudentOrphans: true });
         })();
         res.json({ message: '已删除学生及其关联记录', removed });
       } catch (err) {
@@ -268,7 +275,7 @@ function startServer(port) {
       // fee-records 含 multer（文件上传处理），一起延迟加载
       () => {
         const multer = require('multer');
-        const { ALLOWED_EXT_RE, checkUpload, KINDS, decodeFileName } = require('./services/uploadSignatures');
+        const { ALLOWED_EXT_RE, checkUpload, KINDS, decodeFileName, receiptKind } = require('./services/uploadSignatures');
         const { moveReceiptsToTrash } = require('./services/receiptTrash');
         // multer 的 limits 只能设一个总上限，按「最大的一类」给；分类上限在 handler 里判
         const MAX_UPLOAD_BYTES = Math.max(...Object.values(KINDS).map((k) => k.maxBytes));
@@ -313,7 +320,7 @@ function startServer(port) {
                   path: `/uploads/${f.filename}`,
                   name: originalName || f.filename,
                   size: f.size,
-                  kind: check.kind,
+                  kind: receiptKind(check.kind),
                 });
               }
               if (errors.length > 0) {

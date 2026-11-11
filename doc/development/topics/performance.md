@@ -11,15 +11,7 @@ classnest/
 │   ├── main/
 │   │   ├── main.privateWorkingSet.js  # 与任务管理器「进程」页一致
 │   │   └── main.startup-timer.js
-│   ├── afterPack.js  # 仅 win32
-│   └── preload.js  # 页面脚本之前预取安全通道主密钥
-├── student-backend/
-│   └── app.js  # 启动时序、启动打点与后台让路链
-├── student-frontend/
-│   ├── index.html  # 启动占位页；刻意不加回环预连接
-│   └── src/
-│       └── composables/
-│           └── secureChannel.js  # 握手分段打点与主密钥复用
+│   └── afterPack.js  # 仅 win32
 └── testjs/
     └── probe/
         ├── bundle-diff.mjs  # 构建产物体积差异

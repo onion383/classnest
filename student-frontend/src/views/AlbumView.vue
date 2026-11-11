@@ -455,7 +455,7 @@ import { getToken } from '../utils/authStorage.js'
 import { ref, computed, nextTick, onMounted, onActivated, onDeactivated, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
-import { pushUndo } from '../api/undo'
+import { recordUndo as recordUndoSpec } from '../utils/undoRecorder.js'
 import { useNotification } from '../composables/useNotification.js'
 import { reportError } from '../utils/reportError.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
@@ -964,6 +964,17 @@ async function mergeSelectedAlbums() {
   merging.value = true
   try {
     const res = await axios.post('/api/album/merge', { album_ids: ids }, { headers: authHeaders() })
+    // 合并原先不可撤销：源相册被删后只能重新建、重新扫。后端把「新相册 + 新照片索引 +
+    // 每个源相册（整行 + 照片整行）」整包带回，这里登记成一条 album_merge 命令。
+    const removed = res.data?.removed
+    if (removed?.newAlbum) {
+      recordUndoSpec({
+        key: 'album',
+        type: 'album_merge',
+        label: `合并相册：${removed.newAlbum.name}`,
+        payload: removed,
+      })
+    }
     exitSelectMode()
     await loadAlbums()
     useNotification().success(res.data?.message || '相册已合并')
@@ -1272,18 +1283,16 @@ async function deletePhoto(p) {
   if (!confirm(`确定把「${p.file_name}」移入回收站吗？（可撤销还原）`)) return
   try {
     await axios.delete(`/api/album/photo/${p.id}`, { headers: authHeaders() })
-    // 记录「删除照片」撤销：undo 从回收站搬回文件+还原索引，redo 再次移入回收站
-    pushUndo({
+    // 记录「删除照片」撤销：undo 从回收站搬回文件+还原索引，redo 再次移入回收站。
+    // 走统一入口：登记失败会给出「本次无法撤销」弱提示并留日志，
+    // 不再只写 console.warn（用户看不见，等于没提示）。
+    recordUndoSpec({
       key: 'album',
       type: 'photo_trash',
       label: `删除照片：${p.file_name}`,
       payload: {
         photo: { id: p.id, album_id: activeAlbum.value?.id, file_path: p.file_path, file_name: p.file_name, file_size: p.file_size, mtime: p.mtime, photo_date: p.photo_date, exif_date: p.exif_date, date_src: p.date_src }
       }
-    }).catch((e) => {
-      // 照片已经删掉了，只是撤销记录没登记上：提示仍说「已移入回收站」（没承诺可撤销），
-      // 但控制台要留下原因，否则用户回头发现撤不回去时无从排查。
-      console.warn('[undo] 删除照片的撤销记录登记失败（本次删除将不可撤销）', e)
     })
     viewer.value = null
     useNotification().success('已移入回收站')

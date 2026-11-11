@@ -9,7 +9,6 @@
       @keydown.down.prevent="move(1)"
       @keydown.up.prevent="move(-1)"
       @keydown.enter.prevent="open ? commit(hoverIdx) : openMenu()"
-      @keydown.escape="open = false"
     >
       <!-- title：触发器宽度不够时文案仍会被省略号截断，悬停可看全文 -->
       <span class="av-select__value" :class="{ 'av-select__value--placeholder': !resolved || resolved.value == null }" :title="display">
@@ -54,9 +53,10 @@
 // 用法：
 //   <AppSelect v-model="xxx" :options="[{value:'a', label:'A'}, 'B']" placeholder="请选择" />
 import '../../styles/select.css'
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, onDeactivated } from 'vue'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import CustomScrollbar from './CustomScrollbar.vue'
+import { pushEscLayer, removeEscLayer, consumeEscape } from '../../utils/dialogStack.js'
 
 defineOptions({ name: 'AppSelect' })
 
@@ -77,6 +77,27 @@ const emit = defineEmits(['update:modelValue', 'change'])
 
 const open = ref(false)
 const hoverIdx = ref(-1)
+// 下拉菜单也是一层「Esc 层」：打开期间压进与弹窗共用的栈。
+// 监听放在 document 而不是触发器上 —— 菜单展开后焦点可能已经不在按钮上，
+// 只绑按钮会漏掉 Esc，弹窗反而因为「不是栈顶」死在原地。
+const escLayer = {}
+function onDocKeydown(e) {
+  // Esc 走统一协议（见 utils/dialogStack.js · consumeEscape）：
+  //   菜单展开 → 收菜单并消费事件，父弹窗不动；
+  //   菜单收起 → 完全不消费，父弹窗的 Esc 照常生效。
+  if (!consumeEscape(e, { open: open.value, self: escLayer })) return
+  open.value = false
+  hoverIdx.value = -1
+}
+watch(open, (v) => {
+  if (v) {
+    pushEscLayer(escLayer)
+    document.addEventListener('keydown', onDocKeydown)
+  } else {
+    removeEscLayer(escLayer)
+    document.removeEventListener('keydown', onDocKeydown)
+  }
+}, { flush: 'sync' })
 const menuPos = ref({ left: 0, top: 0, width: 0, up: false, max: 220 })
 // menuZ：下拉菜单的层级。菜单 Teleport 到 body 后自成一层，必须压过"包住触发器的浮层"，
 // 否则会被弹窗遮罩/AI 悬浮窗盖住（点开看不到或只看到一角）。
@@ -173,6 +194,9 @@ function toggle() {
   openMenu()
 }
 
+// Esc 的处理在 document 监听里（见上面的 onDocKeydown）：
+// 它随菜单展开注册、收起注销，不依赖按钮是否还持有焦点。
+
 // 菜单层级：从触发器往上取祖先里最大的 z-index 再叠一层，保证压过包住它的浮层。
 // 这样同一个下拉放在普通页面（无浮层，用 10010 兜底）、z-[10070] 的「添加模型」弹窗、
 // z-[20001] 的 AI 悬浮窗里都能正常显示，不用每处浮层各写一个魔法数字。
@@ -229,8 +253,17 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  removeEscLayer(escLayer)
+  document.removeEventListener('keydown', onDocKeydown)
   document.removeEventListener('click', onDocClick)
   window.removeEventListener('scroll', onViewportChange, true)
   window.removeEventListener('resize', onViewportChange)
+})
+
+// 页面被 <KeepAlive> 缓存时不会 unmount，带着展开的菜单切走会把它留在全局 Esc 栈里，
+// 导致之后所有弹窗的 Esc 都失效。切走即收起（收起的同时会从栈里移除）。
+onDeactivated(() => {
+  open.value = false
+  hoverIdx.value = -1
 })
 </script>

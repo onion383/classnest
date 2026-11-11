@@ -7,9 +7,6 @@
 
 ```text
 classnest/
-├── .github/
-│   └── workflows/
-│       └── ci.yml  # CI/CD 流水线：测试 → 打包（安装包 / 免安装 ZIP / 源码 ZIP）→ 草稿发布
 ├── electron/
 │   ├── inno/
 │   │   ├── compile.mjs  # 按「INNO_SETUP_ISCC 环境变量 → PATH 中 iscc → 常见安装目录（…

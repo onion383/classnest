@@ -17,6 +17,11 @@
         :aria-hidden="mode === 'recovery' ? 'true' : null"
         @submit.prevent="onPageSubmit"
       >
+        <!-- 全卡唯一的文件选择器：登录 / 恢复两种形态共用（同一时刻只会有一个按钮触发它）。
+             放在这里而不是各分支里，是因为 ref 只能绑一个元素，分支互斥时虽然也只存在一个，
+             但「哪个分支会挂」得靠脑子里记 —— 放顶层就没有这个负担。
+             accept 里三种都给：.db 库文件、.json 旧备份包、.zip 整包备份。 -->
+        <input ref="fileInputRef" type="file" accept=".db,.json,.zip" class="hidden" @change="onPickFile" />
         <!-- 登录表单 -->
         <template v-if="cardMode === 'login'">
           <h2 class="text-xl font-bold mb-4">班集登录</h2>
@@ -31,7 +36,7 @@
               注册
             </button>
           </div>
-          <button type="button" :disabled="busy" class="mt-2 bg-surface-hover px-4 py-2 rounded-xl w-full disabled:opacity-50" @click="openDbPicker">
+          <button type="button" :disabled="busy" class="mt-2 bg-surface-hover px-4 py-2 rounded-xl w-full disabled:opacity-50" @click="fileInputRef && fileInputRef.click()">
             从数据库登录
           </button>
           <p class="text-center mt-3">
@@ -45,9 +50,17 @@
           <p class="text-xs text-text-muted mb-4">
             <a class="cursor-pointer underline" @click="switchMode('login')">返回登录</a>
           </p>
-          <input v-if="restoreFile" :value="restoreBundle?.username || ''" readonly placeholder="账号" autocomplete="off" class="border p-2 w-full mb-2 rounded-xl" />
-          <input v-model="password" type="password" placeholder="密码（与导出时一致）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
-          <input v-model="recoverPhrase" placeholder="或助记词（12字）" autocomplete="off" class="border p-2 w-full mb-4 rounded-xl" />
+          <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 rounded-xl w-full mb-2 disabled:opacity-50" @click="fileInputRef && fileInputRef.click()">
+            {{ restoreZipName || (restoreBundle ? '换一个备份包' : '选择备份包') }}
+          </button>
+          <!-- 只显示真正需要的框：明文库或钥匙随包的备份不需要任何口令，
+               摆一个输入框只会让人以为「必须填点什么」。
+               用 gap 容器而不是逐个 mb-2：框的可见数量会变，少一个就多一条空白。 -->
+          <div class="flex flex-col gap-2 mb-2">
+            <input v-if="restoreAccountName" :value="restoreAccountName" readonly placeholder="账号" autocomplete="off" class="border p-2 w-full rounded-xl" />
+            <input v-if="restoreFields.password" v-model="password" type="password" :placeholder="restoreFields.mnemonic ? '密码（与导出时一致）' : '密码（导出时设置的数据库密码）'" autocomplete="new-password" class="border p-2 w-full rounded-xl" />
+            <input v-if="restoreFields.mnemonic" v-model="recoverPhrase" :placeholder="restoreFields.password ? '或助记词（12字）' : '助记词（12字）'" autocomplete="off" class="border p-2 w-full rounded-xl" />
+          </div>
           <button type="submit" :disabled="busy" @mouseenter="prefetch(loadConfirmDialog)" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
             {{ busy ? '恢复中…' : '解包并恢复' }}
           </button>
@@ -195,7 +208,8 @@ import '../styles/dialog-transition.css';
 import { storeMediaToken } from '../utils/apiUrl';
 import { fetchLocalAccounts, recoverFromLocalDb, submitRecoveredPassword } from '../utils/localRecover.js';
 import { useDisposables } from '../utils/disposables.js';
-import { INVOKE } from '../electronChannels.js';
+import { createLatest } from '../utils/latestOnly.js';
+import { peekBundleMeta, bundleNeedsSecret } from '../utils/zipPeek.js';
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
 // 悬停预取：ConfirmDialog 的 chunk 提前加载（供 @mouseenter → prefetch 使用）
@@ -247,7 +261,38 @@ const draftId = ref('');             // 待确认注册草稿 id（抄写通过�
 const restoredUsername = ref('');
 const busy = ref(false);
 const restoreBundle = ref(null);
-const restoreFile = ref('');
+// v3 备份包（.zip）：存 File 句柄而不是内容 —— 几百 MB 的包只有在真正上传时才由
+// Chromium 流式读盘，读进 JS 堆就会直接把渲染进程顶爆。
+const restoreZip = ref(null);
+const restoreZipName = ref('');
+const fileInputRef = ref(null);
+// 从包内 bundle.json 探测出来的身份（只读开头 64KB，不解压）：
+// null 表示「没探测到/不是 v3 包」—— 此时界面按「两个框都要」降级，宁可多问一句。
+const restoreZipMeta = ref(null);
+// 探测是异步的：快速连选两个包时，先选那次的产物不能盖掉后选的
+const zipPeekGuard = createLatest();
+// 弹窗里显示哪个账号：v3 从包内探测，v2 从 JSON 取
+const restoreAccountName = computed(() => {
+  const m = restoreZipMeta.value;
+  if (m) return m.username || '';
+  const b = restoreBundle.value;
+  return (b && b.username) || '';
+});
+// 哪些口令框该出现 —— 直接由「包里有没有明文钥匙 / 用的是哪种包裹」决定。
+// 规则与「后端拿什么解钥匙」一一对应（见 utils/zipPeek.js 的 bundleNeedsSecret）。
+const restoreFields = computed(() => {
+  const meta = restoreZipMeta.value || restoreBundle.value;
+  if (!meta) return { password: true, mnemonic: true }; // 还没选包：两个都摆着
+  if (restoreZipMeta.value) {
+    if (!bundleNeedsSecret(meta)) return { password: false, mnemonic: false };
+  } else if (meta.key) {
+    return { password: false, mnemonic: false }; // v2：钥匙明文随包
+  }
+  const byPwd = !!meta.wrappedByPassword;
+  const byMnem = !!meta.wrappedByMnemonic;
+  // 两种包裹都有时两个框都给；只有一种就只留那一个
+  return { password: byPwd || !byMnem, mnemonic: byMnem || !byPwd };
+});
 const confirmVisible = ref(false);
 const confirmMounted = ref(false);
 const confirmMessage = ref('');
@@ -278,7 +323,11 @@ watch(securityLevel, (v) => {
 
 function switchMode(m) {
   mode.value = m; loginError.value = ''; busy.value = false;
-  if (m === 'restore') { password.value = ''; recoverPhrase.value = ''; restoreBundle.value = null; restoreFile.value = ''; }
+  if (m === 'restore') {
+    password.value = ''; recoverPhrase.value = ''; restoreBundle.value = null;
+    restoreZip.value = null; restoreZipName.value = ''; restoreZipMeta.value = null;
+    zipPeekGuard.invalidate();
+  }
   // 注册页不再默认预选安全等级（进来没有选择 → 不弹任何说明），
   // 只有用户自己选到「普通密码 / 超级隐私」时由 watch(securityLevel) 弹一次说明。
   if (m === 'recover') {
@@ -367,50 +416,54 @@ function onLevelTipCancel() {
   securityLevel.value = '';
   nextTick(() => { levelTipSuppress.value = false; });
 }
-// 「从数据库登录」：选 .db 库文件，或 .json 备份包（转去「从备份恢复」填密码/助记词）。
+// 「从数据库登录」——一个入口，三种文件：
+//   .db   本机已有的库文件（后端按**文件名**在数据目录里找登记，不读这个路径本身）
+//   .json v2 备份包（整库 base64 + 库钥匙），转去「从备份恢复」填密码/助记词
+//   .zip  v3 备份包（库 + 收据原件等文件 + 清单），同样转去恢复页
 //
-// 走主进程的原生 dialog（IPC select-db-file），不用渲染层的 <input type="file">：
-// Chromium 的 file chooser 传不了默认目录，每次都从系统上次停留的位置开始，
-// 停在 OneDrive / 网络位置时光枚举目录就要 0.5~2 秒 —— 点下去就像「卡了一下才弹框」。
-// 主进程这条能记住上次目录（首次落在数据目录，.db 就在那里），并按 .db/.json 过滤。
-//
-// 返回三态（见 electron/main/main.ipc-contract.js）：ok / fail / canceled。
-// 取消要安静吞掉，不能弹「选择失败」。
-async function openDbPicker() {
-  let res;
-  try {
-    res = await window.electron.invoke(INVOKE.SELECT_DB_FILE);
-  } catch (err) {
-    useNotification().error('打开文件选择器失败');
-    return;
-  }
-  if (!res || res.outcome === 'canceled') return;
-  if (res.outcome !== 'ok') return useNotification().error(res.error || '选择文件失败');
+// 为什么用渲染层 <input type="file"> 而不是主进程的原生 dialog：
+// 主进程那条只能给**路径**，而渲染层没有 fs —— .zip 这种几百 MB 的整包拿不到 File
+// 就没法 multipart 上传。File 是惰性句柄，上传时由 Chromium 流式读盘，不进 JS 堆。
+// 代价是丢了「记住上次目录」（那是原生 dialog 才有的），首次打开落在浏览器记的位置。
+async function onPickFile(e) {
+  const file = (e.target && e.target.files && e.target.files[0]) || null;
+  // 不清空的话，同一个文件第二次选不会触发 change
+  if (e.target) e.target.value = '';
+  if (!file) return;
+  const name = file.name || '';
 
-  // 备份包：主进程已把文本读出来，这里直接解析（省掉一次 FileReader）
-  if (res.kind === 'json') {
-    let parsed;
-    try {
-      parsed = JSON.parse(res.text);
-      if (parsed.version !== 2) throw new Error('不是有效的 v2 备份包');
-    } catch (err) {
-      return useNotification().error('备份文件无法解析：' + err.message);
-    }
-    restoreBundle.value = parsed;
-    restoreFile.value = res.name;
-    mode.value = 'restore';
-    useNotification().info('已识别备份包，账号 ' + (parsed.username || '…') + '：请输入密码或助记词后点「解包并恢复」');
-    return;
-  }
+  if (/\.zip$/i.test(name)) return pickZipFile(file);
+  if (/\.json$/i.test(name)) return pickJsonBundle(file);
 
-  // 本机已有 .db 库文件：后端按文件名在数据目录里找登记（不读这个路径本身）
+  // .db 及其它：只交文件名，后端在数据目录里找登记
   busy.value = true;
-  axios.post('/api/db-login', { file: res.name }).then(res => {
+  axios.post('/api/db-login', { file: name }).then(res => {
     username.value = res.data.username;
     useNotification().success('已选择数据库，账号 ' + res.data.username + '，请输入密码登录');
   }).catch(err => {
     reportError(err, { action: '打开数据库' });
   }).finally(() => { busy.value = false; });
+}
+// v2 备份包：整库 base64 套一层 JSON，必须全文读进来解析（v3 的 .zip 才有条件只读开头）
+async function pickJsonBundle(file) {
+  if (file.size > 64 * 1024 * 1024) {
+    return useNotification().error('备份包过大（超过 64MB），请确认选的是备份文件');
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+    if (parsed.version !== 2) throw new Error('不是有效的 v2 备份包');
+  } catch (err) {
+    return useNotification().error('备份文件无法解析：' + err.message);
+  }
+  // 换成 v2 包：把 v3 的残留清干净，免得两条链路同时有值走错分支
+  restoreZip.value = null;
+  restoreZipName.value = '';
+  restoreZipMeta.value = null;
+  zipPeekGuard.invalidate();
+  restoreBundle.value = parsed;
+  mode.value = 'restore';
+  useNotification().info('已识别备份包，账号 ' + (parsed.username || '…') + '：请输入密码或助记词后点「解包并恢复」');
 }
 function login() {
   loginError.value = '';
@@ -487,10 +540,80 @@ async function confirmRecovery() {
     })
     .finally(() => { busy.value = false; });
 }
+// 选中 v3 备份包（.zip）。只记句柄不读内容：File 是惰性引用，FormData 上传时
+// Chromium 自己流式读盘 —— 把 ArrayBuffer 读进来在 GB 级包上会直接 OOM。
+async function pickZipFile(file) {
+  if (!file) return;
+  restoreZip.value = file;
+  restoreZipName.value = file.name;
+  // 选了 zip 就不可能再是 v2 的 JSON 包，避免两条链路同时有值导致走错分支
+  restoreBundle.value = null;
+  restoreZipMeta.value = null;
+  // 读开头 64KB 判断「这个包要不要口令」+ 顺手拿到账号名。
+  // 失败一律当 null：界面会退回「两个框都要」，不会误藏输入框。
+  const token = zipPeekGuard.begin();
+  const meta = await peekBundleMeta(file);
+  if (!zipPeekGuard.isCurrent(token)) return; // 已经换了另一个包
+  restoreZipMeta.value = meta;
+  if (meta && meta.username) {
+    useNotification().info('已识别备份包，账号 ' + meta.username);
+  }
+}
+// v3 整包恢复：multipart 上传 → 后端解包校验 → 才动数据。
+// 密码 / 助记词都放进表单字段，与 v2 共用同一套语义（有密码包才需要其一）。
+async function restoreFromZip(confirm) {
+  const file = restoreZip.value;
+  if (!file) return useNotification().warning('请先选择备份包');
+  // 包需要口令却两样都空：直接上传只会白跑一趟（大包尤其明显）
+  const f = restoreFields.value;
+  if (f.password || f.mnemonic) {
+    if (!password.value && !recoverPhrase.value) {
+      return useNotification().warning(f.mnemonic ? '请输入密码或助记词' : '请输入导出时设置的数据库密码');
+    }
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  if (password.value) fd.append('password', password.value);
+  if (recoverPhrase.value) fd.append('mnemonic', recoverPhrase.value);
+  if (confirm) fd.append('confirm', 'true');
+  busy.value = true;
+  try {
+    const res = await axios.post('/api/account/restore-zip-offline', fd);
+    // 恢复成功后后端已签发登录态，直接进首页
+    if (res.data.token) {
+      setToken(res.data.token);
+      storeMediaToken(res.data.mediaToken);
+      setCurrentUser(res.data.user);
+      router.push('/');
+      return;
+    }
+    useNotification().success('恢复成功');
+  } catch (err) {
+    const data = (err.response && err.response.data) || {};
+    if (data.needConfirm) {
+      confirmAction.value = 'restore';
+      confirmTitle.value = '';
+      confirmText.value = '确定';
+      cancelText.value = '取消';
+      confirmMessage.value = data.message || '本机已存在同名账号，是否确认覆盖？';
+      // zip 不需要像 v2 那样把整包塞进 confirmPayload：File 还在，确认时重传一次即可
+      confirmPayload.value = null;
+      confirmVisible.value = true;
+      useNotification().info('该账号在本机已存在，请确认后覆盖恢复');
+    } else if (data.error) {
+      useNotification().error(data.error);
+    } else {
+      reportError(err, { action: '恢复备份' });
+    }
+  } finally { busy.value = false; }
+}
 async function restore() {
+  if (restoreZip.value) return restoreFromZip(false);
   const b = restoreBundle.value;
-  // 无密码账号的备份包已带明文 key，无需密码/助记词；有密码包才需其一
-  if (!b.key && !password.value && !recoverPhrase.value) return useNotification().warning('请至少输入密码或助记词之一');
+  if (!b) return useNotification().warning('请先选择备份包');
+  // 钥匙明文随包的备份不需要口令；其余包必须给密码或助记词之一（判据与界面显示同源）
+  const f = restoreFields.value;
+  if ((f.password || f.mnemonic) && !password.value && !recoverPhrase.value) return useNotification().warning('请至少输入密码或助记词之一');
   const payload = {
     data: b.data,
     slug: b.slug,
@@ -534,6 +657,11 @@ async function restore() {
 }
 async function confirmRestore() {
   confirmVisible.value = false;
+  // v3 包：确认后就是「带着 confirm 再传一次」，File 句柄还在，不用像 v2 那样缓存整包数据
+  if (restoreZip.value) {
+    confirmPayload.value = null;
+    return restoreFromZip(true);
+  }
   const b = restoreBundle.value;
   const payload = confirmPayload.value;
   confirmPayload.value = null;
@@ -571,7 +699,10 @@ function afterRestore(b, restoredUsername) {
   password.value = '';
   recoverPhrase.value = '';
   restoreBundle.value = null;
-  restoreFile.value = '';
+  restoreZip.value = null;
+  restoreZipName.value = '';
+  restoreZipMeta.value = null;
+  zipPeekGuard.invalidate();
   switchMode('login');
 }
 // 忘记密码：返回上一步（setpass 阶段已签发恢复 token，不提供返回，避免留下未改密的登录态）

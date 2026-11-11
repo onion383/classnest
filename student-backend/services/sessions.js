@@ -80,11 +80,17 @@ function prune() {
   return changed;
 }
 
-// 登录时登记一个新会话，返回 sid（写进 JWT 的 sid 声明）
-function create(userId) {
+// 登录时登记一个新会话，返回 sid（写进 JWT 的 sid 声明）。
+// dbSlug 是账号维度：.sessions.json 是全局一份，各账号库里 users.id 都可能是 1，
+// 只记 userId 无法区分账号（改 A 账号密码会把 B 账号一起踢下线）。
+function create(userId, dbSlug = null) {
   const list = load();
   const sid = crypto.randomBytes(24).toString('hex');
-  list[sid] = { userId: userId == null ? null : userId, at: Date.now() };
+  list[sid] = {
+    userId: userId == null ? null : userId,
+    dbSlug: dbSlug == null ? null : String(dbSlug),
+    at: Date.now(),
+  };
   prune();
   save();
   return sid;
@@ -102,9 +108,11 @@ function has(sid) {
   const prevAt = rec && typeof rec.at === 'number' ? rec.at : 0;
   const now = Date.now();
   if (now - prevAt > TOUCH_INTERVAL_MS) {
-    // 兼容旧的/损坏的 rec：保留 userId，at 统一写成数字
+    // 兼容旧的/损坏的 rec：保留 userId 与账号维度，at 统一写成数字。
+    // dbSlug 丢了会让改密吊销退回到「只按 userId」→ 误踢其它账号，必须原样带过去。
     list[sid] = {
       userId: rec && rec.userId != null ? rec.userId : null,
+      dbSlug: rec && rec.dbSlug != null ? rec.dbSlug : null,
       at: now,
     };
     save();
@@ -121,13 +129,39 @@ function revoke(sid) {
   return true;
 }
 
+// 按账号维度吊销全部会话：改密 / 恢复词重置 / 删账号后，该账号在其它窗口签发的
+// 旧 token 必须立即失效，不能留到 JWT 到期（30 天）或 TTL（35 天）。
+//
+// 双键 (userId, dbSlug)：名单是全局一份，各账号库里 users.id 都可能为 1。
+// 记录带 dbSlug 时精确匹配；升级前签发的旧记录没有 dbSlug，按 userId 保守纳入
+// （宁可多退一次登录，也不留一个改密后仍可读写数据的旧 token）。
+// 两个维度任一为空都直接返回 0 —— 否则「undefined === undefined」会把整张名单清空。
+function revokeAllByUser(userId, dbSlug) {
+  if (userId == null || dbSlug == null) return 0;
+  const slug = String(dbSlug);
+  const list = load();
+  let revoked = 0;
+  for (const [sid, rec] of Object.entries(list)) {
+    if (!rec || rec.userId !== userId) continue;
+    if (rec.dbSlug != null && rec.dbSlug !== slug) continue;
+    delete list[sid];
+    revoked += 1;
+  }
+  if (revoked) save();
+  return revoked;
+}
+
 module.exports = {
-  create, has, revoke, prune,
+  create, has, revoke, prune, revokeAllByUser,
   SESSION_TTL_MS, MAX_SESSIONS,
   // —— 以下仅供单元测试构造场景，生产代码不要用 ——
-  __test_insert: (sid, userId, at) => {
+  __test_insert: (sid, userId, at, dbSlug) => {
     const list = load();
-    list[sid] = { userId: userId == null ? null : userId, at };
+    list[sid] = {
+      userId: userId == null ? null : userId,
+      dbSlug: dbSlug == null ? null : String(dbSlug),
+      at,
+    };
     save();
     return true;
   },

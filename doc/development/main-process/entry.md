@@ -19,7 +19,7 @@ classnest/
 
 - **定位**：Electron 主进程的唯一入口（[`main.js`](../../../electron/main/main.js)，`package.json` 的 `main` 指向它），负责启动编排、窗口创建、首次引导与数据迁移流程、退出收尾；不承担各模块内部实现。
 - **对外接口**：无 `module.exports`（被 Electron 直接加载）；对渲染层通过 `ipcMain.handle` / `ipcMain.on` 注册入口级通道，对系统通过 `app.whenReady` / `second-instance` / `window-all-closed` / `before-quit` / `activate` 驱动生命周期。
-- **依赖与调用方**：依赖 21 个 `main.*.js` 模块（逐步拆出）与 `electron`、`path`、`fs`、`os`；渲染层只能经 `preload.js` 的白名单通道间接触达。
+- **依赖与调用方**：依赖 24 个 `main.*.js` 模块（逐步拆出）与 `electron`、`path`、`fs`、`os`；渲染层只能经 `preload.js` 的白名单通道间接触达。
 
 ---
 

@@ -5,6 +5,7 @@ const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../util
 const { sanitizeField } = require('../services/sanitize');
 const { validateRow } = require('../services/businessRules');
 const { reorderRows } = require('../services/tableService');
+const { readRowsByIds } = require('../services/createdRows');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['姓名', '类型', '开始时间', '结束时间', '家长联系电话', '学生联系电话', '状态', '返校时间', '备注'];
@@ -187,16 +188,19 @@ router.post('/import', (req, res) => {
     });
 
     const insertMany = db.transaction((items) => {
+      const ids = [];
       for (const item of items) {
-        insert.run(
+        ids.push(Number(insert.run(
           item.position, item.student_id, item.姓名, item.类型, item.开始时间, item.结束时间,
           item.家长联系电话, item.学生联系电话, item.状态, item.返校时间, item.备注, item.created_at
-        );
+        ).lastInsertRowid));
       }
+      return ids;
     });
-    insertMany(list);
+    const ids = insertMany(list);
     renumber('leave_records');
-    res.json({ message: `成功导入 ${list.length} 条请假记录` });
+    // created = 本次真正新建的行（撤销导入的唯一 inverse 来源，见 services/createdRows）
+    res.json({ message: `成功导入 ${list.length} 条请假记录`, created: readRowsByIds('leave_records', ids) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

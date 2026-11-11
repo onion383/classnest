@@ -107,6 +107,14 @@
                 </button>
               </template>
             </div>
+            <!-- 后端多取一条判出「还有下一页」时给出口：翻页只追加，不放大上限重查 -->
+            <div v-if="remoteHasMore && visibleResults.length && !remoteSearching" class="shrink-0 pt-2 text-center">
+              <button
+                type="button"
+                class="text-xs px-3 py-1.5 rounded-lg bg-surface-hover border border-border text-text-secondary hover:text-text transition-theme"
+                @click="showMoreRemote"
+              >加载更多结果（下一页）</button>
+            </div>
           </div>
           <CustomScrollbar :target="listEl" />
         </div>
@@ -153,6 +161,12 @@ const history = ref(readHistory())
 const remoteResults = ref([])
 // 远程搜索进行中：用于避免本地无结果时过早闪现「无匹配结果」
 const remoteSearching = ref(false)
+// 远程搜索按页取：后端每页固定条数、LIMIT/OFFSET 翻页，响应 meta 是「页大小 / 是否还有下一页」
+// 的唯一来源，前端不复制一份常量，也不放大每页条数重查（那只是把天花板往外挪）。
+// 「加载更多」只取下一页并追加，前面几页不重查。
+const remotePage = ref(0)
+const remoteHasMore = ref(false)
+let lastRemoteQ = ''
 // pinyin-match 的 match 函数（懒加载，首次打开搜索时动态 import，加载完成后本地结果自动重算）
 const pinyinMatch = ref(null)
 
@@ -298,10 +312,19 @@ function scheduleRemoteSearch() {
   if (!q) {
     remoteResults.value = []
     remoteSearching.value = false
+    lastRemoteQ = ''
+    remotePage.value = 0
+    remoteHasMore.value = false
     // 清空时作废在途请求，否则它回来后会把结果又填回空列表
     remoteSeq.invalidate()
     abortRemote()
     return
+  }
+  // 换了关键字就回到第一页：上一轮翻到的页码不该带进新词，否则会从中间某页开始显示。
+  if (q !== lastRemoteQ) {
+    lastRemoteQ = q
+    remotePage.value = 0
+    remoteHasMore.value = false
   }
   remoteSearching.value = true
   scheduleRemote(() => fetchRemoteSearch(q), 250)
@@ -314,25 +337,42 @@ function abortRemote() {
   remoteAbort = null
 }
 
-async function fetchRemoteSearch(q) {
+async function fetchRemoteSearch(q, page = remotePage.value, append = false) {
   const my = remoteSeq.begin()
   // 先取消上一次：后端在做的是同步查询，越早掐掉越省 CPU
   abortRemote()
   remoteAbort = new AbortController()
   try {
-    const { data } = await axios.get(REMOTE_SOURCE.endpoint, { params: { q }, signal: remoteAbort.signal })
+    const { data } = await axios.get(REMOTE_SOURCE.endpoint, { params: { q, page }, signal: remoteAbort.signal })
     // 响应回来时已不是最新一次检索：丢弃（快速输入时后发的请求可能先到）
     if (!remoteSeq.isCurrent(my)) return
-    remoteResults.value = buildRemoteResults(data && data.groups)
+    const incoming = buildRemoteResults(data && data.groups)
+    remoteResults.value = append ? remoteResults.value.concat(incoming) : incoming
+    const meta = data && data.meta
+    remoteHasMore.value = !!(meta && meta.hasMore)
   } catch (e) {
     // 主动取消：不是错误，保持现有结果不动
     if (e && (e.code === 'ERR_CANCELED' || e.name === 'CanceledError')) return
-    // 后端未就绪/未登录：静默，仅清空远程结果，不影响本地搜索
+    // 后端未就绪/未登录：静默。翻页失败时保留已显示的结果，只收起按钮；
+    // 首屏失败才清空远程结果（本地搜索照常可用）。
     if (!remoteSeq.isCurrent(my)) return
-    remoteResults.value = []
+    if (!append) remoteResults.value = []
+    remoteHasMore.value = false
   } finally {
     if (remoteSeq.isCurrent(my)) remoteSearching.value = false
   }
+}
+
+// 「加载更多」：只取下一页并追加，不走防抖（用户已经点了）。
+// 后端每源多取一条判 hasMore，到最后一页按钮自然消失，不会重复同一份结果。
+function showMoreRemote() {
+  const q = keyword.value.trim()
+  if (!q || !remoteHasMore.value || remoteSearching.value) return
+  scheduleRemote.cancel()
+  remotePage.value += 1
+  remoteHasMore.value = false
+  remoteSearching.value = true
+  fetchRemoteSearch(q, remotePage.value, true)
 }
 
 function moveActive(dir) {

@@ -13,6 +13,7 @@ const { safeJson } = require('../utils/json');
 
 const MODES = ['daily', 'big'];
 
+// 统一成 { daily, big }：只认按模式分键的结构，其余（缺失 / 旧版整块 / 畸形值）回空。
 function toModeMap(field) {
   const obj = safeJson(field, {});
   if (!obj || typeof obj !== 'object') return { daily: {}, big: {} };

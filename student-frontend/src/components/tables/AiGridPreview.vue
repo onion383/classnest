@@ -24,6 +24,8 @@
 <script>
 import { apiFetch } from '../../utils/apiUrl.js'
 import { registerUserScopedReset } from '../../utils/userScopedCache.js'
+// 带账号代次的进程内缓存（换号时连在途响应一起作废）；见该文件头部的泄漏事故说明
+import { createSequencedCache } from '../../utils/sequencedCache.js'
 
 // 日期表头兜底（课表/值日缺省时）
 const DEFAULT_DAYS = ['周一', '周二', '周三', '周四', '周五']
@@ -44,12 +46,13 @@ const FAMILY = {
 // 供提案预览 / 记录块判断是否走网格展示
 export const GRID_TABLES = Object.keys(FAMILY)
 
-// 学生 id→姓名 映射：座位表里存的是学生 id，需还原成姓名展示。进程内缓存（带 TTL）。
-let _studentMap = null
-let _studentMapAt = 0
-const STUDENT_MAP_TTL = 60 * 1000
-async function getStudentMap() {
-  if (_studentMap && Date.now() - _studentMapAt < STUDENT_MAP_TTL) return _studentMap
+// 学生 id→姓名 映射：座位表里存的是学生 id，需还原成姓名展示。
+// 用 utils/sequencedCache 而不是自己写 TTL：模块级缓存 + 异步加载 + 换号三者凑一起时，
+// 「登出时清缓存」挡不住「清完之后旧响应才回来」——A 的姓名会被写回缓存给 B 看。
+// 那个模块在写入前核对账号代次，是这类缓存唯一被允许的写法。
+const studentMapCache = createSequencedCache({ load: loadStudentList, ttl: 60 * 1000 })
+
+async function loadStudentList() {
   try {
     const r = await apiFetch('/api/students')
     const j = await r.json()
@@ -57,31 +60,27 @@ async function getStudentMap() {
     const list = Array.isArray(j) ? j
       : Array.isArray(j.data) ? j.data
       : (j.data && j.data.rows) || j.rows || []
-    _studentMap = new Map(list.map((s) => [s.id, s.姓名 || '']))
-    _studentMapAt = Date.now()
+    return new Map(list.map((s) => [s.id, s.姓名 || '']))
   } catch (e) {
-    // 拉取失败不能把空 Map 缓存下来（否则之后永远显示空白）；返回临时空表，下次重新请求
-    return new Map()
+    // 拉取失败不能缓存空表（否则之后永远显示空白）：返回 null = 本次没拿到，下次重新请求
+    return null
   }
-  return _studentMap
 }
 
-// 学生改名/增删后由外部调用，让下一次预览重新拉取
-export function invalidateStudentMap() {
-  _studentMap = null
-  _studentMapAt = 0
+async function getStudentMap() {
+  // 没拿到（失败 / 换了号）时给空表：这次预览短暂显示 id，也绝不跨账号显示姓名
+  return (await studentMapCache.get()) || new Map()
 }
 
-// 这份 id→姓名 映射是**跟着登录用户走**的进程内缓存：换号后必须失效，
-// 否则新用户看到的是上一个用户的姓名（座位表里存的是学生 id，靠它还原成名字）。
-// TTL 只挡住「长时间不换号」的情况，挡不住「刚换完号就看预览」。
-// 登记到用户级清理表（见 utils/userScopedCache.js），登出统一调。
-registerUserScopedReset(invalidateStudentMap)
+// 这份 id→姓名 映射是**跟着登录用户走**的进程内缓存，登记到用户级清理表：
+// invalidate 同时做两件事 —— 清值 + 让在途请求作废（少任一件都还会泄漏）。
+registerUserScopedReset(() => studentMapCache.invalidate())
 </script>
 
 <script setup vapor>
 import GridView from './GridView/GridView.vue'
 import { generateColHeaders, buildSeatLikeRows } from '../../composables/useSeatGrid.js'
+// 组件内「只认最后一次请求」的序号守卫（换表/换 override 时丢弃旧响应）
 import { createLatest } from '../../utils/latestOnly.js'
 import { ref, watch } from 'vue'
 

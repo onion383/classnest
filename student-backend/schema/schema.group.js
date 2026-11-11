@@ -17,7 +17,7 @@ function migrateGroup(conn) {
     -- 分组管理：某个维度下的组（小组名字，如宿舍号 302/303；gender：0=男生 1=女生）
     CREATE TABLE IF NOT EXISTS groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      dimension_id INTEGER NOT NULL,
+      dimension_id INTEGER NOT NULL REFERENCES group_dimensions(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       gender INTEGER DEFAULT 0,
       sort_order INTEGER DEFAULT 0
@@ -26,7 +26,9 @@ function migrateGroup(conn) {
     -- 分组管理：组内成员（成员 + 备注）
     CREATE TABLE IF NOT EXISTS group_members (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      group_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      -- member_name 故意**不加外键**：按姓名引用，而 students.姓名 不唯一（同名学生合法），
+      -- SQLite 的外键要求父列是 PRIMARY KEY 或 UNIQUE。这条只能靠应用层校验（见 businessRules）。
       member_name TEXT DEFAULT '',
       remark TEXT DEFAULT '',
       sort_order INTEGER DEFAULT 0

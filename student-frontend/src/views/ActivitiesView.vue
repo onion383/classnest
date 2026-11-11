@@ -175,7 +175,7 @@ import Tabs from '../components/base/Tabs.vue'
 import LeaveTimeline from '../components/base/LeaveTimeline.vue'
 import { useNotification } from '../composables/useNotification.js'
 import { reportError } from '../utils/reportError.js'
-import { recordRowInsert, recordRowUpdate, recordRowDelete, useUndoShortcut } from '../composables/useUndo.js'
+import { recordRowInsert, recordRowUpdate, recordRowDelete, recordRowsBatchInsert, useUndoShortcut } from '../composables/useUndo.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
 defineOptions({ name: 'ActivitiesView' })
@@ -522,6 +522,8 @@ async function onImportData({ fields, rows }) {
     const res = await axios.post(`${API}/${isCountdown ? 'countdowns' : 'activities'}/import`, { fields, rows })
     useNotification().success(res.data.message || '导入成功')
     await loadAll()
+    // 后端回传本次真正新建的行：一次导入只记一条撤销（活动与倒计时各自独立的历史栈）
+    recordRowsBatchInsert(resolveKey(), res.data?.created)
   } catch (err) {
     reportError(err, { action: isCountdown ? '导入倒计时' : '导入活动' })
   }

@@ -280,7 +280,7 @@ import LeaveTimeline from '../components/base/LeaveTimeline.vue'
 import { zhCollator } from '../utils/collator.js'
 import StatBarList from '../components/base/StatBarList.vue'
 import { useNotification } from '../composables/useNotification.js'
-import { recordCellUndo, useUndoShortcut } from '../composables/useUndo.js'
+import { recordCellUndo, recordRowDelete, recordRowInsert, recordRowUpdate, recordRowReorder, recordRowsBatchInsert, useUndoShortcut } from '../composables/useUndo.js'
 import { formatDate, formatDateTime } from '../utils/dateTime.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
@@ -563,12 +563,33 @@ async function refresh() {
   notifySuccess(activeTab.value === 'today' ? '已刷新 今日请假 数据' : '已刷新 请假记录 数据')
   checkOverdue()
 }
+// ---------- 撤销登记（Q2-05） ----------
+// 请假的所有写路径原先只有「单元格编辑」有撤销；新增 / 编辑 / 删除 / 销假 /
+// 撤销销假都没有 —— 用户填错一条记录只能手工恢复。这里统一走 useUndo 的通用行命令：
+// 新增登记 row_insert、编辑与状态流转登记 row_update（完整前后态）、删除登记 row_delete。
+function snapshotLeaveRow(id) {
+  const row = leaves.value.find((l) => l.id === id)
+  return row ? { ...row } : null
+}
+function recordLeaveInsert(id) {
+  const row = snapshotLeaveRow(id)
+  if (row) recordRowInsert('leave_records', row)
+}
+// 状态流转（销假 / 撤销销假）改的字段由后端决定（销假时间等），
+// 所以「之后」的行必须重新读库后的真值，而不是前端拼一个近似对象。
+function recordLeaveUpdate(before, id) {
+  if (!before) return
+  const after = snapshotLeaveRow(id)
+  if (after) recordRowUpdate('leave_records', before, after)
+}
 async function onImportData({ fields, rows }) {
   importDialogVisible.value = false
   try {
     const res = await axios.post(`${API}/leaves/import`, { fields, rows })
     notifySuccess(res.data.message || '导入成功')
     await loadAll()
+    // 后端回传本次真正新建的行：一次导入只记一条撤销，不受每 key 50 条上限截断
+    recordRowsBatchInsert('leave_records', res.data?.created)
   } catch (err) {
     reportError(err, { action: '导入请假记录' })
   }
@@ -604,11 +625,13 @@ function handleOverdueNot(rec) {
 }
 // 「已经返校并销假」：调用销假接口后从列表移除
 async function handleOverdueReturn(rec) {
+  const before = snapshotLeaveRow(rec.id) || { ...rec }
   try {
     await axios.post(`${API}/leaves/${rec.id}/return`)
     notifySuccess(`${rec.姓名} 已返校并销假`)
     removeOverdue(rec.id)
     await loadAll()
+    recordLeaveUpdate(before, rec.id)
   } catch (err) {
     reportError(err, { action: '销假' })
   }
@@ -619,10 +642,11 @@ function removeOverdue(id) {
 }
 async function submitAdd(payload) {
   try {
-    await axios.post(`${API}/leaves`, payload)
+    const res = await axios.post(`${API}/leaves`, payload)
     addDialogVisible.value = false
     notifySuccess('已添加请假')
     await loadAll()
+    recordLeaveInsert(res.data?.id)
   } catch (err) {
     reportError(err, { action: '添加' })
   }
@@ -643,11 +667,13 @@ function openEditLeave(item) {
 }
 async function updateLeave(payload) {
   const { id, ...fields } = payload
+  const before = snapshotLeaveRow(id)
   try {
     await axios.put(`${API}/leaves/${id}`, fields)
     addDialogVisible.value = false
     notifySuccess('已保存')
     await loadAll()
+    recordLeaveUpdate(before, id)
   } catch (err) {
     reportError(err, { action: '保存' })
   }
@@ -658,10 +684,12 @@ function unreturnLeave(item) {
     message: `确认撤销「${item.姓名}」的销假，恢复为请假中吗？`,
     ok: async () => {
       confirm.value.visible = false
+      const before = snapshotLeaveRow(item.id) || { ...item }
       try {
         await axios.post(`${API}/leaves/${item.id}/unreturn`)
         notifySuccess('已撤销销假')
         await loadAll()
+        recordLeaveUpdate(before, item.id)
       } catch (err) {
         notifyError('撤销失败')
       }
@@ -674,10 +702,12 @@ function returnLeave(item) {
     message: `确认 ${item.姓名} 已返校并销假吗？`,
     ok: async () => {
       confirm.value.visible = false
+      const before = snapshotLeaveRow(item.id) || { ...item }
       try {
         await axios.post(`${API}/leaves/${item.id}/return`)
         notifySuccess('已销假')
         await loadAll()
+        recordLeaveUpdate(before, item.id)
       } catch (err) {
         notifyError('销假失败')
       }
@@ -711,6 +741,8 @@ function startEdit(row, field) {
 async function saveRowOrder(table, from, to) {
   const subset = table === 'active' ? activeLeaves.value : todayReturned.value
   if (from === to || !subset[from]) return
+  // 动作前的整表顺序：排序落库后与动作后的顺序比对登记撤销
+  const before = leaves.value.map(l => ({ ...l }))
   const moved = subset[from]
   const rest = subset.filter((_, i) => i !== from)
   const ids = leaves.value.map(l => l.id).filter(id => id !== moved.id)
@@ -726,11 +758,15 @@ async function saveRowOrder(table, from, to) {
   try {
     await axios.post(`${API}/leaves/reorder`, { ids })
     await loadAll()
+    recordRowReorder('leave_records', before, leaves.value)
   } catch (err) {
     notifyError('排序保存失败')
   }
 }
-// 列拖动：本地立即重排，并把列顺序保存到后端（下次进入按保存的顺序渲染）
+// 列拖动：本地立即重排，并把列顺序保存到后端（下次进入按保存的顺序渲染）。
+// 列顺序是**展示偏好**、不丢数据，也不进撤销栈：Ctrl+Z 是「撤数据」的语义，
+// 让一次拖列占掉撤销位，用户下一次按 Ctrl+Z 会先把布局弹回去而不是撤回刚改的那条记录。
+// 想还原直接再拖回来即可（Q2-05 口径）。
 async function saveColumnOrder(table, from, to) {
   if (from === to) return
   const keys = { active: activeLeaveFields, returned: returnedLeaveFields, records: leaveFields }
@@ -800,10 +836,11 @@ async function saveNewRow() {
     data[f.name] = newRow.value[f.name] || ''
   }
   try {
-    await axios.post(`${API}/leaves`, data)
+    const res = await axios.post(`${API}/leaves`, data)
     newRow.value = null
     notifySuccess('已添加请假记录')
     await loadAll()
+    recordLeaveInsert(res.data?.id)
   } catch (err) {
     reportError(err, { action: '添加' })
   }
@@ -815,10 +852,12 @@ function deleteLeave(id) {
     ok: async () => {
       confirm.value.visible = false
       addDialogVisible.value = false // 关闭编辑弹窗
+      const before = snapshotLeaveRow(id)
       try {
         await axios.delete(`${API}/leaves/${id}`)
         notifySuccess('已删除')
         await loadAll()
+        if (before) recordRowDelete('leave_records', before)
       } catch (err) {
         notifyError('删除失败')
       }

@@ -13,17 +13,28 @@ classnest/
 │   │   └── historyRoutes.js  # 历史快照路由工厂
 │   ├── services/
 │   │   ├── accountRename.js  # 改用户名的跨库两写（带补偿）
+│   │   ├── backupArchive.js  # 备份包 v3 写包
 │   │   ├── bcryptAsync.js  # 用户名规则
+│   │   ├── bundleRestore.js  # 备份包落盘还原
 │   │   ├── businessRules.js  # 业务规则校验
+│   │   ├── createdRows.js  # 导入结果回读
+│   │   ├── credentialChange.js  # 凭证变更动作层
 │   │   ├── dutyCells.js
+│   │   ├── dutyConfig.js  # 值日列名与模式配置
+│   │   ├── dutyCycle.js  # 大扫除命中日
 │   │   ├── dutyMode.js  # 值日单元格工具
 │   │   ├── ffmpeg.js  # 视频处理封装
 │   │   ├── ocr.js  # 文字识别
 │   │   ├── pdfDomShim.js  # PDF DOM 兼容层
 │   │   ├── pendingRegs.js  # 注册草稿暂存
 │   │   ├── provisionalStudents.js  # 临时学生建档
+│   │   ├── receiptTrash.js  # 收据文件移进 dataDir/receipt-trash/。收据扩到视频后，删除只改数据库数…
 │   │   ├── recoveryKey.js  # 恢复密钥
 │   │   ├── sanitize.js  # 数据清洗
+│   │   ├── searchLimits.js  # 全局搜索分页
+│   │   ├── seatGrid.js  # 座位网格几何（后端纯计算）
+│   │   ├── seatSnapshot.js  # 座位快照 payload
+│   │   ├── seatWrite.js  # 座位单格写入唯一入口
 │   │   ├── secureChannel.js  # 安全通道
 │   │   ├── sessions.js  # 登录会话
 │   │   ├── slotStore.js  # 槽位存储
@@ -31,10 +42,16 @@ classnest/
 │   │   ├── studentRename.js  # 学生改名级联
 │   │   ├── tableService.js  # 表格服务
 │   │   ├── unzipSafe.js  # 安全解压
-│   │   └── usernameRules.js
+│   │   ├── uploadSignatures.js  # 收据上传的类型判定：扩展名白名单（图片 20MB / PDF 30MB / ooxml 30…
+│   │   ├── usernameRules.js
+│   │   ├── zipStream.js  # 流式 ZIP 写入（备份包 / 数据导出共用）：条目「边读边写」，任何时刻只持有一个 256…
+│   │   └── zipWriter.js  # ZIP 的共用零件（不含打包流程）：CRC32（含增量版，供流式大文件边读边算）、归档内路径…
 │   ├── utils/
 │   │   ├── date.js  # 本地日期字符串
 │   │   ├── json.js  # JSON 安全读写
+│   │   ├── securityLevel.js  # 账号安全等级判定（plain / nopass / password / privacy）。…
+│   │   ├── semester.js  # 学期推荐值（按当前月份推学期名与起止日期）。两个调用方共用这一份：设置页「增加学期」与课表路…
+│   │   ├── slugScopes.js  # 按库（slug）隔离的进程内状态：各库 album_photos.id 独立自增，裸 id …
 │   │   └── sql.js  # SQL 辅助
 │   ├── albumExif.js  # EXIF/XMP 拍摄时间（读不到就是空串，不拿 mtime 冒充）
 │   ├── albumOps.js  # 回收站移入/恢复、删缩略图
@@ -71,6 +88,12 @@ classnest/
 - 内部：列元数据存 `table_meta.sort_order`（表元数据表的排序列）；`importRows` 自动补建缺失列并 `transaction`（事务）插入；`insertRow` 支持 `atPosition`（插入位置）与 `minCount`（最少行数）。
 - **注意事项**：列名正则白名单，保留字段 `id/position/atPosition` 不可直接写；至少保留一个数据列。
 
+#### [`services/createdRows.js`](../../../student-backend/services/createdRows.js) · 导入结果回读
+- **定位**：所有导入端点共用的「本次真正新建的行」回读，统一响应形状为 `{ message, created: [完整行…] }`。
+- **需求来源**：撤销导入要按真实列重建（`position`、`created_at` 猜不得），只回 id 或条数都做不出 inverse；前端据此一次导入只记一条撤销，也不受每 key 50 条上限截断。
+- **导出**：`readRowsByIds(tableName, ids)`（表名由路由以字面量传入，`ids` 走参数绑定）。
+- **调用方**：`routes/leaves.js`、`routes/scores.js`、`routes/activities.js`、`routes/countdowns.js`、`services/tableService.js` 的 `importRows`。
+
 #### [`routes/historyRoutes.js`](../../../student-backend/routes/historyRoutes.js) · 历史快照路由工厂
 - **定位**：周历史快照的四个同构接口 `factory`（工厂函数：传配置进去，返回组装好的路由），供 duty、schedule 复用。
 - **导出**：`registerHistoryRoutes(router, { table, includeId, parseSnapshot, stringifySnapshot })`（注册历史路由；表名 / 是否带 id / 快照解析 / 快照序列化）。
@@ -86,19 +109,51 @@ classnest/
 
 #### [`services/businessRules.js`](../../../student-backend/services/businessRules.js) · 业务规则校验
 - **定位**：跨表业务校验。
-- **导出**：`validateRow`、`assertLeaveWindow`（请假时间窗与 SQL 时间戳）、`assertSeatRefs`（座位引用）、`assertDutyRefs`（值日引用）。
+- **导出**：`ValidationError`、`validateRow`、`assertLeaveWindow`（请假时间窗与 SQL 时间戳）、`assertSeatRefs`（座位引用）、`assertDutyRefs`（值日引用）。
+- **错误语义**：校验不通过统一抛 `ValidationError`（`status = 400`）—— 这是「用户填错了」，不是服务器故障；未捕获时由 `app.js` 的统一错误出口按 `err.status` 回 400。路由里若自行 `catch`，必须照抄 `err.status`，不要一律 500（`PUT /api/seats` 曾因此把「空位里还有人」报成服务器错误）。
 - 被对应路由写操作前调用；`assertDutyRefs` 的单模式根分支是刻意兼容，勿删。
 - `assertDutyRefs` 遇到名册外姓名不拒绝，改为调用 `provisionalStudents.resolveNames` 登记为临时学生（与座位表直接输入姓名同口径）。
 
 #### [`services/dutyCells.js`](../../../student-backend/services/dutyCells.js) / [`services/dutyMode.js`](../../../student-backend/services/dutyMode.js) · 值日单元格工具
-- `dutyCells`：值日单元格/姓名引用工具，导出 `DUTY_MODES`、`dutyRoots`、`countDutyRefs`、`removeDutyName`、`renameDutyName`。
+- `dutyCells`：值日单元格/姓名引用工具，导出 `DUTY_MODES`、`dutyRoots`、`countDutyRefs`、`collectDutyRefs`、`removeDutyName`、`renameDutyName`。
 - `dutyMode`：模式打包解包，导出 `MODES`、`toModeMap`、`unpackMode`、`packMode`、`normalizeMode`；**`items` 为空必须返回数组**（该返回标准由单元测试固定）。
+- **只认按模式分键**：非 `{daily,big}` 的旧/扁平值（发布前的试验数据、AI 误写）一律读空，**不做旧版兼容层** —— 发布前不积累兼容代码；这类库重建列或重建账号即可。
+
+#### [`services/seatGrid.js`](../../../student-backend/services/seatGrid.js) · 座位网格几何（后端纯计算）
+- **定位**：座位「第几列」对外文案与检索口径的唯一实现。数据模型与前端 `composables/useSeatGrid.geometry.js` 同构：`seats` 与 `types` 同下标 `rows×cols`，`cols` 是**网格总列数**（含走廊列）。
+- **导出**：`columnKinds`、`columnLabels`、`gridToDenseCols`、`rowIsAisle`。
+- **注意事项**：任何「第几列」文案都必须走 `columnLabels` / `gridToDenseCols`，不能拿网格下标当列号（否则 7 座位列的表会报出「第 13 列」）；此处只放纯计算，不读库、不解析 JSON。
+
+#### [`services/seatSnapshot.js`](../../../student-backend/services/seatSnapshot.js) · 座位快照 payload
+- **定位**：座位历史快照 payload 的唯一构造点（`/snapshot`、`/snapshot/backfill`、AI 整块写入前的自动快照三处共用）。
+- **导出**：`seatSnapshotPayload(row)`。
+- **注意事项**：payload **必须带 `types`**（缺了走廊列会被当成空座位，座位指数从此按错列位乘权重）；`aisleCols` / `groupsConfig` 是保留空值的老字段，供既有消费方读取。
+
+#### [`services/seatWrite.js`](../../../student-backend/services/seatWrite.js) · 座位单格写入唯一入口
+- **定位**：`writeSeatCell()` 是写一格座位的唯一函数，坐标、值形状、可写性、引用关系全在这里，路由只负责 HTTP 形状（v6 · P0-1）。
+- **导出**：`writeSeatCell`、`SeatWriteError`、`SEAT_TABLES`（只允许 `seat_layout` / `seat_template`）。
+- **注意事项**：`seats` 解析失败直接抛 500 **不降级**（降级会把整张表覆盖成只剩这一格）；`types` 解析失败按「全座位」处理并记日志，与 GET 同口径。判据本身在 `businessRules.assertSeatCellWritable`。
+
+#### [`services/dutyConfig.js`](../../../student-backend/services/dutyConfig.js) · 值日列名与模式配置
+- **定位**：值日「列名 + 模式配置」的唯一读写入口。列名按模式分键存 `{daily:[周一…], big:[第1大组…,全部]}`，与 `items` 的 `{daily,big}` 同构；模式配置存在 `settings` 列（大扫除为 `{cycle, weekday, groupType, groupCount}`）。
+- **导出**：`DEFAULT_DAYS`、`ALL_COLUMN`、`CYCLES`、`WEEKDAYS`、`GROUP_TYPES`、`MAX_GROUPS`、`DEFAULT_CONFIG`、`cleanList`、`bigColumnNames` 等。
+- **注意事项**：其它地方不许再直接 `SELECT days`（后端有 6 处读列名，各写一份就会出现「AI 出图列名跟界面对不上」）；大扫除列名是「任务分组 + 数量」的纯函数，不落库。
+
+#### [`services/dutyCycle.js`](../../../student-backend/services/dutyCycle.js) · 大扫除命中日
+- **定位**：大扫除「周期 + 星期几」→ 命中日的唯一计算实现（以学期开始日所在周为第 1 周；一周 = 每周、两周 = 隔周、一个月 = 每 4 周）。
+- **导出**：`normalizeCycle`、命中日判定与批次计算等纯函数。
+- **注意事项**：纯函数，基准周一由调用方算好传入；「一个月 = 4 周」是本项目定的口径（日历上的「每月第几个星期三」没有唯一解）。
+
+#### [`services/searchLimits.js`](../../../student-backend/services/searchLimits.js) · 全局搜索分页
+- **定位**：搜索分页与防失控阈值的唯一来源（v6 · P3-08）。
+- **导出**：`LIMITS`（`PAGE_SIZE 12` / `MAX_PAGE` / 词数与拼音值上限）、页参数归一、`clipPage`、`windowOf` 等。
+- **注意事项**：每页固定 12 且**不接受请求覆盖**（允许按请求放大就退回「调阈值」那条补丁路）；`hasMore` 用「每源多取一条」判定，不跑 COUNT。
 
 ### 2. 学生与账号
 
 #### [`services/studentRelations.js`](../../../student-backend/services/studentRelations.js) · 学生引用维护
 - **定位**：学生删除/改名时的引用维护（分组、座位、值日、分数、班干部、请假等）。
-- **导出**：`studentRelations`、`purgeStudentRelations`、`collectSeatRefs`。
+- **导出**：`studentRelations`、`purgeStudentRelations`、`restoreSeatCells`、`clearSeatCells`、`restoreDutySlots`、`clearDutySlots`。
 - **调用方**：动态表删行、账号改名。
 
 #### [`services/studentRename.js`](../../../student-backend/services/studentRename.js) · 学生改名级联
@@ -124,9 +179,15 @@ classnest/
 - **调用方**：`routes/auth.js`。
 
 #### [`services/sessions.js`](../../../student-backend/services/sessions.js) · 登录会话
-- **定位**：登录会话（sid）登记与失效。
-- **导出**：`create`、`has`、`revoke`。
-- **调用方**：`middleware/auth.js`、`routes/auth.js`（登出）。
+- **定位**：登录会话（sid）登记与失效；`.sessions.json` 全局一份，因此账号维度是 `(userId, dbSlug)` 双键（各账号库 `users.id` 都可能是 1）。
+- **导出**：`create`、`has`、`revoke`、`revokeAllByUser(userId, dbSlug)`。
+- **调用方**：`middleware/auth.js`、`routes/auth.js`（登出）、`services/credentialChange.js`。
+- **注意事项**：`has()` 会顺带刷新活动时间（有节流）并清理长期不活动的记录；`revoke` 是单点出口，`revokeAllByUser` 才是「这个账号的全部 sid」。
+
+#### [`services/credentialChange.js`](../../../student-backend/services/credentialChange.js) · 凭证变更动作层
+- **定位**：「凭证变更 → 会话失效」的唯一动作层（v6 · A1-16）。调用方只描述「哪个账号变了」，不自己决定吊销范围、也不自己拼 sid。
+- **导出**：`revokeAccountSessions(userId, dbSlug)`（全部旧 token 作废）、`rotateAccountSessions(userId, dbSlug)`（全量吊销后换发新 sid，供设置页改密这类「改完仍要继续在线」的路径）。
+- **注意事项**：缺任一维度直接抛 `TypeError`，绝不静默返回 0（静默等于「改完密码旧 token 还能用」）；凭证变更路径必须全部接入，不许在路由里另拼吊销逻辑。
 
 #### [`services/recoveryKey.js`](../../../student-backend/services/recoveryKey.js) · 恢复密钥
 - **定位**：中文恢复密钥。
@@ -152,6 +213,17 @@ classnest/
 #### [`services/unzipSafe.js`](../../../student-backend/services/unzipSafe.js) · 安全解压
 - **定位**：自研安全解压（拦截符号链接、路径穿越、绝对路径、反斜杠）。
 - **调用方**：备份恢复、字体/资源导入。
+
+#### [`services/backupArchive.js`](../../../student-backend/services/backupArchive.js) · 备份包 v3 写包
+- **定位**：整库备份包（ZIP：库 + 用户文件 + 清单）的**写包**实现（v6 · N2-02）。只写包，不碰还原。
+- **导出**：`writeBundle`、`extractAndVerify`、`replaceDir`、`META_ENTRY` / `MANIFEST_ENTRY` 等。
+- **包内结构**：`bundle.json`（包身份：slug / 用户名 / 是否加密 / 库钥匙）+ 各目录真实文件 + `manifest.json`（每项 `{path,size,sha256}` + `totalBytes` + `omitted`）。
+- **注意事项**：条目名一律过 `sanitizeEntryName`；`album-thumbs`（缩略图）是派生数据不入包，但**必须写进 `omitted`**，否则用户会以为备份漏了东西；`bundle.json` 放在第一个条目且 store 不压缩，前端 `zipPeek` 才能只读 64KB 判断要不要口令。
+
+#### [`services/bundleRestore.js`](../../../student-backend/services/bundleRestore.js) · 备份包落盘还原
+- **定位**：把「已校验通过的 v3 包」落到磁盘的**唯一实现**，登录中恢复与新机离线恢复两个入口共用（v6 · N2-02）。
+- **导出**：`receiveAndVerify(file)`（解到 `.restore-<时间戳>` 并逐项校验，**不碰现有数据**）、`applyVerifiedBundle(...)`（按目录计划替换，旧目录改名成 `.bak-<stamp>` 不删）。
+- **注意事项**：包为空目录 / 缺 `uploads` / 缺 `memory.md` 时一律**不替换**（空目录等于没有，别把现有文件或 AI 记忆清空）；整库被换掉后必须同步失效列缓存（`ai.helpers` 反向引用是刻意保留的一处）；失败时清理临时目录，不在数据目录留 GB 级残骸。
 
 #### [`services/pdfDomShim.js`](../../../student-backend/services/pdfDomShim.js) · PDF DOM 兼容层
 - **定位**：纯 JS 最小 `DOMMatrix` 实现，供 pdfjs 文本提取（替代 35MB 的 canvas 依赖）。
@@ -187,7 +259,8 @@ classnest/
 | [`utils/slugScopes.js`](../../../student-backend/utils/slugScopes.js) | 按库（slug）隔离的进程内状态：各库 `album_photos.id` 独立自增，裸 id 键 / 全局攒批会串库。状态自己登记，登出统一失效 | `safeSlug`、`createSlugBuckets`、`createSlugBatch`、`clearAllForSlug` |
 | [`utils/securityLevel.js`](../../../student-backend/utils/securityLevel.js) | 账号安全等级判定（`plain` / `nopass` / `password` / `privacy`）。**口径单源**：设置页判档与「本机信息恢复」分流都走这里，各写一份会分叉成「显示免密、登录却要密码」。明文库判定排在密码判定之前（明文档不该有密码哈希） | `resolveSecurityLevel` |
 | [`utils/semester.js`](../../../student-backend/utils/semester.js) | 学期推荐值（按当前月份推学期名与起止日期）。**两个调用方共用这一份**：设置页「增加学期」与课表路由、首次引导页（引导时库还没打开，走 routes 的实现会直接撞上未打开的 db）。抄两份会导致「设置页推荐的学期和引导页不一样」 | `autoSemester` |
-| [`services/zipWriter.js`](../../../student-backend/services/zipWriter.js) | 多文件 ZIP 打包（CRC32 + deflate），可选 ZipCrypto 传统加密。**刻意不用 AES**：Windows 资源管理器只认传统加密，AES 必须装 7-Zip，普通用户会看到「文件已损坏」；代价是只能防随手打开，不能当强加密宣传。无第三方依赖（后端原有依赖里没有 zip 写库） | `buildZip`、`crc32` |
+| [`services/zipWriter.js`](../../../student-backend/services/zipWriter.js) | ZIP 的共用零件（不含打包流程）：CRC32（含增量版，供流式大文件边读边算）、归档内路径净化、ZipCrypto key 流。**刻意不用 AES**：Windows 资源管理器只认传统加密，AES 必须装 7-Zip，普通用户会看到「文件已损坏」；代价是只能防随手打开，不能当强加密宣传。无第三方依赖（后端原有依赖里没有 zip 写库） | `crc32`、`crc32Start/Update/End`、`sanitizeEntryName`、`createZipCrypto` |
+| [`services/zipStream.js`](../../../student-backend/services/zipStream.js) | 流式 ZIP 写入（备份包 / 数据导出共用）：条目「边读边写」，任何时刻只持有一个 256KB 块；明文条目用数据描述符（bit 3），加密条目把 CRC 写进本地头（ZipCrypto 校验口令要用），文件条目加密时走 store 以便写头前就拿到尺寸。**单一入口**：不允许再出现「全部读进内存再拼终包」的第二套实现（v6 · P2-01：旧实现同时驻留 raw / deflate / parts / 终包四份） | `createZipWriter`、`writeZip` |
 | [`services/uploadSignatures.js`](../../../student-backend/services/uploadSignatures.js) | 收据上传的类型判定：扩展名白名单（图片 20MB / PDF 30MB / ooxml 30MB / ole 30MB / 视频 200MB / 纯文本 md 5MB）+ 真实字节魔数。**md 没有魔数**，判据改成「前 512 字节没有 NUL 字节、且非空」（二进制改后缀开头几乎必然带 0x00；512 而不是 16，是因为 16 字节太短，二进制可能还没出现 NUL）。**Windows 上 docx/xlsx 的 mimetype 不可靠**，multer 只按扩展名初筛，真正判断走魔数。另含 `decodeFileName`：busboy 按 latin1 解析 multipart 文件名，中文名会变成乱码，这里按 latin1→字节→utf8 转回来（转换出 `�` 说明原字节不是 UTF-8，返回原串防二次破坏） | `KINDS`、`EXT_TO_KIND`、`ALLOWED_EXT_RE`、`sniff`、`checkUpload`、`decodeFileName` |
 | [`services/receiptTrash.js`](../../../student-backend/services/receiptTrash.js) | 收据文件移进 `dataDir/receipt-trash/`。收据扩到视频后，删除只改数据库数组会让 uploads 悄悄涨到几个 G。**安全边界：一律 `path.basename` 再拼回 uploads**，`../`、绝对路径、反斜杠穿越都出不去 —— 这个函数能搬动磁盘文件，边界写错就是「把机器上任意文件挪走」的入口 | `moveReceiptsToTrash` |
 

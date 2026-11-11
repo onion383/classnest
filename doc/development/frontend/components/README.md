@@ -1,6 +1,6 @@
 # 前端组件（`student-frontend/src/components/`）
 
-共 76 个 `.vue`，按目录分节。所有组件都是 `SFC`（单文件组件）+ `<script setup>`（组合式 API 简洁脚本），多数带 `vapor`（Vue 3.6 Vapor 渲染模式）标记，见第 5 节。
+共 81 个 `.vue`，按目录分节。所有组件都是 `SFC`（单文件组件）+ `<script setup>`（组合式 API 简洁脚本），多数带 `vapor`（Vue 3.6 Vapor 渲染模式）标记，见第 5 节。
 
 
 ## 1. 通用标准
@@ -59,13 +59,13 @@
 | 子文档 | 目录 | 数量 |
 | --- | --- | --- |
 | [layout.md（布局）](./layout.md) | `layout/` | 1 |
-| [base.md（基础件）](./base.md) | `base/` | 21 |
+| [base.md（基础件）](./base.md) | `base/` | 22 |
 | [tables.md（表格与网格）](./tables.md) | `tables/` | 6 |
-| [dialogs.md（业务弹窗）](./dialogs.md) | `dialogs/` | 28 |
+| [dialogs.md（业务弹窗）](./dialogs.md) | `dialogs/` | 31 |
 | [import-export.md（导入导出）](./import-export.md) | `import-export/` | 4 |
 | [ai.md（AI 界面）](./ai.md) | `ai/` | 6 |
 | [album.md（相册）](./album.md) | `album/` | 1 |
-| [data-manage.md（数据管理）](./data-manage.md) | `data-manage/` | 4 |
+| [data-manage.md（数据管理）](./data-manage.md) | `data-manage/` | 5 |
 | [root.md（根级组件）](./root.md) | `components/*.vue` | 5 |
 
 ---

@@ -1,7 +1,11 @@
 import { reportError } from '../utils/reportError.js'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import axios from 'axios'
-import { pushUndo } from '../api/undo'
+import { recordUndo as recordUndoSpec, rowSnapshot } from '../utils/undoRecorder.js'
+import {
+  recordRowInsert, recordRowDelete, recordRowReorder,
+  recordRowsBatchInsert, recordRowsBatchDelete,
+} from './useUndo.js'
 import { useNotification } from './useNotification'
 import { createRowReuseCache } from '../utils/rowReuse.js'
 import { filterRowsByKeyword, isSearchNoResult } from '../utils/tableSearch.js'
@@ -32,6 +36,9 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   const reuseRows = createRowReuseCache()
   // 「只认最后一次」的守卫：连续刷新时，先发的请求后回来会把整表覆盖成旧数据
   const fetchGuard = createLatest()
+  // 供页面级弹窗（Q2-07）复用：新增/编辑成功后按 id 从全表快照取完整行再登记 inverse。
+  // 抽成共享方法是因为两个页面各有自研弹窗提交，各写一份必然漏列。
+  const rowSnapshotById = (id, fallback) => rowSnapshot(rows.value, id, fallback)
   const newRow = ref(null)
   const editingCell = ref(null)
   const contextMenu = ref({ visible: false, x: 0, y: 0, items: [] })
@@ -303,17 +310,15 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   }
 
   // 记录一条持久化撤销（单元格编辑）
+  // 走统一登记入口：原先这里的 .catch(() => {}) 会静默吞掉登记失败，
+  // 单元格已经改了、撤销栈里却没有这条，用户按 Ctrl+Z 才发现撤不回来（Q2-10）。
   function recordUndo(rowId, fieldName, oldVal, newVal) {
-    try {
-      pushUndo({
-        key: undoTableKey,
-        type: 'cell_update',
-        label: `${fieldName}：「${oldVal == null ? '' : oldVal}」→「${newVal == null ? '' : newVal}」`,
-        payload: { table: undoTableKey, rowId, field: fieldName, oldValue: oldVal, newValue: newVal }
-      }).catch(() => {})
-    } catch {
-      /* 撤销记录失败不影响主流程 */
-    }
+    return recordUndoSpec({
+      key: undoTableKey,
+      type: 'cell_update',
+      label: `${fieldName}：「${oldVal == null ? '' : oldVal}」→「${newVal == null ? '' : newVal}」`,
+      payload: { table: undoTableKey, rowId, field: fieldName, oldValue: oldVal, newValue: newVal }
+    })
   }
 
   function validateValue(val, type) {
@@ -325,6 +330,16 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   }
 
   // ==================== 行操作 ====================
+  // 排序类操作的「动作前」快照：成功后与动作后的全表顺序比对，一致就不登记，
+  // 避免把「拖回原位 / 点表头排序但顺序没变」记成一条空撤销。
+  function orderSnapshot() {
+    return rows.value.filter(r => !r._isNew).map(r => ({ ...r }))
+  }
+  // 排序登记：key 未配置（页面未接撤销）时直接跳过，由 useUndo 内部兜底。
+  function recordOrderChange(before) {
+    return recordRowReorder(undoTableKey, before, rows.value.filter(r => !r._isNew))
+  }
+
   function addNewRowAtBottom() {
     if (!newRow.value) createNewRow(null)
   }
@@ -361,28 +376,38 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     }
     if (newRow.value.atPosition != null) data.atPosition = newRow.value.atPosition
     try {
-      await axios.post(apiBase, data)
+      const res = await axios.post(apiBase, data)
       newRow.value = null
       await fetchRows()
+      // POST 只回 id，撤销需要完整行：按 id 从刚拉到的全表快照里取（取不到用提交数据兜底）
+      if (undoTableKey && Number.isInteger(res.data?.id)) {
+        recordRowInsert(undoTableKey, rowSnapshot(rows.value, res.data.id, data))
+      }
     } catch (err) {
       showAlert('添加失败：' + (err.response?.data?.error || err.message))
     }
   }
 
   async function moveRow(row, direction) {
+    const before = orderSnapshot()
     try {
       await axios.post(`${apiBase}/move-row`, { id: row.id, direction })
       await fetchRows()
+      recordOrderChange(before)
     } catch (err) {
       reportError(err, { action: '移动' })
     }
   }
 
   // ==================== 列操作 ====================
+  // 列结构（增/删/改名/移动）不进撤销体系：它改的是表结构而不是行数据，
+  // 撤销一条结构命令要连 DDL 与 table_meta 一起回滚，风险远大于收益（Q2-04 已定口径）。
+  // 但「删列」会丢整列数据，用户手工恢复不回来 —— 确认文案必须明示不可撤销；
+  // 增列/改名/移动都不丢数据，用户自己能改回去，不额外打扰。
   function deleteColumn(field) {
     if (field.name === 'id' || field.name === 'position') return showAlert('不能删除保留字段')
     if (protectedColumns.includes(field.name)) return showAlert('该字段受保护，无法删除')
-    showConfirm(`确定删除字段"${field.name}"吗？`, async () => {
+    showConfirm(`确定删除字段"${field.name}"吗？该列的整列数据会一并删除，且无法撤销。`, async () => {
       try {
         await axios.delete(`${apiBase}/columns/${field.name}`)
         await fetchRows()
@@ -558,9 +583,12 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       const row = targetRow
       if (!row || row._isNew) return
       showConfirm('确定删除该记录吗？', async () => {
+        // 删除前存整行：后端 DELETE 不回数据，删完就再也取不到 inverse 需要的列
+        const snapshot = rowSnapshotById(row.id)
         try {
           await axios.delete(`${apiBase}/${row.id}`)
           await fetchRows()
+          if (snapshot) recordRowDelete(undoTableKey, snapshot)
           selectedCount.value = 0
           selectedRowKeys.value = []
         } catch (err) {
@@ -576,6 +604,8 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     const selectedIds = rows.value.filter(s => keys.includes(s.id)).map(s => s.id)
     showConfirm(`确定删除选中的 ${selectedIds.length} 条记录吗？`, async () => {
       try {
+        // 删除前先留整行快照：一次勾选删除是一步操作，撤销也应一步回来
+        const removed = rows.value.filter(s => selectedIds.includes(s.id)).map(s => ({ ...s }))
         // 并行删除所有选中行，逐个收集结果（不再静默吞错）
         const results = await Promise.all(selectedIds.map(async id => {
           try {
@@ -586,6 +616,10 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
           }
         }))
         await fetchRows()
+        // 只把真正删掉的行登记进撤销：失败的删除还在库里，记进去会让撤销重复插入
+        const failedIds = selectedIds.filter((_, i) => !results[i].ok)
+        const deleted = removed.filter(r => !failedIds.includes(r.id))
+        if (deleted.length) recordRowsBatchDelete(undoTableKey, deleted)
         selectedCount.value = 0
         selectedRowKeys.value = []
         const fails = results.filter(r => !r.ok)
@@ -598,22 +632,27 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     })
   }
 
-  function pasteRows(position, targetRow) {
+  async function pasteRows(position, targetRow) {
     if (!clipboard.value || clipboard.value.ids.length === 0) return
     const { rows: clipRows } = clipboard.value
     const targetIndex = rows.value.findIndex(r => r.id === targetRow.id)
     if (targetIndex === -1) return
+    const before = orderSnapshot()
     const insertIdx = position === 'above' ? targetIndex : targetIndex + 1
     rows.value.splice(insertIdx, 0, ...clipRows)
     const newIds = rows.value.map(r => r.id)
-    axios.post(`${apiBase}/reorder`, { ids: newIds }).catch(() => {
-      notifyError('粘贴失败')
-      fetchRows()
-    })
     clipboard.value = null
+    try {
+      await axios.post(`${apiBase}/reorder`, { ids: newIds })
+      recordOrderChange(before)
+    } catch (err) {
+      notifyError('粘贴失败')
+      await fetchRows()
+    }
   }
 
-  function onMoveSelectedRows({ selectedKeys, oldIndex, newIndex, isDownward }) {
+  async function onMoveSelectedRows({ selectedKeys, oldIndex, newIndex, isDownward }) {
+    const before = orderSnapshot()
     const records = [...rows.value]
     const selectedRows = selectedKeys.map(key => records.find(r => r.id === key || r._rowKey === key)).filter(r => r && !r._isNew)
     if (selectedRows.length === 0) return
@@ -624,10 +663,13 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     otherRows.splice(insertIdx, 0, ...selectedRows)
     rows.value = otherRows
     const ids = otherRows.map(r => r.id)
-    axios.post(`${apiBase}/reorder`, { ids }).catch(() => {
+    try {
+      await axios.post(`${apiBase}/reorder`, { ids })
+      recordOrderChange(before)
+    } catch (err) {
       notifyError('移动失败')
-      fetchRows()
-    })
+      await fetchRows()
+    }
   }
 
   // ==================== 导入 / 导出 / 去重 ====================
@@ -637,6 +679,8 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       const res = await axios.post(`${apiBase}/import`, { fields, rows: importRows })
       notifySuccess(res.data.message)
       await fetchRows()
+      // 后端回传「本次真正新建的行」：导入几百行也只记一条撤销，且不受每 key 50 条上限截断
+      recordRowsBatchInsert(undoTableKey, res.data?.created)
     } catch (err) {
       reportError(err, { action: '导入' })
     }
@@ -646,10 +690,13 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     if (!ids || ids.length === 0) return
     showConfirm(`确定删除选中的 ${ids.length} 条重复记录吗？`, async () => {
       try {
+        // 删前留整行：一次清理是一步操作，撤销一步回来
+        const removed = rows.value.filter(s => ids.includes(s.id)).map(s => ({ ...s }))
         for (const id of ids) {
           await axios.delete(`${apiBase}/${id}`)
         }
         await fetchRows()
+        if (removed.length) recordRowsBatchDelete(undoTableKey, removed)
         dedupeDialogVisible.value = false
         showAlert('已成功删除所选重复数据')
       } catch (err) {
@@ -661,6 +708,7 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   // ==================== 行/列拖拽（移动语义：插入到目标位置，中间项顺移） ====================
   async function onSwapRows(fromIndex, toIndex) {
     if (fromIndex === toIndex) return
+    const before = orderSnapshot()
     const records = [...rows.value]
     const [moved] = records.splice(fromIndex, 1)
     if (moved === undefined) return
@@ -669,6 +717,7 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     const ids = records.map(r => r.id)
     try {
       await axios.post(`${apiBase}/reorder`, { ids })
+      recordOrderChange(before)
     } catch (err) {
       notifyError('排序更新失败')
       await fetchRows()
@@ -714,9 +763,11 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       onBatchDelete()
     } else {
       showConfirm('确定删除该记录吗？', async () => {
+        const snapshot = rowSnapshotById(id)
         try {
           await axios.delete(`${apiBase}/${id}`)
           await fetchRows()
+          if (snapshot) recordRowDelete(undoTableKey, snapshot)
           selectedCount.value = 0
           selectedRowKeys.value = []
         } catch (err) {
@@ -730,6 +781,7 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     // 搜索/过滤态下 displayRows 只是可见子集，直接拿它当全量 ids 提交会把库里的
     // position 按子集重排 —— 看不见的行与可见行交错，退出搜索后顺序全乱（审查 v4 · B10-06）。
     // 正确语义：只改「可见行之间的相对顺序」，隐藏行留在原来的槽位上。
+    const before = orderSnapshot()
     const all = rows.value.filter(r => !r._isNew)
     const display = displayRows.value.filter(r => !r._isNew)
     const byId = new Map(all.map(r => [r.id, r]))
@@ -749,7 +801,9 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     const ids = ordered.map(r => r.id)
     if (ids.length > 0) {
       // 排序保存失败必须可感知：界面已按新顺序显示，库里没改，静默会让用户以为已保存
-      axios.post(`${apiBase}/reorder`, { ids }).catch((e) => {
+      axios.post(`${apiBase}/reorder`, { ids }).then(() => {
+        recordRowReorder(undoTableKey, before, ordered)
+      }).catch((e) => {
         console.error(e)
         notifyError('排序保存失败，改动未保存')
       })
@@ -788,6 +842,6 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     onUpdateNewRow, cutRows, cutSelectedRows, deleteRows, onBatchDelete,
     pasteRows, onMoveSelectedRows, onSwapRows, onSwapColumns,
     onSelectionChange, onImportData, onDeleteDuplicates,
-    saveCurrentOrder, deleteRowById
+    saveCurrentOrder, deleteRowById, rowSnapshotById
   }
 }

@@ -179,8 +179,9 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
 
     // 开始排表 / 换一换
     startArrange() {
-      // 首次排表且座位表里有新同学时，先弹窗确认是否参与
-      if (!ctx.arranged.value && ctx.strangers.value.length > 0) { ctx.showNewPrompt.value = true; return }
+      // 首次排表且「全部同学」数据源下座位表里有新同学时，才弹窗确认是否参与。
+      // table 模式的语义是「只重排表里已有的人」，表内自由文本名字本就该保留（A5-01）。
+      if (!ctx.arranged.value && ctx.allowNew.value && ctx.strangers.value.length > 0) { ctx.showNewPrompt.value = true; return }
       ctx.generatePreview()
       ctx.arranged.value = true
     },

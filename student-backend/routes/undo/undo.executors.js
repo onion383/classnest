@@ -10,13 +10,18 @@ const { moveToTrash, restoreToOriginal, deleteThumb } = require('../../albumOps'
 const { SEAT_MAX_ROWS, SEAT_MAX_GRID_COLS } = require('../../services/sanitize')
 const { renameStudentRefs } = require('../../services/studentRename')
 const {
-  readGridArray, writeGridArray, writeGeometryCounts, cellText,
+  restoreSeatCells, clearSeatCells, restoreDutySlots, clearDutySlots,
+} = require('../../services/studentRelations')
+const {
+  readGridArray, writeGridArray, writeGeometryCounts, currentSeatGeometry, geometryOfSnapshot, warnGeometryDrift, cellText,
   insertRow, deleteRowById, updateRowById, writeDocCols, rowName,
   applyAlbumOrder, applyGroupSnapshot,
 } = require('./undo.helpers')
+const { UNDO_WRITE_TABLES, UNDO_DOC_TABLES } = require('../../schema/tableRegistry')
 
 // 允许记录的动态表名（防注入）。含 cadre_members：跨表批量写入（propose_batch）可能写入职务成员，需可撤销。
-const ALLOWED_TABLES = ['students', 'fee_records', 'leave_records', 'score_records', 'group_members', 'groups', 'group_dimensions', 'activities', 'countdowns', 'cadres', 'cadre_members']
+// 名单在 schema/tableRegistry.js —— 白名单散在多处时，新增可撤销表必然漏一处。
+const ALLOWED_TABLES = UNDO_WRITE_TABLES
 
 // 学生改名在写入时会把值日/座位/成绩/请假/小组/班干部里的旧姓名一起改掉
 // （见 services/studentRename.js）。撤销/重做必须同步反向改名，否则「撤销改名」会让
@@ -46,9 +51,23 @@ function applyCadreState(state) {
   tx()
 }
 
+// 按 [{ id, position }] 回写行的槽位：只更新已存在的行，不插入、不删除。
+// 某行后来被删掉时 UPDATE 影响 0 行，直接跳过；position 为 null 的（异常行）也跳过，
+// 避免把 NULL 写进去后整表排序漂到表头。
+function applyRowPositions(table, list) {
+  if (!ALLOWED_TABLES.includes(table)) return
+  const upd = db.prepare(`UPDATE "${table}" SET position = ? WHERE id = ?`)
+  db.transaction(() => {
+    for (const r of list || []) {
+      if (!r || !Number.isInteger(r.id) || !Number.isInteger(r.position)) continue
+      upd.run(r.position, r.id)
+    }
+  })()
+}
+
 // 「整块 JSON 列」表：数据以整块 JSON 存于单列（座位 seats / 权重 weights / 课表 cells…），
-// 撤销时按「整块列值」整体还原。表名固定，杜绝注入。
-const DOC_TABLES = ['schedule', 'master_schedule', 'seat_layout', 'seat_template', 'seat_weight', 'duty_settings', 'duty_layout', 'duty_template', 'duty_weight', 'widget_settings']
+// 撤销时按「整块列值」整体还原。表名固定，杜绝注入；名单在 registry 统一维护。
+const DOC_TABLES = UNDO_DOC_TABLES
 
 // 网格型数据：整块 JSON 存于单列，撤销按单格或整块处理。
 // 表名固定，杜绝注入。列名到具体网格列一一对应。
@@ -154,6 +173,79 @@ const executors = {
     }
   },
 
+  // 行顺序调整（拖拽排序 / 上移下移 / 粘贴 / 表头排序落库）：
+  // payload { table, before, after }，before/after = [{ id, position }]（参与本次排序的行）。
+  // 为什么记「每行 position」而不是「ids 顺序」：撤销要恢复的是**这几行当时的槽位**。
+  // 按 ids 重排会连带把之后新插入的行挤到别的槽位；按 position 回写只动参与过的行，
+  // 后插入的行原样保留（它们的位置本来就是排在这几行之后算出来的）。
+  row_reorder: {
+    validate({ table, before, after }) {
+      if (!ALLOWED_TABLES.includes(table)) return '表无效'
+      if (!Array.isArray(before) || !Array.isArray(after)) return '参数不完整'
+      const bad = [...before, ...after].some((r) => !r || !Number.isInteger(r.id))
+      if (bad) return '参数不完整'
+      return null
+    },
+    undo({ table, before }) { applyRowPositions(table, before) },
+    redo({ table, after }) { applyRowPositions(table, after) },
+    describe(p, mode) {
+      return mode === 'undo' ? '恢复行顺序' : '重做行顺序调整'
+    },
+    change() { return { type: 'full_reload' } }
+  },
+
+  // 批量新增行（Excel 导入）：payload { table, rows }，rows 为本次真正新建的完整行。
+  // 逐行 row_insert 会被每 key 50 条上限截断（导入几百行时前面几十条根本撤不回来），
+  // 也会让一次导入变成几十次 Ctrl+Z；整批记一条，撤销即整批删除。
+  rows_batch_insert: {
+    validate({ table, rows }) {
+      if (!ALLOWED_TABLES.includes(table)) return '表无效'
+      if (!Array.isArray(rows) || rows.length === 0) return '参数不完整'
+      if (!rows.every((r) => r && Number.isInteger(r.id))) return '参数不完整'
+      return null
+    },
+    undo({ table, rows }) {
+      db.transaction(() => {
+        // 逆序删：自引用/父先行的情况下也不会在事务中途留下悬空引用
+        for (const r of [...rows].reverse()) deleteRowById(table, r.id)
+      })()
+    },
+    redo({ table, rows }) {
+      db.transaction(() => {
+        for (const r of rows) insertRow(table, r)
+      })()
+    },
+    describe(p, mode) {
+      return mode === 'undo' ? `撤销导入：${p.rows.length} 条记录` : `重新导入：${p.rows.length} 条记录`
+    },
+    change() { return { type: 'full_reload' } }
+  },
+
+  // 批量删除行（勾选删除 / 重复项清理）：payload { table, rows }，rows 为删除前的完整行。
+  // 与 rows_batch_insert 互为反操作，理由同上：一次选择删除是一步操作，就该一步撤销。
+  rows_batch_delete: {
+    validate({ table, rows }) {
+      if (!ALLOWED_TABLES.includes(table)) return '表无效'
+      if (!Array.isArray(rows) || rows.length === 0) return '参数不完整'
+      if (!rows.every((r) => r && Number.isInteger(r.id))) return '参数不完整'
+      return null
+    },
+    undo({ table, rows }) {
+      db.transaction(() => {
+        for (const r of rows) insertRow(table, r)
+      })()
+    },
+    redo({ table, rows }) {
+      db.transaction(() => {
+        for (const r of [...rows].reverse()) deleteRowById(table, r.id)
+      })()
+    },
+    describe(p, mode) {
+      return mode === 'undo' ? `恢复记录：${p.rows.length} 条` : `删除记录：${p.rows.length} 条`
+    },
+    change() { return { type: 'full_reload' } }
+  },
+
   // 整块写入「非行式」表（座位/权重/课表/值日/模板等）：
   // payload { table, id, before, after, label }，before/after 为「列名 → 整块列值」。
   // 覆盖一列或多列；对象/数组列按 JSON 文本落库。undo 写回 before，redo 写回 after。
@@ -181,6 +273,17 @@ const executors = {
       // 与 /api/seats 的 50×60 上限保持一致，避免撤销记录把越界坐标写回 JSON 网格。
       // 列上限是**网格列数**（含走廊列），不是设置里的「座位列数」。
       if (row >= SEAT_MAX_ROWS || col >= SEAT_MAX_GRID_COLS) return `坐标超出范围（最多 ${SEAT_MAX_ROWS} 行 × ${SEAT_MAX_GRID_COLS} 列）`
+      // 光卡全局上限不够：撤的是**很久以前**记下的一格，那次操作之后布局可能已经变小。
+      // 越界行照样能写进 seats（JSON 是自由形状），但下一次整表 PUT 会按 rows 裁剪
+      // （slice(0, rows)）把它静默丢掉 —— 用户看到「撤销成功」，数据其实没了。
+      // 所以按当前布局卡：宁可拒绝并说清原因，也不写一条注定被裁掉的行。
+      const geom = currentSeatGeometry(table)
+      if (geom && geom.rows != null && row >= geom.rows) {
+        return `该布局已变更，无法撤销：这条记录在第 ${row + 1} 行，当前座位表只有 ${geom.rows} 行`
+      }
+      if (geom && geom.cols != null && col >= geom.cols) {
+        return `该布局已变更，无法撤销：这条记录在第 ${col + 1} 列，当前座位表只有 ${geom.cols} 列`
+      }
       return null
     },
     apply({ table, row, col, value }) {
@@ -204,24 +307,32 @@ const executors = {
 
   // 整块覆盖（网络 JSON 列，用于整行/列换位等批量操作）：
   // payload { table, oldValue, newValue }（oldValue/newValue 为整个 JSON 数组）
-  // 可选 oldRows/newRows/oldCols/newCols：座位表「插入/删除走廊行、走廊列」会改变行数/列数，
-  // 它们必须与 types 同一笔回写（见 writeGeometryCounts 注释）。
-  // 不带这几个字段的老记录（整行/列换位、设置空位）行为完全不变。
+  // 座位表「插入/删除走廊行、走廊列」会改变行数/列数，几何必须与 seats/types 同一笔回写，
+  // 否则撤完就是「types 宽 8 列、cols 还写着 7」——读库按 cols 裁，座位图错列且不报错。
+  //
+  // 几何从哪来：**只看快照自带的 types 形状**（geometryOfSnapshot），前端另传的
+  // oldRows/oldCols 不再采信 —— 同一事实抄两遍必然漏一项，历史事故就是只传了 rows、漏了 cols。
+  // 传了但和 types 不一致时会打一条 warn（这是前后端口径漂移的早期信号），不影响撤销本身。
+  // 没有 types 的老记录（换位 / 设置空位）照旧只回写 JSON 列，行数列数一格不动。
   grid_snapshot: {
     validate({ table }) {
       if (!(table in GRID_SOURCES)) return '网格表无效'
       return null
     },
     undo({ table, oldValue, oldRows, oldCols }) {
+      const geom = geometryOfSnapshot(oldValue)
+      if (geom) warnGeometryDrift(table, 'undo', geom, oldRows, oldCols)
       db.transaction(() => {
         writeGridArray(table, GRID_SOURCES[table], oldValue)
-        writeGeometryCounts(table, oldRows, oldCols)
+        if (geom) writeGeometryCounts(table, geom.rows, geom.cols)
       })()
     },
     redo({ table, newValue, newRows, newCols }) {
+      const geom = geometryOfSnapshot(newValue)
+      if (geom) warnGeometryDrift(table, 'redo', geom, newRows, newCols)
       db.transaction(() => {
         writeGridArray(table, GRID_SOURCES[table], newValue)
-        writeGeometryCounts(table, newRows, newCols)
+        if (geom) writeGeometryCounts(table, geom.rows, geom.cols)
       })()
     },
     describe(p, mode) {
@@ -271,6 +382,88 @@ const executors = {
     change(p, mode) {
       return { type: 'group_snapshot', dimId: p.dimId, snapshot: mode === 'undo' ? p.oldValue : p.newValue }
     }
+  },
+
+  // 删除分组维度（级联）：payload { dimension, groups, members, sortOrders }
+  //   dimension  = 被删维度整行（group_dimensions）
+  //   groups     = 该维度下的小组整行（groups）
+  //   members    = 这些小组的成员整行（group_members）
+  //   sortOrders = 删除前所有维度的排序 [{ id, sort_order }]
+  // 后端删维度是三件事：删成员、删小组、删维度，再把剩余维度重排成 1..n。
+  // 撤销必须连**排序**一起回滚，否则维度回来了、顺序却和删除前不一样。
+  group_dimension_delete: {
+    validate({ dimension }) {
+      if (!dimension || !Number.isInteger(dimension.id)) return '参数不完整'
+      return null
+    },
+    undo({ dimension, groups, members, sortOrders }) {
+      db.transaction(() => {
+        // 外键顺序：维度 → 小组 → 成员
+        insertRow('group_dimensions', dimension)
+        for (const g of groups || []) insertRow('groups', g)
+        for (const m of members || []) insertRow('group_members', m)
+        const upd = db.prepare('UPDATE group_dimensions SET sort_order = ? WHERE id = ?')
+        for (const s of sortOrders || []) upd.run(s.sort_order, s.id)
+      })()
+    },
+    redo({ dimension, groups }) {
+      db.transaction(() => {
+        for (const g of groups || []) {
+          db.prepare('DELETE FROM group_members WHERE group_id = ?').run(g.id)
+        }
+        db.prepare('DELETE FROM groups WHERE dimension_id = ?').run(dimension.id)
+        db.prepare('DELETE FROM group_dimensions WHERE id = ?').run(dimension.id)
+        const rest = db.prepare('SELECT id FROM group_dimensions ORDER BY sort_order, id').all()
+        const upd = db.prepare('UPDATE group_dimensions SET sort_order = ? WHERE id = ?')
+        rest.forEach((r, i) => upd.run(i + 1, r.id))
+      })()
+    },
+    describe(p, mode) {
+      const name = (p.dimension && p.dimension.name) || `#${p.dimension && p.dimension.id}`
+      const g = (p.groups || []).length
+      const m = (p.members || []).length
+      return mode === 'undo'
+        ? `恢复分组维度：${name}（${g} 个小组 / ${m} 名成员）`
+        : `删除分组维度：${name}（${g} 个小组 / ${m} 名成员）`
+    },
+    change() { return { type: 'full_reload' } }
+  },
+
+  // 合并相册（虚拟相册）：payload { newAlbum, newPhotos, sources: [{ album, photos }] }
+  // 后端合并 = 建新相册 + 复制照片索引 + 删掉源相册及其索引。
+  // 撤销要反着来：删新相册 → 把每个源相册（整行 + 照片整行）原样插回。
+  // ⚠️ 合并时源相册的缩略图文件已被物理删除，恢复索引时把 thumb_path 清空，
+  //    让前端按需重新生成 —— 否则列表会指向一批已经不存在的文件。
+  album_merge: {
+    validate({ newAlbum }) {
+      if (!newAlbum || !Number.isInteger(newAlbum.id)) return '参数不完整'
+      return null
+    },
+    undo({ newAlbum, sources }) {
+      db.transaction(() => {
+        db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(newAlbum.id)
+        db.prepare('DELETE FROM albums WHERE id = ?').run(newAlbum.id)
+        for (const s of sources || []) {
+          insertRow('albums', s.album)
+          for (const p of s.photos || []) insertRow('album_photos', { ...p, thumb_path: '' })
+        }
+      })()
+    },
+    redo({ newAlbum, newPhotos, sources }) {
+      db.transaction(() => {
+        for (const s of sources || []) {
+          db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(s.album.id)
+          db.prepare('DELETE FROM albums WHERE id = ?').run(s.album.id)
+        }
+        insertRow('albums', newAlbum)
+        for (const p of newPhotos || []) insertRow('album_photos', p)
+      })()
+    },
+    describe(p, mode) {
+      const name = (p.newAlbum && p.newAlbum.name) || ''
+      return mode === 'undo' ? `恢复相册：${name}` : `合并相册：${name}`
+    },
+    change() { return { type: 'full_reload' } }
   },
 
   // 删除职务（级联）：payload { node, members, children }
@@ -357,6 +550,52 @@ const executors = {
       const c = (p.cadres || []).length
       const m = (p.members || []).length
       return mode === 'undo' ? `撤销导入：${c} 个职务、${m} 名担任学生` : `重新导入：${c} 个职务、${m} 名担任学生`
+    },
+    change() { return { type: 'full_reload' } }
+  },
+
+  // 删除学生（级联）：payload = 后端 delete-with-relations 返回的 removed 快照
+  //   { student, leaveRows, scoreRows, groupRows, cadreRows, seatCells, dutySlots }
+  // 一次删除同时动 students / 请假 / 加减分 / 小组 / 班干部 / 座位 / 值日 七处：
+  // 拆成七条 row_delete/grid_cell 会让用户按七次 Ctrl+Z 才回到原状，中途失败还会留下半删状态。
+  // 所以撤销 = 一个事务里把七处一起回滚；重做 = 一个事务里再删一遍。
+  student_cascade_delete: {
+    validate({ student }) {
+      if (!student || !Number.isInteger(student.id)) return '参数不完整';
+      return null;
+    },
+    undo({ student, leaveRows, scoreRows, groupRows, cadreRows, seatCells, dutySlots }) {
+      db.transaction(() => {
+        // 主表先插：其余记录靠 id/姓名指向它（新库有外键，顺序反了会被直接拒写）
+        insertRow('students', student);
+        for (const r of leaveRows || []) insertRow('leave_records', r);
+        for (const r of scoreRows || []) insertRow('score_records', r);
+        for (const r of groupRows || []) insertRow('group_members', r);
+        for (const r of cadreRows || []) insertRow('cadre_members', r);
+        restoreSeatCells(seatCells);
+        restoreDutySlots(dutySlots);
+      })();
+    },
+    redo({ student, leaveRows, scoreRows, groupRows, cadreRows, seatCells, dutySlots }) {
+      db.transaction(() => {
+        const delById = (table, id) => db.prepare(`DELETE FROM "${table}" WHERE id = ?`).run(id);
+        for (const r of leaveRows || []) delById('leave_records', r.id);
+        for (const r of scoreRows || []) delById('score_records', r.id);
+        for (const r of groupRows || []) delById('group_members', r.id);
+        for (const r of cadreRows || []) delById('cadre_members', r.id);
+        clearSeatCells(seatCells);
+        clearDutySlots(student);
+        delById('students', student.id);
+      })();
+    },
+    describe(p, mode) {
+      const name = rowName(p.student);
+      const n = ['leaveRows', 'scoreRows', 'groupRows', 'cadreRows']
+        .reduce((sum, k) => sum + ((p[k] || []).length), 0)
+        + (p.seatCells || []).length + (p.dutySlots || []).length;
+      return mode === 'undo'
+        ? `恢复学生：${name}（含 ${n} 条关联记录）`
+        : `删除学生：${name}（含 ${n} 条关联记录）`;
     },
     change() { return { type: 'full_reload' } }
   },

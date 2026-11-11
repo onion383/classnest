@@ -1,10 +1,14 @@
 // =========================================================================
-// zipWriter.js —— 多文件 ZIP 打包（可选 ZipCrypto 传统加密）
+// zipWriter.js —— ZIP 零件：CRC32 / 条目名净化 / ZipCrypto 加密
+//
+// 打包本体在 zipStream.js（边读边写）。这里只留「与流无关、可被两部分共用」的零件：
+//   · CRC32（含增量版，流式写大文件时不能整包读进内存）
+//   · sanitizeEntryName —— 归档内路径的唯一净化点
+//   · createZipCrypto —— 传统加密的 key 流
 //
 // 为什么自己写而不装库：
-//   后端现有依赖里没有 zip 写库（yauzl 只能读），而这个功能只需要「把若干内存
-//   里的 Buffer 打成一个包」，实现量不大；electron/afterPack.js 里已有一份单文件
-//   的 CRC32 + deflate 写法，这里扩成多文件并补上加密，不引入新依赖、不影响打包脚本。
+//   后端现有依赖里没有 zip 写库（yauzl 只能读）。electron/afterPack.js 里已有一份
+//   单文件的 CRC32 + deflate 写法，这里扩成多文件并补上加密，不引入新依赖。
 //
 // 为什么用 ZipCrypto 而不是 AES：
 //   Windows 资源管理器双击就能输入密码解压，只有 ZipCrypto 支持；AES-256 必须装
@@ -13,12 +17,11 @@
 //
 // 关键实现约束：
 //   - 用传统加密时 CRC 必须写在本地头里（不能用数据描述符），解压端要靠 CRC 高字节
-//     校验 12 字节加密头是否解对了，所以这里一律不开 bit 3。
+//     校验 12 字节加密头是否解对了。
 //   - 文件名走 UTF-8（通用标志位 bit 11），否则中文表名在解压后是乱码。
 //   - 先 deflate 原始数据、再加密压缩结果（顺序反了就是「先加密再压缩」，体积和
 //     兼容性都会出问题）。
 // =========================================================================
-const zlib = require('zlib')
 
 // CRC32 — 与 afterPack.js 同款内置表，避免依赖 zlib.crc32 的 Node 版本差异
 const CRC_TABLE = (() => {
@@ -32,23 +35,46 @@ const CRC_TABLE = (() => {
 })()
 
 function crc32(buf) {
-  let c = 0 ^ -1
+  let c = crc32Start()
+  c = crc32Update(c, buf)
+  return crc32End(c)
+}
+
+// 增量 CRC（流式写大文件时不能把整包读进内存）：这三个函数与 crc32 共用同一张表
+function crc32Start() {
+  return 0 ^ -1
+}
+function crc32Update(state, buf) {
+  let c = state
   for (let i = 0; i < buf.length; i++) c = (c >>> 8) ^ CRC_TABLE[(c ^ buf[i]) & 0xff]
-  return (c ^ -1) >>> 0
+  return c
+}
+function crc32End(state) {
+  return (state ^ -1) >>> 0
+}
+
+// 归档内路径的**唯一**净化点（审查 v6 · A1-03 / N3-03 Zip Slip）：
+// 条目名会被原样写进 ZIP，解压端（含 Windows 资源管理器）会照着建目录 ——
+// 名字里带 `../` 或盘符就能写到解压目录之外。这里按「逐段白名单」处理：
+//   · 反斜杠统一成正斜杠
+//   · 去掉盘符（C:）与开头的 /（绝对路径）
+//   · `.` 段丢弃，`..` 段弹掉上一段（前导 `..` 直接丢弃）
+//   · 结果为空时退回 'file'，绝不返回空名（空名条目在部分解压器里会退化）
+function sanitizeEntryName(name) {
+  const raw = String(name == null ? '' : name).replace(/\\/g, '/').replace(/^[a-zA-Z]:/, '')
+  const out = []
+  for (const seg of raw.split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') { out.pop(); continue }
+    out.push(seg.replace(/[\u0000-\u001f]/g, ''))
+  }
+  const joined = out.filter(Boolean).join('/')
+  return joined || 'file'
 }
 
 // ZipCrypto 的 key0 走的是同一张表，但作用在「上一次的 key0」上
 function crc32Byte(crc, byte) {
   return (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 0xff]
-}
-
-// DOS 时间格式（不是 Unix 时间戳）：年份从 1980 起算，秒数按 2 秒粒度
-function dosDateTime(d) {
-  const year = Math.max(d.getFullYear(), 1980)
-  return {
-    time: ((d.getHours() & 0x1f) << 11) | ((d.getMinutes() & 0x3f) << 5) | ((d.getSeconds() >> 1) & 0x1f),
-    date: (((year - 1980) & 0x7f) << 9) | (((d.getMonth() + 1) & 0x0f) << 5) | (d.getDate() & 0x1f),
-  }
 }
 
 // ---------- ZipCrypto ----------
@@ -89,91 +115,4 @@ function createZipCrypto(password) {
   }
 }
 
-/**
- * 把一组条目打成 ZIP。
- * @param {Array<{name: string, data: Buffer|string}>} entries 归档内路径与内容
- * @param {string} [password] 传了就走 ZipCrypto 加密；空串/未传 = 不加密
- * @returns {Buffer}
- */
-function buildZip(entries, password) {
-  const encrypted = !!password
-  // 加密模式下一个 key 流只对**一个文件**有效，每个文件都要从密码重新派生（PKZIP 规范）
-  const parts = []
-  const central = []
-  let offset = 0
-  const now = dosDateTime(new Date())
-
-  for (const entry of entries || []) {
-    const raw = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(String(entry.data), 'utf8')
-    const crc = crc32(raw)
-    const deflated = zlib.deflateRawSync(raw, { level: 6 })
-    const nameBytes = Buffer.from(String(entry.name || 'file').replace(/\\/g, '/'), 'utf8')
-
-    let payload = deflated
-    if (encrypted) {
-      const cipher = createZipCrypto(password)
-      // 12 字节加密头：前 11 字节随机，第 12 字节 = CRC 高字节（解压端据此判密码对不对）
-      const header = Buffer.allocUnsafe(12)
-      require('crypto').randomFillSync(header, 0, 11)
-      header[11] = (crc >>> 24) & 0xff
-      const encHeader = cipher.encrypt(header)
-      const encBody = cipher.encrypt(deflated)
-      payload = Buffer.concat([encHeader, encBody])
-    }
-
-    const flags = 0x0800 | (encrypted ? 0x0001 : 0) // bit11 UTF-8 文件名 / bit0 加密
-
-    const local = Buffer.alloc(30)
-    local.writeUInt32LE(0x04034b50, 0)
-    local.writeUInt16LE(20, 4) // 解压所需版本
-    local.writeUInt16LE(flags, 6)
-    local.writeUInt16LE(8, 8) // deflate
-    local.writeUInt16LE(now.time, 10)
-    local.writeUInt16LE(now.date, 12)
-    local.writeUInt32LE(crc, 14)
-    local.writeUInt32LE(payload.length, 18)
-    local.writeUInt32LE(raw.length, 22)
-    local.writeUInt16LE(nameBytes.length, 26)
-    local.writeUInt16LE(0, 28) // 扩展区长度
-
-    const localOffset = offset
-    const localBlock = Buffer.concat([local, nameBytes, payload])
-    parts.push(localBlock)
-    offset += localBlock.length
-
-    const cd = Buffer.alloc(46)
-    cd.writeUInt32LE(0x02014b50, 0)
-    cd.writeUInt16LE(20, 4) // 创建版本
-    cd.writeUInt16LE(20, 6) // 解压所需版本
-    cd.writeUInt16LE(flags, 8)
-    cd.writeUInt16LE(8, 10)
-    cd.writeUInt16LE(now.time, 12)
-    cd.writeUInt16LE(now.date, 14)
-    cd.writeUInt32LE(crc, 16)
-    cd.writeUInt32LE(payload.length, 20)
-    cd.writeUInt32LE(raw.length, 24)
-    cd.writeUInt16LE(nameBytes.length, 28)
-    cd.writeUInt16LE(0, 30) // 扩展区
-    cd.writeUInt16LE(0, 32) // 注释
-    cd.writeUInt16LE(0, 34) // 起始磁盘
-    cd.writeUInt16LE(0, 36) // 内部属性
-    cd.writeUInt32LE(0, 38) // 外部属性
-    cd.writeUInt32LE(localOffset, 42)
-    central.push(Buffer.concat([cd, nameBytes]))
-  }
-
-  const centralBuf = Buffer.concat(central)
-  const end = Buffer.alloc(22)
-  end.writeUInt32LE(0x06054b50, 0)
-  end.writeUInt16LE(0, 4)
-  end.writeUInt16LE(0, 6)
-  end.writeUInt16LE(entries.length, 8)
-  end.writeUInt16LE(entries.length, 10)
-  end.writeUInt32LE(centralBuf.length, 12)
-  end.writeUInt32LE(offset, 16)
-  end.writeUInt16LE(0, 20)
-
-  return Buffer.concat([...parts, centralBuf, end])
-}
-
-module.exports = { buildZip, crc32 }
+module.exports = { crc32, crc32Start, crc32Update, crc32End, sanitizeEntryName, createZipCrypto }

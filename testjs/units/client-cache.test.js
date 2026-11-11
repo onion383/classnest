@@ -116,7 +116,9 @@ test('V5-007：桌面挂件两类加载都挂上「只认最后一次」守卫',
   assert.ok(/loadAppsGuard = createLatest\(\)/.test(src))
   // loadAll：await 后、写 ref 前判断；finally 只让最新一轮收尾
   assert.ok(/if \(!loadAllGuard\.isCurrent\(token\)\) return/.test(src))
-  assert.ok(/if \(loadAllGuard\.isCurrent\(token\)\) loadingAll = false/.test(src))
+  // A5-02 之后 finally 里除了收尾还要处理「在途期间来过变更通知」的补拉，
+  // 展开成块了；守卫本身（只让最新一轮收尾）必须还在。
+  assert.ok(/if \(loadAllGuard\.isCurrent\(token\)\) \{\s*loadingAll = false/.test(src))
   // loadApps：成功与失败两条路径都要判断（旧请求的 401 不能写「未登录」）
   assert.ok(/if \(!loadAppsGuard\.isCurrent\(token\)\) return false/.test(src))
   // 换号时必须作废在途请求，并放开 loadingAll 让新请求立刻发出

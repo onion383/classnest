@@ -8,6 +8,10 @@ import { pad2 } from '../../utils/dateTime.js'
 import { invalidateSemesterStart } from '../../utils/semesterStart.js'
 import { clearMediaToken } from '../../utils/apiUrl'
 import { AUTH_API } from '../../utils/apiPaths.js'
+import { friendlyError } from '../../utils/blobError.js'
+
+// 这里不再自己读 Blob：响应错误拦截器（utils/blobError.js）已把失败体还原成对象，
+// 统一从 friendlyError 取文案，避免每个 blob 调用点各写一份解析。
 
 // 把同一次动作的多条记录折成一行：同 origin、同方向的连续记录算「一次改动（N 项）」，
 // 无 origin 的单条记录仍是一行。这样设置页与 Ctrl+Z 的口径一致：一次动作 = 一步。
@@ -378,7 +382,11 @@ export function useSettingsData(ctx) {
       }
     },
     async exportDb() {
-      const needsPassword = !!ctx.user.value.hasPassword
+      // 是否有登录密码：以安全等级为准（securityLevel），不用 localStorage 里的 user 快照 ——
+      // 本次会话里刚把等级从「普通密码」切成「免密」时那份快照是旧的，
+      // 会出现「界面没让我填密码、这里却拦着要密码」的死结。
+      // 无密码账号后端本来就不校验密码（account.js 只在 user.password 存在时才比对）。
+      const needsPassword = !!ctx.hasLoginPassword.value
       const loginPwd = ctx.exportPassword.value
       // 有密码账号：必须先校验登录密码
       if (needsPassword && !loginPwd) {
@@ -391,16 +399,24 @@ export function useSettingsData(ctx) {
         return
       }
       ctx.busyExport.value = true
+      ctx.exportProgress.value = 0
       try {
         const body = { encrypt: ctx.exportEncrypt.value ? '1' : '0' }
         if (needsPassword) body.password = loginPwd
         if (ctx.dbEncrypted.value && ctx.exportEncrypt.value && ctx.exportDbPwd.value) body.dbPassword = ctx.exportDbPwd.value
-        const res = await axios.post('/api/account/export', body)
-        const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' })
-        const url = URL.createObjectURL(blob)
+        // v3：整包 ZIP 流式下载（库 + 收据原件 + AI 技能 + 回收站 + 快照 + 清单）。
+        // responseType: 'blob' 让 axios 不要把二进制当文本解 —— 否则中文文件名与 CRC 全毁。
+        const res = await axios.post('/api/account/export-zip', body, {
+          responseType: 'blob',
+          onDownloadProgress: (e) => { ctx.exportProgress.value = e.loaded || 0 },
+        })
+        const date = new Date().toISOString().slice(0, 10)
+        // 用户名可能含空格/斜杠等，直接当文件名会被浏览器改得很难认，先归一
+        const who = String(ctx.user.value.username || 'classnest').replace(/[\\/:*?"<>|]/g, '_')
+        const url = URL.createObjectURL(res.data)
         const a = document.createElement('a')
         a.href = url
-        a.download = ctx.user.value.username + '-backup.json'
+        a.download = `${who}-备份-${date}.zip`
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
@@ -408,10 +424,13 @@ export function useSettingsData(ctx) {
         // 同步 revokeObjectURL 会让下载拿到 0 字节文件。
         setTimeout(() => URL.revokeObjectURL(url), 1000)
         ctx.closeModal()
-        ctx.showAlert('导出成功。请保管好备份文件与本次使用的数据库密码（线上明文不保存）')
+        ctx.showAlert('导出成功。备份包内含收据原件等文件，请妥善保管；加密导出时所用的数据库密码不在包内，请一并记住')
       } catch (err) {
-        ctx.showAlert(err.response?.data?.error || '导出失败')
-      } finally { ctx.busyExport.value = false }
+        ctx.showAlert(friendlyError(err, '导出失败'))
+      } finally {
+        ctx.busyExport.value = false
+        ctx.exportProgress.value = 0
+      }
     },
   }
 }

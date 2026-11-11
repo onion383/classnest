@@ -202,7 +202,7 @@ import StatBarList from '../components/base/StatBarList.vue'
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import { zhCollator } from '../utils/collator.js'
 import { useNotification } from '../composables/useNotification.js'
-import { recordCellUndo, recordRowInsert, recordRowDelete, recordRowUpdate, useUndoShortcut } from '../composables/useUndo.js'
+import { recordCellUndo, recordRowInsert, recordRowDelete, recordRowUpdate, recordRowsBatchInsert, useUndoShortcut } from '../composables/useUndo.js'
 import { formatDate } from '../utils/dateTime.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 
@@ -457,6 +457,8 @@ async function onImportData({ fields, rows }) {
     const res = await axios.post(`${API}/scores/import`, { fields, rows, mode: scoreMode.value })
     useNotification().success(res.data.message || '导入成功')
     await loadAll()
+    // 后端回传本次真正新建的行：一次导入只记一条撤销
+    recordRowsBatchInsert('score_records', res.data?.created)
   } catch (err) {
     reportError(err, { action: '导入加分记录' })
   }

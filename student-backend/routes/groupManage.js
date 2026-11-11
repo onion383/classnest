@@ -205,7 +205,15 @@ router.delete('/dimensions/:id', (req, res) => {
   const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(id);
   if (!dim) return res.status(404).json({ error: '维度不存在' });
   if (dim.is_default) return res.status(400).json({ error: '内置宿舍组不可删除' });
-  const groups = db.prepare('SELECT id FROM groups WHERE dimension_id = ?').all(id);
+  const groups = db.prepare('SELECT * FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(id);
+  const groupIds = groups.map((g) => g.id);
+  // 成员按组一次性取回（含 id / sort_order），撤销时可直接重建
+  const members = groupIds.length
+    ? db.prepare(`SELECT * FROM group_members WHERE group_id IN (${groupIds.map(() => '?').join(',')}) ORDER BY group_id, sort_order, id`).all(...groupIds)
+    : [];
+  // 排序快照必须取**删除前**的值：删除后会把剩余维度重排成 1..n，
+  // 撤销时若只重插维度行，其余维度的 sort_order 已被改过，顺序回不到原样。
+  const sortOrders = db.prepare('SELECT id, sort_order FROM group_dimensions ORDER BY sort_order, id').all();
   const delMembers = db.prepare('DELETE FROM group_members WHERE group_id = ?');
   const tx = db.transaction(() => {
     for (const g of groups) delMembers.run(g.id);
@@ -217,7 +225,8 @@ router.delete('/dimensions/:id', (req, res) => {
     rest.forEach((r, i) => upd.run(i + 1, r.id));
   });
   tx();
-  res.json({ message: '删除成功' });
+  // 带回完整快照：维度删除原先不可撤销，删掉后所有小组/成员只能手工重建。
+  res.json({ message: '删除成功', removed: { dimension: dim, groups, members, sortOrders } });
 });
 
 // 移动维度

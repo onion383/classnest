@@ -2,7 +2,7 @@
 // dialogs.js —— 文件/文件夹对话框与本地文件读写类 IPC
 //
 // 汇总主进程里「弹系统对话框 + 读写本地文件」的一组请求-响应通道：
-//   select-folder / select-db-file / open-folder / save-background-image /
+//   select-folder / open-folder / save-background-image /
 //   save-file / open-file / screenshot-capture / note-save / get-data-directories
 //
 // 记忆上次访问目录：Electron 43 起未传 defaultPath 时对话框默认打开「下载」目录，
@@ -33,9 +33,6 @@ const isDev = !app.isPackaged
 
 // 渲染层 → 主进程 → 写盘通道的统一体积上限：避免超大 payload 在主进程再复制一份。
 const MAX_WRITE_BYTES = 50 * 1024 * 1024
-// 「读取备份包」的上限：备份包是整库 base64（膨胀 4/3）后再套一层 JSON，
-// 一个班的库通常几 MB，64MB 足够覆盖异常膨胀，同时挡住「选错一个巨大文件」把主进程读爆。
-const MAX_RESTORE_BYTES = 64 * 1024 * 1024
 // 一键截屏的 JPEG 质量：90 在界面截图上肉眼几乎无差，编码耗时只有 PNG 的 1/10 左右
 const JPEG_QUALITY = 90
 // save-file 只服务导出类文件；扩展名由用户可在对话框里改，因此最终路径还要再校验一次。// 白名单与「前端/后端实际能产出的格式」严格对账（见 testjs/probe/export-format-probe.cjs）：
@@ -110,47 +107,6 @@ function registerDialogsIpc(opts = {}) {
       lastDialogDir = result.filePaths[0]
     }
     return result
-  }))
-
-  // 选择「数据库 / 备份包」文件（登录页「从数据库登录」用）
-  //
-  // 为什么不用渲染层的 `<input type="file">`：Chromium 的 file chooser 传不了 defaultPath，
-  // 每次都从系统上次停留的位置开始；停在 OneDrive / 网络位置时光枚举目录就要 0.5~2 秒，
-  // 表现出来就是「点了按钮要等一下文件框才出来」。走主进程 dialog 可以把默认目录钉在本地
-  // （上次用过 → 数据目录，.db 库就在那里），顺带能带扩展名过滤。
-  //
-  // 返回按文件类型分流，让渲染层少两件事：
-  //   .db   → 只给文件名（后端按文件名在数据目录里找登记，不读这个路径本身）
-  //   .json → 连文本一起读出来（备份包要塞给 JSON.parse，前端不必再走 FileReader）
-  ipcMain.handle('select-db-file', contract.safe(async (event) => {
-    const senderWin = BrowserWindow.fromWebContents(event.sender)
-    const parent = (senderWin && !senderWin.isDestroyed()) ? senderWin : null
-    const opts = {
-      title: '选择数据库或备份文件',
-      properties: ['openFile'],
-      defaultPath: lastDialogDir || resolveDataDir(),
-      filters: [
-        { name: '数据库 / 备份包', extensions: ['db', 'json'] },
-        { name: '所有文件', extensions: ['*'] },
-      ],
-    }
-    const result = parent
-      ? await dialog.showOpenDialog(parent, opts)
-      : await dialog.showOpenDialog(opts)
-    // 用户点了取消：走 canceled（不是 fail），前端不该弹错误提示
-    if (result.canceled || result.filePaths.length === 0) return contract.canceled()
-    const filePath = result.filePaths[0]
-    lastDialogDir = path.dirname(filePath)
-    const name = path.basename(filePath)
-    if (path.extname(name).toLowerCase() !== '.json') {
-      return contract.ok({ kind: 'db', name })
-    }
-    const stat = await fsp.stat(filePath)
-    if (stat.size > MAX_RESTORE_BYTES) {
-      return contract.fail('备份包过大（超过 64MB），请确认选的是备份文件')
-    }
-    const text = await fsp.readFile(filePath, 'utf8')
-    return contract.ok({ kind: 'json', name, text })
   }))
 
   // 在文件管理器中打开指定文件夹

@@ -1,6 +1,8 @@
 // ===== 值日智能排表：一级条件的拖拽添加/删除 + 语义句 + 草稿 =====
 // 移除了「方式 → 子约束」的二级结构：条件一行一条、可重复添加，按顺序执行。
-// ctx 契约：{ conditions, nextUid, arranged, rejectText, previewCells, _rejectTimer, emit ... }
+// ctx 契约：{ conditions, nextUid, arranged, rejectText, previewCells, _rejectTimer, emit, sortCond ... }
+
+import { nextTick } from 'vue'
 
 export function useDutyArrangementOptions(ctx, REGISTRY) {
   return {
@@ -28,12 +30,23 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
       const at = Math.max(0, Math.min(index, ctx.conditions.value.length))
       ctx.conditions.value.splice(at, 0, node)
       ctx.resetArranged()
+      // 高度从 0 展开 + 滚进视野（列表限高时新行可能落在可视区外）：
+      // 必须等这一行渲染出来才量得到高度
+      nextTick(() => { if (ctx.sortCond) ctx.sortCond.enterAt(at) })
     },
+    // 删除条件：先把高度收到 0 再真正移除（否则行「啪」地消失，上下的行也是瞬间补位）
     removeCondition(index) {
       const node = ctx.conditions.value[index]
       if (!node) return
-      ctx.conditions.value.splice(index, 1)
-      ctx.resetArranged()
+      const doRemove = () => {
+        // 用对象身份重新定位：收起动画这 200ms 里列表可能已被再次修改
+        const i = ctx.conditions.value.indexOf(node)
+        if (i < 0) return
+        ctx.conditions.value.splice(i, 1)
+        ctx.resetArranged()
+      }
+      if (ctx.sortCond) ctx.sortCond.leaveAt(index, doRemove)
+      else doRemove()
     },
     // 取某条件的语义句段（纯文案 + 下拉位），供通用渲染器产出 UI
     segmentsOf(node) {

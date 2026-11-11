@@ -151,8 +151,8 @@ function createDynamicTableRouter(tableName, options = {}) {
   router.post('/import', (req, res) => {
     try {
       const { fields, rows } = req.body;
-      const count = importRows(tableName, fields, rows);
-      res.json({ message: `成功导入 ${count} 条记录` });
+      const { count, created } = importRows(tableName, fields, rows);
+      res.json({ message: `成功导入 ${count} 条记录`, created });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

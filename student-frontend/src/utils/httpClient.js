@@ -4,6 +4,18 @@ import { applyAuthHeader, safe } from '../composables/secureChannel'
 import { waitForBackendReady, isBackendUnreachable, resetBackendReady } from './backendReady'
 import { absorbRenewal } from './apiUrl'
 import { getToken as loadStoredToken } from './authStorage'
+import { userScopedGeneration } from './userScopedCache.js'
+import { installBlobErrorNormalizer } from './blobError.js'
+import { createWidgetDataChangedAnnouncer } from './widgetDataChanged.js'
+import { markSince, phase } from './perfMark.js'
+import { SEND } from '../electronChannels.js'
+
+// 主窗口写成功后通知桌面挂件刷新（A5-02）。复用既有 to-widget → from-main 中继，
+// 不新增通道名；只有主窗口传 announceDataChanged: true 时才启用，避免挂件自己写
+// 自己收、以及子窗口重复广播。
+const widgetDataChanged = createWidgetDataChangedAnnouncer(
+  (payload) => window.electron.send(SEND.TO_WIDGET, payload),
+)
 
 // 安全通道「会话过期」不是登录态失效：加密会话 15 分钟被动过期时，后端在请求解密阶段
 // 直接回 401 且 body 为 { d:'session-expired' }（不是密文，也非登录 token 问题）。
@@ -53,6 +65,8 @@ export function setupApiClient({
   onTokenRenewed,
   onAuthExpired,
   onUnreachable,
+  // 仅主窗口开启：写成功后向桌面挂件广播 data-changed（挂件不再只能等 5 分钟轮询）
+  announceDataChanged = false,
   // ⚠️ 默认值必须是「**写请求不重发**」，不能是放行。
   //
   // 原默认值是 `() => true`（放行），于是**任何没传守卫的窗口**（子窗口 setup /
@@ -68,27 +82,45 @@ export function setupApiClient({
 } = {}) {
   if (baseURL) axios.defaults.baseURL = baseURL
 
-  // 安全通道先装配：请求拦截器按「后注册先执行」的顺序运行，
+  // 二进制下载（responseType:'blob'）的 4xx 错误体也是 Blob。先把它还原成业务对象，
+  // 否则安全通道读不到 err.response.data.d —— 会话过期的 401 会被误判成「登录过期」，
+  // 密文错误信封也没法解密，调用方更拿不到后端的 { error }。归一必须排在加密层之前。
+  installBlobErrorNormalizer(axios)
+
+  // 安全通道随后装配：请求拦截器按「后注册先执行」的顺序运行，
   // 先注册加密层可保证「凭据注入」在「请求体加密」之前完成（两者共用同一会话）。
   // 响应侧同理，加密层的 401 重试要先于下面的登录失效判定执行。
   setupSecureAxios(axios)
 
   // 请求拦截器：登录凭据统一走信道（X-Auth-Proof 密文凭据；未启用安全通道时才用明文头）
+  //
+  // 首屏分段（v6 · P1-01）：本拦截器在注册顺序上最晚、执行顺序上最先，
+  // 所以「排队」= 从 axios.get() 创建 config 到这里的调度耗时；「凭据」=
+  // getToken + applyAuthHeader（安全模式下含一次握手）。没有 __perf 时两者都空转。
   axios.interceptors.request.use(async (config) => {
-    const token = await getToken()
-    config.headers = config.headers || {}
-    if (!token) return config
-    const carriedToken = await applyAuthHeader(config.headers, token, {
-      forceToken: config.__forceAuthToken === true,
-    })
-    // 记录了「本次确实携带 token」，响应成功后据此把会话标记为已绑定身份
-    if (carriedToken) config.__authProofToken = true
-    // 凭据降级：安全模式下 applyAuthHeader 握手失败会退回明文 Bearer，而后端在安全模式下
-    // 不收明文凭据 → 这次请求必然 401。标记出来，响应拦截器遇到这种 401 时**不**按「登录过期」
-    // 处理（否则一次握手抖动就把用户的 token 清掉、直接踢回登录页），而是让 secureAxios
-    // 重建会话后重试。
-    if (safe() && !config.headers['X-Auth-Proof']) config.__credentialDegraded = true
-    return config
+    markSince(config, '排队')
+    const endCredential = phase(config, '凭据')
+    try {
+      // 发请求前的登录代次：响应回来时用它判断「这份续期凭据还属于当前这一代吗」。
+      // 必须在这里记（而不是响应时现取当前值），否则判据恒为真，等于没判。
+      config.__authGeneration = userScopedGeneration()
+      const token = await getToken()
+      config.headers = config.headers || {}
+      if (!token) return config
+      const carriedToken = await applyAuthHeader(config.headers, token, {
+        forceToken: config.__forceAuthToken === true,
+      })
+      // 记录了「本次确实携带 token」，响应成功后据此把会话标记为已绑定身份
+      if (carriedToken) config.__authProofToken = true
+      // 凭据降级：安全模式下 applyAuthHeader 握手失败会退回明文 Bearer，而后端在安全模式下
+      // 不收明文凭据 → 这次请求必然 401。标记出来，响应拦截器遇到这种 401 时**不**按「登录过期」
+      // 处理（否则一次握手抖动就把用户的 token 清掉、直接踢回登录页），而是让 secureAxios
+      // 重建会话后重试。
+      if (safe() && !config.headers['X-Auth-Proof']) config.__credentialDegraded = true
+      return config
+    } finally {
+      endCredential()
+    }
   })
 
   // 响应拦截器：
@@ -100,12 +132,18 @@ export function setupApiClient({
   //     例外（dev 下 Vite 代理对「上游未就绪」的包装，与「连接被拒」同义），见 isBackendUnreachable。
   axios.interceptors.response.use(
     res => {
-      // 滑动续期：后端在 token 快到期时随响应下发新的 30 天 token / 媒体凭据，落盘后生效
-      absorbRenewal(res.headers, { onTokenRenewed })
+      // 滑动续期：后端在 token 快到期时随响应下发新的 30 天 token / 媒体凭据，落盘后生效。
+      // generation 取的是**发请求时**记下的代次（见请求拦截器），中途换号则丢弃这份续期。
+      absorbRenewal(res.headers, { onTokenRenewed, generation: res.config?.__authGeneration })
+      // 写成功后立刻告诉挂件「数据变了」：只在主窗口发，读请求 / 无关写不发（判定见 widgetDataChanged）
+      if (announceDataChanged) widgetDataChanged.announce(res.config)
       return res
     },
     async (error) => {
       const config = error.config
+
+      // blob 错误体已在最前面的归一化拦截器里还原成对象（见 installBlobErrorNormalizer），
+      // 所以这里读到的 err.response.data 与 JSON 接口形状一致，无需每个调用点各自解析。
 
       // 登录态失效（401，且非安全通道会话过期 / 信道凭据待重试）：交调用方决定是否清 token 并跳登录
       if (error.response && error.response.status === 401

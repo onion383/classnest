@@ -346,6 +346,14 @@ export function useRowSortDrag({ items, dragIdx, overIdx, attr, rowClass = '', o
       el.style.marginBottom = ''
       el.style.overflow = ''
       el.style.transition = ''
+      // 展开收尾后再校正一次滚动。上面那次 scrollRowIntoView 是在「压成 0 高之前」
+      // 算的量，而接下来 200ms 里容器 scrollHeight 先减 h、再涨回 h —— 浏览器会把
+      // 进行中的 smooth 滚动 clamp 到变小后的可滚上限，于是最终停在新行只露出一条缝的
+      // 位置（追加到末尾时最明显：明明加在最后，却没滚到底）。
+      // 此时样式已清空，getBoundingClientRect 会强制同步布局、量到的是自然高度，
+      // 所以直接调用即可，不用再等一帧。幂等：新行本来就完整可见时该函数直接 return，
+      // 中间插入的场景不受影响。
+      scrollRowIntoView(el)
     }, ROW_MS + 40)
   }
 

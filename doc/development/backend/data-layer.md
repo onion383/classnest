@@ -113,6 +113,20 @@ flowchart LR
 
 迁移方式：`PRAGMA table_info` → 缺列时 `ALTER TABLE ADD COLUMN`；表级差异用 `ensureTableWithMigration`；索引 `CREATE INDEX IF NOT EXISTS` 幂等。
 
+#### [`schema/seatGridMigration.js`](../../../student-backend/schema/seatGridMigration.js) · 座位网格一次性数据迁移
+
+- **定位**：把老库的「dense 座位矩阵 + 渲染期虚拟插入的走廊列」搬成「网格矩阵 + `types` 格子类型矩阵」，并把 `cols` 从座位列数改成网格总列数。
+- **必做原因**：座位指数是跨天把 `domain_history` 里每天的 `seats[r][c]` 与权重矩阵**按同一下标**累加出来的；`seats` 变网格而历史 payload 仍是 dense，会从第一天起整体错位且不报错。库与模板可以直接重建，**历史快照不能**。
+- **幂等判据**：迁完的记录 `types` 必为非空满矩阵（`weight` 记录也写一份作几何标记），老数据 `types` 恒为 `'[]'`；按数据本身判断，不建「已迁移」标记表（标记与数据可能不一致，中途崩溃会迁一半）。
+- **注意事项**：文件内冻结的 `legacy*` 公式描述的是「老数据的具体形状」，**不得**与将来「按 types 渲染」的代码合并复用，否则已迁库与未迁库会按不同公式解读。
+
+#### [`schema/tableRegistry.js`](../../../student-backend/schema/tableRegistry.js) · 表名的唯一名单
+
+- **定位**：物理表名、逻辑表名（`slotStore` 的 kind 键）与业务白名单的唯一来源（v6 · 6-2）。
+- **导出**：`PHYSICAL`（按 schema 文件分组）、`ALL_PHYSICAL`、`LOGICAL`（逻辑表 → 物理表）、`ALL_LOGICAL`、`GENERIC_CRUD_TABLES`、`UNDO_WRITE_TABLES`、`UNDO_DOC_TABLES`、`AI_SEARCH_TABLES`、`SEAT_CURRENT_SLOTS`、`isKnownName(name)`。
+- **单列一份的理由**：表名此前只存在于 DDL 文本与四份白名单数组里，抄漏一处不会报错，只表现为「撤销少记一条 / AI 少查一张表」。本文件只放名字、不 `require` 任何模块 —— 它要被业务代码、路由、单测与 `eslint.config.mjs` 同时引用，带副作用会把 db 拖进纯计算场景。
+- **注意事项**：`PHYSICAL` 与 `schema/*.js` 的 `CREATE TABLE` 是**双向锁定**（多一张、少一张、分组写错都会让 `architecture-guard` 变红）；`LOGICAL` 与 `services/slotStore.js` 的 `SPEC` 同理。新增可撤销表或 AI 可检索表时改这里，不许改调用点的数组。
+
 ### 6. 备份与加密转换
 
 - 备份包 v2：`encrypted` 标记来源是否加密库；`key`（明文库钥匙）/ `wrappedByPassword` / `wrappedByMnemonic` 三选一，`decryptBundleKey` 按「明文 key → 密码 → 助记词」顺序尝试。

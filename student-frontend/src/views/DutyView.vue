@@ -35,9 +35,9 @@
                    留在这里就是一片空白网格。这是唯一会「什么都没有」的场景（判定必须带 settingsLoaded，
                    否则设置请求失败也会被误认成「没配项目」），所以换成引导页把人引到设置去。 -->
               <EmptySnapshot
-                v-if="settingsLoaded && !settingsItems.length"
+                v-if="settingsLoaded && settingsMissing"
                 icon="duty"
-                text="还没有值日设置"
+                :text="settingsEmptyText"
                 min-height="200px"
                 action-text="去设置"
                 action-icon="settings"
@@ -79,9 +79,9 @@
             <template v-else>
               <!-- 同当前值日：项目没配置 → 没有行，给引导页（模板与当前值日共用同一份全局项目设置） -->
               <EmptySnapshot
-                v-if="settingsLoaded && !settingsItems.length"
+                v-if="settingsLoaded && settingsMissing"
                 icon="duty"
-                text="还没有值日设置"
+                :text="settingsEmptyText"
                 min-height="200px"
                 action-text="去设置"
                 action-icon="settings"
@@ -147,9 +147,9 @@
                  一张没有行也没有列的空网格没有任何可填内容，所以和上面两张表一样换成引导页。
                  判定同样要带 settingsLoaded：设置请求失败时 items 会停在初始 []，否则会误报「没配项目」。 -->
             <EmptySnapshot
-              v-if="settingsLoaded && !settingsItems.length"
+              v-if="settingsLoaded && settingsMissing"
               icon="duty"
-              text="还没有值日设置"
+              :text="settingsEmptyText"
               min-height="200px"
               action-text="去设置"
               action-icon="settings"
@@ -483,6 +483,12 @@ const settingsConfig = ref({})
 // 首次进入若 settings 请求失败，settingsItems 会停留在初始的 []，不设这道闸就会误报「没配项目」。
 const settingsLoaded = ref(false)
 
+// 设置已读回来，但「列名」或「劳动项目」为空：值日表没有可排的格子，统一出引导页。
+// 列名为空必须当异常态处理 —— 后端只认设置里的列，界面若自己造出周一~周五，
+// 每次保存都会被拒（见上面 fetchSettings 的说明）。
+const settingsMissing = computed(() => !settingsItems.value.length || !settingsDays.value.length)
+const settingsEmptyText = computed(() => (settingsDays.value.length ? '还没有值日设置' : '设置里还没有值日列'))
+
 // 学生名单（用于网格候选选择姓名）
 const allStudents = ref([])
 
@@ -532,7 +538,11 @@ async function fetchSettings() {
     const res = await axios.get(`${API_BASE}/duty/settings?mode=${dutyMode.value}`)
     // 列名按模式不同：日常值日=星期几，大扫除=分组名+全部。
     // 大扫除的列名由后端返回（后端保证内置的「全部」列在末尾），这里原样采用。
-    settingsDays.value = (res.data.days && res.data.days.length) ? res.data.days : ['周一', '周二', '周三', '周四', '周五']
+    // 设置读回来就**如实采用**（含空数组）：空代表「没有值日列」，由页面出引导页。
+    // 不能再兜底成周一~周五 —— 后端以设置为唯一真相，会把这些兜底列当非法列拒绝整表保存，
+    // 用户看到的就是「怎么填都提示保存失败」（真实故障，见 backend.log 的
+    // 「值日列「周一」不在设置的列名列表里」）。首屏未就绪时仍用初始默认值撑住表头。
+    settingsDays.value = Array.isArray(res.data.days) ? res.data.days : []
     // 只接受数组：items 契约是 [{name,difficulty,count}]，形状异常时不覆盖现有设置（避免 {} 把 forEach 带崩）
     settingsItems.value = Array.isArray(res.data.items) ? res.data.items : []
     // 大扫除的模式配置（周期 / 星期几 / 分组维度）

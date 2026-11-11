@@ -200,7 +200,9 @@ function kindOfPath(path) {
 // · 无法预览 —— 上两者都不行（未知类型），点了只给「下载后本地查看」的建议
 function viewMode(f) {
   if (['image', 'video', 'pdf', 'text'].includes(f.kind)) return 'inline'
-  if (f.kind === 'office') return 'external'
+  // 第二道防线：后端写入时已把 ooxml / ole 归成 office，
+  // 但旧记录或未归一的来源仍可能带细分类型，这里一并认。
+  if (f.kind === 'office' || f.kind === 'ooxml' || f.kind === 'ole') return 'external'
   return 'none'
 }
 function viewLabel(f) {

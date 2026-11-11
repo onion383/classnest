@@ -10,19 +10,20 @@ classnest/
 └── testjs/
     └── smoke/
         ├── _isolated-backend.cjs  # 共用脚手架
-        ├── _tmpdir.cjs  # 临时目录脚手架：父进程建本次专属 SMOKE_TMP_ROOT 并整体删（Windows 上 sqlite 句柄在进程内不释放，子进程内删不掉是物理事实）
+        ├── _tmpdir.cjs  # 共用脚手架
         ├── album-file-etag-test.cjs  # 无
         ├── album-photo-info-test.cjs  # 无
+        ├── album-rename-test.cjs  # 临时 DATA_DIR + 真实路由，不需要完整后端
         ├── album-ruler-mapping-test.cjs  # 无
         ├── api-routes-test.cjs  # 临时 DATA_DIR + 真实路由挂最小 Express，不需要完整后端
         ├── api-smoke.cjs  # 内置最小 Express，不需要真实后端
         ├── auth-smoke.js  # 默认自起隔离后端；AUTH_SMOKE_EXTERNAL=1 时连接 PORT / 3000…
-        ├── cadre-undo-test.cjs  # 临时 DATA_DIR + 真实路由挂最小 Express，不需要完整后端
+        ├── cadre-undo-test.cjs  # 临时 DATA_DIR + 测试主密钥建真实加密库 + 真实路由挂最小 Express
         ├── collator-equiv-probe.js  # 无
         ├── font-subset-verify.mjs  # 需 pdf-subset-verify 产物
         ├── pdf-subset-verify.mjs  # 先生成子集
         ├── pptx-guard-test.cjs  # 无
-        ├── secure-channel-retry.js  # 需 Vite 开发服务器（testjs/probe/pages/ 断言页，经 tools/electron-p…
+        ├── secure-channel-retry.js  # 需 Vite 开发服务器（testjs/probe/pages/ 断言页，经 tools/e…
         ├── theme-setting-probe.mjs  # 无
         ├── thumbs-cache-test.cjs  # 无
         ├── undo-batch-test.cjs  # 临时 DATA_DIR + 真实撤销路由，不需要完整后端
@@ -69,6 +70,7 @@ classnest/
 | [`api-routes-test.cjs`](../../../testjs/smoke/api-routes-test.cjs) | 临时 `DATA_DIR` + 真实路由挂最小 Express，不需要完整后端 | 畸形 Range、值日落盘结构、AI 密钥复用、快照后列缓存失效、SSE 尾帧、虚拟相册撤销 |
 | [`auth-smoke.js`](../../../testjs/smoke/auth-smoke.js) | 默认自起隔离后端；`AUTH_SMOKE_EXTERNAL=1` 时连接 `PORT` / `3000` 的明文后端 | 注册 → 确认 → 登录 → 改密 → 改名；隐私模式口令包裹/恢复词校验 |
 | [`undo-batch-test.cjs`](../../../testjs/smoke/undo-batch-test.cjs) | 临时 `DATA_DIR` + 真实撤销路由，不需要完整后端 | 批次撤销：同 `origin` 一次退完/一次回完、跨表批次、无 `origin` 仍是单条、新动作清空全部 redo、按 `origin` 整批（设置页路径） |
+| [`cadre-undo-test.cjs`](../../../testjs/smoke/cadre-undo-test.cjs) | 临时 `DATA_DIR` + 测试主密钥建真实加密库 + 真实路由挂最小 Express | 班干部撤销执行器：`cadre_delete`（级联删成员 + 下级上移整批回滚 / 重做）、`cadre_order`（`parent_id` / `cadre_id` / `sort_order` 回滚）、`cadre_import`（只回滚本次新建行，重做层级正确）；走真实 `/api/undo` 中文 `key` |
 | [`collator-equiv-probe.js`](../../../testjs/smoke/collator-equiv-probe.js) | 无 | 后端 `Intl.Collator` 与前端排序一致性 |
 | [`unzip-safe-test.cjs`](../../../testjs/smoke/unzip-safe-test.cjs) | 无 | 安全解压：符号链接/路径穿越/绝对路径/反斜杠全部拦截 |
 | [`pptx-guard-test.cjs`](../../../testjs/smoke/pptx-guard-test.cjs) | 无 | PPTX 导入守卫 |
@@ -76,6 +78,7 @@ classnest/
 | [`album-file-etag-test.cjs`](../../../testjs/smoke/album-file-etag-test.cjs) | 无 | 相册原文件 ETag/缓存语义 |
 | [`album-photo-info-test.cjs`](../../../testjs/smoke/album-photo-info-test.cjs) | 无 | 照片信息（EXIF 日期字段等） |
 | [`album-ruler-mapping-test.cjs`](../../../testjs/smoke/album-ruler-mapping-test.cjs) | 无 | 年份尺映射（宽 42、轴心 x=34） |
+| [`album-rename-test.cjs`](../../../testjs/smoke/album-rename-test.cjs) | 临时 `DATA_DIR` + 真实路由，不需要完整后端 | 相册改名连带照片目录改名：索引与磁盘目录同名、同名冲突拒绝、改名后原文件仍可读 |
 | [`theme-setting-probe.mjs`](../../../testjs/smoke/theme-setting-probe.mjs) | 无 | 主题设置项读写 |
 | [`secure-channel-retry.js`](../../../testjs/smoke/secure-channel-retry.js) | 需 Vite 开发服务器（`testjs/probe/pages/` 断言页，经 `tools/electron-page-probe.cjs`） | 安全信道 401 重试：会话过期/凭据降级/绑定失效时正确重发 |
 | [`pdf-subset-verify.mjs`](../../../testjs/smoke/pdf-subset-verify.mjs) | 先生成子集 | PDF 字体动态子集产出核对 |

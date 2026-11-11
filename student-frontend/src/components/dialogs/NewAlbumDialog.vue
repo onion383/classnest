@@ -77,8 +77,7 @@ import DialogShell from '../base/DialogShell.vue'
 import AppSelect from '../base/AppSelect.vue'
 import AlbumPhotoPickerDialog from './AlbumPhotoPickerDialog.vue'
 import { useNotification } from '../../composables/useNotification.js'
-import { pushUndo } from '../../api/undo'
-import { warnUndoFailed } from '../../composables/useUndo.js'
+import { recordUndo as recordUndoSpec } from '../../utils/undoRecorder.js'
 import { INVOKE } from '../../electronChannels.js'
 import '../../styles/dialog-transition.css'
 
@@ -163,14 +162,14 @@ async function submit() {
       const res = await axios.post('/api/album', { kind: 'folder', name: finalName, folder_path: folderPath.value }, { headers: authHeaders() })
       // 记录「添加相册」撤销：undo 删除索引与缩略图，redo 重新加入文件夹并重扫
       // （虚拟相册不记录：它的照片来自别的相册，重做无法还原索引，记了反而误导）
-      pushUndo({
+      recordUndoSpec({
         key: 'album',
         type: 'album_add',
         label: `添加相册：${finalName}`,
         payload: {
           album: { id: res.data.id, name: finalName, folder_path: folderPath.value, kind: 'folder', sort_order: res.data.id, created_at: '', updated_at: '' }
         }
-      }).catch(() => warnUndoFailed('添加相册'))
+      })
       useNotification().success('相册已创建，正在后台扫描照片索引…')
       emit('created', res.data.id)
       emit('close')

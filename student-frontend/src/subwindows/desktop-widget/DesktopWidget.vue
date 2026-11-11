@@ -140,7 +140,7 @@
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import AnimatedClock from '../../components/AnimatedClock.vue'
-import { INVOKE, SEND } from '../../electronChannels.js'
+import { INVOKE, SEND, RECEIVE } from '../../electronChannels.js'
 import { useThemeStore } from '../../stores/theme'
 import { AUTH_CHANGED_EVENT } from '../../utils/authStorage.js'
 import { useDisposables } from '../../utils/disposables.js'
@@ -1028,11 +1028,22 @@ function saveApps(attempt = 0) {
 // 上一轮是否还在飞。后端卡住时 axios 没有超时，Promise.all 可能长时间不返回，
 // 5 分钟一轮的定时器若照常发，请求会一层层叠加（每层 5 个接口）。
 let loadingAll = false
+// 变更通知撞上一轮尚在飞的全量拉取时，不能把这次刷新直接丢掉 —— 否则又要等
+// 下一个 5 分钟周期（等于通知白发了）。记一个待刷新标记，在飞的那轮结束后补拉。
+let refreshPending = false
 // 两类请求各自一个「只认最后一次」守卫；换号时在 resetBusinessState 里统一作废。
 const loadAllGuard = createLatest()
 const loadAppsGuard = createLatest()
+// 主窗口一次批量写会连发多条 data-changed，合并成一次重拉。
+// 用 d.defer()：每次 schedule 会真清掉上一次定时器（d.timeout 的返回函数只摘登记、不清定时器）。
+const scheduleDataRefresh = disposables.defer()
+function onFromMain(data) {
+  if (!data || data.type !== 'data-changed') return
+  // d.defer() 返回的就是调度函数本身（不是带 .schedule 的对象）
+  scheduleDataRefresh(() => loadAll(), 200)
+}
 async function loadAll() {
-  if (loadingAll) return
+  if (loadingAll) { refreshPending = true; return }
   loadingAll = true
   // 代次守卫：换号时 resetBusinessState 会 invalidate 掉所有在途请求，
   // 旧响应回来后不能再写回 ref（否则挂件残留上一用户的课表/值日 —— 审查 v5 · V5-007）。
@@ -1063,7 +1074,14 @@ async function loadAll() {
     // 静默失败，保留旧数据
   } finally {
     // 只让最新一轮收尾：旧请求结束时不能把新请求的 loadingAll 提前放开
-    if (loadAllGuard.isCurrent(token)) loadingAll = false
+    if (loadAllGuard.isCurrent(token)) {
+      loadingAll = false
+      // 期间来过变更通知：立刻补拉一轮，别让事件被在途请求吞掉
+      if (refreshPending) {
+        refreshPending = false
+        loadAll()
+      }
+    }
   }
 }
 
@@ -1076,6 +1094,7 @@ function resetBusinessState() {
   loadAllGuard.invalidate()
   loadAppsGuard.invalidate()
   loadingAll = false
+  refreshPending = false
   schedule.value = { cells: [], settings: { periods: [], days: ['周一', '周二', '周三', '周四', '周五'] } }
   duty.value = { cells: {}, settings: { days: ['周一', '周二', '周三', '周四', '周五'], items: [] } }
   countdowns.value = []
@@ -1177,7 +1196,10 @@ onMounted(() => {
   disposables.listen(window, 'pointercancel', onAppDragEnd)
   // 登录态变化（别的窗口登出/换号）→ 立刻作废业务数据并重拉
   disposables.listen(window, AUTH_CHANGED_EVENT, onAuthChanged)
-  // every 5 分钟刷新数据；now 仅驱动倒计时/课程等分钟级状态，秒级走 AnimatedClock
+  // 主窗口写成功 → data-changed：订阅句柄要登记进资源表，卸载时配对 off（不是 DOM 监听器，用 add）
+  const fromMainHandler = window.electron.on(RECEIVE.FROM_MAIN, onFromMain)
+  if (fromMainHandler) disposables.add(() => window.electron.off(RECEIVE.FROM_MAIN, fromMainHandler))
+  // 5 分钟刷新只作兜底：事件丢失 / 窗口当时没建好时最终一致，不再是唯一刷新来源
   disposables.interval(loadAll, 5 * 60 * 1000)
   disposables.interval(() => { now.value = new Date() }, 60000)
 })

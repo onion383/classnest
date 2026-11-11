@@ -1,6 +1,5 @@
-import { getToken as loadStoredToken, TOKEN_KEY, AUTH_CHANGED_EVENT } from '../../utils/authStorage.js'
-import { resetUserScopedCaches } from '../../utils/userScopedCache.js'
-import { decodeJwtPayload } from '../../utils/jwt.js'
+import { getToken as loadStoredToken } from '../../utils/authStorage.js'
+import { installAuthSync } from '../../utils/authSync.js'
 import { createApp } from 'vue'
 // 桌面组件里也用到带 <script setup vapor> 的组件（AnimatedClock 时钟），
 // 3.6 通道下同样需要 interop 插件；3.5 通道下该模块是 null（见 vite.config.js）。
@@ -39,13 +38,6 @@ function getToken() {
   return tokenPromise
 }
 
-// 登录身份：同一会话的滑动续期只改 token 字符串，sid / userId / dbSlug 不变。
-// 解析失败（空 token、损坏 JWT）返回空身份，视为「未登录/已登出」。
-function authIdentity(token) {
-  const p = decodeJwtPayload(token)
-  return p ? `${p.userId || ''}|${p.dbSlug || ''}|${p.sid || ''}` : ''
-}
-
 // 共用 axios 装配：登录态、网络错误退避重试、安全通道加密。
 // 打包版加载自 app://local/desktop-widget.html，相对路径会被解析到该协议而拿不到后端，
 // 故与其它窗口一样补全后端地址；开发模式仍走 Vite 代理的相对路径。
@@ -55,6 +47,11 @@ setupApiClient({
   // 滑动续期拿到新 token 后同步本窗口缓存，避免常驻组件一直用旧 token 到过期
   onTokenRenewed: (token) => { tokenPromise = Promise.resolve(token) },
 })
+
+// 跨窗口登录态：续期只让本窗口重读 token；登出/换号才清用户级缓存并广播
+// AUTH_CHANGED_EVENT（组件据此清空课表/值日/学生等业务数据）。
+// 判定统一在 utils/authSync.js，本窗口不再自己解析 JWT 比对身份。
+installAuthSync({ onTokenChanged: () => { tokenPromise = null } })
 
 function bootstrap() {
   if (import.meta.env.DEV) console.info('[dw-timing] bootstrap 开始 ' + Date.now())
@@ -79,33 +76,10 @@ function bootstrap() {
   // 露出下面自绘的渐变层（否则 body 的 #f0f4f8 底色会盖住它）。
   document.documentElement.classList.add('system-acrylic')
 
-  // 同一 profile 下，主窗口改主题/日夜间/token 都会在本窗口触发 storage 事件。
-  // ⚠️ token 的**滑动续期**也会写 TOKEN_KEY（后端下发的 X-Renewed-Token），
-  //    storage 事件本身分不清「续期」和「换号」。只看 key 就 reset 会把挂件
-  //    整窗的业务数据清空重拉 —— 换号才该清（审查 v5 · V5-044）。
-  //    用 userId|dbSlug|sid 判断身份是否真的变了。
-  let authIdentitySnapshot = authIdentity(loadStoredToken())
+  // 同一 profile 下，主窗口改主题/日夜间都会在本窗口触发 storage 事件。
+  // 登录态（含「续期不算换人」的判定）由 utils/authSync.js 统一处理，见文件顶部。
   window.addEventListener('storage', (e) => {
-    if (!e.key) return
-    if (e.key === TOKEN_KEY) {
-      const nextIdentity = authIdentity(e.newValue)
-      if (nextIdentity === authIdentitySnapshot) {
-        // 同一会话只换了 token 字符串（续期）：让下次请求重读即可，不要广播登出
-        tokenPromise = null
-        return
-      }
-      authIdentitySnapshot = nextIdentity
-      tokenPromise = null
-      // 本窗口的用户级缓存（信道会话等）也要作废：登出只清了主窗口那份注册表，
-      // 这里得自己清一次，否则换号后本窗口还拿着旧用户的信道会话。
-      resetUserScopedCaches()
-      // **业务数据必须立刻作废**：原来只清了 token 缓存，组件里的课表/值日/倒计时/
-      // 请假/学生/常用软件仍是上一个用户的，最长要等 5 分钟后的轮询才刷新 → 旧数据外露。
-      // 这里广播一个窗口内事件，组件收到后自行清空并重拉。
-      window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT))
-      return
-    }
-    if (!e.key.startsWith('app-')) return
+    if (!e.key || !e.key.startsWith('app-')) return
     theme.reloadFromStorage()
   })
 

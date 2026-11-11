@@ -92,7 +92,7 @@
 
 1. **改代码前**：在 `doc/README.md` 目录里找到对应文档，先读现状。
 2. **改代码后**：按下方映射表更新文档的清单 / 标准；新增、删除或移动代码文件后，跑 `node testjs/tools/doc-trees.mjs`。
-3. **跑校验**：`npm run docs:verify`；失败项会直接指出「哪个文件未覆盖 / 哪个路由缺 / 哪个依赖版本不符」。
+3. **跑校验**：`npm run docs:verify`；失败项会直接指出「哪个文件未覆盖 / 哪个路由缺 / 哪个依赖版本不符」。若是数量类计数漂移，先跑 `npm run docs:sync` 按源码现算值改写（`--dry` 可预览），再复检。
 4. **补叙述**：行为、时序、注意事项这类内容人工补（脚本不管）。
 5. **记账**：在「维护记录」追加一行日期 + commit + 改动内容。
 6. **提交前**：`npm run docs:verify` 必须为 0；建议接入 CI 或 pre-push。
@@ -137,10 +137,11 @@
 
 ```powershell
 npm run docs:verify            # 30 类校验；失败退出码 1
+npm run docs:sync              # 数量类计数按源码现算值改写（只改数字；--dry 预览）
 node testjs/tools/docs-verify.mjs --json   # 机器可读
 ```
 
-脚本读源码 / 读配置，**不修改任何文件**。
+`docs-verify` 读源码 / 读配置，**不修改任何文件**；`docs:sync` 是唯一会写文档的脚本，且只改数量类计数里的数字。
 
 #### 2.1 格式自动化校验（8 类）
 
@@ -159,16 +160,16 @@ node testjs/tools/docs-verify.mjs --json   # 机器可读
 
 | 校验项 | 覆盖对象 |
 | --- | --- |
-| 源码覆盖（7 类） | 组件 76、页面 22（含拆分模块）、composable 26、utils 26、后端 98、主进程 26 + `inno/` 与安装器素材、构建配置 5 个，逐个在文档中出现 |
-| 路由校验 | `routes/**` 实际注册的 214 条 `METHOD path`（含 `historyRoutes` 工厂） |
+| 源码覆盖（7 类） | 组件 81、页面 22（含拆分模块）、composable 29、utils 50、后端 121、主进程 39 + `inno/` 与安装器素材、构建配置 5 个，逐个在文档中出现 |
+| 路由校验 | `routes/**` 实际注册的 228 条 `METHOD path`（含 `historyRoutes` 工厂） |
 | 依赖校验 | 40 个直接依赖的名称 / 声明版本或安装版本 / 许可证标识 |
-| 关键计数（6 类） | 组件 76 / 组合式 26 / utils 26 / `main.*.js` 21 / 后端依赖 12 / 页面 15，与源码统计比对 |
-| npm 脚本 | 23 个脚本全部在根 README 出现 |
+| 关键计数（9 类） | 组件 81 / 组合式 29 / utils 50 / `main.*.js` 24 / 后端依赖 12 / 页面 15 / 导出表 20 / 单元测试文件 97 / 后端路由 228，与源码统计比对（口径集中在 `testjs/tools/docs-counts.mjs`，`docs:sync` 共用） |
+| npm 脚本 | 24 个脚本全部在根 README 出现 |
 | 环境变量（2 类） | `.env` 键在 README 有说明；文档声明的 7 个运行时变量在源码里确实被 `process.env` 读取 |
-| IPC 通道 | `ipc-channels.json` 的 86 个通道全部写入文档 |
+| IPC 通道 | `ipc-channels.json` 的 82 个通道全部写入文档 |
 | 用户手册索引 | `doc/user/` 32 篇（除 README）全部写入 `user/README.md` |
-| 工具脚本覆盖 | `testjs/tools/` 12 个脚本全部写入 `testing/tools.md` |
-| 测试脚本覆盖 | `testjs/units`、`behavior`、`smoke`、`probe` 共 57 个脚本全部写入 `testing/` 对应子页 |
+| 工具脚本覆盖 | `testjs/tools/` 20 个脚本全部写入 `testing/tools.md` |
+| 测试脚本覆盖 | `testjs/units`、`behavior`、`smoke`、`probe` 共 180 个脚本全部写入 `testing/` 对应子页 |
 
 ### 3. 自动化校验的不足和注意事项
 
@@ -206,5 +207,12 @@ node testjs/tools/docs-verify.mjs --json   # 机器可读
 | 2026-11-07 | 工作区未提交 | 启动归因与本轮优化落文档：`topics/performance.md` 补第 6 节（双峰判据、独立探针、打包实测、否掉的两项、电源事件判据）并更新前后端优化表与启动链路图；`backend/README.md` 启动时序改为让路链与首屏路由提前注册；更正 `main-process/entry.md`、`widgets.md` 的回环地址描述；`main-process/root-files.md`、`frontend/composables.md`、`topics/security.md` 补 preload 主密钥预取；同步 `doc/开发文档/优化文档.md` 的 4.3 与新增 4.6 | 禁用词 / 英文标识配中文 / 字段标签加粗 / Mermaid / doc-tree / 模块分隔线 / 死链等本轮相关校验全 PASS；「测试脚本覆盖」等既有缺口属并行会话，未处理 |
 | 2026-11-09 | 工作区未提交 | 同步 11-09 相位竞态复测结论：`topics/performance.md` 第 6 节两条「仍待运行时验证」改为已验证、新增第 7 节（三包排除预连接、裸 `fetch` 早于 `listen` 的固定退避、`waitForBackendReady(1500)` 修法、7 批验证数据、645ms 新基线与未定位项），前端优化表把「回环预连接同源」改为已撤回、补「握手前等后端就绪」行并给主密钥预取加相位副作用；`frontend/composables.md`、`topics/security.md` 补配套等待与安全中性结论；`doc/开发文档/优化文档.md` 4.6 待验证清单改为已验证并新增 4.7 过程记录 | 禁用词 / 英文标识配中文 / 字段标签加粗 / Mermaid / doc-tree / 模块分隔线 / 死链等格式类校验无新增 FAIL；「组合式函数覆盖」等 5 类 FAIL 为并行会话既有缺口，未处理 |
 | 2026-11-09 | 工作区未提交 | Electron 45 保留定案 + 为 46 做安全存储异步化：`main.config.js` / `main.backend.js` / `main.js` 改造后，同步 `main-process/README.md`、`main-process/entry.md`、`main-process/modules.md`、`backend/data-layer.md` 的可用性时序与方法名；`topics/performance.md` 第 7 节补 45 的 A/B 定案；`testing/units.md` 登记新增 `db-master-key.test.js`；`index.html` 作废注释清理与 `dev-vite.js` 过时注释更正 | 禁用词 / 英文标识配中文 / 字段标签加粗 / Mermaid / doc-tree / 模块分隔线 / 死链等格式类校验无新增 FAIL；「测试脚本覆盖」缺口回到基线 21；5 类 FAIL 均为并行会话既有缺口 |
+| 2026-11-11 | 工作区未提交 | 审查修复台账三张卡落地并同步文档：4-11 导出 ZIP 改纯流式（`services.zipStream` 成唯一入口，`zipWriter` 只留 CRC/路径净化/加密零件），4-10 首屏分段打点（新增 `utils/perfMark.js` 与 `__perf` 传参链，`useDashboardData` 汇总一条 `[startup]`），5-3 计数单一来源（新增 `testjs/tools/docs-counts.mjs` 与 `docs-sync.mjs`，`docs-verify` 改为共用同一张表，新增 `npm run docs:sync`）；`backend/services.md`、`backend/routes.md`、`testing/units.md`、`testing/tools.md`、`frontend/misc.md`、`frontend/README.md`、`development/README.md`、根 `README.md` 同步条目与计数 | 9 类关键计数全 PASS；工具脚本覆盖 0 FAIL；npm 脚本 24 个全部写入根 README |
+| 2026-11-11 | 工作区未提交 | 5-2 覆盖类缺口清零：`frontend/misc.md` 补 14 个 utils、`frontend/composables.md` 补 2 个 composable 并修正 `useSeatGrid` 旧导出叙述、`backend/services.md` 补 9 个 service 与 `sessions` 新导出、`backend/data-layer.md` 补 `schema/seatGridMigration.js`、`backend/routes.md` 补 4 条路由、`main-process/modules.md` 补 2 个模块、`frontend/components/{base,dialogs}.md` 补 `MediaViewer` 与 `ReceiptDialog`、`testing/{units,behavior,smoke}.md` 补 68 条测试脚本；重跑 `doc-trees.mjs` 刷新 30 份篇首树 | `npm run docs:verify` **33 类校验 0 FAIL**（覆盖类、关键计数、死链、禁用词、doc-tree 全绿） |
+| 2026-11-11 | 工作区未提交 | §6 守卫：新增 `student-backend/schema/tableRegistry.js` 作表名唯一名单（物理表按 schema 分组 + 逻辑表 + 四份白名单），5 个调用点改为 import；`data-layer.md` 补该文件条目，`testing/units.md` 补 `architecture-guard.test.js` 行；`eslint.config.mjs` 增加业务层两条架构规则 | 后端文件覆盖 121、单元测试文件 96、测试脚本覆盖 179 均由源码现算对齐；`npm run docs:verify` **33 类 0 FAIL**；全量单测 96 文件 / 953 条全绿；ESLint 0 error |
+| 2026-11-11 | 工作区未提交 | 2-3b 跨窗口登录态收口：新增 `student-frontend/src/utils/authSync.js`（按「账号 + 库 + 会话」判身份，滑动续期不算换人；换号/登出先清用户级缓存再广播 `AUTH_CHANGED_EVENT`），主窗口 / 工具箱 / 桌面组件三个入口改走 `installAuthSync`，删掉桌面组件自解析 JWT 与工具箱「只看 key 就 reset」；`frontend/misc.md`、`testing/units.md` 补条目，`lifecycle-dispose-probe.cjs` 判据改锁统一入口；另修 `PUT /api/seats` 业务校验失败回 500 的不一致（`businessRules` 抛 `ValidationError`（status=400），座位保存路由按 `err.status` 映射；`backend/services.md` 补错误语义） | utils 50、单元测试文件 97、测试脚本 180 由源码现算对齐；`npm run docs:verify` **33 类 0 FAIL**；全量单测 97 文件 / 961 条全绿；ESLint 0 error；`npm run build` 通过 |
+| 2026-11-11 | 工作区未提交 | 修「值日设置弹窗重启后首次打开是空的」：父组件 `v-if="settingsMounted"` 懒挂载，而该标记在 `visible` 变 true 的同一 flush 置真 → 首次挂载时 `props.visible` 已是 true，不带 `immediate` 的 watch 一次都不跑，本地副本停在空数组；`DutySettingsDialog` 与 `DutyWeightAlgorithmDialog` 的 visible watch 补 `{ immediate: true }`；新增 `duty-settings-hydrate.test.js` 3 条（含「父组件确实懒挂载」前提断言），变异去掉 immediate 即红 | 全量单测 98 文件 / 964 条全绿；ESLint 0 error；`docs:verify` 33 类 0 FAIL |
+| 2026-11-11 | 工作区未提交 | 修「主窗口改数据后桌面挂件不刷新」（用户报新增课表/值日项目挂件不动）：`desktop-layer.log` 里每次收到通知都 `Uncaught Error: scheduleDataRefresh.schedule is not a function` —— `disposables.defer()` 返回的就是调度函数本身，首版却按 `{ schedule }` 对象调用；改为 `scheduleDataRefresh(() => loadAll(), 200)`，接线测试补「禁止 `.schedule(`」断言 | 全量单测 97 文件 / 961 条全绿；ESLint 0 error |
+| 2026-11-11 | 工作区未提交 | 排查「值日表怎么填都保存失败」（用户报「不支持临时学生」）：从 `backend.log` 取到 400「值日列「周一」不在设置的列名列表里」，根因是旧/扁平 `days` 被 `unpackMode` 读空 → 前端兜底造列 → 后端以设置为唯一真相拒存。保留的正确性修复：`DutyView` 设置读回后不再兜底造列、缺列出引导页，`DutySettingsDialog` 禁止日常值日保存 0 列；**旧结构兼容层经用户确认已回退**（发布前不积累兼容代码），`toModeMap`/`unpackMode`/`dutyCells` 恢复只认 `{daily,big}`，`backend.test.js` 旧口径一并还原，`duty-save-transaction.test.js` 回到 3 条 | 全量单测 97 文件 / 961 条全绿；`docs:verify` 33 类 0 FAIL；ESLint 0 error |
 
 ---

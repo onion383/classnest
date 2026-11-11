@@ -170,7 +170,7 @@ import SearchBar from '../components/base/SearchBar.vue'
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import Tabs from '../components/base/Tabs.vue'
 import { useTableCRUD } from '../composables/useTableCRUD.js'
-import { useUndoShortcut, recordRowDelete } from '../composables/useUndo.js'
+import { useUndoShortcut, recordRowDelete, recordRowInsert, recordRowUpdate, recordStudentCascadeDelete } from '../composables/useUndo.js'
 import { undoById } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
@@ -364,14 +364,20 @@ async function onSubmitStudent(data) {
   const isEdit = !!editingRow.value
   try {
     if (isEdit) {
-      await axios.put(`${API_BASE}/students/${editingRow.value.id}`, data)
+      // 弹窗整行提交不走共享 CRUD 的 saveCell，撤销要在这里按完整行登记（Q2-07）。
+      // oldRow/newRow 都取完整行：row_update 的 undo 按列回写，学生改名还要反向级联关联表里只存姓名的引用。
+      const oldRow = { ...editingRow.value }
+      await axios.put(`${API_BASE}/students/${oldRow.id}`, data)
       addDialogVisible.value = false
       await fetchStudents()
+      recordRowUpdate('students', oldRow, table.rowSnapshotById(oldRow.id, { ...oldRow, ...data }))
       notifySuccess('已保存修改')
     } else {
-      await axios.post(`${API_BASE}/students`, data)
+      const res = await axios.post(`${API_BASE}/students`, data)
       addDialogVisible.value = false
       await fetchStudents()
+      // POST 只回 id，redo 要靠完整行重建；共享层按 id 从刚刷新的全表快照里取。
+      recordRowInsert('students', table.rowSnapshotById(res.data.id, data))
       notifySuccess('已添加学生')
     }
   } catch (err) {
@@ -449,11 +455,24 @@ async function deleteStudent(id) {
   showConfirm(msg, async () => {
     try {
       dynamicTable.value?.beginRowsAnimWindow() // 级联删除同样要行离场动画
-      await axios.post(`${API_BASE}/students/${id}/delete-with-relations`, {
+      const res = await axios.post(`${API_BASE}/students/${id}/delete-with-relations`, {
         relations: { leave: true, score: true, seat: true, duty: true, group: true, cadre: true }
       })
       await finish()
-      notifySuccess('已删除学生及关联记录')
+      // 级联删除也要可撤销：后端把七处（学生/请假/加减分/小组/班干部/座位/值日）
+      // 的快照整包返回，登记成**一条**命令 —— 否则 Ctrl+Z 只回来学生，关联还得再撤六次。
+      const removed = res.data?.removed
+      const undoId = await recordStudentCascadeDelete(removed)
+      const name = removed?.student?.['姓名'] || '该学生'
+      if (undoId) {
+        notifyUndo(`已删除学生「${name}」及关联记录`, async () => {
+          dynamicTable.value?.beginRowsAnimWindow()
+          await undoById(undoId)
+          await finish()
+        })
+      } else {
+        notifySuccess('已删除学生及关联记录')
+      }
     } catch (err) {
       showAlert(err.response?.data?.error || '删除失败')
     }
@@ -464,7 +483,17 @@ async function deleteStudent(id) {
         dynamicTable.value?.beginRowsAnimWindow()
         await axios.delete(`${API_BASE}/students/${id}`)
         await finish()
-        notifySuccess('已删除学生（保留关联记录）')
+        // 「仅删学生」原先不登记撤销 —— 删完只能重新录入。学生整行就在手边，直接登记。
+        const undoId = student ? await recordRowDelete('students', student) : null
+        if (undoId) {
+          notifyUndo(`已删除学生「${student['姓名']}」（保留关联记录）`, async () => {
+            dynamicTable.value?.beginRowsAnimWindow()
+            await undoById(undoId)
+            await finish()
+          })
+        } else {
+          notifySuccess('已删除学生（保留关联记录）')
+        }
       } catch (err) {
         showAlert(err.response?.data?.error || '删除失败')
       }

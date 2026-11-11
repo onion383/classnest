@@ -73,6 +73,7 @@ import AppSelect from '../../base/AppSelect.vue'
 import { useNotification } from '../../../composables/useNotification';
 import { useExportFormats } from './ExportExcel.exporters.js';
 import { localDateStr } from '../../../utils/dateTime.js';
+import { friendlyError } from '../../../utils/blobError.js';
 import { useCardHeightAnimation } from '../../../composables/useCardHeightAnimation.js';
 import '../../../styles/dialog-transition.css'
 
@@ -252,7 +253,9 @@ async function doExport() {
     } catch (err) {
       // 失败保留弹窗，便于改完选项重试（与下方各格式的失败处理一致）
       console.error('导出失败:', err);
-      notifyError(err && err.message ? err.message : '导出失败，请重试')
+      // 自定义导出（zip 打包 / 班费收据）失败时后端原因可能藏在 blob 或密文信封里，
+      // 统一走 friendlyError 取文案，别只读 axios 的通用 message。
+      notifyError(friendlyError(err, '导出失败，请重试'))
       emit('export-error', err);
     } finally {
       exporting.value = false

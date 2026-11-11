@@ -236,7 +236,9 @@ const previewRows = computed(() => {
   }))
 })
 
-watch(() => props.visible, (v) => { if (v) resetDefaults() })
+// immediate：弹窗由父组件按 mounted 标记懒挂载，首次挂载时 visible 已经是 true，
+// 没有 false→true 的变化，不 immediate 的话 resetDefaults 一次都不跑，首次打开是空表。
+watch(() => props.visible, (v) => { if (v) resetDefaults() }, { immediate: true })
 
 function _rate(v) {
   const n = Number(v)

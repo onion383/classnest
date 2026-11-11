@@ -123,29 +123,36 @@ function applyDocWrite(table, id, values) {
   }
   const keys = Object.keys(cleaned);
   if (!keys.length) return { error: '没有可写入的字段' };
-  // ①-2 依赖既有数据的一致性校验（座位引用的学生是否真实存在、值日项目/星期/姓名是否合法等）
-  try {
-    validateRow(table, cleaned, row);
-  } catch (e) {
-    return { error: e.message };
-  }
   const before = {};
   const after = {};
   keys.forEach((k) => { before[k] = row[k]; after[k] = cleaned[k]; });
-  // ② 整块写入是「整体替换」，先把旧值快照进历史表（课表/座位），留一颗后悔药
+
+  // ② 校验 + 快照 + 写入放进**同一个事务**。
+  // 校验（validateRow → assertDutyRefs）会把值日名单里的新名字建档，这是有意的副作用；
+  // 原先它跑在事务外，只要写入或快照失败，值日表没写成、名册里却多出一个临时学生
+  // （审查 v6 · Q4-01）。放进事务后，抛错即整体回滚，建档不会留下残骸。
   try {
-    snapshotBeforeWrite(table, row);
+    return db.transaction(() => {
+      // ②-1 依赖既有数据的一致性校验（座位引用的学生是否真实存在、值日项目/星期/姓名是否合法等）
+      validateRow(table, cleaned, row);
+      // ②-2 整块写入是「整体替换」，先把旧值快照进历史表（课表/座位），留一颗后悔药
+      try {
+        snapshotBeforeWrite(table, row);
+      } catch (e) {
+        console.warn(`[ai] 写入前快照失败（已跳过，不影响本次写入）：${e.message}`);
+      }
+      if (store.isDoc(table)) {
+        // 单例文档表已合并为槽位表，写入统一走 slotStore
+        store.setDoc(table, cleaned);
+      } else {
+        const setSql = keys.map((k) => `"${k}" = ?`).join(', ');
+        db.prepare(`UPDATE "${table}" SET ${setSql} WHERE id = ?`).run(...keys.map((k) => serializeColVal(cleaned[k])), rid);
+      }
+      return { ok: true, table, id: rid, before, after };
+    })();
   } catch (e) {
-    console.warn(`[ai] 写入前快照失败（已跳过，不影响本次写入）：${e.message}`);
+    return { error: e.message };
   }
-  const setSql = keys.map((k) => `"${k}" = ?`).join(', ');
-  if (store.isDoc(table)) {
-    // 单例文档表已合并为槽位表，写入统一走 slotStore
-    store.setDoc(table, cleaned);
-  } else {
-    db.prepare(`UPDATE "${table}" SET ${setSql} WHERE id = ?`).run(...keys.map((k) => serializeColVal(cleaned[k])), rid);
-  }
-  return { ok: true, table, id: rid, before, after };
 }
 
 // POST /api/ai/doc —— 整块写入「非行式」表（座位/权重/课表/值日/模板等）

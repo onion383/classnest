@@ -344,7 +344,8 @@
 
 <script setup>
 import { prefetch } from '../../../utils/dialogPrefetch.js'
-import { ref, computed, watch, onMounted, onActivated, onBeforeUnmount, nextTick, defineAsyncComponent, TransitionGroup, toRef } from 'vue'
+import { pushEscLayer, removeEscLayer, consumeEscape } from '../../../utils/dialogStack.js'
+import { ref, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, nextTick, defineAsyncComponent, TransitionGroup, toRef } from 'vue'
 import AppSelect from '../../base/AppSelect.vue'
 import ConfirmDialog from '../../base/ConfirmDialog.vue'
 import CustomScrollbar from '../../base/CustomScrollbar.vue'
@@ -526,6 +527,13 @@ const fixedMaxHeight = ref(props.maxHeight)
 const columnFilters = ref({})
       // 当前打开筛选面板的列名（'' = 未打开）
 const filterField = ref('')
+// 筛选面板也是一层 Esc 层：打开时压进与弹窗共用的栈，
+// 表头的 Esc 只收面板，不会把外层弹窗（如导入预览）一起关掉。
+const filterEscLayer = {}
+watch(filterField, (v) => {
+  if (v) pushEscLayer(filterEscLayer)
+  else removeEscLayer(filterEscLayer)
+}, { flush: 'sync' })
       // 筛选面板打开期间才开启行错峰动画（面板关闭后延时关闭，见 rowAnimEnabled）
 const filterAnimating = ref(false)
       // 面板里的值列表：由 buildFilterOptions 在打开/勾选时算出，缓存避免每次渲染重算
@@ -1043,7 +1051,9 @@ function onFilterDocClick(e) {
       ctx.closeFilter();
     }
 function handleFilterKeydown(e) {
-      if (e.key === 'Escape' && ctx.filterField.value) ctx.closeFilter();
+      // 统一协议：面板打开且自己是最上层才消费 Esc；收起态完全放行。
+      if (!consumeEscape(e, { open: !!ctx.filterField.value, self: filterEscLayer })) return;
+      ctx.closeFilter();
     }
     // 表格/页面滚动后锚点位置已失效：收起面板（面板内部列表滚动不算）
 function onFilterScroll(e) {
@@ -1542,6 +1552,12 @@ onActivated(() => {
   // 恢复滚动位置必须排在 initVirtual 之前：后者会用 wrap.scrollTop 覆盖 _scrollTop。
   nextTick(() => { restoreBodyScroll(); initVirtual(); });
 })
+// 被 <KeepAlive> 缓存时不会 unmount：筛选面板若开着就走，会把它的 Esc 层留在全局栈里，
+// 之后所有弹窗的 Esc 都会失效。切走即收面板并出栈。
+onDeactivated(() => {
+  if (ctx.filterField.value) ctx.closeFilter();
+  removeEscLayer(filterEscLayer);
+})
 onBeforeUnmount(() => {
   if (ctx._ro) { ctx._ro.disconnect(); ctx._ro = null; }
   // 空态延迟定时器：卸载后还在跑会往已销毁的实例上写状态
@@ -1554,6 +1570,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleGlobalEnter);
   document.removeEventListener('click', onFilterDocClick);
   document.removeEventListener('keydown', handleFilterKeydown);
+  removeEscLayer(filterEscLayer);
   window.removeEventListener('scroll', onFilterScroll, true);
   // 拖拽中途被卸载：停掉自动滚动并清掉让位位移，避免残留定时器/内联样式
   if (ctx._rowAutoScroll) { ctx._rowAutoScroll.stop(); ctx._rowAutoScroll = null; }

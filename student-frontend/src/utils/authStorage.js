@@ -45,6 +45,10 @@ function clearCurrentUser() {
 }
 
 // ---- 组合操作（登录成功写全套 / 登出清全套）----
+// 换「登录主体」时用户作用域代次会在 clearAuth 里 +1（见 utils/userScopedCache.js）：
+// 在途请求的续期凭据、模块级缓存都靠它判断「这份结果还属于当前这个用户吗」。
+// 注意 setToken / clearToken 不换代 —— 滑动续期走的是 setToken，同账号续期不算换人，
+// 否则每次续期都会把自己在途的请求一起作废。
 function setAuth(token, user) {
   setToken(token)
   setCurrentUser(user)

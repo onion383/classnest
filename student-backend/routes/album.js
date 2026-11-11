@@ -264,16 +264,26 @@ router.post('/merge', (req, res) => {
           insertPhoto.run(newId, p.file_path, p.file_name, p.file_size || 0, p.mtime || '', p.photo_date || '', p.exif_date || '', p.date_src || '');
           if (p.thumb_path) thumbs.push(p.thumb_path);
         }
+      }
+      // 快照必须在删除之前取：合并后的新相册（含复制出的照片索引）与每个源相册
+      // （整行 + 照片整行）一起带回，撤销时才能把源相册原样重建、把新相册删掉。
+      const newAlbum = db.prepare('SELECT * FROM albums WHERE id = ?').get(newId);
+      const newPhotos = db.prepare('SELECT * FROM album_photos WHERE album_id = ?').all(newId);
+      const sources = sourceAlbums.map((album) => ({
+        album: db.prepare('SELECT * FROM albums WHERE id = ?').get(album.id),
+        photos: getPhotos.all(album.id),
+      }));
+      for (const album of sourceAlbums) {
         deletePhotos.run(album.id);
         deleteAlbum.run(album.id);
       }
-      return { newId, thumbs };
+      return { newId, thumbs, removed: { newAlbum, newPhotos, sources } };
     });
 
-    const { newId, thumbs } = run();
+    const { newId, thumbs, removed } = run();
     // 源索引已删除，其缩略图缓存不再被引用，顺手清理（失败无所谓）
     for (const tp of thumbs) fsp.unlink(tp).catch(() => {});
-    res.json({ id: newId, message: `已合并 ${sourceAlbums.length} 个相册` });
+    res.json({ id: newId, message: `已合并 ${sourceAlbums.length} 个相册`, removed });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

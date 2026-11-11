@@ -11,8 +11,8 @@ classnest/
     └── src/
         └── components/
             └── data-manage/
-                ├── DataManageDialog.vue  # 数据管理弹窗（AI 技能/对话）
-                ├── DataExportPanel.vue  # 设置页「数据管理」导出面板
+                ├── DataExportPanel.vue  # 数据导出面板
+                ├── DataManageDialog.vue  # 数据管理弹窗
                 ├── ExportChatDialog.vue  # 对话导出
                 ├── ExportMarkdownDialog.vue  # Markdown 导出
                 └── MarkdownEditDialog.vue  # Markdown 编辑
@@ -37,7 +37,7 @@ classnest/
 ## 详细说明
 
 ### [DataExportPanel.vue](../../../../student-frontend/src/components/data-manage/DataExportPanel.vue) · 数据导出面板
-- **定位**：设置页「数据管理」分区的主体。列出 19 张业务表（行数、勾选、单表导出），顶部「全部导出 / 选中导出」把多张表打成一个 zip。
+- **定位**：设置页「数据管理」分区的主体。列出 20 张业务表（行数、勾选、单表导出），顶部「全部导出 / 选中导出」把多张表打成一个 zip。
 - **搜索**：标题行右侧的搜索框（外观与设置页顶部那个一致），结果是**过滤列表**而不是设置页那样的跳转定位，所以没有悬浮弹窗与键盘高亮。匹配口径沿用同一套 —— 命中「表名片段」或「拼音首字母」（`py` 由 `GET /tables` 下发），`Esc` 清空。搜索状态下「全部导出」变成「导出筛选的 N 张」，只导当前筛出来的表；「选中导出」仍按勾选走（筛选只是视图，取消勾选才会改动集合）。
 - **对外接口**：无 props / emits（自包含，直接挂在 `SettingsView`）。
 - **内部实现**：`GET /api/data/tables` 取清单（默认全选）；「全部/选中导出」打开 `ExportExcel` 弹窗（`hideFieldPicker` 隐藏选列 + `extraOptions` 插槽放「选择导出的表」和 zip 密码 + `customExport` 接管导出动作）；每行的「导出」也走同一个弹窗，只是恢复选列。

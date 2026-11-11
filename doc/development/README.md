@@ -10,7 +10,7 @@
 
 1. **主进程**：Electron 侧的窗口、托盘、自定义协议、后端 fork 与心跳、IPC 白名单、打包精简。
 2. **后端**：Express 服务的启动时序、逐文件清单、每个 HTTP 接口的处理方式、抽出来的公共能力、加密数据库与表结构。
-3. **前端**：Vue 3 应用的入口与构建、15 个页面、26 个组合式函数（根目录 19 + `ai/` 7）、76 个组件（逐个说明用途、Props/Emits/Slots/Expose 与内部函数）、主题与工具。
+3. **前端**：Vue 3 应用的入口与构建、15 个页面、29 个组合式函数（根目录 22 + `ai/` 7）、81 个组件（逐个说明用途、Props/Emits/Slots/Expose 与内部函数）、主题与工具。
 4. **专题**：AI（前端组件与后端工具链如何配合）、性能（启动流程、内存口径、前后端优化及结论）、打包与分支（打包流程、剔除规则、Vue 3.6 / 3.5 双分支如何兼容）、界面设计与交互（三套主题、日夜模式、图标、排版、弹窗与动效）。
 5. **依赖**：依赖清单、各依赖的用途、使用位置与许可证原文。
 6. **测试**：`testjs/` 下单元 / 行为 / 冒烟 / 探针 / 工具五类脚本的测试范围、运行方式与判据。
@@ -33,7 +33,7 @@
 | --- | --- |
 | [main-process/README.md](./main-process/README.md) | `electron/` 全部模块：整体机制（协议、窗口、后端 fork/心跳、托盘、启动计时、打包精简）、目录树与主进程标准 |
 | [main-process/entry.md](./main-process/entry.md) | 入口 `main.js`：加载期顺序、主窗口、`whenReady` 编排、引导/低版本提示、迁移与加密流程、入口 IPC、退出收尾 |
-| [main-process/modules.md](./main-process/modules.md) | 21 个 `main.*.js` 模块清单：职责、关键导出 / IPC 通道、依赖与被依赖 |
+| [main-process/modules.md](./main-process/modules.md) | 24 个 `main.*.js` 模块清单：职责、关键导出 / IPC 通道、依赖与被依赖 |
 | [main-process/root-files.md](./main-process/root-files.md) | `electron/` 根文件（`preload.js`、`startup.html`、图标、`afterPack.js`、IPC 清单）与 `inno/`、`installer-assets/` 安装器素材 |
 
 ### 2.3 后端
@@ -52,18 +52,18 @@
 | [frontend/README.md](./frontend/README.md) | 定位与职责、技术栈、5 个窗口入口与构建、目录树、路由表、主题系统、关键机制 |
 | [frontend/entry.md](./frontend/entry.md) | 5 个 HTML 入口、入口脚本关键动作、构建配置 |
 | [frontend/views.md](./frontend/views.md) | 15 个页面：路由、职责与 Tab、关键状态与数据流、调用的后端接口、依赖组件 |
-| [frontend/composables.md](./frontend/composables.md) | 26 个组合式函数（根目录 19 + `ai/` 7）：签名、返回字段、时序与副作用、调用方、注意事项 |
-| [frontend/misc.md](./frontend/misc.md) | stores / router / styles / utils（26 个）/ 指令 / 独立窗口 / 静态资源 |
-| [frontend/components/README.md](./frontend/components/README.md) | 组件标准、全局注册、76 个组件索引 |
+| [frontend/composables.md](./frontend/composables.md) | 29 个组合式函数（根目录 22 + `ai/` 7）：签名、返回字段、时序与副作用、调用方、注意事项 |
+| [frontend/misc.md](./frontend/misc.md) | stores / router / styles / utils（49 个）/ 指令 / 独立窗口 / 静态资源 |
+| [frontend/components/README.md](./frontend/components/README.md) | 组件标准、全局注册、81 个组件索引 |
 
 组件子文档：
 
 | 文档 | 主要内容 |
 | --- | --- |
 | [`frontend/components/layout.md`](./frontend/components/layout.md) | `Sidebar` 导航：分组、乐观高亮、路由预取 |
-| [`frontend/components/base.md`](./frontend/components/base.md) | 21 个基础件：下拉、开关、对话框壳、确认框、右键菜单、图标、空态、通知、搜索、标签页、周切换等 |
+| [`frontend/components/base.md`](./frontend/components/base.md) | 22 个基础件：下拉、开关、对话框壳、确认框、右键菜单、图标、空态、通知、搜索、标签页、周切换等 |
 | [`frontend/components/tables.md`](./frontend/components/tables.md) | 表格与网格：`DynamicTable`（动态列 CRUD）、`GridView`（座位/课表/值日）、AI 表格预览与提案表 |
-| [`frontend/components/dialogs.md`](./frontend/components/dialogs.md) | 28 个业务弹窗：新增/编辑记录、设置、编排、回填、权重算法、相册任务等 |
+| [`frontend/components/dialogs.md`](./frontend/components/dialogs.md) | 31 个业务弹窗：新增/编辑记录、设置、编排、回填、权重算法、相册任务等 |
 | [`frontend/components/import-export.md`](./frontend/components/import-export.md) | 导入导出：Excel 导出、相册索引导出、Excel 导入、视频缩略图 |
 | [`frontend/components/ai.md`](./frontend/components/ai.md) | AI 对话界面：消息列表、会话面板、链接/变更面板、流式尾巴、输入器 |
 | [`frontend/components/album.md`](./frontend/components/album.md) | 相册年份尺 |
@@ -96,11 +96,11 @@
 | 文档 | 主要内容 |
 | --- | --- |
 | [`testing/README.md`](./testing/README.md) | testjs 目录分工与入库规则、入口命令矩阵、runner 与旗标、结论台账、新增脚本流程 |
-| [`testing/units.md`](./testing/units.md) | 7 个单元测试：逐个写覆盖范围、前置依赖、运行方式 |
-| [`testing/behavior.md`](./testing/behavior.md) | 6 个行为层测试：暴露面、失败语义、架构标准、登录态、串行保存等 |
-| [`testing/smoke.md`](./testing/smoke.md) | 15 个链路冒烟脚本：前置环境、产物顺序、退出码判据 |
-| [`testing/probe.md`](./testing/probe.md) | 29 个探针：启动/性能、渲染绘制、相册查看器、表格拖拽、Vapor、其他 |
-| [`testing/tools.md`](./testing/tools.md) | 11 个工具脚本：种子数据、代码统计、边界检查、审计、图标生成、文档一致性校验等 |
+| [`testing/units.md`](./testing/units.md) | 92 个单元测试：逐个写覆盖范围、前置依赖、运行方式 |
+| [`testing/behavior.md`](./testing/behavior.md) | 10 个行为层测试：暴露面、失败语义、架构标准、登录态、串行保存等 |
+| [`testing/smoke.md`](./testing/smoke.md) | 17 个链路冒烟脚本：前置环境、产物顺序、退出码判据 |
+| [`testing/probe.md`](./testing/probe.md) | 53 个探针：启动/性能、渲染绘制、相册查看器、表格拖拽、Vapor、其他 |
+| [`testing/tools.md`](./testing/tools.md) | 18 个工具脚本：种子数据、代码统计、边界检查、审计、图标生成、文档一致性校验等 |
 
 ### 2.8 小组件
 

@@ -7,14 +7,16 @@ function migrateCadre(conn) {
     CREATE TABLE IF NOT EXISTS cadres (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      -- parent_id 故意**不加外键**：0 是「没有上级」的哨兵值（见 undo.executors 的 applyCadreState），
+      -- 而 0 不是任何 cadres.id。要加得先把哨兵改成 NULL，那是数据改造，不在本步范围。
       parent_id INTEGER NOT NULL DEFAULT 0,
       max_count INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS cadre_members (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      cadre_id INTEGER NOT NULL,
-      student_id INTEGER,
+      cadre_id INTEGER NOT NULL REFERENCES cadres(id) ON DELETE CASCADE,
+      student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
       student_name TEXT NOT NULL,
       sort_order INTEGER NOT NULL DEFAULT 0
     );

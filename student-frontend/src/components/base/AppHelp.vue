@@ -9,7 +9,7 @@
     @mouseleave="onLeave"
     @focus="onFocus"
     @blur="onBlur"
-    @keydown.esc="hideNow"
+    @keydown.esc="onEsc"
   >
     <IconGlyph name="about" tint="current" glyph :size="size" :stroke-width="2" />
   </button>
@@ -44,6 +44,7 @@
 <script setup vapor>
 import { ref, nextTick, onBeforeUnmount, useId } from 'vue'
 import IconGlyph from '../../components/base/IconGlyph.vue'
+import { consumeEscape } from '../../utils/dialogStack.js'
 
 const props = defineProps({
   // 气泡里的说明文字（支持 \n 换行）
@@ -126,6 +127,13 @@ function hideNow() {
   if (!open.value) return
   open.value = false
   removeListeners()
+}
+
+// Esc 走统一协议：气泡展开时收气泡并消费事件（弹窗内的 ⓘ 不会连带关掉弹窗）；
+// 气泡没展开时完全放行，Esc 照常关父弹窗。
+function onEsc(e) {
+  if (!consumeEscape(e, { open: open.value })) return
+  hideNow()
 }
 
 function removeListeners() {

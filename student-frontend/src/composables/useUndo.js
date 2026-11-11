@@ -1,32 +1,32 @@
 import { onMounted, onUnmounted, onActivated, onDeactivated, reactive, watch } from 'vue'
 import { pushUndo, undoStatus, applyUndo } from '../api/undo'
-import { useNotification } from './useNotification.js'
 import { reportError } from '../utils/reportError.js'
+import {
+  recordUndo, configureUndoRecorder, warnUndoFailed,
+} from '../utils/undoRecorder.js'
 
-// 登记撤销失败时的弱提示（B09-14/15/16）。
-// 调用处原先统一 `.catch(() => {})`：操作本身已经完成，但撤销列表里没有这一条，
-// 用户按 Ctrl+Z 才发现「撤不回去」。这里留日志并明确告知「本次无法撤销」。
-export function warnUndoFailed(label) {
-  const text = label ? `「${label}」已完成，但本次无法撤销` : '操作已完成，但本次无法撤销'
-  console.warn('[undo] 登记撤销失败：', label || '')
-  try { useNotification().warning(text) } catch (_) { /* 通知不可用时仅保留日志 */ }
-}
+// 对外保持原 API：其它页面一直从本文件 import 这两个名字。
+// 实现已下沉到 utils/undoRecorder.js —— 登记入口只能有一处，失败反馈不能各写一份。
+export { warnUndoFailed, newUndoBatchId } from '../utils/undoRecorder.js'
+
+// 把真实副作用装配给纯模块：transport 走全局 axios（安全通道），
+// onRegistered 刷 Ctrl+Z 可用态。装配放在这里是因为所有撤销页面都加载本模块。
+configureUndoRecorder({
+  transport: pushUndo,
+  notifyFailure: warnUndoFailed,
+  onRegistered: () => refreshUndoStatus(true),
+})
 
 // ==================== 记录一条单元格编辑撤销 ====================
 // 供非 useTableCRUD 页面复用。
 // key = 后端 undo 分组的表 key（须在 undo.js ALLOWED_TABLES 内）
 export function recordCellUndo(key, rowId, fieldName, oldVal, newVal) {
-  try {
-    pushUndo({
-      key,
-      type: 'cell_update',
-      label: `${fieldName}：「${oldVal == null ? '' : oldVal}」→「${newVal == null ? '' : newVal}」`,
-      payload: { table: key, rowId, field: fieldName, oldValue: oldVal, newValue: newVal }
-    }).then(() => refreshUndoStatus(true)).catch(() => warnUndoFailed(`${fieldName} 的修改`))
-  } catch {
-    // 主流程已完成，只是这条撤销没登记上 —— 必须让用户知道「这次撤不回去」
-    warnUndoFailed(`${fieldName} 的修改`)
-  }
+  return recordUndo({
+    key,
+    type: 'cell_update',
+    label: `${fieldName}：「${oldVal == null ? '' : oldVal}」→「${newVal == null ? '' : newVal}」`,
+    payload: { table: key, rowId, field: fieldName, oldValue: oldVal, newValue: newVal },
+  })
 }
 
 // 单元格展示文案：纯值或课表 {course} 对象都取可读文本
@@ -37,12 +37,7 @@ export function cellText(v) {
 }
 
 // ==================== 批次标识 ====================
-// 一次用户动作可能登记多条记录（拖一次座位改动多格、课表一次更新多个格）。
-// 这些记录共用同一个 origin，后端 Ctrl+Z 时按 origin 整批回退 —— 一次动作一步退完。
-// 无 origin 的记录保持旧的「单条」语义，不受影响。
-export function newUndoBatchId() {
-  return `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-}
+// 新批次标识与批次登记共用 utils/undoRecorder.js 的入口（见文件顶部 re-export）。
 
 // 批次登记结束后统一刷一次可用态。
 // 批次内每条登记都 force 刷新会发 N 次 /status（一次粘贴上百格就是上百次请求），
@@ -59,38 +54,32 @@ export function recordGridCellUndo(key, table, row, col, oldVal, newVal, label, 
   const payload = { table, row, col, oldValue: oldVal, newValue: newVal }
   if (label) payload.label = label
   const text = label || `格子(${row + 1},${col + 1})：「${cellText(oldVal)}」→「${cellText(newVal)}」`
-  try {
-    pushUndo({ key, type: 'grid_cell', label: text, payload, origin: origin || '' })
-      .then(() => { if (!origin) refreshUndoStatus(true) })
-      .catch(() => warnUndoFailed(label || '单元格修改'))
-  } catch {
-    warnUndoFailed(label || '单元格修改')
-  }
+  return recordUndo({ key, type: 'grid_cell', label: text, payload, origin: origin || '' })
 }
 
 // ==================== 记录一条网格整块覆盖撤销 ====================
 // 用于整行/整列换位等批量操作，oldArr/newArr 为整个网格（数组或对象）快照。
 // label：可选，传递时用于通知条展示详细文案（默认「整块变更」，后端有兜底维度文案）
 // opts：可选
-//   oldRows / newRows —— 座位表「插入/删除行走廊」会改变行数。后端 grid_snapshot 只回写
-//     JSON 列、不认行数，撤掉一次「插入一行」之后库里会变成「types 少一行、rows 还是多的」，
-//     读回时被裁掉/降级，破坏「types 与 rows 必须同时写」这条不变量。
+//   oldRows / newRows / oldCols / newCols —— 座位表「插入/删除走廊行、走廊列」会改变几何。
+//     后端 grid_snapshot 只回写 JSON 列、不认行数列数，撤掉一次「插入一行/一列」之后库里
+//     会变成「types 少一行、rows 还是多的」，读回被裁/降级，破坏「types 与行数列数必须同时写」。
+//     四个字段必须成对透传（历史上就是只带了行、漏了列，导致第一次修复只修好一半）。
 //   origin —— 批次标识。两张座位表要一起插一行（几何是共享的），撤销也得一步退完；
 //     同 origin 的记录会被后端整批回退（见 routes/undo/undo.js 的 /table/:key/undo）。
 export function recordGridSnapshotUndo(key, table, oldArr, newArr, label, opts = null) {
   const payload = { table, oldValue: oldArr, newValue: newArr }
   if (opts && opts.oldRows !== undefined) payload.oldRows = opts.oldRows
   if (opts && opts.newRows !== undefined) payload.newRows = opts.newRows
+  // 列数必须和行数一起带：只带行数的话，撤销「插入/删除走廊列」后 types 已经多一列、
+  // 后端却拿不到 cols，几何与矩阵当场分叉（读库按 cols 裁 → 座位图整体错列）。
+  // 后端现在以快照里 types 的形状为准，这两个字段是老记录（没有 types）的兜底，
+  // 但「同一件事抄两遍必然漏一遍」就是从这里来的，所以成对透传，别再漏。
+  if (opts && opts.oldCols !== undefined) payload.oldCols = opts.oldCols
+  if (opts && opts.newCols !== undefined) payload.newCols = opts.newCols
   if (label) payload.label = label
   const origin = (opts && opts.origin) || ''
-  try {
-    pushUndo({ key, type: 'grid_snapshot', label: label || '整块变更', payload, origin })
-      // 批次内不逐条刷：由调用方在整批登记完后 flushUndoStatus 刷一次
-      .then(() => { if (!origin) refreshUndoStatus(true) })
-      .catch(() => warnUndoFailed(label || '整块变更'))
-  } catch {
-    warnUndoFailed(label || '整块变更')
-  }
+  return recordUndo({ key, type: 'grid_snapshot', label: label || '整块变更', payload, origin })
 }
 
 // ==================== 记录一条动态表 增/改/删 撤销 ====================
@@ -99,22 +88,14 @@ export function recordGridSnapshotUndo(key, table, oldArr, newArr, label, opts =
 // 不必走 performUndo 的「当前激活表」上下文（用户删完立刻切页面时，那个上下文已经换表了）。
 // 不接返回值的既有调用方行为不变。
 function pushRow(type, key, row) {
-  try {
-    return pushUndo({ key, type, label: row ? `${row.姓名 || row.group_name || row.主题 || row.名称 || `#${row.id}`}` : '', payload: { table: key, row } })
-      .then(res => {
-        refreshUndoStatus(true)
-        return (res && res.data && res.data.id) || null
-      })
-      .catch((e) => {
-        // 返回 null 时调用方会退回「已删除」这类不含撤销入口的提示，用户看到的信息是对的；
-        // 但失败原因原先连控制台都没有，排查「删了之后撤不回去」时无从下手。
-        console.warn('[undo] 撤销记录登记失败（本次操作将不可撤销）', e);
-        return null;
-      })
-  } catch (e) {
-    console.warn('[undo] 撤销记录登记失败（本次操作将不可撤销）', e);
-    return Promise.resolve(null)
-  }
+  // 返回值语义保持不变：成功给撤销记录 id（调用方据此做「撤销」提示条），失败 null。
+  // 失败反馈不再由这里单独决定，统一由入口负责（原先只 console.warn，用户看不见）。
+  return recordUndo({
+    key,
+    type,
+    label: row ? `${row.姓名 || row.group_name || row.主题 || row.名称 || `#${row.id}`}` : '',
+    payload: { table: key, row },
+  })
 }
 // 添加加分/记录：undo=删除该行，redo=重新插入
 export function recordRowInsert(key, row) {
@@ -128,14 +109,89 @@ export function recordRowDelete(key, row) {
 // 编辑加分/记录（整条替换）：payload { rowId, oldRow, newRow }
 export function recordRowUpdate(key, oldRow, newRow) {
   const payload = { table: key, rowId: newRow ? newRow.id : oldRow.id, oldRow, newRow }
-  try {
-    const name = (newRow || oldRow)?.姓名 || (newRow || oldRow)?.group_name || (newRow || oldRow)?.主题 || (newRow || oldRow)?.名称 || `#${payload.rowId}`
-    pushUndo({ key, type: 'row_update', label: `${name}`, payload })
-      .then(() => refreshUndoStatus(true))
-      .catch(() => warnUndoFailed(`${name} 的修改`))
-  } catch {
-    warnUndoFailed(`${name} 的修改`)
+  const name = (newRow || oldRow)?.姓名 || (newRow || oldRow)?.group_name || (newRow || oldRow)?.主题 || (newRow || oldRow)?.名称 || `#${payload.rowId}`
+  return recordUndo({ key, type: 'row_update', label: `${name}`, payload })
+}
+
+// 删除学生（级联）：后端 delete-with-relations 一次动了七处（学生 / 请假 / 加减分 /
+// 小组 / 班干部 / 座位 / 值日），必须整包登记成**一条**命令。
+// 拆成多条的话，用户按 Ctrl+Z 只回来学生本身，关联还要再撤六次，中途放弃就留下半个人。
+// removed 即后端响应里的快照（含 student 整行），原样存进 payload 供撤销重建。
+export function recordStudentCascadeDelete(removed) {
+  const student = removed && removed.student
+  if (!student) return Promise.resolve(null)
+  return recordUndo({
+    key: 'students',
+    type: 'student_cascade_delete',
+    label: `删除学生「${student['姓名'] || `#${student.id}`}」及关联记录`,
+    payload: removed,
+  })
+}
+
+// ==================== 行顺序 / 批量行操作 ====================
+// 这三种命令覆盖「一次动作改多行」的写路径（拖拽排序、勾选批量删除、Excel 导入）。
+// 逐行登记会把一步操作拆成几十条撤销记录：用户要按 N 次 Ctrl+Z，且每 key 50 条上限
+// 会让导入几百行时最早那批根本撤不回来。所以统一整批记一条。
+
+// 只保留真实列：行对象上可能挂着 _rowKey / _isNew 等前端内部字段，
+// redo 时按真实列重建，带进去也没用（还会把 payload 撑大）。
+function plainRow(row) {
+  if (!row || !Number.isInteger(row.id)) return null
+  const out = {}
+  for (const [k, v] of Object.entries(row)) {
+    if (k.startsWith('_')) continue
+    out[k] = v
   }
+  return out
+}
+
+// 参与排序的行的槽位快照。position 缺失时按数组下标兜底（后端列表本来就是按 position 排的）。
+function positionSnapshot(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((r) => r && Number.isInteger(r.id))
+    .map((r, i) => ({ id: r.id, position: Number.isInteger(r.position) ? r.position : i + 1 }))
+}
+
+// 记录一次行顺序调整：beforeRows 是动作前的全表行，afterRows 是动作后的全表行。
+// 顺序没变就不登记（表头点排序、拖到自己原位等），别用空操作污染撤销栈。
+export function recordRowReorder(key, beforeRows, afterRows) {
+  if (!key) return Promise.resolve(null)
+  const before = positionSnapshot(beforeRows)
+  const after = positionSnapshot(afterRows)
+  if (!before.length && !after.length) return Promise.resolve(null)
+  if (JSON.stringify(before) === JSON.stringify(after)) return Promise.resolve(null)
+  return recordUndo({
+    key,
+    type: 'row_reorder',
+    label: '调整行顺序',
+    payload: { table: key, before, after },
+  })
+}
+
+// 记录一次批量新增（Excel 导入）：rows 为本次真正新建的完整行
+export function recordRowsBatchInsert(key, rows) {
+  if (!key) return Promise.resolve(null)
+  const list = (Array.isArray(rows) ? rows : []).map(plainRow).filter(Boolean)
+  if (!list.length) return Promise.resolve(null)
+  return recordUndo({
+    key,
+    type: 'rows_batch_insert',
+    label: `批量导入 ${list.length} 条记录`,
+    payload: { table: key, rows: list },
+  })
+}
+
+// 记录一次批量删除（勾选删除 / 重复项清理）：rows 为删除前的完整行
+export function recordRowsBatchDelete(key, rows) {
+  if (!key) return Promise.resolve(null)
+  const list = (Array.isArray(rows) ? rows : []).map(plainRow).filter(Boolean)
+  if (!list.length) return Promise.resolve(null)
+  return recordUndo({
+    key,
+    type: 'rows_batch_delete',
+    label: `批量删除 ${list.length} 条记录`,
+    payload: { table: key, rows: list },
+  })
 }
 
 // ==================== 全局撤销/重做状态（供标题栏按钮读取）====================

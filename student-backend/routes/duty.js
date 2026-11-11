@@ -173,10 +173,16 @@ router.put('/save', (req, res) => {
         return res.status(400).json({ error: '参数格式错误' });
     }
     // 依赖既有数据的一致性校验（当前表 / 模板各自校验）
-    if (active !== undefined) validateRow('duty_layout', { cells: active });
-    if (master !== undefined) validateRow('duty_template', { cells: master });
-
+    //
+    // ⚠️ 校验必须放在事务**里面**：validateRow → assertDutyRefs 会把名册外的姓名
+    // 直接建档（写库，有意的副作用 —— 值日表存姓名，不建档值日指数就漏人）。
+    // 放在事务外时，只要后面任何一步失败（磁盘满/库忙/写模板抛错），值日表回滚了、
+    // 临时学生却已经提交 —— 用户在名册里看到一个凭空多出来、也没排进值日的人
+    // （审查 v6 · N2-06）。放进来之后建档与写入同生共死。
     db.transaction(() => {
+        if (active !== undefined) validateRow('duty_layout', { cells: active });
+        if (master !== undefined) validateRow('duty_template', { cells: master });
+
         // ① 全局设置（时间 + 劳动项目）
         const s = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
         const mergedItems = packMode(s ? s.items : null, mode, items);

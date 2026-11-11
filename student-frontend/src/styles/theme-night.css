@@ -369,6 +369,22 @@
   background-color: rgba(32, 46, 78, calc(var(--glass-opacity, 0.4) + 0.10)) !important;
   border-color: rgba(150, 180, 255, 0.18);
 }
+/* 登录卡片：白天那份（theme-glass.css 的 `.login-bg .bg-surface` 0.62 白）与本节
+   通用的 `.bg-surface` 深底**优先级同分**，谁赢只取决于两份 CSS 的加载顺序 ——
+   调整 @import / 动态加载顺序时，夜间卡片会突然变白，浅色文字整片消失。
+   这里显式多带一个 `.login-bg` 提一级，把夜间登录卡片钉在深底上。
+   透明度和输入框一族对齐（+0.30 而不是 +0.16）：登录页背景图最暗、卡片又最大，
+   太透会透出天空的亮云，浅色文字反而看不清。 */
+:root[data-mode="night"][data-theme="glass"] .login-bg .bg-surface {
+  background-color: rgba(30, 44, 74, clamp(0.62, calc(var(--glass-opacity, 0.4) + 0.30), 1)) !important;
+  border-color: var(--alpha-white-12);
+}
+/* 夜间登录页的次要文字：全局 --color-text-muted(#7f8ea6) 在这块深底上只有 4.37:1，
+   卡在及格线下。登录页的链接是唯一出口，取 #8b9bb4（5.15:1）。
+   与 theme-glass.css 白天那条（反向加深）成对，两处要一起改。 */
+:root[data-mode="night"][data-theme="glass"] .login-bg .login-card .text-text-muted {
+  color: #8b9bb4 !important;
+}
 :root[data-mode="night"][data-theme="glass"] .login-bg input:focus {
   border-color: #60a5fa !important;
   background-color: rgba(48, 68, 108, 0.88) !important;

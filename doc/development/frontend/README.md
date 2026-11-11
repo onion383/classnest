@@ -69,12 +69,12 @@ student-frontend/
    ├─ config/        前端常量
    ├─ subwindows/    setup / migration / widget / desktop-widget
    ├─ views/         15 个页面（SettingsView、ScheduleView 为目录）
-   ├─ components/    76 个组件（layout/base/tables/dialogs/import-export/ai/album/data-manage + 根级）
-   ├─ composables/   26 个组合式函数（根目录 19 + ai/ 7）
+   ├─ components/    81 个组件（layout/base/tables/dialogs/import-export/ai/album/data-manage + 根级）
+   ├─ composables/   29 个组合式函数（根目录 22 + ai/ 7）
    ├─ stores/        theme.js
    ├─ router/        index.js
-   ├─ styles/        11 个 CSS（主题、工具类、弹窗过渡、滚动条等）
-   ├─ utils/         26 个工具
+   ├─ styles/        12 个样式文件（10 个 CSS + 2 个 JS，含主题、工具类、弹窗过渡、滚动条等）
+   ├─ utils/         49 个工具
    └─ wasm/          字体子集等 wasm 资源
 ```
 
@@ -86,8 +86,8 @@ student-frontend/
 | --- | --- |
 | [entry.md](./entry.md) | 入口与构建：5 个 HTML 入口、入口脚本关键动作、Vite 配置 |
 | [views.md](./views.md) | 15 个页面：路由、Tab、状态与数据流、调用接口 |
-| [components/README.md](./components/README.md) | 76 个组件索引、通用接口标准、全局注册 |
-| [composables.md](./composables.md) | 26 个组合式函数：签名、返回字段、时序与副作用 |
+| [components/README.md](./components/README.md) | 81 个组件索引、通用接口标准、全局注册 |
+| [composables.md](./composables.md) | 29 个组合式函数：签名、返回字段、时序与副作用 |
 | [misc.md](./misc.md) | stores / router / styles / utils / 指令 / 独立窗口 / 静态资源 |
 | [widgets.md](../widgets.md) | 工具箱浮窗 + 桌面小组件（前端入口与主进程实现） |
 

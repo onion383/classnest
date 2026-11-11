@@ -39,25 +39,53 @@ function countDutyRefs(cells, name) {
   return count;
 }
 
-// 从值日表里移除某个姓名（就地修改 cells），返回移除数量
-// 匹配口径同样是 trim 后比较（与 countDutyRefs / renameDutyName 保持一致）。
-function removeDutyName(cells, name) {
-  if (!name) return 0;
-  let removed = 0;
-  for (const root of dutyRoots(cells)) {
+// 收集某个姓名在值日表里的**全部位置**：[{ mode, item, day, index, value }]。
+// 供「删除学生」在清理前做精确定位快照：撤销时只把这些位置放回去，
+// 而不是整块覆盖 cells —— 整块覆盖会把删除之后用户对值日表的其它改动一并抹掉。
+// 匹配口径与 countDutyRefs / removeDutyName 一致：trim 后比较。
+function collectDutyRefs(cells, name) {
+  const hits = [];
+  if (!name || !cells || typeof cells !== 'object' || Array.isArray(cells)) return hits;
+  for (const mode of DUTY_MODES) {
+    const root = cells[mode];
+    if (!root || typeof root !== 'object' || Array.isArray(root)) continue;
     for (const item of Object.keys(root)) {
       const byDay = root[item];
       if (!byDay || typeof byDay !== 'object' || Array.isArray(byDay)) continue;
       for (const day of Object.keys(byDay)) {
         const list = byDay[day];
         if (!Array.isArray(list)) continue;
-        const kept = list.filter((v) => !(typeof v === 'string' && v.trim() === name));
-        removed += list.length - kept.length;
-        byDay[day] = kept;
+        for (let i = 0; i < list.length; i++) {
+          if (typeof list[i] === 'string' && list[i].trim() === name) {
+            hits.push({ mode, item, day, index: i, value: list[i] });
+          }
+        }
       }
     }
   }
-  return removed;
+  return hits;
+}
+
+// 从值日表里移除某个姓名（就地修改 cells），返回移除数量
+// 匹配口径同样是 trim 后比较（与 countDutyRefs / renameDutyName 保持一致）。
+// 实现改为复用 collectDutyRefs：位置快照与真正删除必须用**同一份**匹配逻辑，
+// 否则「记下的位置」和「清掉的位置」会分叉，撤销就放不回原处。
+function removeDutyName(cells, name) {
+  const hits = collectDutyRefs(cells, name);
+  if (!hits.length) return 0;
+  // 同一天从后往前删，避免删前面元素时后面的索引整体位移
+  const groups = new Map();
+  for (const h of hits) {
+    const key = `${h.mode}\u0000${h.item}\u0000${h.day}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(h.index);
+  }
+  for (const [key, idxs] of groups) {
+    const [mode, item, day] = key.split('\u0000');
+    const list = cells[mode][item][day];
+    for (const i of idxs.sort((a, b) => b - a)) list.splice(i, 1);
+  }
+  return hits.length;
 }
 
 // 把值日表里的 oldName 改成 newName（学生改名时级联）
@@ -89,4 +117,4 @@ function renameDutyName(cells, oldName, newName) {
   return changed;
 }
 
-module.exports = { DUTY_MODES, dutyRoots, countDutyRefs, removeDutyName, renameDutyName };
+module.exports = { DUTY_MODES, dutyRoots, countDutyRefs, collectDutyRefs, removeDutyName, renameDutyName };

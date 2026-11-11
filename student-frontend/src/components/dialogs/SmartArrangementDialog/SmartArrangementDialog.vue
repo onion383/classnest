@@ -363,6 +363,10 @@ const dataSourceHint = computed(() => {
 })
 // 「现有排表表格」但表里没人 → 没有可排的人，「开始排表」置灰
 const poolEmpty = computed(() => dataSource.value === 'table' && !tableStudents.value.length)
+// 数据源能力位：只有「全部同学」才允许名册外的新同学参与排表。
+// 新人提示、excludeNew 过滤、切源复位全部读这一位 —— 不逐个调用点再判一次 dataSource，
+// 否则 table 模式仍会弹新人确认、并把表内已有成员按 excludeNew 排除掉（A5-01）。
+const allowNew = computed(() => dataSource.value !== 'table')
 const previewKey = computed(() => {
   const sig = conditions.value.map(c => c.key + ':' + c.uid).join('-') || 'empty'
   return props.visible ? `arrange-${props.rows}-${props.cols}-${sig}-${previewVersion.value}` : 'closed'
@@ -389,7 +393,7 @@ const ctx = {
   conditions, nextUid, previewSeats, previewVersion, arranged, satisfaction,
   dragIdx, dragOverIdx,
   showNewPrompt, excludeNew, draftSeats, savingDraft, draftInUse, draftConfirmVisible, restoring,
-  dataSource,
+  dataSource, allowNew,
   baseSeats, strangerNames, strangers, tableStudents,
   rows: toRef(props, 'rows'),
   cols: computed(() => seatIdx.value.length),
@@ -413,8 +417,12 @@ const blocks = useSmartArrangementBlocks(ctx)
 const options = useSmartArrangementOptions(ctx, CONDITION_REGISTRY)
 Object.assign(ctx, pipeline, blocks, options)
 
-// 数据源切换：回到「开始排表」，按新数据源重排一次（预览回到未改动的座位表）
+// 数据源切换：回到「开始排表」，按新数据源重排一次（预览回到未改动的座位表）。
+// 同时清掉上一轮的新同学选择：table 模式下这个选择本来就不该生效，
+// 留到切回 all 时会让用户莫名其妙地「上次选过不参与」还继续生效。
 function onDataSourceChange() {
+  ctx.excludeNew.value = false
+  ctx.showNewPrompt.value = false
   ctx.resetArranged()
 }
 

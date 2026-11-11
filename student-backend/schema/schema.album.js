@@ -21,7 +21,9 @@ function migrateAlbum(conn) {
     -- thumb_v：缩略图生成时的尺寸/质量版本，默认 0 < 当前版本，老缩略图会在下次被请求时自动重建。
     CREATE TABLE IF NOT EXISTS album_photos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      album_id INTEGER NOT NULL,
+      -- 外键只负责删行：照片文件的清理由应用层先按行查到路径再删（见 albumOps）。
+      -- 开 PRAGMA 之前要确认「删相册」的代码是「先删文件再删行」，否则会先丢行、文件成孤儿。
+      album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
       file_path TEXT NOT NULL,
       file_name TEXT NOT NULL,
       file_size INTEGER DEFAULT 0,
@@ -73,7 +75,7 @@ function migrateAlbum(conn) {
   //   互不干扰。
   conn.exec(`
     CREATE TABLE IF NOT EXISTS album_scan_tasks (
-      album_id INTEGER PRIMARY KEY,
+      album_id INTEGER PRIMARY KEY REFERENCES albums(id) ON DELETE CASCADE,
       mode TEXT NOT NULL DEFAULT 'incremental',
       phase TEXT NOT NULL DEFAULT 'collect',
       done_path TEXT NOT NULL DEFAULT '',

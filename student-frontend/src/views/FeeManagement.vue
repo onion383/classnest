@@ -193,7 +193,7 @@ import SearchBar from '../components/base/SearchBar.vue'
 import AppSwitch from '../components/base/AppSwitch.vue'
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import { useTableCRUD } from '../composables/useTableCRUD.js'
-import { useUndoShortcut, recordRowDelete } from '../composables/useUndo.js'
+import { useUndoShortcut, recordRowDelete, recordRowInsert, recordRowUpdate } from '../composables/useUndo.js'
 import { undoById } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
 import { useExportFormats } from '../components/import-export/ExportExcel/ExportExcel.exporters.js'
@@ -378,15 +378,20 @@ async function onSubmitRecord(data) {
   try {
     if (isEdit) {
       // 只提交表单里的字段（收据走独立的收据管理流程，这里不带，免得把已有收据清空）
-      await axios.put(`${API_BASE}/fee-records/${editingRow.value.id}`, data)
+      // 弹窗整行提交不走共享 CRUD 的 saveCell，撤销按完整行前后态登记（Q2-07）。
+      const oldRow = { ...editingRow.value }
+      await axios.put(`${API_BASE}/fee-records/${oldRow.id}`, data)
       addDialogVisible.value = false
       await fetchRecords()
+      recordRowUpdate('fee_records', oldRow, table.rowSnapshotById(oldRow.id, { ...oldRow, ...data }))
       notifySuccess('已保存修改')
     } else {
       // 弹窗不填收据，新增时置空，保持列存在
-      await axios.post(`${API_BASE}/fee-records`, { ...data, '收据': '' })
+      const payload = { ...data, '收据': '' }
+      const res = await axios.post(`${API_BASE}/fee-records`, payload)
       addDialogVisible.value = false
       await fetchRecords()
+      recordRowInsert('fee_records', table.rowSnapshotById(res.data.id, payload))
       notifySuccess('已添加记录')
     }
   } catch (err) {

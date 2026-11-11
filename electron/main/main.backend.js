@@ -18,6 +18,8 @@
 
 const { app, ipcMain } = require('electron')
 const path = require('path')
+// 启动单飞守卫（纯 Promise，自身不 require electron，可单独单测）
+const { createSingleFlight } = require('./main.single-flight')
 const fs = require('fs')
 const startupTimer = require('./main.startup-timer')
 const perf = require('./main.perf')
@@ -283,34 +285,43 @@ async function compileBackendProcess() {
   backendProcess.on('message', onBackendMessage)
 }
 
-function startBackend() {
-  // 重启保护：仅当应用仍在运行时才重启，且限制最多 10 次，避免无限崩溃循环刷屏
-  if (backendRestartCount >= 10) {
-    const msg = `后端在启动阶段连续崩溃 ${backendRestartCount} 次，已停止自动重启。请查看日志：${getBackendLogPath()}\n`
+// 启动后端（**单飞**）：在途期间的重复调用复用同一个启动任务。
+//
+// 为什么必须单飞：这个函数是 fire-and-forget（10 处调用点），而真正 fork 的
+// compileBackendProcess 是 async（fork 前要 await 主密钥）。两处近似同时的调用
+// （用户连点「重启后端」、或重启定时器与 IPC 同时触发）会在 await 那段各跑一遍，
+// fork 出两个后端抢 3000 端口 → EADDRINUSE 无限重试 → 启动卡死/白屏。
+// createSingleFlight 保证任务体的**同步副作用**（置 backendReady、广播）仍在调用当场发生。
+const startBackend = createSingleFlight(async () => {
+  try {
+    // 重启保护：仅当应用仍在运行时才重启，且限制最多 10 次，避免无限崩溃循环刷屏
+    if (backendRestartCount >= 10) {
+      const msg = `后端在启动阶段连续崩溃 ${backendRestartCount} 次，已停止自动重启。请查看日志：${getBackendLogPath()}\n`
+      ensureBackendLogStream()
+      if (backendLogStream) backendLogStream.write(`[fatal] ${msg}`)
+      console.error(`[main] ${msg}`)
+      // 自动重启用尽：直接进入失败态，让用户能手动重试或退出，而不是静默卡在加载页
+      markBackendFailed()
+      return
+    }
+
     ensureBackendLogStream()
-    if (backendLogStream) backendLogStream.write(`[fatal] ${msg}`)
-    console.error(`[main] ${msg}`)
-    // 自动重启用尽：直接进入失败态，让用户能手动重试或退出，而不是静默卡在加载页
-    markBackendFailed()
-    return
-  }
+    backendLog(`[main] 正在启动后端 (第 ${backendRestartCount + 1} 次)...\n`)
 
-  ensureBackendLogStream()
-  backendLog(`[main] 正在启动后端 (第 ${backendRestartCount + 1} 次)...\n`)
-
-  // 每次 fork 前复位就绪标记：重启期间前端应重新等待新的 backend-ready
-  backendReady = false
-  // 同步告知渲染层「就绪已失效」，避免前端缓存的 ready 一直为 true 而跳过等待
-  broadcast({ type: 'backend-resetting' })
-  setBootStatus('正在启动本地服务…')
-  armBackendFailWatchdog()
-  // compileBackendProcess 现在是 async（fork 前要 await 主密钥）。startBackend 保持同步签名，
-  // 10 处调用点无需改动；这里兜住 rejection，避免 fire-and-forget 变成 unhandled rejection。
-  compileBackendProcess().catch((err) => {
+    // 每次 fork 前复位就绪标记：重启期间前端应重新等待新的 backend-ready
+    backendReady = false
+    // 同步告知渲染层「就绪已失效」，避免前端缓存的 ready 一直为 true 而跳过等待
+    broadcast({ type: 'backend-resetting' })
+    setBootStatus('正在启动本地服务…')
+    armBackendFailWatchdog()
+    await compileBackendProcess()
+  } catch (err) {
+    // 调用点都是 fire-and-forget：这里必须兜住，否则变成 unhandled rejection；
+    // 统一落到失败态，让用户看到「启动失败 + 可重试」而不是卡在加载页。
     console.error('[main] 后端 fork 失败:', err?.message || err)
     markBackendFailed()
-  })
-}
+  }
+})
 
 // 向所有已存在的渲染窗口广播 from-main 事件
 function broadcast(payload) {

@@ -38,8 +38,8 @@ classnest/
                 ├── NewAlbumDialog.vue  # 新建相册
                 ├── NewComerConfirm.vue  # 新成员参与确认
                 ├── OverdueLeaveDialog.vue  # 逾期未销假
+                ├── ReceiptDialog.vue  # 管理收据
                 ├── RecoveryKeyDialog.vue  # 恢复词展示与抄写确认
-                ├── ReceiptDialog.vue  # 收据管理（上传/预览/下载/删除）
                 ├── SeatBackfillDialog.vue  # 座位回填
                 ├── SeatRecordSettingsDialog.vue  # 座位记录设置
                 ├── SeatSettingsDialog.vue  # 座位设置
@@ -209,6 +209,13 @@ classnest/
 #### [OverdueLeaveDialog.vue](../../../../student-frontend/src/components/dialogs/OverdueLeaveDialog.vue) · 逾期未销假
 - **对外接口**：`props`（组件属性）：`records`（逾期请假记录）；`emits`（组件事件）：`not`（保持逾期，暂不销假）/ `ret`（销假）。
 - **使用方**：`LeaveManagement`。
+
+#### [ReceiptDialog.vue](../../../../student-frontend/src/components/dialogs/ReceiptDialog.vue) · 管理收据
+- **定位**：班费收据的上传、列表、预览、下载与删除（一个弹窗覆盖全流程）。
+- **对外接口**：`props`（组件属性）：`visible`（显隐，默认 `false`）/ `receipts`（已归一化数组 `[{ path, name, size, kind }]`，默认空数组）/ `apiBase`（接口前缀，默认 `/api`）；`emits`（组件事件）：`update:visible`（显隐双向绑定）、`change`（文件列表已变更，回写父级）。
+- **内部实现**：支持多选与拖入（虚线框与「从文件导入数据」同款 `.dropzone`）；上传按 `ACCEPT`（与后端 `services/uploadSignatures.js` 的 `KINDS` 一致）校验，逐项上报进度；图片 / 视频走 [`MediaViewer`](./base.md)，PDF / Markdown 走文档灯箱；下载走安全通道换 Blob。
+- **注意点**：`kind` 必须是归一后的 `office`（后端按魔数分出 `ooxml` / `ole`，见 4-1）；`viewMode` 同时兼容旧值，否则历史 Office 收据点开没反应。
+- **使用方**：`FeeManagement`（懒加载）。
 
 ---
 

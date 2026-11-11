@@ -221,10 +221,11 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { ensureDashboardData } from '../composables/useDashboardData'
+import { mark, perfNow, perfSince } from '../utils/perfMark.js'
 import { reportError } from '../utils/reportError.js'
 import { createLatest } from '../utils/latestOnly.js'
 import IconGlyph from '../components/base/IconGlyph.vue'
@@ -522,8 +523,12 @@ function formatLeaveTime(leave) {
 // ========== 加载数据 ==========
 // 复用首屏预取缓存（请求已在路由导航进入首页时并发发起，见 useDashboardData）
 async function loadData(force = false) {
+  const firstScreen = initialLoading.value
   try {
     const d = await ensureDashboardData(force)
+    // 首屏分段（v6 · P1-01）：从数据就绪到 DOM patch 完成，是 95ms 黑洞的最后一段。
+    // 只标首次首屏；切回首页/后台刷新不重复打，避免日志噪音。
+    const renderAt = perfNow()
     schedule.value = d.schedule
     duty.value = d.duty
     countdowns.value = d.countdowns
@@ -534,6 +539,11 @@ async function loadData(force = false) {
     fees.value = d.fees
     // 相册：挑一个含照片的相册，随机取一张
     loadRandomPhoto(d.album)
+    if (firstScreen && !firstRenderMarked) {
+      firstRenderMarked = true
+      // 不 await：不能因为打点把首屏骨架屏多留一帧；nextTick 回调里再记时刻
+      nextTick().then(() => mark(`首页 patch 渲染 ${perfSince(renderAt)}ms`))
+    }
   } catch (err) {
     // 后端不可达（没有 response）时，App 的「后端启动失败」遮罩会统一提示，这里不重复打扰；
     // 后端可达但返回错误才该让用户知道 —— 否则首屏看着「全是 0」像是数据没了。
@@ -546,6 +556,8 @@ async function loadData(force = false) {
 let timer = null
 // 首帧标记：onActivated 首次随挂载触发，跳过避免与 onMounted 重复加载
 let firstActivate = true
+// 首屏渲染段只打一次（后台刷新/切页回来不重复）
+let firstRenderMarked = false
 const refreshNow = () => { now.value = new Date() }
 
 onMounted(() => {

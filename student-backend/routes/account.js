@@ -17,10 +17,30 @@ const secureChannel = require('../services/secureChannel');
 const { pickPhrase, deriveRestoreHash, formatPhrase } = require('../services/recoveryKey');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
 const sessions = require('../services/sessions');
+// 凭证变更（改密 / 删账号）后「全账号会话失效」的唯一动作层，规则不在路由里各写一遍
+const { revokeAccountSessions, rotateAccountSessions } = require('../services/credentialChange');
 const { renameUsernameWithCompensation } = require('../services/accountRename');
 // 备份恢复会用备份包里的整库文件覆盖当前库，表结构可能与恢复前不同：
 // 恢复后必须让 AI 的列名缓存失效（否则后续 AI 写入/查询仍按旧列集合校验）。
 const aiHelpers = require('./ai/ai.helpers');
+// 备份包 v3（ZIP）：库 + 用户文件 + 清单，流式写 / 解包校验
+const { writeBundle } = require('../services/backupArchive');
+// v3 包的落盘（写库 + 替换目录 + 清列缓存）只有一份，两个恢复入口共用
+const { receiveAndVerify, applyVerifiedBundle, dropTmp } = require('../services/bundleRestore');
+
+// v3 备份包上传：multer 惰性加载（只在「还原」时用，不压在启动路径上）
+let _backupUpload = null;
+function backupUploadMw() {
+  if (!_backupUpload) {
+    const multer = require('multer');
+    const os = require('os');
+    const path = require('path');
+    const dir = path.join(os.tmpdir(), 'classnest-restore');
+    require('fs').mkdirSync(dir, { recursive: true });
+    _backupUpload = multer({ dest: dir, limits: { fileSize: 8 * 1024 * 1024 * 1024 } });
+  }
+  return _backupUpload.single('file');
+}
 
 // 重置恢复密钥：为当前登录账号生成一组新的 12 词恢复密钥并保存哈希。
 // 生成的密钥只在本次响应返回一次（前端提示先保存再确认）。
@@ -30,6 +50,53 @@ router.get('/recovery-key', auth(), (req, res) => {
   db.prepare('UPDATE users SET recovery_hash = ? WHERE id = ?').run(hash, req.user.userId);
   res.json({ phrase: formatPhrase(phrase), recoveryKey: phrase });
 });
+
+// 导出密码校验 + 「库钥匙怎么随包带回」的唯一实现（v2 JSON 包与 v3 ZIP 包共用）。
+// 安全相关的东西不能有两个版本：任何一处放宽，另一处就是漏洞。
+// 返回 { error, status?, bundle, wantEncrypt, keyFields }
+async function resolveExportKeying({ slug, user, password, encrypt, dbPassword }) {
+  const hasPassword = !!user.password;
+  // 有密码账号：必须提供并校验正确的登录密码（只有本人能导出）
+  if (hasPassword) {
+    if (!password) return { error: '请输入登录密码以导出数据库', status: 400 };
+    if (!await bcryptCompare(password, user.password)) {
+      return { error: '密码错误，只有本人能导出数据库', status: 401 };
+    }
+  }
+
+  const bundle = dbManager.exportBundle(slug);
+  const wantEncrypt = encrypt === '1';
+
+  // 解析用于包裹库钥匙的「导出密码」：
+  //   - 勾选加密且源库本身是加密库：
+  //       有密码账号：dbPassword 留空则默认用账号密码；填了则以输入框为准。
+  //       无密码账号：必须提供 dbPassword（否则没有口令可供派生包裹钥匙）。
+  //   - 不勾选加密、或源库是明文库：库钥匙明文随包带回（明文库无钥匙，无需任何口令）。
+  let wrapPwd = null;
+  if (bundle.encrypted && wantEncrypt) {
+    if (hasPassword) {
+      wrapPwd = dbPassword && dbPassword.length ? dbPassword : password;
+    } else {
+      if (!dbPassword || !dbPassword.length) {
+        return { error: '该账号未设置密码，请设置一个导出密码以加密备份', status: 400 };
+      }
+      wrapPwd = dbPassword;
+    }
+  }
+
+  const keyFields = {};
+  if (!bundle.encrypted) {
+    // 明文库数据本身不加密，「用导出密码加密」对该库无意义，包内不携带库钥匙
+    keyFields.key = null;
+  } else if (wantEncrypt) {
+    // 库钥匙用导出密码派生钥匙包裹，换机后可用该密码解包恢复
+    keyFields.wrappedByPassword = dbManager.wrapKeyBySecret(bundle.key, wrapPwd);
+  } else {
+    // 未加密：库钥匙明文随包带回，换机免密恢复
+    keyFields.key = bundle.key;
+  }
+  return { bundle, wantEncrypt, keyFields };
+}
 
 // 备份导出：一次导出当前班主任库（业务数据 + 应用设置 + 账号 全带走）。
 // v2 便携包：仅在「输入正确登录密码」时放行导出，防止他人偷导。
@@ -42,35 +109,10 @@ router.post('/export', auth(), async (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.userId);
   if (!user) return res.status(401).json({ error: '账号不存在' });
 
-  const hasPassword = !!user.password;
-  // 有密码账号：必须提供并校验正确的登录密码
-  if (hasPassword) {
-    if (!password) return res.status(400).json({ error: '请输入登录密码以导出数据库' });
-    if (!await bcryptCompare(password, user.password)) {
-      return res.status(401).json({ error: '密码错误，只有本人能导出数据库' });
-    }
-  }
-  // 无密码账号：无需密码校验。
-
-  // 解析用于包裹库钥匙的「导出密码」：
-  //   - 勾选加密且源库本身是加密库：
-  //       有密码账号：dbPassword 留空则默认用账号密码；填了则以输入框为准。
-  //       无密码账号：必须提供 dbPassword（否则没有口令可供派生包裹钥匙）。
-  //   - 不勾选加密、或源库是明文库：库钥匙明文随包带回（明文库无钥匙，无需任何口令）。
-  const bundle = dbManager.exportBundle(slug);
-  const wantEncrypt = encrypt === '1';
-
-  let wrapPwd = null;
-  if (bundle.encrypted && wantEncrypt) {
-    if (hasPassword) {
-      wrapPwd = dbPassword && dbPassword.length ? dbPassword : password;
-    } else {
-      if (!dbPassword || !dbPassword.length) {
-        return res.status(400).json({ error: '该账号未设置密码，请设置一个导出密码以加密备份' });
-      }
-      wrapPwd = dbPassword;
-    }
-  }
+  // 密码校验与「库钥匙怎么包」只有一份实现（v3 ZIP 包共用同一个函数）
+  const keying = await resolveExportKeying({ slug, user, password, encrypt, dbPassword });
+  if (keying.error) return res.status(keying.status || 400).json({ error: keying.error });
+  const { bundle } = keying;
 
   const data = require('fs').readFileSync(bundle.filePath).toString('base64');
   const out = {
@@ -82,18 +124,177 @@ router.post('/export', auth(), async (req, res) => {
     encrypted: bundle.encrypted,
     // AI 长期记忆（md 原文）：随包一起带走，换机后可原样恢复
     memory: dbManager.readMemory(slug) || '',
+    ...keying.keyFields,
   };
-  if (!bundle.encrypted) {
-    // 明文库数据本身不加密，「用导出密码加密」对该库无意义，包内不携带库钥匙
-    out.key = null;
-  } else if (wantEncrypt) {
-    // 库钥匙用导出密码派生钥匙包裹，换机后可用该密码解包恢复
-    out.wrappedByPassword = dbManager.wrapKeyBySecret(bundle.key, wrapPwd);
-  } else {
-    // 未加密：库钥匙明文随包带回，换机免密恢复
-    out.key = bundle.key;
-  }
   res.json(out);
+});
+
+// 备份导出 v3（ZIP）：库 + 用户文件 + 清单，流式写、不驻留内存。
+// 与 v2 的差别只有「带了哪些东西」；密码校验与库钥匙包裹走同一个 resolveExportKeying。
+// 为什么是流式：收据原件可能有几百 MB，v2 那条链路（base64 + res.json）会把整包读进内存。
+router.post('/export-zip', auth(), async (req, res) => {
+  const slug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
+  const { password, encrypt = '1', dbPassword } = req.body || {};
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.userId);
+  if (!user) return res.status(401).json({ error: '账号不存在' });
+
+  const keying = await resolveExportKeying({ slug, user, password, encrypt, dbPassword });
+  if (keying.error) return res.status(keying.status || 400).json({ error: keying.error });
+  const bundle = keying.bundle;
+
+  // WAL 模式下只拷 .db 会丢掉最近一次提交（-wal 里还没 checkpoint）—— 三个文件一起带，
+  // 还原端按同一组文件名放回去，SQLite 自己会重放 WAL。
+  const dbFiles = [bundle.filePath, `${bundle.filePath}-wal`, `${bundle.filePath}-shm`]
+    .filter((f) => { try { return require('fs').statSync(f).isFile() } catch (_) { return false } })
+    .map((f) => ({ name: `db/${require('path').basename(f)}`, path: f }));
+
+  const meta = {
+    version: 3,
+    slug: bundle.slug,
+    username: bundle.username,
+    encrypted: bundle.encrypted,
+    exportedAt: new Date().toISOString(),
+    ...keying.keyFields,
+  };
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const asciiName = `classnest-backup-${String(slug).replace(/^@/, '')}-${stamp}.zip`;
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(`班集备份-${stamp}.zip`)}`);
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    await writeBundle({
+      meta,
+      files: dbFiles,
+      texts: (() => {
+        const memory = dbManager.readMemory(slug) || '';
+        return memory ? [{ name: 'memory.md', data: memory }] : [];
+      })(),
+      dirs: [
+        { prefix: 'uploads', dir: dbManager.uploadsDir },
+        { prefix: 'ai-skills', dir: dbManager.skillsDir(slug) },
+        { prefix: 'album-trash', dir: dbManager.trashDir },
+        { prefix: 'receipt-trash', dir: require('path').join(dbManager.dataDir, 'receipt-trash') },
+        { prefix: 'snapshots', dir: dbManager.snapshotsDir(slug) },
+      ],
+    }, res);
+    res.end();
+  } catch (err) {
+    // 已经开始写响应体了：只能中断连接，让客户端看到「下载不完整」而不是一个坏包
+    console.error('[backup] 导出 v3 失败:', err && err.message);
+    try { res.destroy(); } catch (_) { /* 已断开 */ }
+  }
+});
+
+// 备份恢复（v3 ZIP）：上传整包 → 解到临时目录 → 逐项校验清单 → 才动现有文件。
+//
+// 顺序是这个 handler 的全部重点：
+//   ① 解包 + 校验（此时**一个现有文件都没动**，包坏/缺项/名字不安全都在这步失败）
+//   ② 校验通过才恢复库（复用 v2 的 restoreBundle：evict 连接 + 写库 + 改 registry）
+//   ③ 最后替换各文件目录，旧目录改名成 .bak-<时间戳>，不删
+// 中途失败最坏情况是「库换了、目录还没换」，此时 .bak 目录还在，用户能手动拿回。
+// —— v3 包落盘的公共部分已下沉到 services/bundleRestore.js ——
+// 这里只做「入口差异」：slug 从哪来、要不要确认覆盖、要不要签发登录态。
+// 落盘（写库 + 替换目录 + 清列缓存）只有一份实现 —— 它动的是用户的整库和全部文件。
+
+router.post('/restore-zip', auth(), (req, res, next) => backupUploadMw()(req, res, next), async (req, res) => {
+  const curSlug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
+  if (dbManager.isProtected(req.user.username)) {
+    return res.status(400).json({ error: '请先在系统设置中关闭超级隐私模式，再恢复备份' });
+  }
+  if (!req.file) return res.status(400).json({ error: '没有收到备份文件' });
+
+  let recv;
+  try {
+    recv = await receiveAndVerify(req.file);
+  } catch (err) {
+    dropTmp(null, req.file.path);
+    return res.status(400).json({ error: err.message || '备份包无法读取' });
+  }
+
+  const { tmpDir, meta, manifest } = recv;
+  if (meta.slug !== curSlug) {
+    dropTmp(tmpDir, req.file.path);
+    return res.status(400).json({ error: '备份包不属于当前账号，不能用它恢复' });
+  }
+
+  try {
+    const out = await applyVerifiedBundle({
+      tmpDir, meta, manifest, slug: curSlug, username: req.user.username, body: req.body,
+    });
+    res.json({ message: '恢复成功', ...out });
+  } catch (err) {
+    res.status(400).json({ error: err.message || '恢复失败' });
+  } finally {
+    dropTmp(tmpDir, req.file.path);
+  }
+});
+
+// 备份恢复（v3 ZIP · 离线引导，无需登录）：
+// 「新电脑只装了软件、本机一个账号都没有」时唯一能走的路径 —— 没有 JWT 可依，
+// 所以库身份（slug / 账号名）只能取自包内的 bundle.json。
+//
+// 与 /restore-zip 的关键差异只有「slug 从哪来」和「要不要确认覆盖」：
+//   · 本机已有同一 slug 且未确认 → 409 needConfirm，绝不静默覆盖现有数据
+//   · 已有且是超级隐私模式 → 拒绝（离线恢复会用主密钥重新包裹库钥匙，等于绕过隐私保护）
+router.post('/restore-zip-offline', (req, res, next) => backupUploadMw()(req, res, next), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '没有收到备份文件' });
+
+  let recv;
+  try {
+    recv = await receiveAndVerify(req.file);
+  } catch (err) {
+    dropTmp(null, req.file.path);
+    return res.status(400).json({ error: err.message || '备份包无法读取' });
+  }
+
+  const { tmpDir, meta, manifest } = recv;
+  const slug = meta.slug;
+  // 账号名先归一（去首尾空白）再校验：registry 用它做登录定位，带空格的名字会「登不进去」
+  const username = normalizeUsername(meta.username || '');
+  const finish = (status, body) => { dropTmp(tmpDir, req.file.path); return res.status(status).json(body) };
+
+  // 备份包是用户手里的普通 ZIP —— `bundle.json` 可以被人手改。
+  // slug 会被拼进 ai-skills/<slug>、snapshots/<slug> 这类路径，所以**先按内部格式卡死**，
+  // 不能指望下游 `restoreBundle` 的校验来兜（那是最后一道，不是第一道）。
+  if (typeof slug !== 'string' || !/^@[0-9a-f]{12}$/.test(slug)) {
+    return finish(400, { error: '备份包里的库标识无效，无法恢复' });
+  }
+  const nameErr = usernameError(username);
+  if (nameErr) return finish(400, { error: `备份包里的账号名无效：${nameErr}` });
+
+  const existing = dbManager.registryFindBySlug(slug);
+  if (existing && existing.protect === 1) {
+    return finish(400, { error: '该账号已开启超级隐私模式，请先登录并在系统设置中关闭后再恢复备份' });
+  }
+  if (existing && !(req.body && req.body.confirm)) {
+    return finish(409, {
+      needConfirm: true,
+      message: `本机已存在账号「${existing.username}」，恢复将覆盖其现有数据，是否确认？`,
+    });
+  }
+
+  let out;
+  try {
+    out = await applyVerifiedBundle({ tmpDir, meta, manifest, slug, username, body: req.body });
+  } catch (err) {
+    return finish(400, { error: err.message || '恢复失败' });
+  }
+
+  // 恢复成功后直接签发登录态，前端据此跳首页，不必再手动登录一次
+  const sid = sessions.create(1, out.slug);
+  const payload = { userId: 1, username: out.username, role: 'teacher', dbSlug: out.slug, sid };
+  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  secureChannel.bindAuth(req.sessionId, token);
+  const mediaToken = signMediaToken(payload);
+  res.cookie('token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE });
+  finish(200, {
+    message: '恢复成功',
+    ...out,
+    token,
+    mediaToken,
+    user: { id: 1, username: out.username, role: 'teacher', dbSlug: out.slug },
+  });
 });
 
 // 备份恢复：上传一个备份包，覆盖当前登录班主任的库并重建缓存连接。
@@ -187,7 +388,7 @@ router.post('/restore-offline', (req, res) => {
     // 一并恢复 AI 长期记忆（旧包无该字段则跳过，不影响恢复）
     if (typeof memory === 'string') dbManager.writeMemory(result.slug || slug, memory);
     // 恢复成功后直接签发登录态，前端据此跳转首页，无需再次手动登录
-    const sid = sessions.create(1);
+    const sid = sessions.create(1, result.slug || slug);
     const payload = { userId: 1, username, role: 'teacher', dbSlug: result.slug || slug, sid };
     const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
     // 绑定到本次加密信道会话：之后前端只需发不含 token 的信道凭据
@@ -299,6 +500,29 @@ router.put('/username', auth(), async (req, res) => {
   res.json({ message: '用户名修改成功', username: newName, token, mediaToken: signMediaToken(payload) });
 });
 
+// 凭证变更后「全量吊销旧会话 + 换发当前窗口登录态」的唯一实现。
+// 改密（PUT /password）与切换安全等级（POST /security-level，会写入或清空密码）
+// 都是凭证变更：既不能留着其它窗口的旧 token，也不能把当前窗口踢回登录页。
+// 返回新 payload / token，供需要显式回传 token 的分支（本机恢复）使用。
+function rotateLoginAfterCredentialChange(req, res) {
+  const u = req.user;
+  const { sid } = rotateAccountSessions(u.userId, u.dbSlug);
+  const payload = {
+    userId: u.userId, username: u.username, role: u.role, dbSlug: u.dbSlug, sid,
+  };
+  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
+  res.cookie('token', token, {
+    httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
+  });
+  // 全量吊销顺带作废了媒体凭据（<img> 的 token 绑同一个 sid）。沿用滑动续期的
+  // 响应头协议下发新凭据：前端成功拦截器统一走 absorbRenewalTokens 落盘，
+  // 改密 / 切安全等级的所有调用点一行都不用改，也不会出现「改完密码图片全裂」。
+  res.set('X-Renewed-Token', token);
+  res.set('X-Renewed-Media', signMediaToken(payload));
+  return { payload, token };
+}
+
 // 修改密码
 router.put('/password', auth(), async (req, res) => {
   try {
@@ -344,24 +568,15 @@ router.put('/password', auth(), async (req, res) => {
 
     const hashed = await bcryptHash(newPassword, 10);
     db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashed, req.user.userId);
-    // 「本机信息恢复」的 token 只授权这一次改密码：改完立即换发不含 recover 的常规 token。
-    // 注意：JWT 是无状态的，只换发新 token 并不能让旧 recover token 失效 ——
-    // 它仍带着 recover 标记、仍命中「PUT /api/account/password」白名单，
-    // 于是泄露的旧 token 可以在 30 天内反复免旧密码改密。
-    // 因此这里吊销旧会话并新建 sid：旧 token 的 sid 不在名单里，立即失效；
-    // 新 token 必须使用新 sid（沿用旧 sid 会把自己也一起吊销）。
+    // 密码已变 → 该账号在**所有窗口**签发的旧 token 立即失效（含本机恢复 token）。
+    // 以前只有「本机恢复」分支 revoke 当前 sid + create 新 sid：普通改密不吊销任何会话，
+    // 兄弟窗口的 token 还能用满 30 天；而只吊销兄弟会话、放过当前 token 也不行 ——
+    // 当前 token 若已泄露，改密码就失去意义。统一走动作层：全量吊销后换发新 sid，
+    // 让当前窗口继续在线（沿用旧 sid 会把自己也一起吊销）。
+    const { payload, token } = rotateLoginAfterCredentialChange(req, res);
+    // 「本机信息恢复」的 recover token 只授权这一次改密：换发的新 token 不带 recover，
+    // 旧 recover token 已被全量吊销，无法再免旧密码反复改密。
     if (byLocalRecover) {
-      sessions.revoke(req.user.sid);
-      const sid = sessions.create(req.user.userId);
-      const payload = {
-        userId: req.user.userId, username: req.user.username, role: req.user.role,
-        dbSlug: req.user.dbSlug, sid,
-      };
-      const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
-      if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
-      res.cookie('token', token, {
-        httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
-      });
       return res.json({ message: '密码修改成功', token, mediaToken: signMediaToken(payload) });
     }
     res.json({ message: '密码修改成功' });
@@ -377,7 +592,8 @@ router.delete('/', auth(), (req, res) => {
   const rec = dbManager.registryFindBySlug(slug);
   if (!rec) return res.status(404).json({ error: '账号不存在或已被删除' });
   dbManager.deleteTeacher(slug);
-  sessions.revoke(req.user && req.user.sid);
+  // 账号都没了，其它窗口残留的 token 不能继续按旧 sid 通过鉴权
+  revokeAccountSessions(req.user.userId, req.user.dbSlug);
   res.clearCookie('token');
   res.json({ message: '账号已删除' });
 });
@@ -453,6 +669,9 @@ router.post('/security-level', auth(), async (req, res) => {
       dbManager.enablePrivacy(username, { password: effectivePwd, mnemonic: phrase });
     }
 
+    // 上面写入或清空了登录密码 = 凭证变更：其它窗口的旧 token 立即失效，
+    // 当前窗口换发新 sid 继续在线（前端切换完还留在设置页，不能被踢回登录页）。
+    rotateLoginAfterCredentialChange(req, res);
     res.json({
       level: target,
       changed: true,

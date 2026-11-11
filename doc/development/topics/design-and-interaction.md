@@ -67,7 +67,7 @@ classnest/
 │   │   │   ├── DutyView.vue
 │   │   │   └── SeatView.vue
 │   │   ├── App.vue
-│   │   └── main.js  # 选择 base / glass / glass2
+│   │   └── main.js  # 选择 base / glass / glass2（未知 id 会被 setTheme 拒绝并…
 │   └── index.html  # 后端未就绪时先给稳定画面，不闪白
 └── testjs/
     └── tools/
@@ -89,7 +89,7 @@ classnest/
 - 三套预设主题：彩色色块（base）、毛玻璃（glass）、新毛玻璃（glass2）的配色、材质、按钮与背景设计。
 - 日间/夜间模式：与主题正交的 `data-mode`、三套主题的夜间配色策略、跟随系统、切换时序。
 - 动画设计：时长分层、缓动族、各场景动效清单、总开关与性能红线。
-- 图标体系：`IconGlyph` 的 Props、76 个语义图标、内联 SVG、彩色/Emoji 两档、夜间提亮。
+- 图标体系：`IconGlyph` 的 Props、79 个语义图标、内联 SVG、彩色/Emoji 两档、夜间提亮。
 - 界面排版：标题栏、侧边栏、页面标题卡、内容分区、表格/网格、首页卡片、登录页与浮窗。
 - 弹窗排版：外壳、尺寸档、正文滚动、按钮区、层级阶梯与遮罩。
 - 交互规范：乐观高亮、悬停预取、快捷键、通知、拖拽、禁用态与焦点反馈。
@@ -402,7 +402,7 @@ sequenceDiagram
 #### 6.2 图形数据与语义色
 
 - [`IconGlyph.shapes.js`](../../../student-frontend/src/components/base/IconGlyph.shapes.js) 由 [`gen-icon-shapes.mjs`](../../../testjs/tools/gen-icon-shapes.mjs) **从 `@lucide/vue`（Lucide 线性图标库）自动生成**，文件头注明「自动生成，勿手改」。这样做是为了不再为每个图标实例化一个 VDOM 组件，而是一个 `<svg>` + 若干形状元素。
-- [`IconGlyph.vue`](../../../student-frontend/src/components/base/IconGlyph.vue) 的 `MAP`（语义图标映射表）登记 **76 个 key**（图标键名），每项含 `lucide`（Lucide 图标名）、`emoji`（表情符号兜底）与语义 `color`（颜色）：
+- [`IconGlyph.vue`](../../../student-frontend/src/components/base/IconGlyph.vue) 的 `MAP`（语义图标映射表）登记 **79 个 key**（图标键名），每项含 `lucide`（Lucide 图标名）、`emoji`（表情符号兜底）与语义 `color`（颜色）：
   - 页面主标题：`students #60a5fa`、`group #818cf8`、`schedule #22d3ee`、`fee #fbbf24`、`seat #fb923c`、`duty #34d399`、`leave #a78bfa`、`score #f87171`、`album #f472b6`、`activity #fb7185`、`ai #38bdf8`、`settings/about #94a3b8`。
   - 通用：刷新、下载/上传、删除、搜索、文件夹、撤销、图片、勾选、时钟、图表、工具箱、调色板、大脑、主页、电源等。
   - 工具型：箭头、加减、方形、数据库、筛选、地球、布局、显示器、月亮/太阳、面板开合等。

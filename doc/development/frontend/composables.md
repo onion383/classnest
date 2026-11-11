@@ -21,10 +21,11 @@ classnest/
         │   ├── exportFormats.js  # 导出格式实现
         │   ├── secureAxios.js  # axios 加解密装配
         │   ├── secureChannel.js  # 加密原语
+        │   ├── secureRetry.js  # 安全信道 401 重试判定
         │   ├── tableDragFx.js  # 拖拽让位算法
         │   ├── useAlbumScan.js  # 扫描轮询
         │   ├── useAlbumTaskResume.js  # 断点续扫
-        │   ├── useCardHeightAnimation.js  # 卡片高度过渡（内容增减时播动画）
+        │   ├── useCardHeightAnimation.js  # 卡片高度过渡
         │   ├── useDashboardData.js  # 首页聚合
         │   ├── useElasticScroll.js  # 橡皮筋滚动
         │   ├── useNotification.js  # 全局通知
@@ -32,17 +33,20 @@ classnest/
         │   ├── useRowFocus.js  # 跨页行定位
         │   ├── useRowSortDrag.js  # 行排序拖拽
         │   ├── useSeatDraft.js  # 座位草稿
+        │   ├── useSeatGrid.geometry.js  # 座位网格几何（纯函数）
         │   ├── useSeatGrid.js  # 座位/网格
         │   ├── useSyncStudentNames.js  # 人名自动补建
         │   ├── useTableCRUD.js  # 动态列 CRUD（增删改查）
         │   ├── useThumbBatch.js  # 缩略图批量预取
-        │   └── useUndo.js  # 撤销/重做
+        │   ├── useUndo.js  # 撤销/重做
+        │   └── useWeekDates.js  # 今天的响应式日期
         └── utils/
-            └── httpClient.js
+            ├── httpClient.js
+            └── latestOnly.js
 ```
 <!-- doc-tree:end -->
 
-26 个文件：根目录 19 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
+29 个文件：根目录 22 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
 
 ---
 
@@ -68,9 +72,20 @@ classnest/
 
 #### [`useSeatGrid.js`](../../../student-frontend/src/composables/useSeatGrid.js) · 座位/网格
 - **签名**：`useSeatGrid(apiBase, options)`；`options = { getStudentName, getStudentId, undo({ key, table }), cellBase }`。
-- **导出**：`useSeatGrid(apiBase, options)`，以及网格工具 `generateColHeaders(cols, mode, showAisle)`、`getDisplayColCount(cols, mode, showAisle)`、`isAisleCol(displayIdx, cols, mode, showAisle)`、`buildSeatLikeRows(rows, cols, mode, showAisle, valueAt)`。
-- **内部时序**：整表保存 `PUT {apiBase}`（整体更新，提交 rows/cols/seats/mode/showAisle）；单格 `PATCH {apiBase}/master/cell`（局部更新）；开启撤销时写前 `recordGridSnapshotUndo`（记录网格快照）；走廊列由 `showAisle`（是否显示走廊）与列数推导。
+- **导出**：`useSeatGrid(apiBase, options)`；几何纯函数全部来自 `useSeatGrid.geometry.js` 并由本文件 `export *` 转发（`SeatView` / `AiGridPreview` / `useSeatDraft` 仍从这里取），不在此处另行维护。
+- **内部时序**：整表保存 `PUT {apiBase}`（整体更新，提交 rows/cols/seats/mode/showAisle/types）；单格 `PATCH {apiBase}/master/cell`（局部更新）；开启撤销时写前 `recordGridSnapshotUndo`（记录网格快照）；走廊是 `types` 里的真实行/列，不再由 `showAisle` 在渲染期插虚拟列。
 - **调用方**：`SeatView`。
+
+#### [`useSeatGrid.geometry.js`](../../../student-frontend/src/composables/useSeatGrid.geometry.js) · 座位网格几何（纯函数）
+- **定位**：座位网格的全部纯计算。单独成文件是为了能在 node 下单测（`seat-geometry` / `seat-aisle-row` / `seat-hole-paint` 等），避免一 import 就把 axios 与路径别名带进单测环境。
+- **导出**：`CELL`（`SEAT=0` / `AISLE=1` / `BLANK=2`）、`SEAT_MAX_ROWS` / `SEAT_MAX_GRID_COLS`（与后端 `services/sanitize.js` 同值）、`normalizeTypes`、`columnKinds` / `columnLabels` / `seatColumnIndices` / `rowIsAisle`、`generateColHeaders` / `buildSeatLikeRows` / `applyEditedRows` / `reshapeGeometry`、`usableSeatCount` / `toggleHole` / `clearHoles`、`insertAisleRow` / `removeGridRow` / `insertAisleColumn` / `removeGridColumn`。
+- **数据模型**：`seats` 与 `types` 同下标 `rows×cols`；`cols` 是**网格总列数**（含走廊列），不是座位列数。旧的 `getDisplayColCount` / `isAisleCol` / `displayColOfReal` 一套「显示列 ↔ 真实列」换算已随模型整体删除，需要座位列序号时用 `seatColumnIndices()` 现算。
+- **注意事项**：上限常量与后端必须成对修改；真正的形状权威在后端，这里只做「别让用户白操作一次」的前置拦截。
+
+#### [`useWeekDates.js`](../../../student-frontend/src/composables/useWeekDates.js) · 今天的响应式日期
+- **导出**：`useWeekDates()` → `{ today, monday, todayName }`（今天的本地日期串 / 所在自然周周一 / 今天星期名）。
+- **内部时序**：`today` 每分钟刷新一次（跨零点自动翻页），定时器经 `utils/disposables.js` 就地登记、随作用域释放；换算函数来自 `utils/weekDates.js`。
+- **调用方**：课表页与值日页（列头日期副行、今天列高亮）。
 
 #### [`useSeatDraft.js`](../../../student-frontend/src/composables/useSeatDraft.js) · 座位草稿
 - **签名**：`useSeatDraft(...)`；负责智能排表/回填的草稿暂存与恢复（与弹窗 `draft` 参数配合）。
@@ -132,7 +147,7 @@ classnest/
 ### 数据与网络
 
 #### [`useDashboardData.js`](../../../student-frontend/src/composables/useDashboardData.js) · 首页聚合
-- **签名**：`ensureDashboardData(force)`；并行 9 个接口 + 模块级缓存 + pending 共享。
+- **签名**：`ensureDashboardData(force)`；单次 `/api/dashboard` 聚合请求 + 模块级缓存 + pending 共享。
 - **调用方**：`router/index.js`（进首页前）、`DashboardView`。
 
 #### [`useUndo.js`](../../../student-frontend/src/composables/useUndo.js) · 撤销/重做
@@ -156,6 +171,12 @@ classnest/
 - **签名**：`setupSecureAxios(axios)`。
 - 内部：请求拦截加密 JSON 体（FormData/GET 直通）；响应拦截检测 `{ d }` 解密；失败 `clearSession` 后重新握手重试一次；错误响应同样解密。
 - **调用方**：`main.js`；其他窗口经 [`utils/httpClient.js`](../../../student-frontend/src/utils/httpClient.js) 转调。
+
+#### [`secureRetry.js`](../../../student-frontend/src/composables/secureRetry.js) · 安全信道 401 重试判定
+- **导出**：`decideSecureRetry({ status, headers, data, config })`，返回 `degraded / auth / session / null`。
+- **顺序**：凭据降级 > auth-required > 会话过期；顺序不能改（降级时后端也回 401，先判 auth 会误清 token）。
+- **调用方**：`secureAxios.js` 的响应错误拦截器；清会话、重新加密、重发等副作用仍留在调用方。
+- **测试**：纯函数、零依赖，`testjs/units/secure-retry.test.js` 直接覆盖，不再只靠需要 Vite 的冒烟脚本。
 
 #### [`exportFormats.js`](../../../student-frontend/src/composables/exportFormats.js) · 导出格式实现
 - **导出**：`FORMAT_OPTIONS`（html / xlsx / csv / md / txt / json / image / pdf）、`FORMAT_LABELS`、`runTableExport({ format, columns, rows, filename, title })`；负责各格式的实际生成与保存。

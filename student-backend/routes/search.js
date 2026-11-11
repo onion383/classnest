@@ -6,18 +6,24 @@ const { unpackMode } = require('../services/dutyMode')
 // 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
 const dutyConfig = require('../services/dutyConfig')
 const { safeJson } = require('../utils/json')
+// 格子类型的唯一常量源：走廊是 AISLE，不是「魔法数字 1」
+const { SEAT_CELL } = require('../services/sanitize')
+// 分页与防失控阈值的唯一入口：页大小固定、OFFSET 翻页；词数 / 拼音候选值带硬上限。
+const { resolveSearchLimits, clipPage, windowOf } = require('../services/searchLimits')
 
 // 标题栏「全局搜索」的服务端数据源：对若干业务表的文本列做 LIKE 匹配，分组返回。
 // 表名/列名全部来自本文件的白名单常量（不接受请求参数拼接），杜绝注入。
 //
 // 性能取向（2026-11-04 调的）：这个接口由前端每次输入 debounce 后触发，且 better-sqlite3
 // 是同步的 —— 一次慢查询会卡住整个进程。所以：
-//   · 排序交给 SQL（主列命中优先 + id 倒序），LIMIT 直接截 PER_GROUP 条，不再「拉 1000 行再 JS 排」；
+//   · 排序交给 SQL（主列命中优先 + id 倒序），LIMIT/OFFSET 只取当前一页，不再「拉 1000 行再 JS 排」；
 //   · 拼音只对主列的 **distinct 值** 做（班级数据里「姓名」只有几十个不同值），
 //     不再拉 1000 行宽记录逐列转拼音；
 //   · 拼音补扫只在 LIKE 命中不足时才做 —— 中文查询通常第一次就够数，直接跳过。
 
-const PER_GROUP = 12
+// 每组每页固定 12 条，由 ?page= 翻页（见 services/searchLimits.js）。**不做「放大上限重查」**：
+// 那只是把天花板往外挪，命中再多仍会撞墙，而且每点一次都要把前面所有结果重查一遍。
+// 所有源（SQL 与内存 JSON）统一走 clipPage，多取一条判 hasMore，响应 meta 带回前端。
 
 // 自定义列：students / fee_records 支持用户自行加列（services/tableService.addColumn 会同步写
 // table_meta），但 SOURCES 里的 match 是写死的白名单 —— 新加的列永远搜不到。这里按 table_meta
@@ -47,9 +53,7 @@ function getPinyinMatch() {
   return pinyinMatch
 }
 
-// 拼音补充匹配的候选「值」上限：拼音只对主列的 distinct 值做，
-// 班级数据里姓名/组名这类去重后通常只有几十个，400 是留足余量的保险值。
-const PINYIN_VALUES = 400
+// 拼音候选「distinct 值」上限同样来自 searchLimits（默认 400、可按 pinyinValues 放宽到 5000）。
 
 // 维度名命中的维度 id（每次请求前重算，供 groups 源的 extra 子句使用）。
 // 请求处理全程同步（better-sqlite3），不存在跨请求交错的窗口。
@@ -244,7 +248,9 @@ function matchPinyin(fn, value, q) {
 // 名称匹配（用于非 SQL 的课程表数据）：文本子串（忽略大小写）或拼音。
 function nameHit(name, q, pm) {
   if (name.toLowerCase().includes(q)) return true
-  return pm ? matchPinyin(pm, name, q) : false
+  // 拼音只对纯字母的词有意义：中文词不该被塞进拼音匹配器（结果不可控）。
+  // 这里按词判断，多词查询里的字母词依然能走拼音（Q1-02）。
+  return pm && /^[a-z]+$/i.test(q) ? matchPinyin(pm, name, q) : false
 }
 
 // 多词版：每个词都要命中（词内仍支持拼音），语义与 SQL 侧一致。
@@ -257,8 +263,8 @@ function allTermsHit(name, terms, pm) {
 // ==================== 分词 / 字段限定 / 排序 / 命中列 ====================
 
 // 空格分词：多个词是「且」关系（「张三 请假」= 姓名含张三、且某列含请假）。
-// 上限 5 个词：输入「a b c d e f g…」时不让 SQL 的占位符数量失控。
-const MAX_TERMS = 5
+// 词数上限由请求参数给（默认 12、硬上限 20）：5 个词就把第 6 个起静默丢掉，
+// 会让「且」条件凭空变松，属于用户看不见的错误结果。
 
 // 字段限定：`姓名:张三` 只在姓名列里搜。
 // 别名表 = 用户可能输入的字段名 → 实际列名。一个别名可映射多列（电话 = 家长/学生两列；
@@ -285,11 +291,11 @@ const FIELD_ALIASES = {
 // 冒号前限 1~6 个字符：像「12:30」这种用户真可能搜的时间不会被误认成字段
 const FIELD_RE = /^([^:：]{1,6})[:：](.+)$/
 
-function splitTerms(q) {
+function splitTerms(q, maxTerms) {
   return String(q)
     .split(/\s+/)
     .filter(Boolean)
-    .slice(0, MAX_TERMS)
+    .slice(0, maxTerms)
     .map(raw => {
       const m = FIELD_RE.exec(raw)
       const cols = m ? FIELD_ALIASES[m[1].trim()] : null
@@ -311,15 +317,53 @@ function termWhere(term, cols, prefix = '') {
   }
 }
 
-// 整条查询的 WHERE：词之间 AND
-function buildWhere(terms, cols, prefix = '') {
+// 拼音候选：主列的 distinct 值。上限由请求参数控制，超限时不再静默截断索引。
+function primaryValues(table, primary, limit) {
+  try {
+    return db.prepare(
+      `SELECT DISTINCT "${primary}" AS v FROM ${table}
+       WHERE "${primary}" IS NOT NULL AND "${primary}" <> '' LIMIT ?`
+    ).all(limit).map(r => r.v)
+  } catch (_) {
+    return [] // 存量库缺表/缺列：退化为纯 LIKE，不影响其它分组
+  }
+}
+
+// 给每个「纯字母词」算出拼音命中值，作为该词的一个 OR 分支。
+// 返回与 terms 等长的数组（没有拼音命中的词为 null），全部为空时返回 null。
+// 关键：拼音是**按词**补进 WHERE 的，不是把整条 OR 掉 —— 后者会破坏多词的 AND 关系。
+function pinyinAlternatives(terms, pm, primary, cols, values) {
+  if (!pm || !primary || !cols.includes(primary) || !values.length) return null
+  const out = new Array(terms.length).fill(null)
+  let used = false
+  for (let i = 0; i < terms.length; i++) {
+    const t = terms[i]
+    if (!/^[a-z]+$/i.test(t.text)) continue
+    // 限定到别的列时（备注:zs）不做拼音：拼音只对姓名/名称这类主列有意义
+    if (t.cols && !t.cols.includes(primary)) continue
+    const hits = values.filter(v => matchPinyin(pm, v, t.text))
+    if (hits.length) { out[i] = { hits, primary }; used = true }
+  }
+  return used ? out : null
+}
+
+// 整条查询的 WHERE：词之间 AND；每个词的拼音命中值作为该词内部的 OR 分支。
+// pinyinByTerm 与 terms 等长，元素形如 { hits: [...], primary: '姓名' }。
+function buildWhere(terms, cols, prefix = '', pinyinByTerm = null) {
   const parts = []
   const params = []
-  for (const t of terms) {
-    const w = termWhere(t, cols, prefix)
+  for (let i = 0; i < terms.length; i++) {
+    const w = termWhere(terms[i], cols, prefix)
     if (!w) return null
-    parts.push(w.sql)
-    params.push(...w.params)
+    const alt = pinyinByTerm && pinyinByTerm[i]
+    if (alt && alt.hits.length) {
+      const ph = alt.hits.map(() => '?').join(',')
+      parts.push(`(${w.sql} OR ${prefix}"${alt.primary}" IN (${ph}))`)
+      params.push(...w.params, ...alt.hits)
+    } else {
+      parts.push(w.sql)
+      params.push(...w.params)
+    }
   }
   return { sql: parts.join(' AND '), params }
 }
@@ -351,13 +395,20 @@ function hitColumn(cols, terms, row) {
 
 router.get('/', (req, res) => {
   try {
+    // 分页一处解析：page 决定 OFFSET，每页大小固定；maxTerms / pinyinValues 是防失控阀门。
+    const limits = resolveSearchLimits(req.query)
+    const perGroup = limits.perGroup
+    // 所有源共用一个 pageState：任一组多取到一条 ⇒ 整次查询还有下一页。
+    const pageState = { hasMore: false }
+    const meta = { page: limits.page, perGroup, hasMore: false }
     const q = String(req.query.q || '').trim()
-    if (!q) return res.json({ groups: [] })
-    const terms = splitTerms(q)
-    if (!terms.length) return res.json({ groups: [] })
-    const single = terms.length === 1
-    // 纯字母的单词查询才启用拼音匹配（zs / zhangsan 这类，字段限定同样支持：姓名:zs）；多词与中文走纯 LIKE
-    const pm = single && /^[a-z]+$/i.test(terms[0].text) ? getPinyinMatch() : null
+    if (!q) return res.json({ groups: [], meta })
+    const terms = splitTerms(q, limits.maxTerms)
+    if (!terms.length) return res.json({ groups: [], meta })
+    // 只要有一个词是纯字母就启用拼音匹配器；**每个词自己**决定要不要走拼音（Q1-02）。
+    // 旧写法要求「整条查询只有一个词」，于是 `zs 张三` / `zs ls` 这类多词查询里
+    // 字母词完全退化成 LIKE %zs%，对中文姓名零命中。
+    const pm = terms.some(t => /^[a-z]+$/i.test(t.text)) ? getPinyinMatch() : null
     // 维度名命中的维度：先算出来，groups 源的 extra 要用（搜「宿舍管理」→ 该维度下所有组）
     dimHitIds = []
     try {
@@ -370,32 +421,24 @@ router.get('/', (req, res) => {
     for (const src of SOURCES) {
       // 列名来自本文件常量白名单（dynamic 源额外并入 table_meta 里已校验过的自定义列），直接内联到 SQL
       const cols = src.dynamic ? Array.from(new Set(src.match.concat(dynamicColumns(src.table)))) : src.match
+      // 拼音候选值只扫一次主列的 distinct 值（上限随请求放宽），再按词生成 OR 分支；
+      // 不写成「先 LIKE 查一遍、不够再回表查一遍」—— 那是两次全表扫描。
+      const canPinyin = pm && src.primary && src.pinyin !== false && cols.includes(src.primary)
+      const pinyinByTerm = canPinyin
+        ? pinyinAlternatives(terms, pm, src.primary, cols,
+          primaryValues(src.table, src.primary, limits.pinyinValues))
+        : null
       // 字段限定：本表没有该字段时 buildWhere 返回 null，整组跳过（也省掉这次扫描）
-      const w = buildWhere(terms, cols)
+      const w = buildWhere(terms, cols, '', pinyinByTerm)
       if (!w) continue
       const extra = src.extra ? src.extra() : null
       const where = extra ? `(${w.sql}) OR ${extra.clause}` : w.sql
       const od = orderByClause(src, cols, terms)
-      // 拼音：先把主列的 distinct 值过一遍，拿到命中值再与 LIKE 合并成**一次**查询。
-      // 不写成「先 LIKE 查一遍、不够再回表查一遍」—— 那是两次全表扫描，这里省掉一半。
-      // 字段限定到别的列时（备注:zs）不做拼音：拼音只对姓名/名称这类主列有意义。
-      const pinyinOk = pm && src.primary && src.pinyin !== false && (!terms[0].cols || terms[0].cols.includes(src.primary))
-      let pinyinHits = []
-      if (pinyinOk) {
-        try {
-          const vals = db.prepare(
-            `SELECT DISTINCT "${src.primary}" AS v FROM ${src.table}
-             WHERE "${src.primary}" IS NOT NULL AND "${src.primary}" <> '' LIMIT ?`
-          ).all(PINYIN_VALUES)
-          pinyinHits = vals.map(r => r.v).filter(v => matchPinyin(pm, v, terms[0].text))
-        } catch (_) {}
-      }
       let rows = []
       try {
-        const ph = pinyinHits.map(() => '?').join(',')
-        const whereSql = ph ? `((${where}) OR "${src.primary}" IN (${ph}))` : where
-        rows = db.prepare(`SELECT * FROM ${src.table} WHERE ${whereSql} ORDER BY ${od.sql} LIMIT ?`)
-          .all(...w.params, ...(extra ? extra.params : []), ...pinyinHits, ...od.params, PER_GROUP)
+        const found = db.prepare(`SELECT * FROM ${src.table} WHERE ${where} ORDER BY ${od.sql} LIMIT ? OFFSET ?`)
+          .all(...w.params, ...(extra ? extra.params : []), ...od.params, limits.probeLimit, limits.offset)
+        rows = clipPage(found, limits, pageState)
       } catch (_) {
         rows = [] // 单表异常（如存量库缺列）不影响其它分组
       }
@@ -429,11 +472,13 @@ router.get('/', (req, res) => {
       settings = safeJson(row.settings, {}, `${sc.table}.settings`)
       if (!Array.isArray(cells) || !cells.length) continue
       const days = Array.isArray(settings.days) && settings.days.length ? settings.days : DEFAULT_DAYS
+      // 内存型源：命中项最多收集到「本页窗口末尾 + 1 条」就停，不必扫完整张表。
+      const collectUpTo = limits.offset + limits.probeLimit
       const items = []
-      for (let li = 0; li < cells.length && items.length < PER_GROUP; li++) {
+      for (let li = 0; li < cells.length && items.length < collectUpTo; li++) {
         const line = cells[li]
         if (!Array.isArray(line)) continue
-        for (let di = 0; di < line.length && items.length < PER_GROUP; di++) {
+        for (let di = 0; di < line.length && items.length < collectUpTo; di++) {
           const cell = line[di]
           const name = cell && typeof cell === 'object' && cell.course != null ? String(cell.course).trim() : ''
           if (!name || !allTermsHit(name, terms, pm)) continue
@@ -445,7 +490,8 @@ router.get('/', (req, res) => {
           })
         }
       }
-      if (items.length) groups.push({ table: sc.table, group: sc.group, emoji: '📖', route: '/schedule', items })
+      const pageItems = clipPage(windowOf(items, limits), limits, pageState)
+      if (pageItems.length) groups.push({ table: sc.table, group: sc.group, emoji: '📖', route: '/schedule', items: pageItems })
     }
 
     // 座位表（cells 存学生 id 或姓名，需 id→姓名映射后再按姓名匹配；focus 用页面显示列）
@@ -479,14 +525,15 @@ router.get('/', (req, res) => {
       for (let c = 0; c < maxCols; c++) {
         let allAisle = Array.isArray(types) && types.length > 0
         for (let r = 0; r < types.length; r++) {
-          if (!Array.isArray(types[r]) || types[r][c] !== 1) { allAisle = false; break }
+          if (!Array.isArray(types[r]) || types[r][c] !== SEAT_CELL.AISLE) { allAisle = false; break }
         }
         seatNo.push(allAisle ? 0 : ++seatSeq)
       }
+      const collectUpTo = limits.offset + limits.probeLimit
       const items = []
-      for (let r = 0; r < seats.length && items.length < PER_GROUP; r++) {
+      for (let r = 0; r < seats.length && items.length < collectUpTo; r++) {
         const line = Array.isArray(seats[r]) ? seats[r] : []
-        for (let c = 0; c < line.length && items.length < PER_GROUP; c++) {
+        for (let c = 0; c < line.length && items.length < collectUpTo; c++) {
           const name = nameOfSeat(line[c]).trim()
           if (!name || !allTermsHit(name, terms, pm)) continue
           if (seatNo[c] === 0) continue
@@ -494,7 +541,8 @@ router.get('/', (req, res) => {
           items.push({ id: r + ':' + c, label: name, sub: `第${r + 1}行 · 列${seatNo[c]}`, focus: st.anchor + ':' + r + ':' + c })
         }
       }
-      if (items.length) groups.push({ table: st.table, group: st.group, emoji: '🪑', route: '/seats', items })
+      const pageItems = clipPage(windowOf(items, limits), limits, pageState)
+      if (pageItems.length) groups.push({ table: st.table, group: st.group, emoji: '🪑', route: '/seats', items: pageItems })
     }
 
     // 值日表（项目×列；行按项目人数展开，与页面 buildGridRows 的行号一致）
@@ -514,14 +562,15 @@ router.get('/', (req, res) => {
         const items = dutyItemsField ? unpackMode(dutyItemsField, mode, []) : []
         if (!Array.isArray(items) || !items.length) continue
         if (!cells || !Object.keys(cells).length) continue
+        const collectUpTo = limits.offset + limits.probeLimit
         const out = []
         let rowIdx = 0
         for (const it of items) {
           const n = Math.max(1, Number(it.count) || 1)
           for (let k = 0; k < n; k++) {
-            if (out.length >= PER_GROUP) break
+            if (out.length >= collectUpTo) break
             const byDay = cells[it.name] || {}
-            for (let di = 0; di < dutyDays.length && out.length < PER_GROUP; di++) {
+            for (let di = 0; di < dutyDays.length && out.length < collectUpTo; di++) {
               const raw = byDay[dutyDays[di]]
               const name = Array.isArray(raw) ? String(raw[k] || '').trim() : String(raw || '').trim()
               if (!name || !allTermsHit(name, terms, pm)) continue
@@ -529,9 +578,10 @@ router.get('/', (req, res) => {
             }
             rowIdx++
           }
-          if (out.length >= PER_GROUP) break
+          if (out.length >= collectUpTo) break
         }
-        if (out.length) groups.push({ table: dt.table, group: dt.group + (mode === 'big' ? '（大扫除）' : ''), emoji: '🧹', route: '/duty', items: out })
+        const pageItems = clipPage(windowOf(out, limits), limits, pageState)
+        if (pageItems.length) groups.push({ table: dt.table, group: dt.group + (mode === 'big' ? '（大扫除）' : ''), emoji: '🧹', route: '/duty', items: pageItems })
       }
     }
 
@@ -541,6 +591,7 @@ router.get('/', (req, res) => {
     for (const mode of ['daily', 'big']) {
       const items = dutyItemsField ? unpackMode(dutyItemsField, mode, []) : []
       if (!Array.isArray(items) || !items.length) continue
+      const collectUpTo = limits.offset + limits.probeLimit
       const out = []
       let rowIdx = 0
       for (const it of items) {
@@ -555,9 +606,10 @@ router.get('/', (req, res) => {
           })
         }
         rowIdx += n
-        if (out.length >= PER_GROUP) break
+        if (out.length >= collectUpTo) break
       }
-      if (out.length) groups.push({ table: 'duty_items', group: '值日项目' + (mode === 'big' ? '（大扫除）' : ''), emoji: '🧹', route: '/duty', items: out })
+      const pageItems = clipPage(windowOf(out, limits), limits, pageState)
+      if (pageItems.length) groups.push({ table: 'duty_items', group: '值日项目' + (mode === 'big' ? '（大扫除）' : ''), emoji: '🧹', route: '/duty', items: pageItems })
     }
 
     // 分组成员（成员名 / 组内备注）：回答「某人在哪个组」。focus 沿用「分组」的 dim:<维度>:<组> 协议。
@@ -567,27 +619,18 @@ router.get('/', (req, res) => {
                         JOIN groups g ON g.id = m.group_id
                         LEFT JOIN group_dimensions d ON d.id = g.dimension_id`
     try {
-      // 字段限定：`姓名:张三` 里的姓名别名含 member_name，能命中分组成员；限定到本表没有的字段则整组跳过
-      const mw = buildWhere(terms, ['member_name', 'remark'], 'm.')
+      // 字段限定：`姓名:张三` 里的姓名别名含 member_name，能命中分组成员；限定到本表没有的字段则整组跳过。
+      // 拼音按词补进同一个 WHERE（不再「没凑够再回表 OR 一次」，那样多词时会绕开 AND 关系）。
+      const memberPinyin = pinyinAlternatives(terms, pm, 'member_name', ['member_name', 'remark'],
+        pm ? primaryValues('group_members', 'member_name', limits.pinyinValues) : [])
+      const mw = buildWhere(terms, ['member_name', 'remark'], 'm.', memberPinyin)
       let rows = []
       if (mw) {
         try {
-          rows = db.prepare(`${MEMBER_SQL} WHERE ${mw.sql} ORDER BY m.id DESC LIMIT ?`)
-            .all(...mw.params, PER_GROUP)
+          const found = db.prepare(`${MEMBER_SQL} WHERE ${mw.sql} ORDER BY m.id DESC LIMIT ? OFFSET ?`)
+            .all(...mw.params, limits.probeLimit, limits.offset)
+          rows = clipPage(found, limits, pageState)
         } catch (_) { rows = [] }
-      }
-      // 拼音补充：只在单词纯字母查询、且 LIKE 没凑够时才跑（distinct 成员名，量很小）
-      const memberPinyinOk = pm && mw && (!terms[0].cols || terms[0].cols.includes('member_name'))
-      if (memberPinyinOk && rows.length < PER_GROUP) {
-        try {
-          const vals = db.prepare(`SELECT DISTINCT member_name AS v FROM group_members WHERE member_name <> '' LIMIT ?`).all(PINYIN_VALUES)
-          const hits = vals.map(r => r.v).filter(v => matchPinyin(pm, v, terms[0].text))
-          if (hits.length) {
-            const ph = hits.map(() => '?').join(',')
-            rows = db.prepare(`${MEMBER_SQL} WHERE (${mw.sql}) OR m.member_name IN (${ph}) ORDER BY m.id DESC LIMIT ?`)
-              .all(...mw.params, ...hits, PER_GROUP)
-          }
-        } catch (_) {}
       }
       if (rows.length) {
         groups.push({
@@ -610,25 +653,16 @@ router.get('/', (req, res) => {
     const CADRE_MEMBER_SQL = `SELECT m.id, m.cadre_id, m.student_name, c.name AS cname
                               FROM cadre_members m LEFT JOIN cadres c ON c.id = m.cadre_id`
     try {
-      const cw = buildWhere(terms, ['student_name'], 'm.')
+      const cadrePinyin = pinyinAlternatives(terms, pm, 'student_name', ['student_name'],
+        pm ? primaryValues('cadre_members', 'student_name', limits.pinyinValues) : [])
+      const cw = buildWhere(terms, ['student_name'], 'm.', cadrePinyin)
       let rows = []
       if (cw) {
         try {
-          rows = db.prepare(`${CADRE_MEMBER_SQL} WHERE ${cw.sql} ORDER BY m.id DESC LIMIT ?`)
-            .all(...cw.params, PER_GROUP)
+          const found = db.prepare(`${CADRE_MEMBER_SQL} WHERE ${cw.sql} ORDER BY m.id DESC LIMIT ? OFFSET ?`)
+            .all(...cw.params, limits.probeLimit, limits.offset)
+          rows = clipPage(found, limits, pageState)
         } catch (_) { rows = [] }
-      }
-      const cadrePinyinOk = pm && cw && (!terms[0].cols || terms[0].cols.includes('student_name'))
-      if (cadrePinyinOk && rows.length < PER_GROUP) {
-        try {
-          const vals = db.prepare(`SELECT DISTINCT student_name AS v FROM cadre_members WHERE student_name <> '' LIMIT ?`).all(PINYIN_VALUES)
-          const hits = vals.map(r => r.v).filter(v => matchPinyin(pm, v, terms[0].text))
-          if (hits.length) {
-            const ph = hits.map(() => '?').join(',')
-            rows = db.prepare(`${CADRE_MEMBER_SQL} WHERE (${cw.sql}) OR m.student_name IN (${ph}) ORDER BY m.id DESC LIMIT ?`)
-              .all(...cw.params, ...hits, PER_GROUP)
-          }
-        } catch (_) {}
       }
       if (rows.length) {
         groups.push({
@@ -648,24 +682,25 @@ router.get('/', (req, res) => {
 
     // 照片文件名：命中后落到该照片所属相册（相册页只支持定位到相册，不支持定位到单张图）。
     // 排序用 id 倒序而不是 photo_date：按拍摄日期排会把所有命中行都排序一遍（几万张时 p90 明显变差），
-    // 而 id 倒序能沿主键反向扫描、凑够 PER_GROUP 条就停。代价是同一相册内按「入库先后」而不是拍摄时间，
+    // 而 id 倒序能沿主键反向扫描、凑够一页就停。代价是同一相册内按「入库先后」而不是拍摄时间，
     // 对「搜到就跳过去」的用途没有实际差别。文件名多为字母数字，LIKE 已足够，不做拼音补充。
     try {
       // 同样走 buildWhere：`文件:IMG_1` 能限定到文件名列，限定到本表没有的字段则整组跳过
       const pw = buildWhere(terms, ['file_name'])
-      const rows = pw ? db.prepare(
+      const found = pw ? db.prepare(
         `SELECT p.id, p.album_id, p.file_name, p.photo_date, a.name AS album_name
          FROM album_photos p LEFT JOIN albums a ON a.id = p.album_id
          WHERE ${pw.sql}
-         ORDER BY p.id DESC LIMIT ?`
-      ).all(...pw.params, PER_GROUP) : []
+         ORDER BY p.id DESC LIMIT ? OFFSET ?`
+      ).all(...pw.params, limits.probeLimit, limits.offset) : []
+      const rows = clipPage(found, limits, pageState)
       if (rows.length) {
         groups.push({
           table: 'album_photos',
           group: '照片',
           emoji: '📷',
           route: '/album',
-          items: rows.slice(0, PER_GROUP).map(r => ({
+          items: rows.map(r => ({
             id: r.id,
             label: r.file_name || ('照片#' + r.id),
             sub: [r.album_name, String(r.photo_date || '').slice(0, 10)].filter(Boolean).join(' · '),
@@ -675,7 +710,10 @@ router.get('/', (req, res) => {
       }
     } catch (_) {}
 
-    res.json({ groups })
+    // 任一组在第 probeLimit 条上多取到一条 ⇒ 还有下一页。不额外跑 COUNT，
+    // 否则为了一个按钮要把十几个源再全表扫一遍。
+    meta.hasMore = pageState.hasMore
+    res.json({ groups, meta })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

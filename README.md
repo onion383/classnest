@@ -69,7 +69,7 @@ MIT开源授权，你几乎可以使用这个仓库里面的代码做任何事�
 
 - [文档写作、更新与校验](doc/development/dev-doc-verification.md)（写作模板与规则、更新流程与映射、可信度、校验项、不足与记录）
 
-> 文档一致性可用 `npm run docs:verify` 复检（死链 / 源码覆盖 / 路由 / 依赖版本与许可 / 关键计数 / 脚本覆盖 / doc-tree / 禁用词与格式），见 [文档写作、更新与校验 · 文档校验](doc/development/dev-doc-verification.md#三文档校验)。
+> 文档一致性可用 `npm run docs:verify` 复检（死链 / 源码覆盖 / 路由 / 依赖版本与许可 / 关键计数 / 脚本覆盖 / doc-tree / 禁用词与格式）；数量类计数漂移时先跑 `npm run docs:sync` 按源码现算值改写，再复检，见 [文档写作、更新与校验 · 文档校验](doc/development/dev-doc-verification.md#三文档校验)。
 
 ## 目录结构
 
@@ -153,6 +153,7 @@ npm run dev:new            # 3.6 通道只起 Vite
 | `npm run lint`                                         | ESLint 检查三块代码                                       |
 | `npm run check:boundaries` / `check:boundaries:strict` | 错误边界检查（strict 更严格）                                  |
 | `npm run docs:verify`                                  | 文档一致性校验（死链 / 覆盖 / 路由 / 依赖 / 计数）                     |
+| `npm run docs:sync`                                    | 按源码现算值同步文档里的数量类计数（只改数字，改完仍需 `docs:verify`）        |
 | `npm run inp`                                          | 交互延迟（INP）测量；需 `INP_DEBUG=1` 启动应用                    |
 
 ## 构建与打包

@@ -16,7 +16,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../db');
 const { safeJson } = require('../utils/json');
-const { buildZip } = require('../services/zipWriter');
+const { writeZip } = require('../services/zipStream');
 // 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
 const dutyConfig = require('../services/dutyConfig');
 const { SEAT_CELL, columnLabels, rowIsAisle } = require('../services/seatGrid');
@@ -531,10 +531,16 @@ function safeSegment(s, fallback) {
 //   password, filename
 // }
 // 返回 zip 字节流。前端用现有的 SAVE_FILE 通道落盘，因此不必新开 IPC 通道。
-router.post('/zip', (req, res) => {
+//
+// 为什么是流式：收据原件可能有几百 MB，旧实现「readFileSync 收据 → deflate 副本 →
+// 每条局部块 → 终包 concat」会在内存里叠出四份，大班导出直接把后端顶爆（v6 · P2-01）。
+// 现在收据只传磁盘路径，条目边读边写进响应，任何时刻只持有一个 256KB 块。
+router.post('/zip', async (req, res) => {
   const body = req.body || {};
   const entries = Array.isArray(body.entries) ? body.entries : [];
 
+  // 条目统一成 { name, data } / { name, path }：前者来自前端（表格化文本），
+  // 后者来自 uploads（收据原件，交给写入器流式读盘，不在这里整份读进内存）。
   const items = [];
   for (const e of entries) {
     const name = String((e && e.name) || '').trim();
@@ -545,7 +551,7 @@ router.post('/zip', (req, res) => {
     } catch (_) {
       return res.status(400).json({ error: `文件「${name}」内容无法解析` });
     }
-    items.push({ name, data: buf });
+    items.push({ name, data: buf, method: 'deflate' });
   }
 
   // 数据管理传 includeReceipts（它手里只有表格化后的文本，没有原始路径）；
@@ -570,7 +576,9 @@ router.post('/zip', (req, res) => {
         try {
           if (!fs.existsSync(abs)) continue;
           const display = safeSegment(it.name, base);
-          items.push({ name: `收据文件/${code}/${display}`, data: fs.readFileSync(abs) });
+          // 只登记路径：文件在写入器里流式读，读失败时整包中断（旧实现会跳过，
+          // 但那要求先把文件读进内存；收据不存在已在上面的 existsSync 挡掉）
+          items.push({ name: `收据文件/${code}/${display}`, path: abs });
         } catch (_) { /* 被占用/权限不足：跳过这一个 */ }
       }
     }
@@ -579,7 +587,6 @@ router.post('/zip', (req, res) => {
   if (!items.length) return res.status(400).json({ error: '没有要打包的文件' });
 
   const password = typeof body.password === 'string' ? body.password : '';
-  const zip = buildZip(items, password);
   const safeName = String(body.filename || '数据导出').replace(/[\\/:*?"<>|]/g, '_');
   res.setHeader('Content-Type', 'application/zip');
   // 文件名走 RFC 5987，中文名不会变成乱码或被截断
@@ -587,8 +594,15 @@ router.post('/zip', (req, res) => {
     'Content-Disposition',
     `attachment; filename="export.zip"; filename*=UTF-8''${encodeURIComponent(safeName + '.zip')}`
   );
-  res.setHeader('Content-Length', String(zip.length));
-  res.end(zip);
+  // 不设 Content-Length：长度要等整包写完才知道，预置就等于把流式又变回「先拼完」
+  try {
+    await writeZip(items, res, { password });
+    res.end();
+  } catch (err) {
+    // 已经开始写响应体了：只能中断连接，让客户端看到「下载不完整」而不是一个坏包
+    console.error('[data] 导出 zip 失败:', err && err.message);
+    try { res.destroy(); } catch (_) { /* 已断开 */ }
+  }
 });
 
 module.exports = router;

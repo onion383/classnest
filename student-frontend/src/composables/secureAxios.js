@@ -10,40 +10,57 @@ import {
   safe, encryptBody, decryptBody, clearSession,
   markAuthBound, resetAuthBinding,
 } from './secureChannel'
+import { decideSecureRetry } from './secureRetry.js'
+import { perfNow, phase } from '../utils/perfMark.js'
 
 export function setupSecureAxios(axios) {
   if (!safe()) return
 
   // 请求加密
   axios.interceptors.request.use(async config => {
-    // 重试请求：错误/解密重试时已用新会话重新加密好 data，这里直接放行，
-    // 避免把已加密的 {session,d} 信封再加密一次（二次封装会让后端解出乱数据）。
-    if (config.__retrySecure === true) return config
-    const d = config.data
-    if (d == null) return config
-    // 已是密文信封（后端未就绪重试等场景复用同一 config）：不能再加密一次，
-    // 否则后端只解一层，路由拿到的是 { session, d } 而不是真实请求体。
-    if (typeof d === 'object' && typeof d.session === 'string' && typeof d.d === 'string') return config
-    if (typeof FormData !== 'undefined' && d instanceof FormData) return config
-    if (typeof d === 'string') return config // 已是序列化表单/查询串，非 JSON 对象
+    // 首屏分段（v6 · P1-01）：加密是纯 CPU + webcrypto await，单独计时才能判断
+    // 95ms 黑洞里有多少是密码学成本；没有 __perf 时为空操作。
+    const endEncrypt = phase(config, '加密')
     try {
-      config.__origData = d
-      config.data = await encryptBody(d)
-      config.headers = config.headers || {}
-      config.headers['Content-Type'] = 'application/json'
-    } catch (_) {
-      // 加密失败（如握手异常）时不阻断请求，回落到明文直通，保证功能可用
+      // 重试请求：错误/解密重试时已用新会话重新加密好 data，这里直接放行，
+      // 避免把已加密的 {session,d} 信封再加密一次（二次封装会让后端解出乱数据）。
+      if (config.__retrySecure === true) return config
+      const d = config.data
+      if (d == null) return config
+      // 已是密文信封（后端未就绪重试等场景复用同一 config）：不能再加密一次，
+      // 否则后端只解一层，路由拿到的是 { session, d } 而不是真实请求体。
+      if (typeof d === 'object' && typeof d.session === 'string' && typeof d.d === 'string') return config
+      if (typeof FormData !== 'undefined' && d instanceof FormData) return config
+      if (typeof d === 'string') return config // 已是序列化表单/查询串，非 JSON 对象
+      try {
+        config.__origData = d
+        config.data = await encryptBody(d)
+        config.headers = config.headers || {}
+        config.headers['Content-Type'] = 'application/json'
+      } catch (_) {
+        // 加密失败（如握手异常）时不阻断请求，回落到明文直通，保证功能可用
+      }
+      return config
+    } finally {
+      endEncrypt()
+      // 本层是最后一道请求拦截器：到这里加密已完成，之后才是真正发网络。
+      // 「发送」段包含 axios 的 JSON.parse（它在响应拦截器之前执行），无法再拆开。
+      if (config.__perf) config.__perf.sendAt = perfNow()
     }
-    return config
   })
 
   // 响应解密：失败一次视为会话过期，清空会话重试一次
   axios.interceptors.response.use(async res => {
+    // 「发送」段 = 请求拦截器结束 → 收到响应（网络 + 后端 handler + axios JSON.parse）。
+    // 这是首屏黑洞里最大的一块，只有它单独成段，才能判断瓶颈在网络还是在解密/渲染。
+    const perf = res.config && res.config.__perf
+    if (perf && perf.sendAt) perf.phases.push(`发送 ${perfNow() - perf.sendAt}ms`)
     // 请求确实带了登录 token 且成功：标记本会话已绑定身份，
     // 之后普通请求只发不含 token 的信道凭据。
     if (res.config && res.config.__authProofToken) markAuthBound()
     const d = res.data
     if (d && typeof d === 'object' && typeof d.d === 'string') {
+      const endDecrypt = phase(res.config, '解密')
       try {
         res.data = await decryptBody(d.d)
       } catch (e) {
@@ -79,6 +96,8 @@ export function setupSecureAxios(axios) {
             return axios(cfg)
           } catch (_) { /* 重发失败：按原响应对待 */ }
         }
+      } finally {
+        endDecrypt()
       }
     }
     return res
@@ -86,19 +105,23 @@ export function setupSecureAxios(axios) {
     // 安全通道会话过期：后端在「请求解密」阶段直接回 401 且 body 为 { d:'session-expired' }，
     // 不是密文、也不是登录态问题。此处清空旧会话、重新握手、把原请求体重新加密后原样重发一次，
     // 避免用户被误判为「登录过期」踢回登录页（与 aiChat 流式请求的重试行为保持一致）。
-    const sd = err.response && err.response.data
     const cfg = err.config
+    // 分支判定统一在 secureRetry.js（纯函数）：顺序 = 降级 > auth-required > 会话过期。
+    // 这里只负责副作用（清会话 / 重新加密 / 重发），CI 用 units 覆盖判定本身。
+    const retry = cfg ? decideSecureRetry({
+      status: err.response && err.response.status,
+      headers: err.response && err.response.headers,
+      data: err.response && err.response.data,
+      config: cfg,
+    }) : null
     // 信道身份未绑定/绑定失效：后端要求带 token 重新认证。清掉绑定标记，
     // 用「强制携带 token」的凭据把原请求重发一次（body 已是密文，原样复用）。
-    const authRequired = err.response && err.response.status === 401
-      && String(err.response.headers?.['x-auth-required'] || '') === '1'
     // 凭据降级：安全模式下握手失败 → applyAuthHeader 退回明文 Bearer，而后端在安全模式下
     // **不收明文凭据** → 必然 401。这不是「登录过期」，绝不能清 token 把用户踢回登录页；
     // 应清掉会话重新握手、带 token 重发一次。
     // 用**独立**的重试标志（__retryDegraded）：不与 auth-required 分支共用 __retryAuth，
     // 否则「降级 → 重试 → 又撞上 auth-required」时后者会被误跳过，用户直接掉登录页。
-    if (err.response && err.response.status === 401 && cfg && cfg.__credentialDegraded
-      && cfg.__retryDegraded !== true) {
+    if (retry === 'degraded') {
       cfg.__retryDegraded = true
       cfg.__forceAuthToken = true
       clearSession()
@@ -117,7 +140,7 @@ export function setupSecureAxios(axios) {
         return axios(cfg)
       } catch (_) { /* 重发失败：按原错误返回 */ }
     }
-    if (authRequired && cfg && cfg.__retryAuth !== true) {
+    if (retry === 'auth') {
       cfg.__retryAuth = true
       cfg.__forceAuthToken = true
       if (cfg.__origData) cfg.__retrySecure = true // 已加密，勿二次封装
@@ -132,8 +155,7 @@ export function setupSecureAxios(axios) {
     // 会话密钥发请求 → 全站持续 401，且会话永远回不来。
     // 同样用**独立**标志（__retrySession）：不与 __retrySecure 共用，否则前面某个分支
     // 置过 __retrySecure 时，这里就会被跳过（而这恰恰是最需要重建会话的场景）。
-    if (err.response && err.response.status === 401 && sd && typeof sd === 'object'
-      && sd.d === 'session-expired' && cfg && cfg.__retrySession !== true) {
+    if (retry === 'session') {
       cfg.__retrySession = true
       cfg.__retrySecure = true
       clearSession()

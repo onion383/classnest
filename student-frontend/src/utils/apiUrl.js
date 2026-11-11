@@ -1,4 +1,6 @@
 import { getToken, setToken } from './authStorage.js'
+import { userScopedGeneration } from './userScopedCache.js'
+import { absorbRenewalTokens } from './tokenRenewal.js'
 import { safe, applyAuthHeader, encryptBody, decryptBody, resetAuthBinding } from '../composables/secureChannel'
 import { decodeJwtPayload } from './jwt'
 import { AUTH_API } from './apiPaths.js'
@@ -18,6 +20,8 @@ export function apiUrl(path) {
 // 供各窗口里绕过 axios 的裸 fetch（流式响应、二进制导入等）使用。
 // 安全模式下凭据是 X-Auth-Proof 密文头；绑定失效时后端置 X-Auth-Required，这里带 token 重试一次。
 export async function apiFetch(path, options = {}) {
+  // 发请求前先取用户作用域代次：401 重试也算同一次逻辑请求，用同一个代次判断续期归属
+  const authGeneration = userScopedGeneration()
   const send = async (forceToken) => {
     const headers = { ...(options.headers || {}) }
     let body = options.body
@@ -43,7 +47,7 @@ export async function apiFetch(path, options = {}) {
   }
 
   // 滑动续期：后端在 token 快到期时随响应下发新凭据（流式接口也是从响应头取）
-  absorbRenewal(res.headers)
+  absorbRenewal(res.headers, { generation: authGeneration })
 
   // 携带密文凭据的请求，后端会把 JSON 响应包成 { d }；调用方仍是 r.json()，在这里透明解密。
   // 二进制/SSE 响应不受影响（后端只包装 res.json）。
@@ -78,16 +82,11 @@ export function clearMediaToken() {
 // 滑动续期：后端在 token 快到期时随响应下发新凭据（30 天 token / 媒体凭据），落盘后生效。
 // fetch 的 Headers 与 axios 的 AxiosHeaders 都支持 .get()（大小写不敏感），裸对象走括号取值。
 // 两条 HTTP 路径（apiFetch / axios 拦截器）共用这一份落盘逻辑，续期规则改一处即可全覆盖。
-export function absorbRenewal(headers, { onTokenRenewed } = {}) {
-  if (!headers) return
-  const get = typeof headers.get === 'function' ? (n) => headers.get(n) : (n) => headers[n]
-  const renewed = get('x-renewed-token')
-  if (renewed) {
-    try { setToken(renewed) } catch (_) {}
-    onTokenRenewed?.(renewed)
-  }
-  const renewedMedia = get('x-renewed-media')
-  if (renewedMedia) storeMediaToken(renewedMedia)
+//
+// generation 必传：**发请求时**取到的登录代次。响应回来时若已经换号，这份续期属于上一代，
+// 落盘就会把 B 的凭据覆盖成 A 的（判定与原因见 utils/tokenRenewal.js 头部）。
+export function absorbRenewal(headers, { onTokenRenewed, generation } = {}) {
+  return absorbRenewalTokens(headers, { generation, setToken, storeMediaToken, onTokenRenewed })
 }
 
 // 读 JWT 的 exp（毫秒）；解析失败返回 0，视为已过期。
@@ -107,6 +106,8 @@ export function refreshMediaToken() {
     // 明文模式同样需要刷新：图片请求不再依赖跨站 Cookie（见 resourceUrl 注释），
     // 媒体凭据过期后若不续，背景图/相册图会一直 401（审查 v5 · V5-005）。
     if (!token) return null
+    // 与续期落盘同一个理由：换号后在途的刷新属于上一代，落盘会把 B 的媒体凭据覆盖成 A 的
+    const gen = userScopedGeneration()
     try {
       const headers = {}
       await applyAuthHeader(headers, token, { forceToken: false })
@@ -116,7 +117,7 @@ export function refreshMediaToken() {
       if (data && typeof data === 'object' && typeof data.d === 'string') {
         data = await decryptBody(data.d)
       }
-      if (data && data.mediaToken) {
+      if (data && data.mediaToken && gen === userScopedGeneration()) {
         storeMediaToken(data.mediaToken)
         return data.mediaToken
       }

@@ -6,6 +6,7 @@
 
 const { db } = require('../../db')
 const store = require('../../services/slotStore')
+const { SEAT_CURRENT_SLOTS } = require('../../schema/tableRegistry')
 
 // 读取网格某列的完整 JSON（单例文档表经 slotStore 读取，其余仍走物理表）
 function readGridArray(table, column) {
@@ -45,7 +46,51 @@ function writeGridArray(table, column, value) {
 // gridShapeMismatch 分支：越界那行被补成「座位」或整块降级成 []，
 // 走廊位置对不上，下次启动的一次性迁移还会把矩阵再展开一遍。
 // 表名走白名单，不接收调用方的任意字符串；列名是写死的两条语句（不拼 SQL）。
-const GEOMETRY_COUNT_TABLES = new Set(['seat_layout', 'seat_template'])
+// 名单在 schema/tableRegistry.js（与 seatWrite 的「当前座位」白名单同源）。
+const GEOMETRY_COUNT_TABLES = new Set(SEAT_CURRENT_SLOTS)
+
+// 座位表的**当前** rows/cols（非座位表返回 null）。
+// 撤销一条单格记录前用它判断「布局是否已经变小」—— 见 undo.executors 的 grid_cell.validate。
+function currentSeatGeometry(table) {
+  if (!GEOMETRY_COUNT_TABLES.has(table)) return null
+  const rec = store.isDoc(table)
+    ? store.getDoc(table)
+    : db.prepare(`SELECT rows, cols FROM "${table}" WHERE id = 1`).get()
+  if (!rec) return null
+  const rows = Number(rec.rows)
+  const cols = Number(rec.cols)
+  return {
+    rows: Number.isInteger(rows) && rows > 0 ? rows : null,
+    cols: Number.isInteger(cols) && cols > 0 ? cols : null,
+  }
+}
+
+// 从一个「整块快照」推回它的几何（行数 / 列数）。
+//
+// 几何在库里只有**一个**真实来源：快照自带的 types 矩阵的形状。
+// 为什么不再采信前端传的 oldRows/oldCols：那是把同一事实抄两遍，抄漏一项就分叉
+// （历史真实事故：只透传了 rows、漏了 cols → types 宽 8 列而 cols 还写 7，读库按 cols 裁，
+// 座位图整体错列且不报错）。矩阵和计数必须同笔写，所以计数只能由矩阵推出来。
+//
+// 没有 types 的历史记录（换位 / 设置空位那类纯数组快照）返回 null：
+// 那时也没有矩阵可写，单独改计数只会**制造**分叉 —— 宁可不动，行为与修复前一致。
+function geometryOfSnapshot(snapshot) {
+  const types = snapshot && !Array.isArray(snapshot) ? snapshot.types : null
+  if (!Array.isArray(types) || !types.length) return null
+  const width = Array.isArray(types[0]) ? types[0].length : 0
+  if (!width) return null
+  return { rows: types.length, cols: width }
+}
+
+// 前端仍会把几何四元组一起传（既有契约）。它不再被采信，但**不一致要留痕**：
+// 这条日志是「前后端几何口径开始漂移」的早期信号，别删。
+function warnGeometryDrift(table, tag, geom, explicitRows, explicitCols) {
+  const bad = []
+  if (Number.isInteger(explicitRows) && explicitRows !== geom.rows) bad.push(`行 ${explicitRows}≠${geom.rows}`)
+  if (Number.isInteger(explicitCols) && explicitCols !== geom.cols) bad.push(`列 ${explicitCols}≠${geom.cols}`)
+  if (bad.length) console.warn(`[undo] ${table} ${tag} 的几何字段与 types 快照不一致（以 types 为准）：${bad.join('，')}`)
+}
+
 function writeGeometryCounts(table, rows, cols) {
   if (!GEOMETRY_COUNT_TABLES.has(table)) return
   const patch = {}
@@ -148,6 +193,9 @@ module.exports = {
   readGridArray,
   writeGridArray,
   writeGeometryCounts,
+  currentSeatGeometry,
+  geometryOfSnapshot,
+  warnGeometryDrift,
   cellText,
   tableCols,
   rowKeys,

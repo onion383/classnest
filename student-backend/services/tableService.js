@@ -1,5 +1,8 @@
 const { db, getFields, renumber } = require('../db');
 const { sanitizeField } = require('./sanitize');
+const { studentRelations } = require('./studentRelations');
+const { readRowsByIds } = require('./createdRows');
+const { GENERIC_CRUD_TABLES } = require('../schema/tableRegistry');
 
 // 列名白名单：与 addColumn/renameColumn 保持一致，防止列名拼入 SQL 造成注入。
 // 仅允许中英文、数字、下划线，且禁止保留字段（id/position 由内部管理，atPosition 为插入位置参数）。
@@ -8,7 +11,8 @@ const RESERVED_COLUMNS = ['id', 'position', 'atPosition'];
 
 // 表名白名单：本模块把 tableName 直接拼进 SQL，列名有 assertValidColumn 把守，
 // 表名此前完全依赖调用方自觉。这里补一层纵深防御，新调用方漏白名单也不会变成注入入口。
-const ALLOWED_TABLES = new Set(['students', 'fee_records', 'leave_records']);
+// 名单本身在 schema/tableRegistry.js —— 散在业务文件里的表名清单靠人脑同步，必漏。
+const ALLOWED_TABLES = new Set(GENERIC_CRUD_TABLES);
 
 function assertValidColumn(name) {
   if (!name || RESERVED_COLUMNS.includes(name) || !COLUMN_NAME_RE.test(name)) {
@@ -106,9 +110,36 @@ function updateRow(tableName, id, data) {
   db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE id = ?`).run(...values);
 }
 
+// —— 删学生的「关联不变量」——
+// 学生与 请假/加分/座位/值日/小组/班干部 是松耦合（老数据甚至只存姓名），删主表不会连带清。
+// 界面上删学生走 `POST /students/:id/delete-with-relations`：它先按用户勾选 purge，再把被删
+// 的整行交回前端登记撤销。通用 `DELETE /students/:id` 没有这层，直调就会留六类孤儿
+// （审查 v6 · N2-05）—— 而且不报错：值日指数、名单统计继续把已删除的人算进去。
+//
+// 这里的取舍：**拒绝，不偷偷帮你清**。
+//   · 偷偷清 → 绕过撤销登记：前端只登记了「删学生」一条，撤销回来是个没有加分/请假的空壳。
+//   · 放任 → 留孤儿（就是现在的问题）。
+//   · 拒绝 → 调用方必须走「一并删除」，用户看得见自己勾了什么。
+// 已经按要求 purge 过的调用方传 `allowStudentOrphans: true` 显式放行（关联已清，或用户明确选择保留）。
+function assertStudentRelationsCleared(id) {
+  const student = db.prepare('SELECT * FROM students WHERE id = ?').get(id);
+  if (!student) return;
+  const rel = studentRelations(student);
+  if (!rel.total) return;
+  const parts = [
+    rel.leave && `请假 ${rel.leave}`,
+    rel.score && `加分 ${rel.score}`,
+    rel.seat && `座位 ${rel.seat}`,
+    rel.duty && `值日 ${rel.duty}`,
+    rel.group && `小组 ${rel.group}`,
+    rel.cadre && `班干部 ${rel.cadre}`,
+  ].filter(Boolean).join('、');
+  throw new Error(`该学生还有 ${rel.total} 条关联记录（${parts}）：请用「一并删除」并选择要清理的项，直接删主表会留下孤儿数据`);
+}
+
 function deleteRow(tableName, id, options = {}) {
   assertValidTable(tableName);
-  const { minCount = 0 } = options;
+  const { minCount = 0, allowStudentOrphans = false } = options;
 
   if (minCount > 0) {
     const count = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get().count;
@@ -117,6 +148,8 @@ function deleteRow(tableName, id, options = {}) {
 
   const row = db.prepare(`SELECT position FROM ${tableName} WHERE id = ?`).get(id);
   if (!row) throw new Error('记录不存在');
+
+  if (tableName === 'students' && !allowStudentOrphans) assertStudentRelationsCleared(id);
 
   db.prepare(`DELETE FROM ${tableName} WHERE id = ?`).run(id);
   db.prepare(`UPDATE ${tableName} SET position = position - 1 WHERE position > ?`).run(row.position);
@@ -292,18 +325,22 @@ function importRows(tableName, fields, rows) {
     const insertStmt = db.prepare(`INSERT INTO ${tableName} (${columnNames}, "position") VALUES (${placeholders}, ?)`);
     const maxPos = db.prepare(`SELECT MAX(position) AS maxPos FROM ${tableName}`).get().maxPos || 0;
 
+    const ids = [];
     dataRows.forEach((row, i) => {
       const filledRow = fields.map((f, idx) => bindable(sanitizeField(row[idx], tableName, f, typeMap[f] || '文字')));
       filledRow.push(maxPos + i + 1);
-      insertStmt.run(...filledRow);
+      ids.push(Number(insertStmt.run(...filledRow).lastInsertRowid));
     });
 
     renumber(tableName);
+    return ids;
   });
 
-  insertMany(rows);
+  const ids = insertMany(rows);
 
-  return rows.length;
+  // created = 本次真正新建的行（含 renumber 后的最终 position）：
+  // 前端据此登记一条可撤销的批量导入，不需要再按请求参数猜列（Q2-04 / Q2-06）。
+  return { count: rows.length, created: readRowsByIds(tableName, ids) };
 }
 
 function renameColumn(tableName, oldName, newName) {

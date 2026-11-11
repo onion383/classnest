@@ -653,8 +653,13 @@
 }
 
 /* ========== 登录界面毛玻璃窗 - 更白更透 ========== */
-:root:is([data-theme="glass"]) .login-bg .bg-surface {
-  background-color: rgba(255, 255, 255, var(--glass-opacity, 0.4)) !important;
+/* 白度有下限：登录页是所有玻璃里**唯一直接压在背景图上**的一屏，
+   用户把「玻璃透明度」调低、或背景图偏暗时，0.4 白会合成到中灰蓝，
+   深色正文的对比度从 7:1 掉到 4:1 附近，12px 的「忘记密码？」直接看不见。
+   下限 0.62 保证文字始终有底，其它页面的卡片仍按用户设置。
+   夜间模式不适用（浅色文字需要深底，见 theme-night.css 的登录卡片规则）。 */
+:root:is([data-theme="glass"]):not([data-mode="night"]) .login-bg .bg-surface {
+  background-color: rgba(255, 255, 255, clamp(0.62, var(--glass-opacity, 0.4), 1)) !important;
   backdrop-filter: blur(24px) saturate(1.2);
 }
 /* ========== 毛玻璃卡片 / 面板（基准透明度由 --glass-opacity 控制） ========== */
@@ -1172,6 +1177,17 @@
   position: relative;
   background: transparent;
 }
+/* 登录页的次要文字（「忘记密码？」）与占位符：12px 小字 + 半透明卡，
+   用 --color-text-muted(#64748b) 时对 0.62 白底只有 2.6:1（截图反馈「几乎看不见」）。
+   #2b3a4d 在同样底上是 5.0:1 —— 刻意取到比「刚过 4.5」更深一档，
+   因为卡片实际底色还会随背景图浮动，不能贴着及格线选。
+   夜间由 theme-night.css 的反向规则（浅色提亮）处理。 */
+:root:is([data-theme="glass"]):not([data-mode="night"]) .login-bg .login-card .text-text-muted {
+  color: #2b3a4d !important;
+}
+:root:is([data-theme="glass"]):not([data-mode="night"]) .login-bg input::placeholder {
+  color: #64748b;
+}
 :root:is([data-theme="glass"]) .login-glow {
   position: relative;
   /* 只有外圈：0 1px 描边 + 两层外发光 + 落影。内侧那 4 条 1px 高光见下一条规则。 */
@@ -1191,6 +1207,12 @@
     inset 1px 0 0 var(--alpha-white-20),
     inset 0 -1px 0 var(--alpha-white-10),
     inset -1px 0 0 var(--alpha-white-15);
+  /* 抬到 .login-glow::after 的受光渐变之上。
+     两者都是定位元素、z-index 均为 auto，::after 在 DOM 顺序里排在卡片之后，
+     所以那层 `linear-gradient(白 15% → 透明)` 原本是**盖在文字上**的 ——
+     表现为整卡发雾、深色标题被洗白、本来就不深的次要链接直接消失。 */
+  position: relative;
+  z-index: 1;
 }
 :root:is([data-theme="glass"]) .login-glow::before {
   content: '';

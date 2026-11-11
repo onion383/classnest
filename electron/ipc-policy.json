@@ -120,9 +120,6 @@
     "main",
     "setup"
   ],
-  "select-db-file": [
-    "main"
-  ],
   "save-background-image": [
     "main"
   ],
@@ -219,6 +216,7 @@
   "backend-status": [
     "desktop-widget",
     "main",
+    "migration",
     "setup",
     "widget"
   ],

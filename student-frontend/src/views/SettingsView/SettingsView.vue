@@ -716,20 +716,27 @@
       <div v-if="modalType === 'export'" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="closeModal">
         <div class="dialog-card bg-surface rounded-lg p-6 w-96 border border-border shadow-lg">
           <h3 class="text-lg font-bold text-text mb-4">导出数据库</h3>
-          <p class="text-xs text-text-muted mb-3">导出当前库（业务数据 + 应用设置 + 账号），换机后用对应的密码恢复。</p>
-          <input v-model="exportPassword" type="password" placeholder="登录密码（未设密码可留空）" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" />
+          <p class="text-xs text-text-muted mb-3">导出当前账号的全部内容（业务数据 + 应用设置 + 账号 + 收据原件等文件）为 ZIP 备份包，换机后用对应的密码恢复。</p>
+          <!-- 无密码账号（明文 / 免密）不设密码，摆一个密码框只会让人以为「必须填点什么」 -->
+          <input v-if="hasLoginPassword" v-model="exportPassword" type="password" placeholder="登录密码（只有本人能导出）" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" />
           <template v-if="dbEncrypted">
-            <label class="flex items-center gap-2 text-sm text-text mb-2 cursor-pointer select-none">
-              <input type="checkbox" v-model="exportEncrypt" class="w-4 h-4 accent-warning" />
-              数据库密码加密导出
-            </label>
-            <input v-model="exportDbPwd" type="password" :disabled="!exportEncrypt" placeholder="数据库密码（有密码账号留空则默认用账号密码）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-4 rounded disabled:opacity-50" />
+            <!-- 底部间距交给容器：勾选框 / 输入框 / 提示语的显隐组合有好几种，
+                 逐个加 mb-4 必然出现「少显示一个就多一截空白」 -->
+            <div class="mb-4">
+              <label class="flex items-center gap-2 text-sm text-text mb-2 cursor-pointer select-none">
+                <input type="checkbox" v-model="exportEncrypt" class="w-4 h-4 accent-warning" />
+                数据库密码加密导出
+              </label>
+              <input v-if="exportEncrypt" v-model="exportDbPwd" type="password" :placeholder="hasLoginPassword ? '数据库密码（留空则用登录密码）' : '请设置导出密码（换机恢复时要输）'" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full rounded" />
+              <!-- 没有登录密码时，这个导出密码就是换机恢复的**唯一凭证**；包里不存它，丢了就打不开 -->
+              <p v-if="!hasLoginPassword && exportEncrypt" class="text-xs text-text-muted mt-2">该账号没有登录密码，导出密码不会存进备份包，换机恢复时要用它解开 —— 请记牢。</p>
+            </div>
           </template>
           <p v-else class="text-xs text-text-muted mb-4">当前数据库未加密，导出的备份包为明文，无需设置导出密码。</p>
           <div class="flex justify-end gap-2">
             <button @click="closeModal" class="bg-surface-hover text-text px-4 py-2 rounded border border-border transition-theme">取消</button>
             <button @click="exportDb" :disabled="busyExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50">
-              {{ busyExport ? '导出中…' : '导出备份' }}
+              {{ busyExport ? (exportProgress ? `导出中… ${(exportProgress / 1048576).toFixed(1)} MB` : '导出中…') : '导出备份' }}
             </button>
           </div>
         </div>
@@ -879,6 +886,9 @@ const exportPassword = ref('')
 const exportEncrypt = ref(true)
 const exportDbPwd = ref('')
 const busyExport = ref(false)
+// 导出是流式的、没有 Content-Length（边扫边写），所以报不了百分比；
+// 但至少要把「已经写出多少」显示出来 —— 否则 GB 级备份期间用户会当成卡死并强杀进程。
+const exportProgress = ref(0)
 // 学期设置（多学期列表 + 当前学期；起止日期供座位快照按天结算）
 const semesters = ref([])
 const semesterId = ref(null)
@@ -1139,7 +1149,7 @@ const ctx = {
   // 状态 ref（.value 访问）
   settingsSearch, settingsSearchOpen, searchPopup, searchActiveIndex, settingsSections, settingsItems,
   modalType, newUsername, usernamePassword, oldPassword, newPassword, confirmPassword, pwdError, busyPwd,
-  usernameError, busyUsername, exportPassword, exportEncrypt, exportDbPwd, busyExport,
+  usernameError, busyUsername, exportPassword, exportEncrypt, exportDbPwd, busyExport, exportProgress,
   semesters, semesterId, semesterNameDraft, showRenameSemester, newSemesterName, showAddSemester,
   showDeleteSemester, busySemester, busySemesterDate, semesterStart, semesterEnd, semesterDateErrorText,
   dialog, dialogMounted, dialogCallback, deleteTimer, toolboxEnabled, noteSavePath, screenshotSavePath,

@@ -3,7 +3,9 @@ const router = express.Router();
 const { db } = require('../db');
 const store = require('../services/slotStore');
 const { validateRow } = require('../services/businessRules');
-const { normalizeSeats, normalizeCellTypes, assertSeatCell, SEAT_MAX_ROWS, SEAT_MAX_GRID_COLS } = require('../services/sanitize');
+const { normalizeSeats, normalizeCellTypes, SEAT_MAX_ROWS, SEAT_MAX_GRID_COLS } = require('../services/sanitize');
+// 单格写入的唯一入口（坐标 / 值形状 / 可坐性 / 引用关系都在它里面）
+const { writeSeatCell, SeatWriteError } = require('../services/seatWrite');
 const { readDocJson } = require('../utils/json');
 // 历史快照 payload 的唯一构造点（补存 / 补录 / AI 写入前快照共用一套字段表）
 const { seatSnapshotPayload } = require('../services/seatSnapshot');
@@ -18,36 +20,6 @@ const { localDateStr, localDateTimeStr, shiftDateStr, mondayOf } = require('../u
 function validateSeatSize(rows, cols) {
   if (rows < 1 || rows > SEAT_MAX_ROWS) return `行数需在 1 ~ ${SEAT_MAX_ROWS} 之间`;
   if (cols < 1 || cols > SEAT_MAX_GRID_COLS) return `列数需在 1 ~ ${SEAT_MAX_GRID_COLS} 之间`;
-  return null;
-}
-
-// PATCH /cell 的 row/col 是 0 基坐标，不能直接套用 validateSeatSize（它校验的是 1 基数量）。
-function validateCellCoord(row, col) {
-  if (row < 0 || row >= SEAT_MAX_ROWS) return `行坐标需在 0 ~ ${SEAT_MAX_ROWS - 1} 之间`;
-  if (col < 0 || col >= SEAT_MAX_GRID_COLS) return `列坐标需在 0 ~ ${SEAT_MAX_GRID_COLS - 1} 之间`;
-  return null;
-}
-
-// 单格写入还必须落在**当前布局**的行列范围内。
-//
-// PATCH /cell 是唯一不经过 normalizeSeats 的座位写入口：它按坐标就地改一格，
-// 而 normalizeSeats 只校「不超过全局上限 50×30」，不校「不超过当前 rows/cols」。
-// 于是 row=10 的单格提交能把 seats 数组撑到 11 行，而 rows/cols 仍写着旧值 ——
-// 前端按 rows/cols 渲染，多出来的行永远看不见，却一直占着库；
-// 更糟的是下一次整块 PUT 会按 rows/cols 裁剪（slice(0, rows)），把这几行静默丢掉。
-//
-// 这里按当前布局校，越界直接拒，不让「看不见的行」进库。
-function validateCellInLayout(table, row, col) {
-  const doc = store.getDoc(table);
-  if (!doc) return null; // 没有布局记录时无「当前尺寸」可校，交给全局上限兜底
-  const rows = Number(doc.rows);
-  const cols = Number(doc.cols);
-  if (Number.isInteger(rows) && rows > 0 && row >= rows) {
-    return `行坐标超出当前座位表范围（当前 ${rows} 行）`;
-  }
-  if (Number.isInteger(cols) && cols > 0 && col >= cols) {
-    return `列坐标超出当前座位表范围（当前 ${cols} 列）`;
-  }
   return null;
 }
 
@@ -202,59 +174,36 @@ router.put('/', (req, res) => {
     store.setDoc('seat_layout', patch);
     res.json({ message: '保存成功' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
+    // 以前这里一律 500，与单格 PATCH 的 400 不一致 —— 「学生 id 不存在 / 空位里还有人」
+    // 是用户填错了，报「服务器错误」会让老师和排查都以为后端崩了。
+    const status = Number(err && err.status) || 500;
+    if (status >= 500) console.error('[seats] 座位表保存失败:', err);
+    res.status(status).json({ error: err.message });
   }
 });
 
 // ======================== 单格更新（供撤销/重做前的单格提交） ========================
-function updateSingleCell(table, row, col, value) {
-  const rec = store.getDoc(table);
-  // 这里**刻意不兜底**：读取路径可以把畸形 seats 降级成空座位（只影响这一次显示），
-  // 写入路径若也降级，空数组会把整张座位表覆盖成只剩这一格 —— 数据直接丢。
-  // 解析失败就抛，由统一错误出口返回 500，数据保持原样。
-  const seats = rec ? JSON.parse(rec.seats) : [];
-  if (!Array.isArray(seats[row])) seats[row] = [];
-  seats[row][col] = value == null ? null : value;
-  store.setDoc(table, { seats: JSON.stringify(seats) });
+// 全部校验与写库都收敛到 services/seatWrite.js 的 writeSeatCell —— 这里只做 HTTP 形状。
+// 曾经的 updateSingleCell + validateCellValue 是本文件的旁路：只校坐标与值形状，
+// 洞里/走廊里能塞人、id 不存在的也能写、一人两座不拦（见该模块头部说明）。
+function cellPatchHandler(table) {
+  return (req, res) => {
+    const { row, col, value } = req.body || {};
+    try {
+      writeSeatCell(table, row, col, value);
+      res.json({ message: '已更新' });
+    } catch (err) {
+      if (err instanceof SeatWriteError) return res.status(err.status).json({ error: err.message });
+      // 解析/数据库异常：带上原始信息，别把它伪装成「参数错误」
+      console.error(`[seats] 单格写入失败（${table} ${row},${col}）:`, err);
+      res.status(500).json({ error: err.message });
+    }
+  };
 }
 
-// 单格 value 校验：与 PUT 走 normalizeSeats 时同一强度（空值 / 数字 / ≤20 字文本）。
-// 此前两个 PATCH 路由只校验坐标，value 可以塞对象、Infinity 或任意长字符串，
-// 直接把畸形数据写进矩阵 —— 而同一份数据走 PUT 是被拒的。
-function validateCellValue(value, row, col) {
-  try {
-    assertSeatCell(value, 'seats', row, col);
-    return null;
-  } catch (e) {
-    return e.message;
-  }
-}
-
-router.patch('/cell', (req, res) => {
-    const { row, col, value } = req.body
-  if (!Number.isInteger(row) || !Number.isInteger(col)) return res.status(400).json({ error: '参数格式错误' })
-  const coordErr = validateCellCoord(row, col)
-  if (coordErr) return res.status(400).json({ error: coordErr })
-  const layoutErr = validateCellInLayout('seat_layout', row, col)
-  if (layoutErr) return res.status(400).json({ error: layoutErr })
-  const valueErr = validateCellValue(value, row, col)
-  if (valueErr) return res.status(400).json({ error: valueErr })
-  updateSingleCell('seat_layout', row, col, value)
-  res.json({ message: '已更新' })
-});
-
-router.patch('/master/cell', (req, res) => {
-    const { row, col, value } = req.body
-  if (!Number.isInteger(row) || !Number.isInteger(col)) return res.status(400).json({ error: '参数格式错误' })
-  const coordErr = validateCellCoord(row, col)
-  if (coordErr) return res.status(400).json({ error: coordErr })
-  const layoutErr = validateCellInLayout('seat_template', row, col)
-  if (layoutErr) return res.status(400).json({ error: layoutErr })
-  const valueErr = validateCellValue(value, row, col)
-  if (valueErr) return res.status(400).json({ error: valueErr })
-  updateSingleCell('seat_template', row, col, value)
-  res.json({ message: '已更新' })
-});
+router.patch('/cell', cellPatchHandler('seat_layout'));
+router.patch('/master/cell', cellPatchHandler('seat_template'));
 
 // ======================== 座位模板 ========================
 router.get('/master', (req, res) => {
@@ -320,7 +269,12 @@ router.put('/master', (req, res) => {
     store.setDoc('seat_template', patch);
     res.json({ message: '模板保存成功' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
+    // 以前这里一律 500，与单格 PATCH 的 400 不一致 —— 「学生 id 不存在 / 空位里还有人」
+    // 是用户填错了，报「服务器错误」会让老师和排查都以为后端崩了。
+    const status = Number(err && err.status) || 500;
+    if (status >= 500) console.error('[seats] 座位表保存失败:', err);
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -611,7 +565,12 @@ router.post('/snapshot/backfill', (req, res) => {
     tx();
     res.json({ message: `已补存 ${inserted} 天`, inserted });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
+    // 以前这里一律 500，与单格 PATCH 的 400 不一致 —— 「学生 id 不存在 / 空位里还有人」
+    // 是用户填错了，报「服务器错误」会让老师和排查都以为后端崩了。
+    const status = Number(err && err.status) || 500;
+    if (status >= 500) console.error('[seats] 座位表保存失败:', err);
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -653,7 +612,12 @@ router.post('/history/week', (req, res) => {
     }
     res.json({ message: inserted ? `已生成 ${inserted} 天记录` : '该周记录已完整，无需补录', inserted });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
+    // 以前这里一律 500，与单格 PATCH 的 400 不一致 —— 「学生 id 不存在 / 空位里还有人」
+    // 是用户填错了，报「服务器错误」会让老师和排查都以为后端崩了。
+    const status = Number(err && err.status) || 500;
+    if (status >= 500) console.error('[seats] 座位表保存失败:', err);
+    res.status(status).json({ error: err.message });
   }
 });
 

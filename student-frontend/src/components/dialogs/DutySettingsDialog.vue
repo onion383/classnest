@@ -301,6 +301,10 @@ function cycleLabel(cycle) {
 const poolChips = computed(() => [...DEFAULT_POOL, ...customPool.value])
 const isInList = computed(() => (name) => localItems.value.some(it => it.name === name))
 
+// 弹窗由父组件 `v-if="settingsMounted"` 懒挂载，而 settingsMounted 是在 visible 变 true 的
+// 同一个 flush 里置真的 —— 也就是**首次挂载时 props.visible 已经是 true**，没有 false→true
+// 的变化，不带 immediate 的 watch 一次都不会跑，本地副本一直是空数组：
+// 用户看到「重启后第一次打开设置，星期一个都没勾、劳动项目全没了」（真实故障 2026-11-11）。
 watch(() => props.visible, (val) => {
   if (val) {
     localDays.value = [...props.days]
@@ -324,7 +328,7 @@ watch(() => props.visible, (val) => {
       loadNextBigDate()
     }
   }
-})
+}, { immediate: true })
 
 // 下一次大扫除日期：由后端算（命中日计算必须单源，前端再算一份必然对不上）
 async function loadNextBigDate() {
@@ -489,6 +493,12 @@ function buildPayload() {
 }
 function save() {
   const payload = buildPayload()
+  // 日常值日至少勾选一天：0 列保存后，值日表页没有合法列可填 ——
+  // 之前它会兜底显示周一~周五，然后整表保存被后端以「列名不在设置里」拒绝。
+  if (!isBigMode.value && !payload.days.length) {
+    useNotification().error('日常值日至少要勾选一天')
+    return
+  }
   const perDay = payload.items.reduce((t, it) => t + it.count, 0)
   // 总槽位 = 列数 × 每列人数。大扫除的列名是派生的（前端不传 days），
   // 列数按派生的列名数量算 —— 与后端 dutyConfig.bigColumnNames 同一规则。

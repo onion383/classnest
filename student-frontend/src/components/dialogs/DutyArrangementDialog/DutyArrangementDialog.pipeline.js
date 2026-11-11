@@ -71,8 +71,12 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     fillEmptySlots(slots, assigned, extraPool) {
       const all = ctx.poolNames.value
       if (!all.length) return
-      // 大扫除时列是「组」而不是「星期」→ 去重范围是整张表
-      const wholeTable = ctx.dedupeWholeTable === true
+      // 大扫除时列是「组」而不是「星期」→ 去重范围是整张表。
+      // ctx 里的状态一律是 ref/computed（见文件头「ctx 契约」），漏掉 .value 比较的是
+      // ref 对象本身 —— `ref(...) === true` 恒为 false，这个开关会静默地从未生效。
+      // 可选链：不是所有调用方都传了这个开关（老测试 / 只用到补空槽的链路），
+      // 缺字段时按「日常按天去重」处理，不能因为一个可选开关把整条排表链打断。
+      const wholeTable = ctx.dedupeWholeTable?.value === true
       const keyOf = (day) => (wholeTable ? '__all__' : day)
       const daySets = {}
       assigned.forEach((n, i) => {

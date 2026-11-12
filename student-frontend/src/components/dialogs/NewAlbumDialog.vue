@@ -42,7 +42,7 @@
           >选择照片</button>
         </div>
         <p class="text-xs text-text-muted mb-4">
-          已选择 <span class="text-text font-semibold tabular-nums">{{ picked.length }}</span> 张。
+          已选择 <span class="text-text font-semibold tabular-nums">{{ pickedCount }}</span> 张。
           只复制照片索引、不改动任何磁盘文件；如果来源本身是虚拟相册，这些照片会从来源相册移走（来源是文件夹相册时不会减少）。
         </p>
       </template>
@@ -62,7 +62,7 @@
     :visible="pickerVisible"
     :album-id="sourceAlbumId"
     :album-name="sourceAlbumName"
-    :initial-ids="picked.map(p => p.id)"
+    :initial="picked"
     @close="pickerVisible = false"
     @confirm="onPicked"
   />
@@ -79,6 +79,7 @@ import AlbumPhotoPickerDialog from './AlbumPhotoPickerDialog.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { recordUndo as recordUndoSpec } from '../../utils/undoRecorder.js'
 import { INVOKE } from '../../electronChannels.js'
+import { selectionCount, buildVirtualAlbumBody } from '../../composables/albumPhotoPages.js'
 import '../../styles/dialog-transition.css'
 
 const props = defineProps({
@@ -98,7 +99,13 @@ const kind = ref('folder')
 const name = ref('')
 const folderPath = ref('')
 const sourceAlbumId = ref(null)
-const picked = ref([])
+/* 选照片弹窗回来的是一段「选择描述」，不是照片数组：
+ *   { albumId, allOfAlbum, ids, exclude, total }
+ * 因为相册是分页加载的，没加载的照片前端根本没有对象；
+ * 整册全选更不该把一万个 id 传过来再传回去。
+ * 真正的展开在提交时由后端做（POST /api/album 的 all_from）。 */
+const picked = ref(null)
+const pickedCount = computed(() => selectionCount(picked.value, picked.value && picked.value.total))
 const busy = ref(false)
 
 const pickerVisible = ref(false)
@@ -117,12 +124,12 @@ watch(() => props.visible, (v) => {
   name.value = ''
   folderPath.value = ''
   sourceAlbumId.value = null
-  picked.value = []
+  picked.value = null
 }, { immediate: true })
 
 // 切换来源相册时清空已选照片（不同相册的照片 id 不能混）
 watch(sourceAlbumId, (v, old) => {
-  if (old !== null && v !== old) picked.value = []
+  if (old !== null && v !== old) picked.value = null
 })
 
 async function pickFolder() {
@@ -147,8 +154,8 @@ function openPicker() {
   pickerVisible.value = true
 }
 
-function onPicked(photos) {
-  picked.value = photos || []
+function onPicked(sel) {
+  picked.value = sel || null
   pickerVisible.value = false
 }
 
@@ -180,15 +187,16 @@ async function submit() {
   }
 
   // 虚拟相册
-  if (!picked.value.length) { useNotification().warning('请先选择照片'); return }
+  const sel = picked.value
+  if (!pickedCount.value) { useNotification().warning('请先选择照片'); return }
   if (!name.value.trim()) { useNotification().warning('请输入相册名称'); return }
+  // 整册 = 只传「源相册 + 排除项」，由后端展开；否则传显式勾选的 id。
+  // 两种情况都不传照片对象 —— 提交一直都只需要 id。
+  const body = buildVirtualAlbumBody(name.value.trim(), sel)
+  if (!body) { useNotification().warning('请先选择照片'); return }
   busy.value = true
   try {
-    const res = await axios.post('/api/album', {
-      kind: 'virtual',
-      name: name.value.trim(),
-      photos: picked.value.map(p => ({ photo_id: p.id })),
-    }, { headers: authHeaders() })
+    const res = await axios.post('/api/album', body, { headers: authHeaders() })
     useNotification().success('虚拟相册已创建')
     emit('created', res.data.id)
     emit('close')

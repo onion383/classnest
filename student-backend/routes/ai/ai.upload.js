@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { readTextHead } = require('../../utils/textHead');
 
 const router = express.Router();
 
@@ -11,6 +12,10 @@ const ALLOWED_UPLOAD_EXT = /\.(txt|csv|md|json|xml|html|pdf|docx?|pptx|xlsx?)$/i
 // 返回给 AI 的文本上限（AI 有上下文限制，长文件只在前面这段有意义）。
 // pptx 分支也用它作为「读够就停」的阈值 —— 反正最终只保留这么多，多解压的页没有意义。
 const MAX_TEXT_LEN = 100000;
+// 文本类附件改用 utils/textHead 只读头部（v6 性能专题 · 2-12）：
+// 原实现是 fs.readFileSync(整份) 再 slice —— 20MB 的 txt 会先变成约 40MB 的 V8 字符串，
+// 其中 99.5% 读完就丢。
+const TRUNC_NOTE = `\n\n...（文件太长，已截断至 ${MAX_TEXT_LEN} 字符）`;
 
 // 文件上传中间件惰性构造（临时存储在系统临时目录）：multer（含 busboy）约 50KB，
 // 只在首次真正上传文件时才 require，避免启动/空闲期就解析；require 有缓存，首次之后零成本。
@@ -47,13 +52,15 @@ router.post('/upload', uploadSingle, async (req, res) => {
     }
     const { originalname, path: tempPath } = req.file;
     let text = '';
+    // 文本分支是否只读到了文件头部（真值表示文件更大，末尾要补截断提示）
+    let headTruncated = false;
 
     try {
       const ext = path.extname(originalname).toLowerCase();
       
-      // TXT / CSV 纯文本：直接读取
+      // TXT / CSV 纯文本：只读头部（够 MAX_TEXT_LEN 即停，不整份读入）
       if (ext === '.txt' || ext === '.csv' || ext === '.md' || ext === '.json' || ext === '.xml' || ext === '.html') {
-        text = fs.readFileSync(tempPath, 'utf-8');
+        ({ text, truncated: headTruncated } = readTextHead(tempPath, MAX_TEXT_LEN));
       }
       // PDF：用 pdf-parse 提取文本（v2 起导出 PDFParse 类，不再是可调用函数）
       else if (ext === '.pdf') {
@@ -169,14 +176,19 @@ router.post('/upload', uploadSingle, async (req, res) => {
         }
         text = lines.length ? lines.join('\n') : '（未从该演示文稿中提取到文字）';
       }
-      // 默认：尝试按文本读取
+      // 默认：尝试按文本读取（同样只读头部）
       else {
-        text = fs.readFileSync(tempPath, 'utf-8');
+        ({ text, truncated: headTruncated } = readTextHead(tempPath, MAX_TEXT_LEN));
       }
 
       // 限制总长度：AI 有 context 限制，这里截一下
       if (text.length > MAX_TEXT_LEN) {
-        text = text.slice(0, MAX_TEXT_LEN) + `\n\n...（文件太长，已截断至 ${MAX_TEXT_LEN} 字符）`;
+        // 非文本分支（PDF/Word/PPT/Excel）仍可能一次性产出超长文本
+        text = text.slice(0, MAX_TEXT_LEN) + TRUNC_NOTE;
+      } else if (headTruncated) {
+        // 文本分支本身没读全：正文已经是 MAX_TEXT_LEN 字符，提示追加在后面。
+        // 这样正文额度与旧实现（readFileSync + slice）严格一致，提示不占正文。
+        text += TRUNC_NOTE;
       }
     } catch (err) {
       // 提取失败，直接返回文件名 + 错误提示

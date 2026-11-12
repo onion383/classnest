@@ -202,3 +202,130 @@ test('块内本来有空位：不丢人、不凭空造人', async () => {
   assert.equal(after.length, 6, '排前 6 人，排后必须还是 6 人')
   assert.deepEqual(after, ['a1', 'a2', 'a3', 'a4', 'b1', 'b2'])
 })
+
+// =========================================================================
+// 2-2：组→块代价的「记忆化」不能改变最优对应
+//
+// applyFair 求组→块最优一一对应时，组数 ≤ 7 走全排列枚举。原来的 costOf 是纯函数，
+// 却在每次排列里对同一 (组, 块) 重复计算，7 块场景一次点击要算 5040 × 7 次；
+// 改为按 (i, j) 记忆化后只算 n² 次。判据：选出的对应与落盘结果必须与
+// 「逐对重算」的参考实现逐格一致（下面这份参考实现就是改造前的口径，故意不复用缓存）。
+// =========================================================================
+// 参考实现：逐对重算 + 同序全排列枚举（与改造前逐行等价，供对拍用）
+function referenceOrder(studLeds, blockWeights, allowInner) {
+  const n = studLeds.length
+  const costOf = (i, j) => {
+    let ls = studLeds[i]
+    let ws = blockWeights[j]
+    if (allowInner) {
+      ls = [...ls].sort((a, b) => b - a)
+      ws = [...ws].sort((a, b) => a - b)
+    }
+    let sum = 0
+    for (let k = 0; k < Math.min(ls.length, ws.length); k++) sum += ls[k] * ws[k]
+    return sum
+  }
+  const a = Array.from({ length: n }, (_, i) => i)
+  let best = null, bestCost = Infinity
+  const permute = (arr, k) => {
+    if (k === arr.length) {
+      let c = 0
+      for (let i = 0; i < n; i++) c += costOf(i, arr[i])
+      if (c < bestCost - 1e-9) { bestCost = c; best = [...arr] }
+      return
+    }
+    for (let i = k; i < arr.length; i++) {
+      ;[arr[k], arr[i]] = [arr[i], arr[k]]
+      permute(arr, k + 1)
+      ;[arr[k], arr[i]] = [arr[i], arr[k]]
+    }
+  }
+  permute(a, 0)
+  return best
+}
+
+// 6 行 × 6 列 + unit='six' → 2×3 = 6 个等大块（每块 6 格），正好落在全排列分支
+function makeSixBySix(weightOf, ledOf) {
+  const rows = 6, cols = 6
+  const grid = Array.from({ length: rows }, () => Array(cols).fill(null))
+  const weights = Array.from({ length: rows }, (_, r) => Array.from({ length: cols }, (_, c) => weightOf(r, c)))
+  const ledger = {}
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const id = `s${r}${c}`
+      const led = ledOf(r, c)
+      grid[r][c] = { id, 姓名: id, 性别: '男', __led: led }
+      ledger[id] = led
+    }
+  }
+  const region = []
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) region.push({ r, c })
+  return { rows, cols, grid, weights, ledger, region }
+}
+
+async function runFairOn(regions, fixture, innerOrder) {
+  const { useSmartArrangementPipeline } = await loadPipeline()
+  const { useSmartArrangementBlocks } = await loadBlocks()
+  const { grid, weights, ledger } = fixture
+  const ctx = makeCtx({ rows: grid.length, cols: grid[0].length, weights, ledger })
+  const pipeline = useSmartArrangementPipeline(ctx, {})
+  ctx.splitRegion = pipeline.splitRegion
+  const blocks = useSmartArrangementBlocks(ctx)
+  blocks.applyFair(grid, regions, { uid: 'n1', unit: 'six', innerOrder })
+  return { grid, splitRegion: pipeline.splitRegion }
+}
+
+// 参考实现给出的「目标块 j ← 来源组 i」落盘后，每块里的 id 序列
+// before = 排表前的 id 网格（applyFair 会就地改写 grid，不能拿它当输入）
+function expectedIdsByBlock(sixBlocks, reference, before, weights, innerOrder) {
+  const wOf = (p) => weights[p.r][p.c]
+  return sixBlocks.map((b, j) => {
+    const src = reference.indexOf(j)
+    const studs = sixBlocks[src].pos.map(p => before[p.r][p.c])
+    const ordered = [...studs]
+    if (innerOrder === 'yes') ordered.sort((x, y) => y.__led - x.__led)
+    const target = innerOrder === 'yes' ? [...b.pos].sort((x, y) => wOf(x) - wOf(y)) : b.pos
+    return target.map((p, k) => ordered[k]?.id ?? null)
+  })
+}
+
+for (const innerOrder of ['no', 'yes']) {
+  test(`2-2 记忆化等价 · 6 块全排列（innerOrder=${innerOrder}）选出的对应与逐对重算一致`, async () => {
+    // 账本与权重同向递增：按重排不等式，最优解必然是「反向配对」，不是恒等置换
+    const fixture = makeSixBySix((r, c) => r * 6 + c, (r, c) => r * 6 + c)
+    const before = fixture.grid.map(row => row.map(s => s && { ...s }))
+    const { grid, splitRegion } = await runFairOn([fixture.region], fixture, innerOrder)
+    const sixBlocks = splitRegion(fixture.region, 'six')
+    assert.equal(sixBlocks.length, 6, '6×6 + six 必须切成 6 块（否则测的不是全排列分支）')
+    const studLeds = sixBlocks.map(b => b.pos.map(p => before[p.r][p.c].__led))
+    const blockWeights = sixBlocks.map(b => b.pos.map(p => fixture.weights[p.r][p.c]))
+    const ref = referenceOrder(studLeds, blockWeights, innerOrder === 'yes')
+    assert.notDeepEqual(ref, [0, 1, 2, 3, 4, 5], '这个夹具的最优解不该是恒等置换，否则对拍无效')
+    assert.deepEqual(
+      sixBlocks.map(b => b.pos.map(p => grid[p.r][p.c].id)),
+      expectedIdsByBlock(sixBlocks, ref, before, fixture.weights, innerOrder),
+      '记忆化后的落盘必须与「逐对重算」参考实现逐格一致',
+    )
+  })
+}
+
+test('2-2 记忆化等价 · 两个作用域各自独立：后一块不能复用前一块的代价', async () => {
+  // A 区（行 0-2）权重逐块递增、B 区（行 3-5）逐块递减，账本单调递增。
+  // 若代价缓存跨作用域复用，B 区会沿用 A 区的位置代价，选出与「单独排 B」不同的对应。
+  const weightOf = (r, c) => {
+    const local = c % 2 + Math.floor(c / 2) // 0,1,1,2,2,3 → 逐块递增
+    return r < 3 ? local : 2 - local
+  }
+  const fixture = makeSixBySix(weightOf, (r, c) => r * 6 + c)
+  const regionA = fixture.region.filter(p => p.r < 3)
+  const regionB = fixture.region.filter(p => p.r >= 3)
+  const both = await runFairOn([regionA, regionB], fixture, 'no')
+  const gridAfter = both.grid.map(row => row.map(s => s && s.id))
+
+  // 单独排 B 区（同样从原始座位开始）
+  const alone = makeSixBySix(weightOf, (r, c) => r * 6 + c)
+  const only = await runFairOn([alone.region.filter(p => p.r >= 3)], alone, 'no')
+  assert.deepEqual(gridAfter.slice(3), only.grid.slice(3).map(row => row.map(s => s && s.id)),
+    'B 区结果必须与「单独排 B 区」一致（缓存不许跨作用域泄漏）')
+})
+

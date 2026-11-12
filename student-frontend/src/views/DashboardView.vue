@@ -121,7 +121,7 @@
           </div>
           <!-- 班费没有「列表空态」：余额恒显示数字，无记录时是 0.00，所以只能按记录条数决定按钮文案 -->
           <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/fee')">
-            {{ fees.length ? '转到班费页面' : '去记一笔班费' }}
+            {{ summary.feeCount ? '转到班费页面' : '去记一笔班费' }}
           </button>
         </div>
 
@@ -258,9 +258,13 @@ const duty = ref({ cells: {}, settings: { days: [], items: [] } })
 const countdowns = ref([])
 const leaves = ref([])
 const students = ref([])
-const scores = ref([])
+// 首页聚合值（v6 · 2-1）：人数 / 今日加分 Top4 / 班费三个口径都由后端算好，
+// 不再把全量加分与班费记录下发到首页（真实班级 1000 条加分会占整包 91%）。
+const summary = ref({
+  studentCount: 0, scoreCount: 0, feeCount: 0,
+  topScores: [], feeBalance: 0, monthIncome: 0, monthExpense: 0,
+})
 const activities = ref([])
-const fees = ref([])
 const albumPhoto = ref('')
 const showFee = ref(localStorage.getItem('dashboard-fee-visible') === '1')
 
@@ -405,50 +409,13 @@ const todayCourseList = computed(() => {
   return result
 })
 
-// 加分排行榜：按加分排序，取前4名
-const topScores = computed(() => {
-  return scores.value
-    .filter(s => s.加分时间 && s.加分时间.startsWith(today.value))
-    .sort((a, b) => Number(b.分值 || 0) - Number(a.分值 || 0))
-    .slice(0, 4)
-    .map(s => {
-      // 区分个人加分（学生）与小组加分（小组名）
-      const name = s.姓名 || s.group_name || '未知'
-      const score = Number(s.分值 || 0)
-      return { name, score: s.类型 === '扣分' ? -score : score }
-    })
-})
+// 加分排行榜：后端已按「今日 + 分值降序 + 前 4」算好（口径见 routes/dashboard.js buildSummary）
+const topScores = computed(() => summary.value.topScores || [])
 
-// 班费计算：余额 + 本月收入/支出
-const feeBalance = computed(() => {
-  return fees.value.reduce((sum, r) => {
-    const amount = Number(r['收支金额'] || 0)
-    const type = String(r['收支类型'] || '').trim()
-    return type === '支出' ? sum - Math.abs(amount) : sum + Math.abs(amount)
-  }, 0)
-})
-const monthIncome = computed(() => {
-  const year = now.value.getFullYear()
-  const month = now.value.getMonth() + 1
-  return fees.value.reduce((sum, r) => {
-    const dateStr = String(r['收支时间'] || '')
-    if (!dateStr.startsWith(`${year}-${pad2(month)}`)) return sum
-    const amount = Number(r['收支金额'] || 0)
-    const type = String(r['收支类型'] || '').trim()
-    return type !== '支出' ? sum + Math.abs(amount) : sum
-  }, 0)
-})
-const monthExpense = computed(() => {
-  const year = now.value.getFullYear()
-  const month = now.value.getMonth() + 1
-  return fees.value.reduce((sum, r) => {
-    const dateStr = String(r['收支时间'] || '')
-    if (!dateStr.startsWith(`${year}-${pad2(month)}`)) return sum
-    const amount = Number(r['收支金额'] || 0)
-    const type = String(r['收支类型'] || '').trim()
-    return type === '支出' ? sum + Math.abs(amount) : sum
-  }, 0)
-})
+// 班费聚合：余额 + 本月收入/支出都由后端算（全量记录不下发首页）
+const feeBalance = computed(() => summary.value.feeBalance || 0)
+const monthIncome = computed(() => summary.value.monthIncome || 0)
+const monthExpense = computed(() => summary.value.monthExpense || 0)
 
 // ========== 方法 ==========
 function goTo(to) {
@@ -490,24 +457,20 @@ const albumPhotoSeq = createLatest()
 async function loadRandomPhoto(albums) {
   const my = albumPhotoSeq.begin()
   const list = Array.isArray(albums) ? albums : []
-  for (const album of list) {
-    try {
-      const photosRes = await axios.get(`/api/album/${album.id}/photos`)
-      if (!albumPhotoSeq.isCurrent(my)) return
-      const groups = (photosRes.data && photosRes.data.data) || []
-      const photos = (Array.isArray(groups) ? groups : []).flatMap(g => (g.photos || []))
-      if (photos.length === 0) continue
-      const pick = photos[Math.floor(Math.random() * photos.length)]
-      const thumbRes = await axios.get(`/api/album/photo/${pick.id}/thumb`, { responseType: 'blob' })
-      // 过期响应：不换图、也不释放当前图（那是另一次调用的成果）
-      if (!albumPhotoSeq.isCurrent(my)) return
-      replaceAlbumPhoto(thumbRes.data)
-      return
-    } catch (_) { /* 试下一个相册 */ }
+  if (!list.length) { if (albumPhotoSeq.isCurrent(my)) revokeAlbumPhoto(); return }
+  /* 只要一张图，就只问后端要一张：后端随机抽一张、直接把缩略图递过来，一次请求。
+   * 原实现是遍历每个相册各拉一次全量照片列表、再自己随机挑一张 —— 真实数据
+   * 12,968 行 / 3.44MB，而且每次进首页都会跑（onMounted + onActivated 各一次）。 */
+  try {
+    const thumbRes = await axios.get('/api/album/random-photo/thumb', { responseType: 'blob' })
+    // 过期响应：不换图、也不释放当前图（那是另一次调用的成果）
+    if (!albumPhotoSeq.isCurrent(my)) return
+    replaceAlbumPhoto(thumbRes.data)
+  } catch (_) {
+    // 没有照片 / 缩略图还在排队生成 / 请求失败：只有仍是最新一次时才清空旧图，
+    // 否则会把另一路调用刚显示出来的图清掉。
+    if (albumPhotoSeq.isCurrent(my)) revokeAlbumPhoto()
   }
-  // 一个相册都没取到图（无照片或全部失败）：只有仍是最新一次时才清空旧图，
-  // 否则会把另一路调用刚显示出来的图清掉。
-  if (albumPhotoSeq.isCurrent(my)) revokeAlbumPhoto()
 }
 function getStudentName(id) {
   const s = students.value.find(st => st.id === Number(id) || st.id === id)
@@ -534,9 +497,8 @@ async function loadData(force = false) {
     countdowns.value = d.countdowns
     leaves.value = d.leaves
     students.value = d.students
-    scores.value = d.scores
+    summary.value = d.summary
     activities.value = d.activities
-    fees.value = d.fees
     // 相册：挑一个含照片的相册，随机取一张
     loadRandomPhoto(d.album)
     if (firstScreen && !firstRenderMarked) {

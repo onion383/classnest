@@ -15,6 +15,7 @@
 const { app, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const { isPackaged } = require('./main.env')
 const { assertHttpsUrl, verifyDownloadedFile, sha256File } = require('./main.update-integrity')
 
 // GitHub 仓库信息（原先在 electron-builder.json 的 publish 里，现仅保留在代码常量中）
@@ -221,7 +222,7 @@ async function downloadInstaller(asset, version) {
 
 // 打包环境完整流程：checking → （无更新）not-available / （有更新）available → downloading → downloaded
 async function runUpdateFlow() {
-  if (!app.isPackaged || updateFlowRunning) return
+  if (!isPackaged || updateFlowRunning) return
   updateFlowRunning = true
   // 同步先推 checking（在首个 await 之前，保证 update-check 返回的快照即 checking）
   setUpdateState({ status: 'checking', error: null, percent: 0 })
@@ -278,7 +279,7 @@ function registerUpdateIpc(send) {
 
   // 检查更新：进入「关于」页 / 手动点击触发；立即返回当前状态快照，后续变化走 from-main 广播
   ipcMain.handle('update-check', async () => {
-    if (app.isPackaged) {
+    if (isPackaged) {
       // 打包环境：后台走完整「检查 + 下载」流程（立即返回，结果靠事件推送）
       runUpdateFlow()
       return { ...updateState }
@@ -301,7 +302,7 @@ function registerUpdateIpc(send) {
   // 没有这把锁就会 spawn 两个安装器（审查 v5 · V5-027）。
   let installBusy = false
   ipcMain.on('update-install', async () => {
-    if (!app.isPackaged) return
+    if (!isPackaged) return
     if (installBusy) return
     installBusy = true
     let launched = false

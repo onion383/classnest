@@ -176,6 +176,13 @@
     "setup",
     "widget"
   ],
+  "secure-handshake": [
+    "desktop-widget",
+    "main",
+    "migration",
+    "setup",
+    "widget"
+  ],
   "apps-select-file": [
     "desktop-widget"
   ],

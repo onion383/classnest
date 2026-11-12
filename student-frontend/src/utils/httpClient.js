@@ -4,10 +4,11 @@ import { applyAuthHeader, safe } from '../composables/secureChannel'
 import { waitForBackendReady, isBackendUnreachable, resetBackendReady } from './backendReady'
 import { absorbRenewal } from './apiUrl'
 import { getToken as loadStoredToken } from './authStorage'
-import { userScopedGeneration } from './userScopedCache.js'
+import { userScopedGeneration, registerUserScopedReset } from './userScopedCache.js'
 import { installBlobErrorNormalizer } from './blobError.js'
 import { createWidgetDataChangedAnnouncer } from './widgetDataChanged.js'
 import { markSince, phase } from './perfMark.js'
+import { createGetShare } from './getShare.js'
 import { SEND } from '../electronChannels.js'
 
 // 主窗口写成功后通知桌面挂件刷新（A5-02）。复用既有 to-widget → from-main 中继，
@@ -59,6 +60,32 @@ function defaultWriteRetryGuard(config) {
   const m = (config?.method || 'get').toLowerCase()
   return m === 'get' || m === 'head'
 }
+
+// ---------- 通用 GET 在途共享（v6 性能专题 · 1-7） ----------
+// 同 `method + url + params` 的并发 GET 只打一次网络请求，成功后短 TTL 内复用响应。
+// 判定与清理都在 utils/getShare.js（纯逻辑，可单测）；这里只负责接到 axios 适配器上。
+// ⚠️ 必须「清值 + 作废在途」一起做：换号时旧响应既不写缓存也不交给调用方。
+const getShare = createGetShare()
+registerUserScopedReset(() => getShare.reset())
+
+// 把默认适配器包一层共享逻辑。只包一次（__sharedGet 标记）：
+// setupApiClient 在各窗口入口都会调用，重复包裹会让同一个请求被套多层。
+function installSharedGetAdapter(target) {
+  const current = target.defaults.adapter
+  if (typeof current === 'function' && current.__sharedGet) return
+  // axios 1.x 的 defaults.adapter 可能是 ['xhr','http','fetch'] 数组，先解析成实际函数
+  const native = typeof target.getAdapter === 'function' ? target.getAdapter(current) : current
+  if (typeof native !== 'function') return
+  const shared = (config) => {
+    const key = getShare.keyOf(config)
+    if (!key) return native(config)
+    // 每个调用方拿到自己的响应副本（config 指向自己）：响应拦截器会改 res.data（解密），
+    // 共用同一个对象会让两条拦截器链互相覆盖；副本只共享 data 引用，解密各写各的。
+    return getShare.run(key, () => native(config)).then((res) => ({ ...res, config }))
+  }
+  shared.__sharedGet = true
+  target.defaults.adapter = shared
+}
 export function setupApiClient({
   baseURL,
   getToken = loadStoredToken,
@@ -81,6 +108,9 @@ export function setupApiClient({
   writeRetryGuard = defaultWriteRetryGuard,
 } = {}) {
   if (baseURL) axios.defaults.baseURL = baseURL
+
+  // 通用 GET 去重/短缓存：适配器层最靠内，不会与凭据注入 / 加密 / 401 重试打架
+  installSharedGetAdapter(axios)
 
   // 二进制下载（responseType:'blob'）的 4xx 错误体也是 Blob。先把它还原成业务对象，
   // 否则安全通道读不到 err.response.data.d —— 会话过期的 401 会被误判成「登录过期」，
@@ -109,6 +139,7 @@ export function setupApiClient({
       if (!token) return config
       const carriedToken = await applyAuthHeader(config.headers, token, {
         forceToken: config.__forceAuthToken === true,
+        perf: config.__perf,
       })
       // 记录了「本次确实携带 token」，响应成功后据此把会话标记为已绑定身份
       if (carriedToken) config.__authProofToken = true
@@ -132,6 +163,9 @@ export function setupApiClient({
   //     例外（dev 下 Vite 代理对「上游未就绪」的包装，与「连接被拒」同义），见 isBackendUnreachable。
   axios.interceptors.response.use(
     res => {
+      // 写成功 → 作废 GET 共享缓存：紧接着的 fetchRows / 各个面板的刷新不能再拿到写前的旧响应
+      const m = String(res.config?.method || 'get').toLowerCase()
+      if (m !== 'get' && m !== 'head') getShare.markDirty()
       // 滑动续期：后端在 token 快到期时随响应下发新的 30 天 token / 媒体凭据，落盘后生效。
       // generation 取的是**发请求时**记下的代次（见请求拦截器），中途换号则丢弃这份续期。
       absorbRenewal(res.headers, { onTokenRenewed, generation: res.config?.__authGeneration })
@@ -183,9 +217,6 @@ export function setupApiClient({
   return axios
 }
 
-// 生产模式（app:// 协议）下无 Vite 代理，需指定完整后端地址；开发模式走 Vite 代理，保持相对路径。
-// 与 secureChannel.js 的 BASE 保持一致：回环地址统一用 127.0.0.1，避开 localhost → ::1 回退。
-// ⚠️ 必须与 apiUrl.js 的 base 同步：后端 set-cookie 是 host-only，两者不同域会让媒体请求丢 Cookie。
-export function backendBaseUrl() {
-  return import.meta.env.PROD ? 'http://127.0.0.1:3000' : ''
-}
+// B1：API 走相对路径（dev 由 Vite 代理，打包由 app://local/api 协议代理），
+// 页面 origin 保持 app://local，不再跨源。
+export { apiBaseUrl as backendBaseUrl } from './backendOrigin.js'

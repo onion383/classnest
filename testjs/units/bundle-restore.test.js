@@ -118,7 +118,10 @@ test('正常包：库写入、目录替换、旧内容进 .bak（不删）、mem
   const restored = calls.find((c) => c.fn === 'restoreBundle')
   assert.ok(restored, '必须调用 restoreBundle 落库')
   assert.equal(restored.args.slug, '@aaaaaaaaaaaa')
-  assert.equal(Buffer.from(restored.args.data, 'base64').toString('utf8'), '假库内容', '库内容要逐字节带过去')
+  // 2-11 之后：传 srcPath（解包目录里现成的库文件），不再读进内存转 base64
+  assert.ok(typeof restored.args.srcPath === 'string', '应传 srcPath 而不是 base64')
+  assert.equal(fs.readFileSync(restored.args.srcPath, 'utf8'), '假库内容', '库内容要逐字节带过去')
+  assert.equal(restored.args.data, undefined, '不再走 base64 中转（100MB 库会白占约 230MB 堆）')
   assert.ok(restored.args.dbKey, '加密包必须解出库钥匙')
   assert.equal(calls.filter((c) => c.fn === 'writeMemory').length, 1)
   dropTmp(recv.tmpDir, null)
@@ -264,22 +267,18 @@ test('dropTmp 同时清临时目录与上传文件，且对 null 不抛', () => 
 // ---------------------------------------------------------------------------
 // ⑤ 接线：两个恢复入口共用同一份落盘逻辑（这是本文件存在的理由）
 // ---------------------------------------------------------------------------
-test('接线：登录中恢复与新机离线恢复都走 bundleRestore，v3 区段里没有第二份写库实现', () => {
+test('接线：两个恢复入口都走 bundleRestore，路由里没有任何自己写库的实现', () => {
   const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/account.js'), 'utf8')
   assert.match(src, /require\('\.\.\/services\/bundleRestore'\)/, '必须引用共享 service')
   assert.equal((src.match(/applyVerifiedBundle\(/g) || []).length, 2, '两个入口各调一次，不能有一处自己实现')
   assert.equal((src.match(/receiveAndVerify\(/g) || []).length, 2, '解包校验也必须是同一个入口')
 
-  // v2 的 /restore 与 /restore-offline 仍直接用 restoreBundle（旧 JSON 包），那是允许的。
-  // 所以要按区段判：从 /restore-zip 起、到 v2 的 /restore 之前，这一段里不许出现 restoreBundle。
-  const start = src.indexOf("router.post('/restore-zip'")
-  const v2 = src.indexOf("router.post('/restore',")
-  assert.ok(start > 0 && v2 > start, '定位 v3 / v2 两段失败，判据本身要修')
-  const v3Section = src.slice(start, v2)
-  assert.equal((v3Section.match(/dbManager\.restoreBundle\(/g) || []).length, 0,
-    'v3 两个入口必须走 service，路由里不许自己写库')
-  // 全文件恰好 v2 那两处 —— 多一处就说明有人又在路由里写了一份
-  assert.equal((src.match(/dbManager\.restoreBundle\(/g) || []).length, 2, 'v2 只有两处，v3 零处')
+  // v2 的 /restore 与 /restore-offline 已下线（v6 性能专题 · 2-11：整库 base64 读进内存）。
+  // 判据相应收紧：路由层不许再出现任何直接写库的调用，且两个旧入口不能回潮。
+  assert.equal((src.match(/dbManager\.restoreBundle\(/g) || []).length, 0,
+    '路由里不许自己写库，必须走 bundleRestore service')
+  assert.equal(src.indexOf("router.post('/restore',"), -1, 'v2 /restore 已下线，不应回潮')
+  assert.equal(src.indexOf("router.post('/restore-offline'"), -1, 'v2 /restore-offline 已下线，不应回潮')
 })
 
 test('接线：离线入口在动数据之前卡住 slug 格式与覆盖确认', () => {

@@ -4,8 +4,27 @@
 // 这里按阶段打 stdout（主进程 backendLog 会写进 backend.log），只看不改行为。
 // 文字刻意避开 "listening" / "server started" —— 主进程靠正则 detectBackendReady 判就绪，不能被误触。
 const _bootT0 = Date.now();
-const _boot = (name) => { try { console.log(`[boot] +${Date.now() - _bootT0}ms ${name}`); } catch (_) { /* 日志失败不影响启动 */ } };
+// 2-21：PERF_STARTUP=1 时额外带上绝对 epoch，供主进程把「fork 发起 / 子进程 spawn」与这里的
+// 「入口 / 监听成功」按同一时钟相减，拆开「进程创建」和「Node 引导 + bundle 加载」两段空档。
+const _bootEpoch = () => (process.env.PERF_STARTUP === '1' ? ` @${Date.now()}` : '');
+const _boot = (name) => { try { console.log(`[boot] +${Date.now() - _bootT0}ms ${name}${_bootEpoch()}`); } catch (_) { /* 日志失败不影响启动 */ } };
 _boot('后端进程入口');
+
+// 2-17 归因：PERF_STARTUP=1 时记录 ≥10ms 的 GC 停顿，判断后端启动期事件循环
+// 的 128ms 阻塞是否来自 V8 垃圾回收（不改变任何业务行为）。
+if (process.env.PERF_STARTUP === '1') {
+  try {
+    const { PerformanceObserver } = require('perf_hooks');
+    const obs = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        if (e.duration >= 10) {
+          try { console.log(`[boot] GC kind=${e.kind} ${e.duration.toFixed(1)}ms @${Date.now()}`); } catch (_) { /* 静默 */ }
+        }
+      }
+    });
+    obs.observe({ entryTypes: ['gc'] });
+  } catch (_) { /* 观察器不可用不影响启动 */ }
+}
 
 const express = require('express');
 const fs = require('fs');
@@ -37,6 +56,24 @@ const app = express();
 // 端口可用环境变量覆盖（默认 3000）：打包/日常运行行为不变，
 // 仅用于在同一台机器上并行起一个「隔离数据目录」的测试后端做性能测量。
 const PORT = Number(process.env.PORT) || 3000;
+
+// 首屏归因（v6 · 2-13）：PERF_STARTUP=1 时记录 /api/dashboard 到达 Express 的 epoch。
+// 与 handler 里的「进入 <epoch>」相减，判断空档在 Node 事件循环/让路链，还是在渲染层/网络。
+if (process.env.PERF_STARTUP === '1') {
+  app.use((req, res, next) => {
+    if (req.path === '/api/dashboard') {
+      try {
+        console.log(`[boot] dashboard 到达 ${req.method} ${Date.now()}`);
+        // 预检（OPTIONS）与真实 GET 是两段：记录各自完成时刻，才能分清「预检响应被事件循环拖住」
+        // 与「真实请求到达后排队」。只在显式开关下输出，默认零日志。
+        res.on('finish', () => {
+          try { console.log(`[boot] dashboard 完成 ${req.method} ${Date.now()}`); } catch (_) { /* 静默 */ }
+        });
+      } catch (_) { /* 打点失败静默 */ }
+    }
+    next();
+  });
+}
 
 // CORS 白名单：只允许应用自身来源（Electron 自定义协议 / file://）与本机回环页面访问。
 // 之前裸 cors() 会回显任意站点的 Origin，任意网页都能把响应读走，配合本机明文凭据会扩大攻击面。
@@ -79,7 +116,12 @@ if (secureChannel.hasMaster()) {
       if (!pub || typeof pub !== 'string') {
         return res.status(400).json({ error: 'bad request' });
       }
+      const _hsT0 = Date.now();
       const result = secureChannel.performHandshake(pub);
+      if (process.env.PERF_STARTUP === '1') {
+        const dt = Date.now() - _hsT0;
+        try { console.log(`[boot] 握手处理 ${dt}ms @${Date.now()}`); } catch (_) { /* 静默 */ }
+      }
       res.json(result);
     } catch (err) {
       res.status(400).json({ error: String(err) });
@@ -200,8 +242,9 @@ app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students',
   }
 }));
 
-// 托管前端静态文件（生产模式用）
-app.use(express.static(path.join(__dirname, '../dist')));
+// 前端静态资源由 Electron 的 app:// 协议提供（见 electron/main/main.protocol.js）。
+// B1 不再让后端托管 dist：页面 origin 保持 app://local，只有 /api 经主进程代理到本进程，
+// 避免把 UI 暴露成 127.0.0.1 上任何本机程序都能打开的源。
 
 // ===================== 启动服务器 =====================
 // 统一错误出口只装一次：startServer 在端口被占用时会递归重入，
@@ -219,6 +262,42 @@ function startServer(port) {
   const server = app.listen(port, '127.0.0.1', () => {
     console.log(`✅ 服务器已启动：http://127.0.0.1:${port}`);
     _boot('监听成功 = 就绪');
+
+    // 2-17 归因：区分「TCP 连接到达」与「请求进入 Express」。
+    // 若连接到达早、请求日志晚，说明后端事件循环被占；若连接本身晚，说明在 OS/客户端建连段。
+    if (process.env.PERF_STARTUP === '1') {
+      const { monitorEventLoopDelay } = require('perf_hooks');
+      const loop = monitorEventLoopDelay({ resolution: 10 });
+      loop.enable();
+      server.on('connection', () => {
+        try { console.log(`[boot] 连接到达 ${Date.now()}`); } catch (_) { /* 静默 */ }
+      });
+      setTimeout(() => {
+        try {
+          console.log(`[boot] 后端事件循环 p50=${(loop.percentile(50) / 1e6).toFixed(1)}ms p95=${(loop.percentile(95) / 1e6).toFixed(1)}ms max=${(loop.max / 1e6).toFixed(1)}ms`);
+          loop.disable();
+        } catch (_) { /* 静默 */ }
+      }, 1500);
+      // 阻塞窗口定位：5ms 心跳，凡是「本该 5ms 却隔了 ≥20ms」就说明事件循环被同步工作占住。
+      // 与链步骤打点对照，可以判断 110ms 空档是落在某个 require 步骤内，还是在两次步骤之间。
+      let _hbLast = Date.now();
+      let _hbCpu = process.cpuUsage();
+      const _hb = setInterval(() => {
+        const now = Date.now();
+        const dt = now - _hbLast;
+        const cpu = process.cpuUsage(_hbCpu);
+        _hbLast = now;
+        _hbCpu = process.cpuUsage();
+        if (dt >= 20) {
+          // cpu：这段停顿里本进程实际用掉的 CPU。接近 0 = 被系统挂起/抢不到 CPU；
+          // 接近 dt = 一直在跑（耗时在未被计时的原生/驱动层，如 DLL 加载、文件扫描）。
+          try {
+            console.log(`[boot] 循环停顿 ${dt}ms cpu=${((cpu.user + cpu.system) / 1000).toFixed(1)}ms 结束于 ${now}`);
+          } catch (_) { /* 静默 */ }
+        }
+      }, 5);
+      setTimeout(() => clearInterval(_hb), 3000);
+    }
 
     // 就绪上报：通过 fork 的 IPC 通道告知主进程「端口已监听」，由主进程转发给各渲染窗口。
     // 前端据此在就绪瞬间发起首个请求，不再靠固定退避重试去「撞」端口。
@@ -409,11 +488,28 @@ function startServer(port) {
       // 链里第 0 步是 warmup，第 1 步起才是 loader，故在跑第 1 步前记时。
       if (stepIdx === 1) _deferT0 = Date.now();
       const step = steps[stepIdx++];
+      const _stepT0 = Date.now();
+      if (process.env.PERF_STARTUP === '1') {
+        try { console.log(`[boot] 链步骤 ${stepIdx - 1} 开始 @${_stepT0}`); } catch (_) { /* 静默 */ }
+      }
       try { step(); } catch (err) { console.error('[defer] 让路链某步失败:', err); }
+      if (process.env.PERF_STARTUP === '1') {
+        const dt = Date.now() - _stepT0;
+        if (dt >= 10) {
+          try { console.log(`[boot] 链步骤 ${stepIdx - 1} ${dt}ms @${Date.now()}`); } catch (_) { /* 静默 */ }
+        }
+      }
       if (stepIdx < steps.length) setImmediate(runStep);
     };
     setImmediate(runStep);
   });
+
+  // 1-6：本地回环 + 单客户端（主进程代理），把空闲保活从 Node 默认 5s 拉长到 60s。
+  // 好处：间隔超过 5s 的请求不必每次重开 TCP（省一次建连与端口分配）。
+  // headersTimeout 必须大于 keepAliveTimeout —— 否则 Node 会先按「请求头超时」把连接掐掉，
+  // 保活等于没生效。本服务只供本机前端/主进程访问，拉长不增加外部暴露面。
+  server.keepAliveTimeout = 60_000;
+  server.headersTimeout = 61_000;
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {

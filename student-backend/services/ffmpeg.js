@@ -22,6 +22,7 @@ const crypto = require('crypto');
 const { promisify } = require('util');
 const { pipeline } = promisify(require('stream').pipeline);
 const dbManager = require('../dbManager/dbManager');
+const { BACKEND_ROOT } = require('../utils/backendRoot');
 
 // 计算文件 sha256（十六进制小写）
 function sha256Hex(filePath) {
@@ -110,9 +111,9 @@ function resolveFfmpegPath() {
   }
   // 2. 用户数据目录缓存
   candidates.push(CACHE_DIR, path.join(CACHE_DIR, 'bin'));
-  // 3. 随包/源码资源目录
-  candidates.push(path.resolve(__dirname, '../../resources/ffmpeg'));
-  candidates.push(path.resolve(__dirname, '../../resources'));
+  // 3. 随包/源码资源目录（bundle 后 __dirname 语义会变，统一按后端根目录推导）
+  candidates.push(path.join(BACKEND_ROOT, '..', 'resources', 'ffmpeg'));
+  candidates.push(path.join(BACKEND_ROOT, '..', 'resources'));
 
   let hit = findFfmpeg(candidates);
   if (hit) return hit;

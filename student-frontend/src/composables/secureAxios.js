@@ -34,7 +34,7 @@ export function setupSecureAxios(axios) {
       if (typeof d === 'string') return config // 已是序列化表单/查询串，非 JSON 对象
       try {
         config.__origData = d
-        config.data = await encryptBody(d)
+        config.data = await encryptBody(d, config.__perf)
         config.headers = config.headers || {}
         config.headers['Content-Type'] = 'application/json'
       } catch (_) {
@@ -45,7 +45,25 @@ export function setupSecureAxios(axios) {
       endEncrypt()
       // 本层是最后一道请求拦截器：到这里加密已完成，之后才是真正发网络。
       // 「发送」段包含 axios 的 JSON.parse（它在响应拦截器之前执行），无法再拆开。
-      if (config.__perf) config.__perf.sendAt = perfNow()
+      if (config.__perf) {
+        config.__perf.sendAt = perfNow()
+        // 首屏归因（v6 · 2-13）：与后端「dashboard 到达」epoch 相减，判断这段空档
+        // 是渲染层派发/网络，还是后端事件循环排队。
+        try { console.log(`[startup] 首屏发送开始 @${config.__perf.sendAt}`) } catch (_) { /* 打点失败静默 */ }
+        // 预检返回后 GET 迟迟不发（2-14）：在发送当下排一个宏任务与一帧，
+        // 它们若被拖到 100ms 后才执行，说明主线程忙；若 0~5ms 就执行，说明是浏览器预检调度。
+        try {
+          const t = perfNow()
+          setTimeout(() => {
+            try { console.log(`[startup] 派发后宏任务 ${perfNow() - t}ms @${perfNow()}`) } catch (_) { /* 静默 */ }
+          }, 0)
+          if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => {
+              try { console.log(`[startup] 派发后帧 ${perfNow() - t}ms @${perfNow()}`) } catch (_) { /* 静默 */ }
+            })
+          }
+        } catch (_) { /* 打点失败静默 */ }
+      }
     }
   })
 
@@ -62,7 +80,7 @@ export function setupSecureAxios(axios) {
     if (d && typeof d === 'object' && typeof d.d === 'string') {
       const endDecrypt = phase(res.config, '解密')
       try {
-        res.data = await decryptBody(d.d)
+        res.data = await decryptBody(d.d, res.config && res.config.__perf)
       } catch (e) {
         // 解密失败 = 这条响应是用「另一个会话」加密的。典型场景：页面并发发多个 GET，
         // 其中某个请求先撞上 401（会话过期/后端重启）触发重握手，模块级 sessionKey 被换掉，
@@ -86,7 +104,7 @@ export function setupSecureAxios(axios) {
           if (cfg.__origData) {
             try {
               cfg.__retrySecure = true
-              cfg.data = await encryptBody(cfg.__origData)
+              cfg.data = await encryptBody(cfg.__origData, cfg.__perf)
             } catch (_) {
               // 重新加密失败：旧会话的密文原样重发必然解不开，按原响应对待、由调用方兜底
               return res
@@ -128,7 +146,7 @@ export function setupSecureAxios(axios) {
       if (cfg.__origData) {
         cfg.__retrySecure = true
         try {
-          cfg.data = await encryptBody(cfg.__origData)
+          cfg.data = await encryptBody(cfg.__origData, cfg.__perf)
         } catch (_) {
           // 重新加密失败：body 若还是明文就原样重发；已是密文则重发必然解不开
           const d = cfg.data
@@ -162,7 +180,7 @@ export function setupSecureAxios(axios) {
       if (cfg.__origData) {
         try {
           // 带 body 的要按**新会话**重新加密（旧密文绑定的是旧会话密钥）
-          cfg.data = await encryptBody(cfg.__origData)
+          cfg.data = await encryptBody(cfg.__origData, cfg.__perf)
         } catch (_) {
           // 重新握手失败（如后端暂时不可用）：body 若还是明文就原样重发（后端安全模式也收明文体）；
           // 已是旧会话的密文则重发必然解不开 —— 此时不重发，按原错误返回
@@ -181,7 +199,7 @@ export function setupSecureAxios(axios) {
     const d = err.response?.data
     if (d && typeof d === 'object' && typeof d.d === 'string') {
       try {
-        err.response.data = await decryptBody(d.d)
+        err.response.data = await decryptBody(d.d, cfg && cfg.__perf)
       } catch (_) {
         // 非法/过期密文（如 { d:'session-expired' }）保持原样，由调用方兜底
       }

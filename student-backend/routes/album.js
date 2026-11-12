@@ -193,6 +193,21 @@ router.post('/', async (req, res) => {
     if (!name) return res.status(400).json({ error: '请输入相册名称' });
 
     if (kind === 'virtual') {
+      // 「整册」（方案 C）：只传源相册 + 排除项，由后端展开。
+      // 为什么要这个：选中状态若在前端展开成 id 列表，一万张就要传一万个 id；
+      // 而且前端得先把整册照片拉下来才知道有哪些 id —— 那又回到全量了。
+      const allFrom = Number(req.body && req.body.all_from) || 0;
+      if (allFrom) {
+        const src = db.prepare('SELECT id, kind FROM albums WHERE id = ?').get(allFrom);
+        if (!src) return res.status(404).json({ error: '源相册不存在' });
+        const exclude = Array.isArray(req.body.exclude)
+          ? [...new Set(req.body.exclude.map(Number).filter(Boolean))]
+          : [];
+        const total = db.prepare('SELECT COUNT(*) AS c FROM album_photos WHERE album_id = ?').get(allFrom).c;
+        if (total - exclude.length <= 0) return res.status(400).json({ error: '请先选择照片' });
+        const albumId = createVirtualAlbum(name, [], { allFrom, exclude });
+        return res.json({ id: albumId, message: '虚拟相册已创建' });
+      }
       const ids = Array.isArray(req.body.photos)
         ? req.body.photos.map(p => Number(p && (p.photo_id ?? p.id ?? p))).filter(Boolean)
         : [];
@@ -291,9 +306,14 @@ router.post('/merge', (req, res) => {
 
 // 创建虚拟相册：把选中的照片索引复制到新相册；源相册是虚拟相册时再把源行删掉（移动索引）。
 // 全程只操作 album_photos 索引表，不移动/删除磁盘上的图片文件。
-function createVirtualAlbum(name, photoIds) {
+function createVirtualAlbum(name, photoIds, opts = {}) {
+  // 「整册」模式（方案 C）：前端不传照片 id，只说「源相册 + 排除掉这几张」。
+  // 一万张照片传一万个 id 是没必要的传输，真正的展开动作交给这里一次查完。
+  const allFrom = Number(opts.allFrom) || 0;
+  const exclude = Array.isArray(opts.exclude) ? opts.exclude.map(Number).filter(Boolean) : [];
   const getPhoto = db.prepare('SELECT * FROM album_photos WHERE id = ?');
   const getAlbum = db.prepare('SELECT id, kind FROM albums WHERE id = ?');
+  const listSource = db.prepare('SELECT * FROM album_photos WHERE album_id = ?');
   const insertPhoto = db.prepare(`
     INSERT OR IGNORE INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
@@ -307,9 +327,14 @@ function createVirtualAlbum(name, photoIds) {
     const albumId = r.lastInsertRowid;
     db.prepare('UPDATE albums SET sort_order = ? WHERE id = ?').run(albumId, albumId);
 
-    for (const pid of photoIds) {
-      const photo = getPhoto.get(pid);
-      if (!photo) continue;
+    // 行必须在事务内一次性取出来：整册模式的源行会边拷边删（源是虚拟相册时），
+    // 逐条 getPhoto 会读到已经删掉的行。
+    const excludeSet = new Set(exclude);
+    const rows = allFrom
+      ? listSource.all(allFrom).filter((p) => !excludeSet.has(p.id))
+      : photoIds.map(pid => getPhoto.get(pid)).filter(Boolean);
+
+    for (const photo of rows) {
       const src = getAlbum.get(photo.album_id);
       // thumb_path 置空：新行有自己的 id，缩略图由 /thumb 按需生成（{新id}.jpg），
       // 不与源相册共用同一个缩略图文件，避免源侧删照片时把这张也一起删掉。
@@ -378,6 +403,27 @@ router.post('/:id/pause', (req, res) => {
   const paused = !(req.body && req.body.paused === false);
   scanWorker.requestPause(slug, albumId, paused);
   res.json({ message: paused ? '已暂停扫描' : '已继续扫描', paused });
+});
+
+// GET /api/album/random-photo/thumb —— 首页配图用：后端随机抽一张，直接把图递给前端。
+//
+// 为什么单独做一个接口：首页只需要「一张图」，原来的做法是前端遍历每个相册、
+// 各拉一次全量照片列表再自己随机挑（真实数据 12,968 行 / 3.44MB，序列化就 41ms），
+// 而且每次进首页都跑一遍（onMounted + onActivated 各一次）。
+// 这种事不该用分页解决 —— 前端从头到尾就不需要那些数据，一次请求拿到图就够了。
+//
+// 生成 / 缓存 / 配额链路复用 sendThumb，与单张 /thumb 完全同源。
+router.get('/random-photo/thumb', async (req, res) => {
+  try {
+    // ORDER BY RANDOM() 是整表扫一遍，但只回一行、不物化结果集：
+    // 实测 13k 行 1.2ms。真涨到几十万张时再换成「随机 rowid + 就近取」。
+    const row = db.prepare('SELECT id FROM album_photos ORDER BY RANDOM() LIMIT 1').get();
+    if (!row) return res.status(404).json({ error: '还没有照片' });
+    // maxAge: 0 → no-store。URL 是固定的，让浏览器缓存 24h 的话首页永远是同一张。
+    await sendThumb(res, row.id, { maxAge: 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/album/:id/status 查询扫描进度
@@ -579,30 +625,151 @@ router.delete('/:id', async (req, res) => {
 
 // ======================== 照片浏览 ========================
 
+// 照片行的公共列与排序 —— 全量路径与分页路径必须完全同源。
+// 两条路径各写一份 SQL 的话，字段或顺序迟早会分叉，表现是「刷新后照片换了位置」。
+const PHOTO_COLS = 'id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src';
+const PHOTO_ORDER = 'ORDER BY photo_date DESC, mtime DESC, id DESC';
+// 读不到 EXIF 的照片 photo_date 是空串，归到这一组（与前端沿用同一串文案）
+const UNKNOWN_DATE_LABEL = '未知时间';
+
+/* 分页口径：单页最多看这么多天、最多这么多行。
+ * 为什么两个上限都要：只按天数封顶时，某一天特别多（秋游 500 张）整页会跟着变胖；
+ * 只按行数封顶就会把同一天拆到两页 —— 前端的分组头、每组「N 张」、年刻度尺都会错。
+ * 做法是「按天累加，加到再加一天就超行数上限为止」，同一天永远整组进出。
+ * 唯一例外：单独一天就超过上限时只能整日返回（拆开就不是一组了）。 */
+const DAYS_MAX = 60;
+const ROWS_PER_PAGE = 1500;
+
+// days 参数解析：缺省/空串 = 全量；非法 = null（调用方回 400）
+function parseDays(raw) {
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > DAYS_MAX) return null;
+  return n;
+}
+
+// 把行按日期聚成组。全量与分页共用这一份，别各写一遍。
+function groupByDate(photos) {
+  const groups = [];
+  const byDate = new Map();
+  for (const p of photos) {
+    const key = p.photo_date || UNKNOWN_DATE_LABEL;
+    if (!byDate.has(key)) { byDate.set(key, []); groups.push({ date: key, photos: byDate.get(key) }); }
+    byDate.get(key).push(p);
+  }
+  return groups;
+}
+
+function markMediaType(photos) {
+  for (const p of photos) p.media_type = mediaTypeOf(p.file_name);
+  return photos;
+}
+
+// GET /api/album/:id/dates —— 照片的「日期索引」：每个日期各有多少张。
+// 只回日期与张数，不回照片行：5 万张 / 469 个日期也只有十几 KB。
+// 前端拿到它就能一次算准总高度、年刻度尺和跳转位置，之后只按需补照片行，
+// 不必先拉全量才能知道「一共有多少组、每组多高」。
+router.get('/:id/dates', (req, res) => {
+  try {
+    const albumId = Number(req.params.id);
+    const rows = db.prepare(`
+      SELECT photo_date AS date, COUNT(*) AS count
+      FROM album_photos WHERE album_id = ?
+      GROUP BY photo_date
+      ORDER BY photo_date DESC
+    `).all(albumId);
+    // photo_date 为空串的那一组（读不到 EXIF）顺序天然在最后。
+    // 这里原样返回空串，由前端按同一规则显示成「未知时间」（与 /photos 的分组键一致）。
+    res.json({ data: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/album/:id/photos 按拍摄日期倒序分组的照片列表
 // 排序键是 photo_date（图片自带的 EXIF 拍摄时间；读不到就是空串，不拿文件时间冒充）。
 // 空串在 SQLite 里小于任何非空字符串，DESC 排序天然落到最后 —— 即「未知时间」在最底部。
 // 同一天内仍按 mtime 倒序，保证组内顺序稳定。
+//
+// 两种用法：
+//   · 不带 days            → 全量。导出、删除前抓撤销快照、首页随机图都依赖这个语义，
+//                            所以分页必须是 opt-in，绝不能默认生效（否则撤销会静默丢照片）。
+//   · 带 days=N&before=D   → 日期游标分页，一次给「若干天」，同一天绝不跨页。
+//                            before 是上一页最后一天的日期（不含），用来往后追加；不带则从头开始。
 router.get('/:id/photos', (req, res) => {
   try {
     const albumId = Number(req.params.id);
-    const photos = db.prepare(`
-      SELECT id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src
-      FROM album_photos WHERE album_id = ?
-      ORDER BY photo_date DESC, mtime DESC, id DESC
-    `).all(albumId);
-    for (const p of photos) p.media_type = mediaTypeOf(p.file_name);
-    // 按日期分组：date -> [photos]
-    // 读不到 EXIF 的照片 photo_date 为空串，统一归到「未知时间」这一组；
-    // 排序时它天然在最底部（见上面的 ORDER BY 注释）。
-    const groups = [];
-    const byDate = new Map();
-    for (const p of photos) {
-      const key = p.photo_date || '未知时间';
-      if (!byDate.has(key)) { byDate.set(key, []); groups.push({ date: key, photos: byDate.get(key) }); }
-      byDate.get(key).push(p);
+    const days = parseDays(req.query && req.query.days);
+    if (days === null) return res.status(400).json({ error: `days 必须是 1~${DAYS_MAX} 的整数` });
+
+    // ---- 全量：保持原有行为，一个字节都不改 ----
+    if (!days) {
+      const photos = db.prepare(
+        `SELECT ${PHOTO_COLS} FROM album_photos WHERE album_id = ? ${PHOTO_ORDER}`
+      ).all(albumId);
+      return res.json({ data: groupByDate(markMediaType(photos)) });
     }
-    res.json({ data: groups });
+
+    // ---- 日期游标分页 ----
+    const rawBefore = req.query && req.query.before;
+    if (rawBefore != null && rawBefore !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(rawBefore))) {
+      return res.status(400).json({ error: 'before 必须是 YYYY-MM-DD' });
+    }
+    const before = rawBefore ? String(rawBefore) : '';
+
+    // 第一步：取候选日期 + 每天张数。走 idx_album_photos_album_date 的 COVERING INDEX，
+    // 不需要临时表，也不会读照片行 —— 只数行数，代价与天数成正比。
+    const dateSql = before
+      ? `SELECT photo_date AS d, COUNT(*) AS n FROM album_photos
+         WHERE album_id = ? AND photo_date <> '' AND photo_date < ?
+         GROUP BY photo_date ORDER BY photo_date DESC LIMIT ?`
+      : `SELECT photo_date AS d, COUNT(*) AS n FROM album_photos
+         WHERE album_id = ? AND photo_date <> ''
+         GROUP BY photo_date ORDER BY photo_date DESC LIMIT ?`;
+    const dateRows = before
+      ? db.prepare(dateSql).all(albumId, before, days + 1)
+      : db.prepare(dateSql).all(albumId, days + 1);
+
+    // 按天累加挑出整数天。至少拿一天 —— 某一天自己就超上限时不能空手而归，
+    // 否则游标不前进，前端会一直请求同一页（死循环）。
+    const picked = [];
+    let rowCount = 0;
+    for (const r of dateRows) {
+      if (picked.length >= days) break;
+      if (picked.length && rowCount + r.n > ROWS_PER_PAGE) break;
+      picked.push(r.d);
+      rowCount += r.n;
+    }
+    // 「还有更多日期」不能只看 picked 的长度：picked 满 days 时也可能是正好取完。
+    // 判据是「取到列表被我们截断了没有」—— 多查了一条（days+1）就是为这个。
+    const hasMoreDates = picked.length < dateRows.length || dateRows.length > days;
+
+    // 第二步：只取这些日期的照片行（占位符个数 = 天数，用绑定值而不是拼字符串）
+    let photos = [];
+    if (picked.length) {
+      const marks = picked.map(() => '?').join(',');
+      photos = db.prepare(
+        `SELECT ${PHOTO_COLS} FROM album_photos
+         WHERE album_id = ? AND photo_date IN (${marks}) ${PHOTO_ORDER}`
+      ).all(albumId, ...picked);
+    }
+
+    let cursor = null;
+    if (hasMoreDates) {
+      // 下一页从这一页最老的那天往前继续（strictly less，所以不会重复）
+      cursor = picked[picked.length - 1];
+    } else {
+      // 日期取完了 → 把「未知时间」组接在最后（它天然是最后一组）
+      photos = photos.concat(db.prepare(
+        `SELECT ${PHOTO_COLS} FROM album_photos WHERE album_id = ? AND photo_date = '' ${PHOTO_ORDER}`
+      ).all(albumId));
+    }
+
+    res.json({
+      data: groupByDate(markMediaType(photos)),
+      hasMore: cursor !== null,
+      cursor,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -814,11 +981,14 @@ router.get('/photo/:photoId/file', async (req, res) => {
 // 低干扰：现场生成要过配额闸 claimOnDemand（见「后台扫描的低干扰约定」）。
 // 扫描期间主进程不能跟扫描抢 CPU/线程池，配额满了就把这个 id 记进需求队列，
 // 由扫描循环顺手补；本次直接 404，前端走占位，下次请求就拿到了。
-router.get('/photo/:photoId/thumb', async (req, res) => {
+// 缩略图的统一出口：生成 / 版本升级 / 内存缓存 / 现场配额都在这一个函数里。
+// 抽出来是因为「首页随机一张」也要走同一条链路 —— 复制一份的话，
+// 缩略图版本升级、配额闸、排队逻辑迟早就只改一处、漏另一处。
+async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
   let claimed = false;
   try {
     const slug = dbManager.currentSlug();
-    const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(req.params.photoId));
+    const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(photoId));
     if (!photo) return res.status(404).json({ error: '照片不存在' });
     let tp = thumbOf(photo, slug);
     const stale = (photo.thumb_v || 0) < THUMB_VERSION;
@@ -853,14 +1023,17 @@ router.get('/photo/:photoId/thumb', async (req, res) => {
     }
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Content-Length', buf.length);
-    res.setHeader('Cache-Control', 'private, max-age=86400');
+    // maxAge 0 表示「不许缓存」—— 给随机图用，否则 URL 固定会让浏览器永远显示同一张
+    res.setHeader('Cache-Control', maxAge > 0 ? `private, max-age=${maxAge}` : 'no-store');
     return res.end(buf);
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {
     if (claimed) releaseOnDemand(1);
   }
-});
+}
+
+router.get('/photo/:photoId/thumb', (req, res) => sendThumb(res, req.params.photoId));
 
 // POST /api/album/photo/thumbs 批量取缩略图（性能优化）
 //

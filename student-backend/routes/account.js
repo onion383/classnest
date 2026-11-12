@@ -20,9 +20,6 @@ const sessions = require('../services/sessions');
 // 凭证变更（改密 / 删账号）后「全账号会话失效」的唯一动作层，规则不在路由里各写一遍
 const { revokeAccountSessions, rotateAccountSessions } = require('../services/credentialChange');
 const { renameUsernameWithCompensation } = require('../services/accountRename');
-// 备份恢复会用备份包里的整库文件覆盖当前库，表结构可能与恢复前不同：
-// 恢复后必须让 AI 的列名缓存失效（否则后续 AI 写入/查询仍按旧列集合校验）。
-const aiHelpers = require('./ai/ai.helpers');
 // 备份包 v3（ZIP）：库 + 用户文件 + 清单，流式写 / 解包校验
 const { writeBundle } = require('../services/backupArchive');
 // v3 包的落盘（写库 + 替换目录 + 清列缓存）只有一份，两个恢复入口共用
@@ -98,40 +95,8 @@ async function resolveExportKeying({ slug, user, password, encrypt, dbPassword }
   return { bundle, wantEncrypt, keyFields };
 }
 
-// 备份导出：一次导出当前班主任库（业务数据 + 应用设置 + 账号 全带走）。
-// v2 便携包：仅在「输入正确登录密码」时放行导出，防止他人偷导。
-// 库钥匙用该登录密码派生钥匙包裹进包，换机后仍可用同一登录密码解包恢复。
-router.post('/export', auth(), async (req, res) => {
-    const slug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
-  // 密码走请求体而非 URL query：配合加密通道，避免 GET 明文 URL 泄露密码
-  const { password, encrypt = '1', dbPassword } = req.body || {};
-  // 校验必须是当前账号的登录密码，未通过直接拒绝，保证只有本人能导出
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.userId);
-  if (!user) return res.status(401).json({ error: '账号不存在' });
-
-  // 密码校验与「库钥匙怎么包」只有一份实现（v3 ZIP 包共用同一个函数）
-  const keying = await resolveExportKeying({ slug, user, password, encrypt, dbPassword });
-  if (keying.error) return res.status(keying.status || 400).json({ error: keying.error });
-  const { bundle } = keying;
-
-  const data = require('fs').readFileSync(bundle.filePath).toString('base64');
-  const out = {
-    version: 2,
-    slug: bundle.slug,
-    username: bundle.username,
-    data,
-    // 备份包是否来自加密库：明文库恢复时无需任何密钥
-    encrypted: bundle.encrypted,
-    // AI 长期记忆（md 原文）：随包一起带走，换机后可原样恢复
-    memory: dbManager.readMemory(slug) || '',
-    ...keying.keyFields,
-  };
-  res.json(out);
-});
-
 // 备份导出 v3（ZIP）：库 + 用户文件 + 清单，流式写、不驻留内存。
-// 与 v2 的差别只有「带了哪些东西」；密码校验与库钥匙包裹走同一个 resolveExportKeying。
-// 为什么是流式：收据原件可能有几百 MB，v2 那条链路（base64 + res.json）会把整包读进内存。
+// 密码校验与库钥匙包裹走 resolveExportKeying（与恢复侧同一份实现）。
 router.post('/export-zip', auth(), async (req, res) => {
   const slug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
   const { password, encrypt = '1', dbPassword } = req.body || {};
@@ -297,28 +262,6 @@ router.post('/restore-zip-offline', (req, res, next) => backupUploadMw()(req, re
   });
 });
 
-// 备份恢复：上传一个备份包，覆盖当前登录班主任的库并重建缓存连接。
-// 校验库身份：仅允许与当前登录账号一致的备份包。
-router.post('/restore', auth(), (req, res) => {
-    // 超级隐私模式：恢复会用主密钥重新包裹库钥匙，等于绕过隐私保护，必须先关闭
-  if (dbManager.isProtected(req.user.username)) {
-    return res.status(400).json({ error: '请先在系统设置中关闭超级隐私模式，再恢复备份' });
-  }
-  const { data, wrappedByPassword, wrappedByMnemonic, password, mnemonic, key, encrypted, memory } = req.body || {};
-  const curSlug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
-  // 备份包未标注 encrypted 时按旧格式（加密库）处理，保证兼容
-  const isEncrypted = !(encrypted === false || encrypted === 0 || encrypted === '0');
-  const dbKey = isEncrypted
-    ? dbManager.decryptBundleKey({ key, wrappedByPassword, wrappedByMnemonic, password, mnemonic })
-    : null;
-  const result = dbManager.restoreBundle({ slug: curSlug, username: req.user.username, data, dbKey, encrypted: isEncrypted });
-  // 整库被覆盖：表结构可能变了，AI 列缓存必须失效
-  aiHelpers.clearTableColumnsCache();
-  // 一并恢复 AI 长期记忆（旧包无该字段则跳过，不影响恢复）
-  if (typeof memory === 'string') dbManager.writeMemory(curSlug, memory);
-  res.json({ message: '恢复成功', slug: result.slug });
-});
-
 // 当前登录账号数据库的落盘加密状态（供设置页展示）。
 router.get('/db-encryption', auth(), (req, res) => {
     const slug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
@@ -351,65 +294,6 @@ router.post('/db-encryption', auth(), async (req, res) => {
     write({ type: 'done', ok: false, message: err.message || String(err) });
   } finally {
     res.end();
-  }
-});
-
-// 备份恢复（离线引导，无需登录）：用于「新电脑只装了全新软件、无任何数据」时，
-// 上传 v2 备份包 + 输入密码或助记词之一，解出库钥匙还原账号与数据。
-// 若本机 registry 中已存在「同一 slug」的账号（即同一用户），覆盖前需二次确认，
-// 以免误恢复盖掉本机已有数据。前端确认后带 confirm:true 才会真正落盘。
-router.post('/restore-offline', (req, res) => {
-  try {
-    const { data, slug, wrappedByPassword, wrappedByMnemonic, password, mnemonic, key, encrypted, memory } = req.body || {};
-    // 备份包未标注 encrypted 时按旧格式（加密库）处理，保证兼容
-    const isEncrypted = !(encrypted === false || encrypted === 0 || encrypted === '0');
-    const dbKey = isEncrypted
-      ? dbManager.decryptBundleKey({ key, wrappedByPassword, wrappedByMnemonic, password, mnemonic })
-      : null;
-    // 用备份包自带的账号名登记（index 中该账号才可登录）
-    const username = req.body && req.body.username;
-
-    // 已存在同一 slug 的库，且尚未确认覆盖 -> 先拒绝并让前端弹确认
-    const existing = dbManager.registryFindBySlug(slug);
-    // 超级隐私模式：离线恢复会用主密钥重新包裹库钥匙，必须先在原机登录并关闭保护
-    if (existing && existing.protect === 1) {
-      return res.status(400).json({ error: '该账号已开启超级隐私模式，请先登录并在系统设置中关闭后再恢复备份' });
-    }
-    if (existing && !req.body.confirm) {
-      return res.status(409).json({
-        needConfirm: true,
-        message: `本机已存在账号「${existing.username}」，恢复将覆盖其现有数据，是否确认？`,
-      });
-    }
-
-    const result = dbManager.restoreBundle({ slug, username, data, dbKey, encrypted: isEncrypted });
-    // 整库被覆盖：表结构可能变了，AI 列缓存必须失效
-    aiHelpers.clearTableColumnsCache();
-    // 一并恢复 AI 长期记忆（旧包无该字段则跳过，不影响恢复）
-    if (typeof memory === 'string') dbManager.writeMemory(result.slug || slug, memory);
-    // 恢复成功后直接签发登录态，前端据此跳转首页，无需再次手动登录
-    const sid = sessions.create(1, result.slug || slug);
-    const payload = { userId: 1, username, role: 'teacher', dbSlug: result.slug || slug, sid };
-    const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
-    // 绑定到本次加密信道会话：之后前端只需发不含 token 的信道凭据
-    secureChannel.bindAuth(req.sessionId, token);
-    const mediaToken = signMediaToken(payload);
-    res.cookie('token', token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      path: '/',
-      maxAge: TOKEN_COOKIE_MAX_AGE
-    });
-    res.json({
-      message: '恢复成功',
-      slug: result.slug,
-      username: result.username || username,
-      token,
-      mediaToken,
-      user: { id: 1, username, role: 'teacher', dbSlug: result.slug || slug },
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
   }
 });
 

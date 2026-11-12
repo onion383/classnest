@@ -4,14 +4,15 @@ import { absorbRenewalTokens } from './tokenRenewal.js'
 import { safe, applyAuthHeader, encryptBody, decryptBody, resetAuthBinding } from '../composables/secureChannel'
 import { decodeJwtPayload } from './jwt'
 import { AUTH_API } from './apiPaths.js'
+import { apiBaseUrl, mediaBaseUrl } from './backendOrigin.js'
 
 // 生产模式打包后以 file:// 协议运行，/api/... 会被解析到磁盘根目录导致 404（ERR_FILE_NOT_FOUND）。
 // 因此 img / CSS 背景里直接拼 API 路径的地方，需显式补上完整后端地址；开发模式走 Vite 代理，保持相对路径即可。
 export function apiUrl(path) {
   if (!path) return ''
   if (/^https?:\/\//.test(path) || path.startsWith('data:') || path.startsWith('blob:')) return path
-  // 与 httpClient.backendBaseUrl / secureChannel.BASE 同步：统一回环 IPv4，避免两个域并存。
-  const base = import.meta.env.PROD ? 'http://127.0.0.1:3000' : ''
+  // 媒体（img/video/背景图）仍走后端绝对地址：Cookie 与媒体凭据、Range 语义不变。
+  const base = mediaBaseUrl()
   return base + path
 }
 
@@ -37,7 +38,7 @@ export async function apiFetch(path, options = {}) {
     }
     // 加密响应与会话密钥绑定：安全模式下不能让浏览器缓存，否则换会话后
     // 命中旧密文必然解不开（apiFetch 没有 axios 那层重试，会直接把 { d } 交给调用方）。
-    return fetch(apiUrl(path), { ...options, headers, body, ...(safe() ? { cache: 'no-store' } : {}) })
+    return fetch(apiBaseUrl() + path, { ...options, headers, body, ...(safe() ? { cache: 'no-store' } : {}) })
   }
 
   let res = await send(false)
@@ -111,7 +112,7 @@ export function refreshMediaToken() {
     try {
       const headers = {}
       await applyAuthHeader(headers, token, { forceToken: false })
-      const res = await fetch(apiUrl(AUTH_API.mediaToken), { headers })
+      const res = await fetch(apiBaseUrl() + AUTH_API.mediaToken, { headers })
       if (!res.ok) return null
       let data = await res.json()
       if (data && typeof data === 'object' && typeof data.d === 'string') {

@@ -320,8 +320,16 @@ export function useSmartArrangementBlocks(ctx) {
         // 罚分取这个上界 × 溢出人数，保证「少溢出一个人」的解永远优于「多溢出一个人」的解，
         // 从而优先选出装得下的配对（块大小全相等时溢出恒为 0，罚分不生效、结果不变）。
         const costBound = students.reduce((t, s) => t + Math.abs(lOf(s)), 0) * Math.max(1, maxW) + 1
+        // 组数：既是暴力枚举的规模（n ≤ 7），也是记忆化键的宽度
+        const n = groups.length
         // 把「学生组 i」放到「位置块 j」的代价（可调整组内排序时按 账本降序×权重升序 的最优配对计）
+        // 代价只取决于 (i, j)，是纯计算；但全排列枚举会把同一对重复算 n! 次（最坏 5040 × n），
+        // 先把结果按 i·n+j 记忆化，每轮最多算 n² 次 —— 数值与逐次重算完全一致。
+        const costCache = new Map()
         const costOf = (i, j) => {
+          const key = i * n + j
+          const cached = costCache.get(key)
+          if (cached !== undefined) return cached
           let ls = groups[i].studs.map(lOf)
           let ws = groups[j].posW
           if (allowInner) {
@@ -332,11 +340,12 @@ export function useSmartArrangementBlocks(ctx) {
           const m = Math.min(ls.length, ws.length)
           for (let k = 0; k < m; k++) sum += ls[k] * ws[k]
           const spill = ls.length - ws.length
-          return spill > 0 ? sum + spill * costBound : sum
+          const cost = spill > 0 ? sum + spill * costBound : sum
+          costCache.set(key, cost)
+          return cost
         }
 
         // 求组→块的最优一一对应：组数少时暴力枚举全排列，多时用贪心
-        const n = groups.length
         let best = null
         if (n <= 7) {
           const arr = Array.from({ length: n }, (_, i) => i)

@@ -51,7 +51,7 @@
             <a class="cursor-pointer underline" @click="switchMode('login')">返回登录</a>
           </p>
           <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 rounded-xl w-full mb-2 disabled:opacity-50" @click="fileInputRef && fileInputRef.click()">
-            {{ restoreZipName || (restoreBundle ? '换一个备份包' : '选择备份包') }}
+            {{ restoreZipName || (restoreZip ? '换一个备份包' : '选择备份包') }}
           </button>
           <!-- 只显示真正需要的框：明文库或钥匙随包的备份不需要任何口令，
                摆一个输入框只会让人以为「必须填点什么」。
@@ -260,7 +260,6 @@ const recoveryPhrase = ref('');
 const draftId = ref('');             // 待确认注册草稿 id（抄写通过后真正建库）
 const restoredUsername = ref('');
 const busy = ref(false);
-const restoreBundle = ref(null);
 // v3 备份包（.zip）：存 File 句柄而不是内容 —— 几百 MB 的包只有在真正上传时才由
 // Chromium 流式读盘，读进 JS 堆就会直接把渲染进程顶爆。
 const restoreZip = ref(null);
@@ -271,23 +270,14 @@ const fileInputRef = ref(null);
 const restoreZipMeta = ref(null);
 // 探测是异步的：快速连选两个包时，先选那次的产物不能盖掉后选的
 const zipPeekGuard = createLatest();
-// 弹窗里显示哪个账号：v3 从包内探测，v2 从 JSON 取
-const restoreAccountName = computed(() => {
-  const m = restoreZipMeta.value;
-  if (m) return m.username || '';
-  const b = restoreBundle.value;
-  return (b && b.username) || '';
-});
+// 弹窗里显示哪个账号：从包内 bundle.json 探测（只认 v3 .zip）
+const restoreAccountName = computed(() => (restoreZipMeta.value && restoreZipMeta.value.username) || '');
 // 哪些口令框该出现 —— 直接由「包里有没有明文钥匙 / 用的是哪种包裹」决定。
 // 规则与「后端拿什么解钥匙」一一对应（见 utils/zipPeek.js 的 bundleNeedsSecret）。
 const restoreFields = computed(() => {
-  const meta = restoreZipMeta.value || restoreBundle.value;
+  const meta = restoreZipMeta.value;
   if (!meta) return { password: true, mnemonic: true }; // 还没选包：两个都摆着
-  if (restoreZipMeta.value) {
-    if (!bundleNeedsSecret(meta)) return { password: false, mnemonic: false };
-  } else if (meta.key) {
-    return { password: false, mnemonic: false }; // v2：钥匙明文随包
-  }
+  if (!bundleNeedsSecret(meta)) return { password: false, mnemonic: false };
   const byPwd = !!meta.wrappedByPassword;
   const byMnem = !!meta.wrappedByMnemonic;
   // 两种包裹都有时两个框都给；只有一种就只留那一个
@@ -297,7 +287,6 @@ const confirmVisible = ref(false);
 const confirmMounted = ref(false);
 const confirmMessage = ref('');
 const confirmTitle = ref('');
-const confirmPayload = ref(null);
 const confirmAction = ref('restore');   // restore=覆盖恢复 | recovery=注册完成
 const confirmText = ref('确定');
 const cancelText = ref('取消');
@@ -324,7 +313,7 @@ watch(securityLevel, (v) => {
 function switchMode(m) {
   mode.value = m; loginError.value = ''; busy.value = false;
   if (m === 'restore') {
-    password.value = ''; recoverPhrase.value = ''; restoreBundle.value = null;
+    password.value = ''; recoverPhrase.value = '';
     restoreZip.value = null; restoreZipName.value = ''; restoreZipMeta.value = null;
     zipPeekGuard.invalidate();
   }
@@ -433,7 +422,10 @@ async function onPickFile(e) {
   const name = file.name || '';
 
   if (/\.zip$/i.test(name)) return pickZipFile(file);
-  if (/\.json$/i.test(name)) return pickJsonBundle(file);
+  // 旧版 v2 备份（整库 base64 套 JSON）已下线：入口删了，只留一句可执行的提示
+  if (/\.json$/i.test(name)) {
+    return useNotification().error('旧版 JSON 备份已不再支持，请改用 .zip 备份包');
+  }
 
   // .db 及其它：只交文件名，后端在数据目录里找登记
   busy.value = true;
@@ -443,27 +435,6 @@ async function onPickFile(e) {
   }).catch(err => {
     reportError(err, { action: '打开数据库' });
   }).finally(() => { busy.value = false; });
-}
-// v2 备份包：整库 base64 套一层 JSON，必须全文读进来解析（v3 的 .zip 才有条件只读开头）
-async function pickJsonBundle(file) {
-  if (file.size > 64 * 1024 * 1024) {
-    return useNotification().error('备份包过大（超过 64MB），请确认选的是备份文件');
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(await file.text());
-    if (parsed.version !== 2) throw new Error('不是有效的 v2 备份包');
-  } catch (err) {
-    return useNotification().error('备份文件无法解析：' + err.message);
-  }
-  // 换成 v2 包：把 v3 的残留清干净，免得两条链路同时有值走错分支
-  restoreZip.value = null;
-  restoreZipName.value = '';
-  restoreZipMeta.value = null;
-  zipPeekGuard.invalidate();
-  restoreBundle.value = parsed;
-  mode.value = 'restore';
-  useNotification().info('已识别备份包，账号 ' + (parsed.username || '…') + '：请输入密码或助记词后点「解包并恢复」');
 }
 function login() {
   loginError.value = '';
@@ -546,8 +517,6 @@ async function pickZipFile(file) {
   if (!file) return;
   restoreZip.value = file;
   restoreZipName.value = file.name;
-  // 选了 zip 就不可能再是 v2 的 JSON 包，避免两条链路同时有值导致走错分支
-  restoreBundle.value = null;
   restoreZipMeta.value = null;
   // 读开头 64KB 判断「这个包要不要口令」+ 顺手拿到账号名。
   // 失败一律当 null：界面会退回「两个框都要」，不会误藏输入框。
@@ -596,8 +565,6 @@ async function restoreFromZip(confirm) {
       confirmText.value = '确定';
       cancelText.value = '取消';
       confirmMessage.value = data.message || '本机已存在同名账号，是否确认覆盖？';
-      // zip 不需要像 v2 那样把整包塞进 confirmPayload：File 还在，确认时重传一次即可
-      confirmPayload.value = null;
       confirmVisible.value = true;
       useNotification().info('该账号在本机已存在，请确认后覆盖恢复');
     } else if (data.error) {
@@ -607,82 +574,15 @@ async function restoreFromZip(confirm) {
     }
   } finally { busy.value = false; }
 }
+// 恢复备份：只剩 v3（.zip）一条通路。v2 的整库 base64 套 JSON 已下线 ——
+// 它的导出口早就没人调用，留着只会多一条整包读进内存的通路（v6 性能专题 · 2-11）。
 async function restore() {
-  if (restoreZip.value) return restoreFromZip(false);
-  const b = restoreBundle.value;
-  if (!b) return useNotification().warning('请先选择备份包');
-  // 钥匙明文随包的备份不需要口令；其余包必须给密码或助记词之一（判据与界面显示同源）
-  const f = restoreFields.value;
-  if ((f.password || f.mnemonic) && !password.value && !recoverPhrase.value) return useNotification().warning('请至少输入密码或助记词之一');
-  const payload = {
-    data: b.data,
-    slug: b.slug,
-    username: b.username,
-    wrappedByPassword: b.wrappedByPassword,
-    wrappedByMnemonic: b.wrappedByMnemonic,
-    key: b.key,
-    password: password.value || undefined,
-    mnemonic: recoverPhrase.value || undefined,
-    memory: b.memory, // AI 长期记忆（随备份包一起还原）
-  };
-  busy.value = true;
-  try {
-    const res = await axios.post('/api/account/restore-offline', payload);
-    // 覆盖恢复成功：后端已签发登录态，直接存 token 并跳首页
-    if (res.data.token) {
-      setToken(res.data.token);
-      storeMediaToken(res.data.mediaToken);
-      setCurrentUser(res.data.user);
-      router.push('/');
-      return;
-    }
-    useNotification().success('恢复成功！账号 ' + (res.data.username || b.username) + ' 已还原，请用其密码登录。');
-    afterRestore(b, res.data.username);
-  } catch (err) {
-    const data = err.response?.data || {};
-    // 本机已存在同一账号，需用户确认后才真正覆盖
-    if (data.needConfirm) {
-      confirmAction.value = 'restore';
-      confirmTitle.value = '';
-      confirmText.value = '确定';
-      cancelText.value = '取消';
-      confirmMessage.value = data.message || '本机已存在同名账号，是否确认覆盖？';
-      confirmPayload.value = payload;
-      confirmVisible.value = true;
-      useNotification().info('该账号在本机已存在，请确认后覆盖恢复');
-    } else {
-      useNotification().error(data.error || '恢复失败');
-    }
-  } finally { busy.value = false; }
+  return restoreFromZip(false);
 }
+// 覆盖确认：带着 confirm 再传一次同一个 File（句柄还在，不需要缓存整包内容）
 async function confirmRestore() {
   confirmVisible.value = false;
-  // v3 包：确认后就是「带着 confirm 再传一次」，File 句柄还在，不用像 v2 那样缓存整包数据
-  if (restoreZip.value) {
-    confirmPayload.value = null;
-    return restoreFromZip(true);
-  }
-  const b = restoreBundle.value;
-  const payload = confirmPayload.value;
-  confirmPayload.value = null;
-  if (!payload) return;
-  busy.value = true;
-  try {
-    payload.confirm = true;
-    const res = await axios.post('/api/account/restore-offline', payload);
-    // 覆盖恢复成功：后端已签发登录态，直接存 token 并跳首页
-    if (res.data.token) {
-      setToken(res.data.token);
-      storeMediaToken(res.data.mediaToken);
-      setCurrentUser(res.data.user);
-      router.push('/');
-      return;
-    }
-    useNotification().success('已覆盖恢复！账号 ' + (res.data.username || (b ? b.username : '')) + ' 已还原，请用其密码登录。');
-    afterRestore(b, res.data.username);
-  } catch (err) {
-    reportError(err, { action: '覆盖恢复' });
-  } finally { busy.value = false; }
+  return restoreFromZip(true);
 }
 function onConfirmAction() {
   if (confirmAction.value === 'restore') confirmRestore();
@@ -691,19 +591,6 @@ function onConfirmAction() {
 function cancelConfirm() {
   if (confirmAction.value === 'restore') useNotification().info('已取消恢复');
   confirmVisible.value = false;
-  confirmPayload.value = null;
-}
-function afterRestore(b, restoredUsername) {
-  const name = restoredUsername || (b && b.username) || '';
-  username.value = name;
-  password.value = '';
-  recoverPhrase.value = '';
-  restoreBundle.value = null;
-  restoreZip.value = null;
-  restoreZipName.value = '';
-  restoreZipMeta.value = null;
-  zipPeekGuard.invalidate();
-  switchMode('login');
 }
 // 忘记密码：返回上一步（setpass 阶段已签发恢复 token，不提供返回，避免留下未改密的登录态）
 function recoverBack() {

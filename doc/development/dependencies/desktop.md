@@ -17,12 +17,13 @@
 - 使用位置：仅根 `package.json` 声明，应用源码与构建脚本未引用。
 - **备注**：属于开发辅助；不影响打包产物。
 
-### 开发期（9 个，均 MIT，不进产物）
+### 开发期（10 个，均 MIT，不进产物）
 
 | 依赖 | 版本 | 用途 | 使用位置 |
 | --- | --- | --- | --- |
 | [`electron`](../../../node_modules/electron) | 45.2.3 | 桌面运行时 | `main: electron/main/main.js` |
 | [`electron-builder`](../../../node_modules/electron-builder) | 26.17.0（声明 `^26.15.3`） | 打包（`--dir`） | `npm run electron:build` |
+| [`esbuild`](../../../node_modules/esbuild) | 0.28.2 | 把后端合成单文件 `app.bundle.js`（v6 · 2-17 启动优化） | `npm run build:backend` |
 | [`@electron/rebuild`](../../../node_modules/@electron/rebuild) | 4.2.1 | 原生模块按 Electron ABI 重编译 | `postinstall` / 手动 |
 | [`concurrently`](../../../node_modules/concurrently) | 10.0.6 | 并行跑 Vite + Electron | `electron:dev` / `electron:dev36` |
 | [`wait-on`](../../../node_modules/wait-on) | 9.5.1 | 等待端口就绪 | 开发脚本 |

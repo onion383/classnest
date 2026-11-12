@@ -140,7 +140,10 @@ test('接线：所有 sessions.create 都传了 dbSlug（新版记录才有账�
       assert.match(m[1], /,\s*\S+/, `${f} 有一处 create 没带第二参数：${m[1]}`)
     }
   }
-  assert.ok(calls >= 4, `create 调用点数量异常（${calls}）`)
+  // v2 备份的两个恢复入口（/restore、/restore-offline）下线后，只剩这三处。
+  // 用精确数而不是 >=：少一处说明有人删了签发登录态的地方（登录会坏），
+  // 多一处说明新增了路径却没被上面那条「必须带 dbSlug」的断言覆盖到清单里。
+  assert.equal(calls, 3, `create 调用点数量变了（${calls}）：新增/删除签发路径时请同步本清单与断言`)
 })
 
 test('接线：每一处写入登录密码的 handler 都接了统一动作层（防新增路径漏网）', () => {

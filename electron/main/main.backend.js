@@ -21,11 +21,12 @@ const path = require('path')
 // 启动单飞守卫（纯 Promise，自身不 require electron，可单独单测）
 const { createSingleFlight } = require('./main.single-flight')
 const fs = require('fs')
+const { rotateIfNeeded } = require('./main.logRotator')
 const startupTimer = require('./main.startup-timer')
 const perf = require('./main.perf')
 const { getMasterKey, resolveDataDir, resolveThumbsDir, resolveSkillsDir, getDbMasterKey, resolveCompileCacheDir } = require('./main.config')
 
-const isDev = !app.isPackaged
+const { isDev } = require('./main.env')
 
 // 【启动剖析打点·仅开发模式】只在 dev 生效，打包版是空操作（不写控制台也不写时间线）
 const _profMark = (name) => { if (isDev) startupTimer.mark(name) }
@@ -53,36 +54,79 @@ const BACKEND_FAIL_TIMEOUT = process.env.SIM_BACKEND_FAIL ? 3000 : 30000
 
 // 后端日志文件：位于用户数据目录，用于持久化记录后端启动/崩溃原因，方便排查无需再抓终端
 let backendLogStream = null
+// 建流是异步的（1-1）：建好之前产生的日志先入队，按顺序补写，不丢行也不阻塞启动。
+let backendLogOpening = null
+const backendLogQueue = []
+// 运行期巡检定时器（体积兜底），unref 不拖住进程退出
+let backendLogRotateTimer = null
 
 function getBackendLogPath() {
   return path.join(app.getPath('userData'), 'data', 'backend.log')
 }
 
+// 后端日志的建流/截断全部异步（1-1）。旧实现在 startBackend 的关键路径上同步做
+// statSync / readFileSync(≤1MB) / writeFileSync / appendFileSync，冷启动时这段阻塞
+// 直接压在 fork 之前。现在改成 fs.promises，且截断只读尾部（句柄定点读，不整份进内存）。
 function ensureBackendLogStream() {
-  if (backendLogStream) return
-  try {
+  if (backendLogStream) return Promise.resolve()
+  if (backendLogOpening) return backendLogOpening
+  backendLogOpening = (async () => {
     const logPath = getBackendLogPath()
-    fs.mkdirSync(path.dirname(logPath), { recursive: true })
-    // 体积兜底：后端每次启动都追加一段、运行期还继续写，不设上限会无限增长。
-    // 它是排查后端崩溃用的，超过 2MB 就只保留最近 1MB（最新一次启动一定在末尾）。
     try {
-      const st = fs.statSync(logPath)
-      if (st.size > 2 * 1024 * 1024) {
-        const tail = fs.readFileSync(logPath, 'utf8').slice(-1024 * 1024)
-        fs.writeFileSync(logPath, '（历史日志已截断，仅保留最近部分）\n' + tail)
-      }
-    } catch (_) { /* 首次启动文件不存在，忽略 */ }
-    backendLogStream = fs.createWriteStream(logPath, { flags: 'a' })
-    fs.appendFileSync(logPath, `\n===== Electron 启动后端 @ ${new Date().toISOString()} =====\n`)
-  } catch (err) {
-    console.error('[main] 无法创建后端日志文件:', err.message)
-  }
+      await fs.promises.mkdir(path.dirname(logPath), { recursive: true })
+      // 体积兜底：后端每次启动都追加一段、运行期还继续写，不设上限会无限增长。
+      // 超过 2MB 只保留最近 1MB（最新一次启动一定在末尾）。截断在流打开之前完成，
+      // 避免与写入交错；首次启动没有文件时 rotateIfNeeded 静默返回 false。
+      await rotateIfNeeded(logPath, { maxBytes: 2 * 1024 * 1024, keepBytes: 1024 * 1024 })
+      backendLogStream = fs.createWriteStream(logPath, { flags: 'a' })
+      backendLogStream.on('error', (err) => console.error('[main] 后端日志写入失败:', err.message))
+      backendLogStream.write(`\n===== Electron 启动后端 @ ${new Date().toISOString()} =====\n`)
+      flushBackendLogQueue()
+    } catch (err) {
+      console.error('[main] 无法创建后端日志文件:', err.message)
+      backendLogStream = null
+      backendLogQueue.length = 0
+    }
+  })().finally(() => { backendLogOpening = null })
+  return backendLogOpening
+}
+
+function flushBackendLogQueue() {
+  if (!backendLogStream) return
+  while (backendLogQueue.length) backendLogStream.write(backendLogQueue.shift())
 }
 
 function backendLog(text) {
-  ensureBackendLogStream()
-  if (backendLogStream) backendLogStream.write(text)
+  if (backendLogStream) {
+    backendLogStream.write(text)
+  } else {
+    // 建流窗口内的日志先入队；上限 200 条，异常情况下也不无限堆积
+    if (backendLogQueue.length < 200) backendLogQueue.push(text)
+    ensureBackendLogStream()
+  }
   process.stdout.write(`[backend] ${text}`)
+}
+
+// 运行期低频巡检：长时间不重启的会话里 backend.log 也可能涨过 2MB（旧实现只在启动时查一次）。
+// 5 分钟看一次，超限则先关流再截断再重开 —— 顺序不能反，边写边读会把尾部读乱。
+function startBackendLogRotateCheck() {
+  if (backendLogRotateTimer) return
+  backendLogRotateTimer = setInterval(() => { rotateBackendLogIfNeeded() }, 5 * 60 * 1000)
+  if (backendLogRotateTimer.unref) backendLogRotateTimer.unref()
+}
+
+async function rotateBackendLogIfNeeded() {
+  if (!backendLogStream) return
+  try {
+    const logPath = getBackendLogPath()
+    const st = await fs.promises.stat(logPath)
+    if (st.size <= 2 * 1024 * 1024) return
+    const old = backendLogStream
+    backendLogStream = null
+    await new Promise((resolve) => old.end(resolve))
+    await rotateIfNeeded(logPath, { maxBytes: 2 * 1024 * 1024, keepBytes: 1024 * 1024 })
+    await ensureBackendLogStream()
+  } catch (_) { /* 巡检失败不影响后端 */ }
 }
 
 let backendRestartCount = 0
@@ -130,7 +174,11 @@ function getBackendPaths() {
   const backendDir = isDev
     ? path.join(appRootDir, 'student-backend')
     : path.join(process.resourcesPath, 'app.asar.unpacked', 'student-backend')
-  const backendPath = path.join(backendDir, 'app.js')
+  // v6 · 2-17：生产优先用单文件 bundle（student-backend/build.bundle.mjs 产出）。
+  // 它把 160+ 个模块合成 1 个文件，启动期文件读取/编译次数大幅减少；缺失时回退源码，
+  // 保证「没跑打包脚本」时仍能正常启动。
+  const bundledPath = path.join(backendDir, 'app.bundle.js')
+  const backendPath = !isDev && fs.existsSync(bundledPath) ? bundledPath : path.join(backendDir, 'app.js')
   return { backendDir, backendPath }
 }
 
@@ -140,6 +188,24 @@ function getBackendPaths() {
 // 打包模式子进程：child_process.fork + execPath=electron.exe + ELECTRON_RUN_AS_NODE=1，
 // 以 Electron 内置 Node 的纯 Node 模式运行后端，目标机无需安装 Node.js，
 // 实现免依赖分发（原生模块已通过 @electron/rebuild 针对 Electron ABI 重编译）。
+// 2-21：后端子进程启动空档拆段（仅 PERF_STARTUP=1）。
+// 主进程的「后端就绪」只覆盖 fork→listen 一整段，中间是黑盒：这里补「fork 发起」与
+// 子进程 `spawn` 事件两戳，配合后端 app.js 的「入口 @epoch / 监听成功 @epoch」拆成：
+//   fork→spawn（进程创建） / spawn→入口（Electron-as-Node 引导 + bundle 加载） / 入口→listen（后端自身）。
+// 默认零开销（开关不开时一个 Date.now() 都不取）。
+const _bootPerfOn = () => process.env.PERF_STARTUP === '1'
+function _bootMark(stage, forkAt) {
+  if (!_bootPerfOn()) return
+  try {
+    const now = Date.now()
+    console.log(`[boot] ${stage} @${now}${forkAt ? `（fork→${stage} ${now - forkAt}ms）` : ''}`)
+  } catch (_) { /* 打点失败静默 */ }
+}
+function _markSpawned(child, forkAt) {
+  if (!_bootPerfOn() || !child || typeof child.once !== 'function') return
+  child.once('spawn', () => _bootMark('子进程 spawn', forkAt))
+}
+
 async function compileBackendProcess() {
   _profMark('【prof】compileBackendProcess 进入')
   // 46 适配：主密钥来自 safeStorage 的异步 API。ready 时已由 main.js 发起预热（与建窗并行），
@@ -169,26 +235,22 @@ async function compileBackendProcess() {
     detectBackendReady(chunk)
   }
   const onErrData = (chunk) => {
-    ensureBackendLogStream()
-    if (backendLogStream) backendLogStream.write(`[err] ${chunk}`)
+    backendLog(`[err] ${chunk}`)
     process.stderr.write(`[backend:err] ${chunk}`)
   }
   const onProcessorError = (err) => {
     const msg = `后端启动失败(error): ${err?.message || err}\n`
-    ensureBackendLogStream()
-    if (backendLogStream) backendLogStream.write(`[fatal] ${msg}`)
+    backendLog(`[fatal] ${msg}`)
     console.error('[main]', msg)
   }
   const onExit = (code, signal) => {
     const msg = `后端进程退出，码: ${code}, signal: ${signal} @ ${new Date().toISOString()}\n`
-    ensureBackendLogStream()
-    if (backendLogStream) backendLogStream.write(`[exit] ${msg}`)
+    backendLog(`[exit] ${msg}`)
     console.log(`[main] ${msg}`)
   }
   const onDisconnect = () => {
     const msg = `后端进程已断开连接 @ ${new Date().toISOString()}\n`
-    ensureBackendLogStream()
-    if (backendLogStream) backendLogStream.write(`[disconnect] ${msg}`)
+    backendLog(`[disconnect] ${msg}`)
     console.log(`[main] ${msg}`)
   }
 
@@ -201,6 +263,8 @@ async function compileBackendProcess() {
     const { fork, execFile } = require('child_process')
     const spawnDev = (execPath) => {
       _profMark('【prof】fork(dev) 调用前')
+      const forkAt = _bootPerfOn() ? Date.now() : 0
+      _bootMark('fork 发起（dev）')
       const child = fork(backendPath, [], {
         cwd: backendDir,
         execPath,
@@ -212,12 +276,15 @@ async function compileBackendProcess() {
           DATA_DIR: dataDir,
           ALBUM_THUMBS_DIR: thumbsDir,
           AI_SKILLS_DIR: skillsDir,
+          // bundle 后所有模块共用一个 __dirname，后端根目录必须由主进程显式注入
+          BACKEND_ROOT: backendDir,
           NODE_COMPILE_CACHE: compileCacheDir,
           SECURE_MASTER: getMasterKey(),
           DB_MASTER_KEY: dbKey,
         },
       })
       backendProcess = child
+      _markSpawned(child, forkAt)
       child.stdout?.on('data', onData)
       child.stderr?.on('data', onErrData)
       child.on('error', onProcessorError)
@@ -258,6 +325,8 @@ async function compileBackendProcess() {
   // 因此不会出现 utilityProcess 在 Windows 上的「not connected」进程级崩溃。
   // 原生模块已针对 Electron ABI 重编译（@electron/rebuild），目标机无需安装 Node.js。
   const { fork } = require('child_process')
+  const forkAt = _bootPerfOn() ? Date.now() : 0
+  _bootMark('fork 发起')
   backendProcess = fork(backendPath, [], {
     cwd: backendDir,
     execPath: process.execPath,
@@ -270,6 +339,8 @@ async function compileBackendProcess() {
       ALBUM_THUMBS_DIR: thumbsDir,
       AI_SKILLS_DIR: skillsDir,
       ELECTRON_RUN_AS_NODE: '1',
+      // bundle 后所有模块共用一个 __dirname，后端根目录必须由主进程显式注入
+      BACKEND_ROOT: backendDir,
       NODE_COMPILE_CACHE: compileCacheDir,
       SECURE_MASTER: getMasterKey(),
       DB_MASTER_KEY: dbKey,
@@ -277,6 +348,7 @@ async function compileBackendProcess() {
   })
 
   backendProcess.stdout?.on('data', onData)
+  _markSpawned(backendProcess, forkAt)
   backendProcess.stderr?.on('data', onErrData)
   backendProcess.on('error', onProcessorError)
   backendProcess.on('exit', onExit)
@@ -297,8 +369,7 @@ const startBackend = createSingleFlight(async () => {
     // 重启保护：仅当应用仍在运行时才重启，且限制最多 10 次，避免无限崩溃循环刷屏
     if (backendRestartCount >= 10) {
       const msg = `后端在启动阶段连续崩溃 ${backendRestartCount} 次，已停止自动重启。请查看日志：${getBackendLogPath()}\n`
-      ensureBackendLogStream()
-      if (backendLogStream) backendLogStream.write(`[fatal] ${msg}`)
+      backendLog(`[fatal] ${msg}`)
       console.error(`[main] ${msg}`)
       // 自动重启用尽：直接进入失败态，让用户能手动重试或退出，而不是静默卡在加载页
       markBackendFailed()
@@ -306,6 +377,7 @@ const startBackend = createSingleFlight(async () => {
     }
 
     ensureBackendLogStream()
+    startBackendLogRotateCheck()
     backendLog(`[main] 正在启动后端 (第 ${backendRestartCount + 1} 次)...\n`)
 
     // 每次 fork 前复位就绪标记：重启期间前端应重新等待新的 backend-ready

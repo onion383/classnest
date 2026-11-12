@@ -57,6 +57,7 @@
     "set-usb-auto-open",
     "open-external",
     "get-master-key",
+    "secure-handshake",
     "apps-select-file",
     "apps-resolve-paths",
     "apps-launch",

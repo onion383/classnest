@@ -66,7 +66,7 @@ classnest/
 - **签名**：`useTableCRUD(apiBase, defaultFields, options)`（表格增删改查组合式函数；`apiBase`（接口基址）、`defaultFields`（默认字段）、`options`（选项））；`options = { requiredField, protectedColumns, enableRenameColumn, customValidate, undoTableKey }`（必填字段 / 受保护列 / 是否允许重命名列 / 自定义校验 / 撤销表键）。
 - 返回（关键）：`rows / fields / newRow / editingCell / loadError / contextMenu / dialog / columnForm / sortField / sortOrder / searchField / searchKeyword / searchKeywordDebounced / searchNoResult / selectedCount / selectedRowKeys / clipboard / displayRows / displayIndexes / visibleFields / allBusinessFields / importDialogVisible / dedupeDialogVisible / fetchRows`，以及 `startEditCell / saveCell / addNewRowAtBottom / insertRowAbove / insertRowBelow / saveNewRow / cancelNewRow / moveRow / deleteRow / deleteColumn / addColumn / renameColumn / moveColumn / importRows / dedupe / toggleSort / setSearch / applyUndoChange / showAlert / showConfirm / onDialogConfirm` 等。
 - **内部时序**：所有写操作先记 `rowsSnapshot`（行快照）→ 调接口 → 成功后就地更新 → `recordCellUndo` / `recordRow*` 登记 `/api/undo`；搜索用 `debounce`（防抖，停止输入一段后才执行）；`perfMark`（性能打点）记录耗时。
-- **接口**：`GET`（查询）/`POST`（新增）`{apiBase}`、`PUT`（整体更新）/`DELETE`（删除）`{apiBase}/:id`、`POST /add-column`、`/rename-column`、`/move-row`、`/move-column`、`/reorder`、`/import`、`DELETE /columns/:name`。
+- **接口**：`GET`（查询）/`POST`（新增）`{apiBase}`、`PUT`（整体更新）/`DELETE`（删除）`{apiBase}/:id`、`POST /batch-delete`（批量删除，一次请求）、`POST /add-column`、`/rename-column`、`/move-row`、`/move-column`、`/reorder`、`/import`、`DELETE /columns/:name`。
 - **调用方**：`ClassroomView`（学生页）、`FeeManagement`（班费页）。
 - **注意事项**：列名走后端正则白名单；`protectedColumns`（受保护列，学生表 `学号/姓名`）不可删改。
 
@@ -148,6 +148,7 @@ classnest/
 
 #### [`useDashboardData.js`](../../../student-frontend/src/composables/useDashboardData.js) · 首页聚合
 - **签名**：`ensureDashboardData(force)`；单次 `/api/dashboard` 聚合请求 + 模块级缓存 + pending 共享。
+- **数据形状（v6 · 2-1）**：`{ schedule, duty, countdowns, leaves, students:[{id,姓名}], activities, album, summary }`；`summary` 含 `studentCount / scoreCount / feeCount / topScores / feeBalance / monthIncome / monthExpense`。缺 `summary` 时按空班兜底（显示 0，不崩）。
 - **调用方**：`router/index.js`（进首页前）、`DashboardView`。
 
 #### [`useUndo.js`](../../../student-frontend/src/composables/useUndo.js) · 撤销/重做
@@ -163,6 +164,7 @@ classnest/
 
 #### [`secureChannel.js`](../../../student-frontend/src/composables/secureChannel.js) · 加密原语
 - **导出**：`safe()`、`markAuthBound()`、`resetAuthBinding()`、`applyAuthHeader(headers, token, { forceToken })`、`encryptBody()`、`decryptBody()`、`clearSession()`。
+- **握手传输（v6 · 2-19）**：`requestHandshake(pub)` 有两条路——有 Electron 外壳时走 IPC 通道 `secure-handshake`（主进程用 Node http 直连后端，只转公钥与 `sessionId`，临时私钥/共享密/会话密钥都不出渲染层）；纯浏览器下退回 `app://` 相对路径的裸 `fetch`。两条路返回形状一致（`{ pub, sessionId }`）。
 - 内部：ECDH P-256 + HKDF(`campus-secure-v1`) + AES-256-GCM；与后端 `services/secureChannel.js` 参数一一对应。
 - **主密钥来源**：`preload.js` 在页面脚本之前发起白名单 IPC `get-master-key`，本模块经 `window.__MASTER_KEY__.get()` 复用同一个在途 `promise`，取不到时回退 `window.electron.invoke`。取回值按 64 位十六进制校验后缓存在模块级 `kMaster`（应用级状态，登出不清）。这把 18~30ms 的跨进程往返从握手关键路径挪到页面解析之前。⚠️ 相位副作用：省下的约 20ms 会让握手那条裸 `fetch` 早于后端 `listen`（监听）发出，撞连接被拒并触发约 210ms 固定退避，故本模块在裸 `fetch` 之前另有 `await waitForBackendReady(1500)`（等待后端就绪），两者必须配套（判据见 `topics/performance.md` 第 7 节）。
 - **握手分段打点**：`握手完成 Nms 分段(IPC / keygen / fetch / derive)` 把一次握手拆成主进程往返、密钥生成、网络往返、密钥派生四段，供启动归因区分本机阻塞与后端排队；`waitForBackendReady` 的等待计入 `keygen` 段，不改 `IPC` / `fetch` 口径。

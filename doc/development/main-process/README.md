@@ -103,7 +103,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 
 - `preload.js` 定义三张白名单：
   - `validSendChannels`：单向发送（`ipcRenderer.send`），如 `to-widget`、`widget-*`、`win-minimize/maximize-toggle/close`、`shutdown-action`、`quit-app`、`show-native-context-menu`、`theme-chrome`、`desktop-widget-enabled`、`widgets-ready`、`migration-*`、`setup-*`、`update-install` 等；
-  - `validInvokeChannels`：请求-响应（对应 `ipcMain.handle`），如 `select-folder`/`save-file`/`open-file`/`open-folder`/`screenshot-capture`/`note-save`、`get-master-key`、`apps-select-file`/`apps-resolve-paths`/`apps-launch`、`get-data-directories`/`set-data-dir`/`set-thumbs-dir`/`set-skills-dir`/`set-db-encryption`/`set-initial-data-dir`、`backend-status`/`boot-status`/`restart-backend`/`backend-failure`/`probe-backend`、`perf-*`、`get-app-version`/`update-check` 等；
+  - `validInvokeChannels`：请求-响应（对应 `ipcMain.handle`），如 `select-folder`/`save-file`/`open-file`/`open-folder`/`screenshot-capture`/`note-save`、`get-master-key`/`secure-handshake`、`apps-select-file`/`apps-resolve-paths`/`apps-launch`、`get-data-directories`/`set-data-dir`/`set-thumbs-dir`/`set-skills-dir`/`set-db-encryption`/`set-initial-data-dir`、`backend-status`/`boot-status`/`restart-backend`/`backend-failure`/`probe-backend`、`perf-*`、`get-app-version`/`update-check` 等；
   - `validReceiveChannels`：仅 `from-main`（主进程 → 渲染进程）。`from-widget` 已删除 —— 配套的 `to-main` 通道整条链路无生产者也无消费者。
 - 其余通道（按用途归类，均来自 `electron/ipc-channels.json`）：
   - 工具箱/桌面组件拖拽与交互：`widget-drag-move`、`widget-drag-end`、`widget-exit`、`desktop-widget-content-ready`、`desktop-widget-drag-start`、`desktop-widget-drag-move`、`desktop-widget-drag-end`、`desktop-widget-open-page`
@@ -134,7 +134,7 @@ preload 层区分不了「谁在调」；主进程只能逐 handler 手写 `even
 
 - **fail-closed**：表里没有的通道一律拒绝。新增通道忘登记 → 开发期立刻表现为「调用没生效」，而不是「忘了写 if 就等于放行」。
 - **单一判据**：改一处即可，不必同步 N 个 handler。
-- **角色 ≠ 窗口**：`get-master-key` 授权给 5 个角色 —— 凡是装了 `apiClient` 的窗口都会建安全通道（`setupApiClient` → `setupSecureAxios`），包括引导窗。
+- **角色 ≠ 窗口**：`get-master-key` 与 `secure-handshake` 授权给同一批 5 个角色 —— 凡是装了 `apiClient` 的窗口都会建安全通道（`setupApiClient` → `setupSecureAxios`），包括引导窗。两者是同一批窗口的两半（取主密钥 / 发握手报文），角色集合必须完全一致，`ipc-policy-probe.cjs` 会断言这一点。
 - **所有窗口同 origin**（`app://local` 或 dev 的 `127.0.0.1:5173`），所以「同源」不构成任何边界 —— 边界只由授权表与「渲染层不加载外部内容」构成。
 
 **授权表怎么来的**：`ipc-policy-gen.mjs` 对每个通道的每个调用点文件做两段判定 ——
@@ -172,7 +172,7 @@ preload 层区分不了「谁在调」；主进程只能逐 handler 手写 `even
 
 ### 1. 主进程目录树
 
-`electron/main/` 下共 **24 个 `main.*.js`** 模块 + `main.js` 入口：
+`electron/main/` 下共 **30 个 `main.*.js`** 模块 + `main.js` 入口：
 
 ```
 electron/

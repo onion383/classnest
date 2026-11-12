@@ -45,6 +45,32 @@ export function phase(config, name) {
   return () => { log.phases.push(`${name} ${perfNow() - t}ms`) }
 }
 
+// 汇总时取哪一份收集器：axios 的 mergeConfig 会深拷贝普通对象，拦截器改的是
+// `config.__perf` 的副本，原始 perfLog 仍是空数组。所以优先读 config 上的那份。
+export function phaseLogOf(config, fallback) {
+  const log = config && config.__perf
+  return log && Array.isArray(log.phases) ? log : fallback
+}
+
+// 资源计时格式化：把浏览器 Resource Timing 的四段（发起/请求开始/响应开始/结束）
+// 转成一行，用来区分「请求发起了但主线程忙、还没真正出网」与「已出网、后端/网络慢」。
+export function formatResourceTiming(entry) {
+  if (!entry) return ''
+  const ms = (n) => Math.round(Number(n) || 0)
+  return `start=${ms(entry.startTime)} requestStart=${ms(entry.requestStart)} responseStart=${ms(entry.responseStart)} responseEnd=${ms(entry.responseEnd)} duration=${ms(entry.duration)}`
+}
+
+export function logResourceTiming(url, label = '资源计时') {
+  try {
+    if (typeof performance === 'undefined' || typeof performance.getEntriesByType !== 'function') return null
+    const list = performance.getEntriesByType('resource') || []
+    const hit = list.filter((e) => String(e.name || '').includes(url)).pop()
+    if (!hit) return null
+    console.log(`[startup] ${label} ${url} ${formatResourceTiming(hit)}`)
+    return hit
+  } catch (_) { return null }
+}
+
 // 输出一条汇总。带 @epoch 是为了兼容 testjs/probe/measure-startup.mjs 的解析格式。
 export function logSummary(label, log) {
   try {

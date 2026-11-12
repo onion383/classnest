@@ -97,6 +97,8 @@ export default [
       'testjs/**',
       'electron/inno/**',
       'resources/**',
+      // 后端单文件 bundle（student-backend/build.bundle.mjs 生成的构建产物，不是源码）
+      'student-backend/app.bundle.js',
     ],
   },
 

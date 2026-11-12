@@ -374,6 +374,7 @@ import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { shiftDateStr, localDateStr } from '../utils/dateTime.js'
 import { getSemesterStart } from '../utils/semesterStart.js'
+import { aggregateSeatDaily, unionCutoff } from '../utils/seatDailyAggregate.js'
 import GridView from '../components/tables/GridView/GridView.vue'
 import ContextMenu from '../components/base/ContextMenu.vue'
 import EmptySnapshot from '../components/base/EmptySnapshot.vue'
@@ -1280,8 +1281,8 @@ const weightError = ref(false)
 const weightWeights = ref([]) // rows×cols 数字矩阵（网格下标，与座位表同一套），null 表示空
 // 行对象复用缓存：编辑一格权重时只重建真正变化的那一行，避免整表重画
 const reuseWeightRows = createRowReuseCache()
-// 座位指数账本：学生 id → 截至「今日之前」累计的座位权重（供「位置公平」排表使用）
-const seatLedger = ref({})
+// 座位指数账本（学生 id → 截至「今日之前」累计的座位权重，供「位置公平」排表使用）
+// 定义在下方「座位指数 / 座位账本」段落：与座位指数共用同一份每日快照、单遍累加。
 const weightRows = computed(() => (seatView.value === 'active' ? activeRows.value : masterRows.value))
 const weightCols = computed(() => (seatView.value === 'active' ? activeCols.value : masterCols.value))
 const weightMode = computed(() => (seatView.value === 'active' ? activeMode.value : masterMode.value))
@@ -1493,9 +1494,8 @@ const historyCurrentWeek = ref('')
 const historySnapshot = ref(null)
 const historyData = ref({ mode: 'single', rows: 0, cols: 0, seats: [], types: [] })
 const historyLoading = ref(false)
-// 当前回看快照的代表日期（该周最后一天），以及座位指数所需的按天快照序列
+// 当前回看快照的代表日期（该周最后一天）；座位指数按它做结算上限
 const historySnapDate = ref('')
-const seatIndexDaily = ref([])
 // 周切换滑动方向：上一周="prev" 从右滑入，下一周="next" 从左滑入（应用于历史表格）
 const slideDir = ref('next')
 function onSwitchWeek(dir) { slideDir.value = dir }
@@ -1585,78 +1585,100 @@ function onWeekChange(week) {
   loadHistorySnapshot({ silent: true })
 }
 
-// ==================== 座位指数（公平账本） ====================
+// ==================== 座位指数 / 座位账本（共用一份每日快照） ====================
 // 结算口径：一天一个座位权重，把「截至所选周」之间每人坐过的位置权重逐天相加。
 // 不做乘法：临时调换座位只需按当天快照结算，累加即可。
-async function loadSeatIndex() {
-  try {
-    // 结算区间：从学期开始日到所选周代表日期（尊重「从开学日算起」的口径）
-    let from = ''
-    try {
-      from = await getSemesterStart()
-    } catch (_) { /* 后端未就绪时忽略 */ }
-    const params = {}
-    if (from) params.from = from
-    if (historySnapDate.value) params.to = historySnapDate.value
-    const res = await axios.get(`${API_BASE}/seats/daily`, { params })
-    seatIndexDaily.value = res.data || []
-  } catch (e) { console.error(e) }
+//
+// 两个消费方的上限口径**不同**，合并时必须显式保留：
+//   · 座位指数（seatIndexRows）：到「所选周代表日」historySnapDate；该周没有快照时不设上限。
+//   · 位置公平账本（seatLedger）：到「昨日」（今天还没过完，不能算进去）。
+// 改造前各发一次 `/seats/daily`（区间只差一天），再把同一批快照扫两遍；现在取区间并集
+// `to = max(所选周, 昨日)` 只拉一次，在同一个循环里按各自上限分别累加。
+const seatDailyDays = ref([])
+const seatIndexCutoff = ref('')
+const seatLedgerCutoff = ref('')
+// 最近一次成功拉取的并集区间（'' = 不设上限）；两个消费方共用，命中就不再发请求
+let seatDailyKey = ''
+// 同一区间在途的请求：账本与指数几乎同时触发时共用同一个 Promise，不再各发一次
+let seatDailyInflight = null
+let seatDailyInflightKey = ''
+// 请求序号：切周 / 强制刷新时先发的请求可能后到，旧区间不能覆盖新区间（与 loadHistorySnapshot 同法）
+let seatDailySeq = 0
+
+function yesterdayStr() {
+  const y = new Date(); y.setDate(y.getDate() - 1)
+  return localDateStr(y)
 }
 
-// 载入「位置公平」所需账本：统计学期范围内、截至昨日每人累计的座位权重
-async function loadSeatLedger() {
-  try {
-    const y = new Date(); y.setDate(y.getDate() - 1)
-    const to = localDateStr(y)
-    let from = ''
-    try {
-      from = await getSemesterStart()
-    } catch (_) { /* 后端未就绪时忽略 */ }
-    const params = { to }
-    if (from) params.from = from
-    const res = await axios.get(`${API_BASE}/seats/daily`, { params })
-    const led = {}
-    for (const day of res.data || []) {
-      const seats = day.seats || []
-      for (let r = 0; r < seats.length; r++) {
-        const wRow = weightWeights.value[r]
-        if (!Array.isArray(wRow)) continue
-        const sRow = seats[r] || []
-        for (let c = 0; c < sRow.length; c++) {
-          const val = sRow[c]
-          if (typeof val !== 'number') continue
-          const w = wRow[c]
-          if (typeof w !== 'number') continue
-          led[val] = (led[val] || 0) + w
-        }
-      }
-    }
-    seatLedger.value = led
-  } catch (e) { console.error(e) }
+// 快照数据变更后（补存 / 删周）调用：下次消费重新拉取
+function invalidateSeatDaily() {
+  seatDailyKey = ''
 }
 
-// 逐天累加：对每一天的每个座位，取 weightWeights[r][c] 累加到该学生名下
-const seatIndexRows = computed(() => {
-  const weights = weightWeights.value
-  if (!Array.isArray(weights) || !seatIndexDaily.value.length) return []
-  const acc = {}
-  for (const day of seatIndexDaily.value) {
-    const seats = day.seats || []
-    for (let r = 0; r < seats.length; r++) {
-      const wRow = weights[r]
-      const sRow = seats[r]
-      if (!Array.isArray(wRow) || !Array.isArray(sRow)) continue
-      for (let c = 0; c < sRow.length; c++) {
-        const val = sRow[c]
-        if (val === null || val === undefined || val === '') continue
-        const w = wRow[c]
-        if (typeof w !== 'number') continue
-        const name = typeof val === 'number' ? getStudentName(val) : val
-        if (!name) continue
-        acc[name] = (acc[name] || 0) + w
-      }
-    }
+async function loadSeatDaily({ force = false } = {}) {
+  const ledgerTo = yesterdayStr()
+  const indexTo = historySnapDate.value || ''
+  const to = unionCutoff(indexTo, ledgerTo)
+  // 两个上限每次都写回：即使命中缓存、不发请求，累加口径也要跟着当前所选周更新
+  seatLedgerCutoff.value = ledgerTo
+  seatIndexCutoff.value = indexTo
+  if (!force) {
+    if (seatDailyKey === to) return
+    // 同一区间已在途中：共用同一个请求（否则「切周」与「打开智能排表」撞一起会发两次）
+    if (seatDailyInflight && seatDailyInflightKey === to) return seatDailyInflight
   }
+  const my = ++seatDailySeq
+  const run = (async () => {
+    try {
+      let from = ''
+      try {
+        from = await getSemesterStart()
+      } catch (_) { /* 后端未就绪时忽略 */ }
+      const params = {}
+      if (from) params.from = from
+      if (to) params.to = to
+      const res = await axios.get(`${API_BASE}/seats/daily`, { params })
+      if (my !== seatDailySeq) return
+      seatDailyDays.value = res.data || []
+      seatDailyKey = to
+    } catch (e) { console.error(e) } finally {
+      if (seatDailyInflight === run) {
+        seatDailyInflight = null
+        seatDailyInflightKey = ''
+      }
+    }
+  })()
+  seatDailyInflight = run
+  seatDailyInflightKey = to
+  return run
+}
+
+// 座位指数：所选周变化后按新口径重拉（与账本共用，命中缓存则只更新上限）
+async function loadSeatIndex() {
+  await loadSeatDaily()
+}
+
+// 位置公平账本：打开智能排表时触发，同样只是「按当前口径取数」
+async function loadSeatLedger() {
+  await loadSeatDaily()
+}
+
+// 单遍累加：同一批每日快照同时产出账本（按学生 id）与指数（按姓名）。
+// 权重矩阵仍是 weightWeights（与改造前同一套对位口径，本卡不动权重语义）。
+const seatAgg = computed(() => aggregateSeatDaily({
+  days: seatDailyDays.value,
+  weights: weightWeights.value,
+  ledgerTo: seatLedgerCutoff.value,
+  indexTo: seatIndexCutoff.value,
+  studentName: getStudentName,
+}))
+
+// 学生 id → 截至昨日的累计权重
+const seatLedger = computed(() => seatAgg.value.ledger)
+
+// 指数行：姓名 + 累计权重，按降序排；_max 供进度条按表内最大值做相对映射
+const seatIndexRows = computed(() => {
+  const acc = seatAgg.value.acc
   const rows = Object.keys(acc).map(name => ({ name, value: acc[name] })).filter(r => r.value !== 0)
   rows.sort((a, b) => b.value - a.value)
   const max = Math.max(...rows.map(r => Math.abs(r.value)), 0)
@@ -1669,10 +1691,10 @@ function seatIndexBarWidth(row) {
 }
 
 // ---------- 座位指数：刷新 / 导出 ----------
-// 指数本身是 computed（seatIndexDaily × weightWeights 逐天累加），所以「刷新」只需重拉
-// 每日快照序列，数字会自动重算——不需要另外保存一份结果。
+// 指数与账本共用一份每日快照，「刷新」必须强制重拉（否则命中缓存会变成空操作）。
+// 数字会自动重算——不需要另外保存一份结果。
 async function refreshSeatIndex() {
-  await loadSeatIndex()
+  await loadSeatDaily({ force: true })
   notifySuccess('已刷新座位指数')
 }
 
@@ -1696,6 +1718,8 @@ async function captureHistorySnapshot() {
     const n = res.data && res.data.inserted
     if (n > 0) notifySuccess(`已补存 ${n} 天的历史快照`)
     else useNotification().info((res.data && res.data.message) || '暂无需要补存的日期')
+    // 补存会新增每日快照：账本/指数共用的那份数据已过期，下次消费重新拉
+    invalidateSeatDaily()
     await fetchHistoryWeeks()
   } catch (e) { notifyError('补存失败'); console.error(e) }
 }
@@ -1728,6 +1752,8 @@ async function confirmDeleteHistorySnapshot() {
     await axios.delete(`${API_BASE}/seats/history/${week}`)
     notifySuccess('该周快照已删除')
     if (historyCurrentWeek.value === week) historySnapshot.value = null
+    // 删周同样改变每日快照序列：作废共用缓存，下次消费重新拉
+    invalidateSeatDaily()
     await fetchHistoryWeeks()
   } catch (e) {
     notifyError('删除快照失败，请重试')
@@ -1801,8 +1827,11 @@ onMounted(async () => {
   const differ = masterRows.value !== s.rows || masterSeatCols !== s.cols || masterMode.value !== s.mode
   if (differ && !hasTrimmedData(masterGrid, s)) await applySharedSettings(s)
   fetchAllStudents()
-  // 启动时静默补全历史快照（今天及之前），失败不打扰用户
-  axios.post(`${API_BASE}/seats/snapshot/backfill`, { includeToday: true }).catch(() => {})
+  // 启动时静默补全历史快照（今天及之前），失败不打扰用户。
+  // 补存成功后作废共用快照缓存 —— 否则账本/指数仍按补存前的序列结算。
+  axios.post(`${API_BASE}/seats/snapshot/backfill`, { includeToday: true })
+    .then(() => invalidateSeatDaily())
+    .catch(() => {})
   // 跨页定位：带 ?focus= 进入本页时定位到目标格子
   _applyRowFocus()
 })

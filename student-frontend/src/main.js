@@ -18,6 +18,7 @@ import { ensureMediaToken, clearMediaToken, resourceUrl } from './utils/apiUrl'
 import { useNotification } from './composables/useNotification'
 import { ensureDashboardData } from './composables/useDashboardData'
 import { installInpProbe } from './utils/inpProbe'
+import { installLongTaskMarks } from './utils/inpLongtask'
 import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
 
 // 401 提示条去重：记录最近一次已处理的 401 时间，避免同一瞬间并发 401 重复弹提示
@@ -178,6 +179,8 @@ initDialogOverlayPulse()
 // INP 归因探针：仅开发模式安装。`import.meta.env.DEV` 在打包版被静态替换为 false，
 // 该调用连同上方 import 一起被摇树删除——正式版既无探针代码也无可观察开销。
 if (import.meta.env.DEV) installInpProbe()
+// 打包版按需长任务采样：PERF_LONG_TASK=1 时 preload 注入开关；正常启动不安装观察器。
+if (typeof window !== 'undefined' && window.__PERF_LONG_TASK__) installLongTaskMarks()
 
 // 原生右键菜单：页面未自行处理右键（模板里没 .prevent）时，交给主进程弹系统菜单。
 // 用 defaultPrevented 判定——表格/课堂/收费等已有自定义右键菜单的区域是 .stop.prevent，

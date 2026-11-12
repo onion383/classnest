@@ -155,6 +155,48 @@ function deleteRow(tableName, id, options = {}) {
   db.prepare(`UPDATE ${tableName} SET position = position - 1 WHERE position > ?`).run(row.position);
 }
 
+// 批量删除：整批包在一个事务里，任一 id 失败整批回滚（不留半截状态）。
+// 与单条删除的差别只有两处：
+//   · minCount 按「整批删完后」的行数判断 —— 逐条判会把「删完还剩 ≥minCount」的正常批量误拦；
+//   · 任一 id 不存在直接报错，不静默跳过（调用方应保证传的是当前全表里的行）。
+// allowStudentOrphans / 关联检查与单条删除同一套，批量路径不得绕过。
+function deleteRows(tableName, ids, options = {}) {
+  assertValidTable(tableName);
+  const { minCount = 0, allowStudentOrphans = false } = options;
+  const list = [...new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n > 0)
+  )];
+  if (!list.length) throw new Error('缺少要删除的记录');
+
+  const placeholders = list.map(() => '?').join(',');
+  return db.transaction(() => {
+    // 先确认每个 id 都真的存在：夹一个脏 id 时要报「记录不存在」而不是被行数下限抢先，
+    // 否则调用方会以为是「不能删」而不是「传错了」。校验与删除同事务，失败即整批回滚。
+    const rows = db.prepare(`SELECT id FROM ${tableName} WHERE id IN (${placeholders})`).all(...list);
+    if (rows.length !== list.length) {
+      const found = new Set(rows.map((r) => r.id));
+      const missing = list.filter((id) => !found.has(id));
+      throw new Error(`记录不存在: ${missing.join(',')}`);
+    }
+
+    if (minCount > 0) {
+      const count = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get().count;
+      if (count - list.length < minCount) throw new Error('至少需要保留一条记录');
+    }
+
+    if (tableName === 'students' && !allowStudentOrphans) {
+      for (const id of list) assertStudentRelationsCleared(id);
+    }
+
+    db.prepare(`DELETE FROM ${tableName} WHERE id IN (${placeholders})`).run(...list);
+    // 位置重排：删掉中间若干行后要连续，否则移动/拖拽会按空档算错
+    renumber(tableName);
+    return { deleted: list.length };
+  })();
+}
+
 function moveRow(tableName, id, direction) {
   assertValidTable(tableName);
   if (!id || !direction) throw new Error('缺少参数');
@@ -359,6 +401,6 @@ function renameColumn(tableName, oldName, newName) {
 }
 
 module.exports = {
-  queryAll, insertRow, updateRow, deleteRow, moveRow,
+  queryAll, insertRow, updateRow, deleteRow, deleteRows, moveRow,
   addColumn, deleteColumn, reorderRows, moveColumn, importRows, renameColumn
 };

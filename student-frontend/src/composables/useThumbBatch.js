@@ -17,6 +17,8 @@
 // =========================================================================
 import { ref, onBeforeUnmount, onScopeDispose, getCurrentScope, watch } from 'vue'
 import { fetchThumbBatch } from '../utils/albumMedia'
+import { useDisposables } from '../utils/disposables.js'
+import { IDLE_AFTER_MS, planEviction } from '../utils/thumbCachePolicy.js'
 
 // 可视区变化后多久发一次批量请求（毫秒）
 const DEBOUNCE_MS = 120
@@ -27,9 +29,9 @@ const RETRY_DELAY_MS = 800
 const RETRY_MAX = 2
 // 一次批量请求最多带多少张
 const CHUNK = 100
-// 已生成 objectURL 的缩略图最多保留多少张（LRU 上限）
-// 512px / q82 的 JPEG blob 约 40~60KB，1500 张 ≈ 75MB，够滚过好几个屏幕还不用重取。
-const MAX_KEEP = 1500
+// 缓存上限与淘汰策略都在 utils/thumbCachePolicy.js（纯函数、可 node 单测）。
+// 这里更正一个过时估算：实测 21,808 张缩略图 / 247MB，平均 11.6KB 一张，
+// 所以 MAX_KEEP=1500 实际约 17MB，不是旧注释写的 75MB。
 
 export function useThumbBatch(getVisibleIds, options = {}) {
   const enabled = options.enabled !== false
@@ -54,6 +56,17 @@ export function useThumbBatch(getVisibleIds, options = {}) {
   // 已创建但尚未 revoke 的 objectURL
   const liveUrls = new Set()
 
+  /* 空闲收缩定时器走统一资源登记表：不能自己 setTimeout 再靠人脑记得 clear。
+   * 必须用 defer 而不是 timeout —— d.timeout() 返回的「取消函数」只把清理项从表里
+   * 摘掉、并不 clearTimeout（实测回调照跑），而空闲收缩是防抖语义，每次可见区变化
+   * 都要真正取消上一次。defer 的 schedule() 每次会先清掉上一轮。 */
+  const d = useDisposables()
+  const armIdle = d.defer()
+  function idleShrink() {
+    if (destroyed) return
+    evict(new Set(getVisibleIds() || []), { idle: true })
+  }
+
   function revokeAll() {
     for (const u of liveUrls) {
       try { URL.revokeObjectURL(u) } catch (_) {}
@@ -62,33 +75,34 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     urls.value = new Map()
   }
 
-  // 内存回收：只在超过 MAX_KEEP 时按 LRU 淘汰，且绝不碰当前可见区。
-  //
-  // 原先的做法是「只保留此刻可见的，其余立刻 revoke」。它省内存，但代价是：
-  // 往回滚一屏，那些 objectURL 已经没了 → <img> 从 blob 退回 http URL → 120ms 后
-  // 批量再做一批新 objectURL → src 又变回 blob。**同一个 <img> 的 src 变了两次**，
-  // 浏览器每次都当作「换了一张图」，清帧重解码，画面上就是「图片在格子里跳 / 闪」。
-  // 现在改成延迟淘汰：src 一旦定下就不再变，闪动的根就没了。
-  function evict(keepIds) {
-    const map = urls.value
-    if (map.size <= MAX_KEEP) return
-    const cands = []
-    for (const [id, u] of map) {
-      if (!u) continue                    // '' 标记体积极小，留着免得重复请求
-      if (keepIds.has(id)) continue       // 可见区的元素还挂在 DOM 上，撤掉必闪
-      cands.push(id)
+  /* 内存回收：把「判据」和「候选」交给纯函数 planEviction 算，这里只执行。
+   *
+   * 原先是用「map.size 减去上限」决定淘汰数量 —— map.size 里混着大量
+   * '' 标记（服务端没缓存缩略图时写的占位），而上限说的是真 blob 数。
+   * 攒够几千个 '' 之后，每次滚动都会把几乎所有非可见 blob 一次撤光，
+   * 滚回去只能重新 createObjectURL，<img> 的 src 又变一次 → 闪。
+   *
+   * 空闲收缩（idle=true）：滚动停止一会后主动降到 IDLE_KEEP，而不是一直挂到上限。
+   * 安全前提：只撤「非可见」的。被撤的格子已经被虚拟滚动卸载了，
+   * 回来时是新挂载的 <img>、src 是首次赋值，不属于「同一个 img 二次换 src」。 */
+  function evict(keepIds, { idle = false } = {}) {
+    const plan = planEviction({
+      urls: urls.value, keepIds, liveCount: liveUrls.size, lastUsed, idle,
+    })
+    if (!plan.dropBlobs.length && !plan.dropMarkers.length) return
+    const next = new Map(urls.value)
+    for (const d of plan.dropBlobs) {
+      try { URL.revokeObjectURL(d.u) } catch (_) {}
+      liveUrls.delete(d.u)
+      next.delete(d.id)
+      lastUsed.delete(d.id)
     }
-    if (!cands.length) return
-    cands.sort((a, b) => (lastUsed.get(a) || 0) - (lastUsed.get(b) || 0))
-    const drop = cands.slice(0, map.size - MAX_KEEP)
-    if (!drop.length) return
-    const next = new Map(map)
-    for (const id of drop) {
-      const u = next.get(id)
-      try { URL.revokeObjectURL(u) } catch (_) {}
-      liveUrls.delete(u)
-      next.delete(id)
-      lastUsed.delete(id)
+    for (const d of plan.dropMarkers) {
+      // 连 miss 一起删：留着 miss 的话 load() 会跳过它，'' 标记永远补不回来，
+      // 这张照片滚回视口时会一直是空白（thumbUrlFor 返回 undefined）。
+      next.delete(d.id)
+      miss.delete(d.id)
+      lastUsed.delete(d.id)
     }
     urls.value = next
   }
@@ -178,6 +192,8 @@ export function useThumbBatch(getVisibleIds, options = {}) {
   function schedule(immediate = false) {
     if (!enabled || destroyed) return
     if (timer) { clearTimeout(timer); timer = 0 }
+    // 每次可见区变化都把「空闲收缩」重新排到 2 秒后；只要还在滚，就一直不触发
+    armIdle(idleShrink, IDLE_AFTER_MS)
     if (immediate) { run(); return }
     timer = setTimeout(() => { timer = 0; run() }, DEBOUNCE_MS)
   }
@@ -187,6 +203,7 @@ export function useThumbBatch(getVisibleIds, options = {}) {
   function scheduleRetry() {
     if (!enabled || destroyed) return
     if (timer) { clearTimeout(timer); timer = 0 }
+    armIdle(idleShrink, IDLE_AFTER_MS)
     timer = setTimeout(() => { timer = 0; run() }, RETRY_DELAY_MS)
   }
 
@@ -206,6 +223,8 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     if (destroyed) return
     destroyed = true
     if (timer) { clearTimeout(timer); timer = 0 }
+    armIdle.cancel()
+    d.dispose()
     revokeAll()
   }
   onBeforeUnmount(cleanup)
@@ -218,8 +237,10 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     //   'blob:…'  → 直接用
     thumbUrlFor: (photoId) => {
       const u = urls.value.get(photoId)
-      // 每次读取都刷新 LRU 时间戳：渲染顺序 ≈ 用户实际看的顺序
-      if (u) lastUsed.set(photoId, ++useSeq)
+      // 每次读取都刷新 LRU 时间戳：渲染顺序 ≈ 用户实际看的顺序。
+      // '' 标记也要记 —— 它同样参与淘汰，不记的话所有标记都停在 0，
+      // 只能按插入顺序 FIFO 淘汰，刚看过的也可能被先撤掉。
+      if (u !== undefined) lastUsed.set(photoId, ++useSeq)
       return u
     },
     // 手动触发一次：立即执行（切换相册、首次加载完照片时用，不等防抖）
@@ -229,6 +250,7 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     // 否则上一本相册排的那次 run() 会落到新相册的可见区上，白发一轮请求。
     clear: () => {
       if (timer) { clearTimeout(timer); timer = 0 }
+      armIdle.cancel()   // 上一本相册排的收缩不能落到新相册的可见区上
       revokeAll(); miss.clear(); inflight.clear(); lastUsed.clear(); failStreak = 0
     },
   }

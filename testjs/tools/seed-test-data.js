@@ -417,8 +417,8 @@ async function main() {
     const dutyHist = await req('GET', '/api/duty/history?mode=daily');
     const seatHist = await req('GET', '/api/seats/history');
     console.log(
-      `校验：学生 ${dash.students.length} · 加分 ${dash.scores.length} · 请假 ${dash.leaves.length}` +
-      ` · 活动 ${dash.activities.length} · 班费 ${dash.fees.length} · 倒计时 ${dash.countdowns.length}` +
+      `校验：学生 ${dash.students.length} · 加分 ${dash.summary.scoreCount} · 请假 ${dash.leaves.length}` +
+      ` · 活动 ${dash.activities.length} · 班费 ${dash.summary.feeCount} · 倒计时 ${dash.countdowns.length}` +
       ` · 课表 ${dash.schedule.cells.length} 行 · 值日项目 ${dash.duty.settings.items.length}` +
       ` · 座位 ${seats.rows}×${seats.cols} · 值日历史 ${dutyHist.length} 周 · 座位历史 ${seatHist.length} 周`
     );

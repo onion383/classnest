@@ -63,6 +63,7 @@
             >
               <span class="text-text">{{ s.姓名 }}</span>
               <span v-if="s.学号" class="ml-2 text-xs text-text-muted">{{ s.学号 }}</span>
+              <span v-if="s.is_provisional" class="ml-2 text-[10px] leading-4 px-1 rounded bg-warning/15 text-warning">临时</span>
             </div>
             <div v-if="!filteredStudents.length" class="px-3 py-2 text-sm text-text-muted">无匹配学生</div>
           </div>
@@ -208,9 +209,19 @@ const form = ref({
   time: formatDateTimeLocal(new Date())
 });
 
+// 候选学生：关键词搜索；名册里没有这个人时，把输入的名字本身变成一条「临时」候选
+// （id 用固定哨兵，不与真实学生冲突）。口径与 GroupManageView / 值日 / 座位完全一致：
+// 它和普通候选一样可点选，落库时后端 resolve 会建临时学生 —— 不需要额外提示「无匹配」，
+// 也不需要用户再点一下别处。
+const PROVISIONAL_ID = '__provisional__'
 const filteredStudents = computed(() => {
-  const kw = keyword.value.toLowerCase();
-  return props.students.filter(s => !kw || String(s.姓名 || '').toLowerCase().includes(kw));
+  const raw = String(keyword.value || '').trim()
+  const kw = raw.toLowerCase()
+  const matched = props.students.filter(s => !kw || String(s.姓名 || '').toLowerCase().includes(kw))
+  if (raw && matched.length === 0) {
+    return [{ id: PROVISIONAL_ID, 姓名: raw, 学号: '', is_provisional: true }]
+  }
+  return matched
 })
 const isEdit = computed(() => {
   return !!(props.editingRecord && props.editingRecord.id != null)
@@ -366,7 +377,9 @@ function submit() {
     return;
   }
   emit('confirm', {
-    studentId: selected.value.id,
+    // 哨兵 id 不是真实学生：置空后由后端按姓名 resolve（正式名单唯一同名会复用，
+    // 名册外才建临时学生），与值日/座位/分组同一套单源实现。
+    studentId: selected.value.id === PROVISIONAL_ID ? null : selected.value.id,
     姓名: selected.value.姓名,
     学号: selected.value.学号 || '',
     ...common

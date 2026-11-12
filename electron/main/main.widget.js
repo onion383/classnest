@@ -34,8 +34,9 @@ const ipcAuth = require('./main.ipc-auth')
 // Windows 置底：把组件窗口的 z 序插到「Progman 之上、所有可见窗口之下」
 const desktopLayer = require('./main.desktop-layer')
 const { relayToWidgetWindows } = require('./widget-relay')
+const { appendWithRotation } = require('./main.logRotator')
 
-const isDev = !app.isPackaged
+const { isDev } = require('./main.env')
 
 // 窗口 / 工具出口：由 registerWidgetIpc 注入（均为调用时取当前值）
 let getMainWindow = () => null
@@ -148,6 +149,7 @@ function createWidgetWindow() {
   if (isDev) {
     loadUrlWithRetry(widgetWindow, 'http://127.0.0.1:5173/widget.html')
   } else {
+    // B1：保持 app://local，API 由协议代理；origin 与主窗口一致，登录态共享。
     widgetWindow.loadURL('app://local/widget.html')
   }
 
@@ -236,14 +238,12 @@ function desktopPosFile() {
 // 仅开发模式写入：正式打包版不产出 desktop-layer.log。
 function logWidget(msg) {
   if (!isDev) return
-  try {
-    fs.appendFileSync(
-      path.join(app.getPath('userData'), 'desktop-layer.log'),
-      '[' + new Date().toISOString() + '] ' + msg + '\n'
-    )
-  } catch (_) {
-    /* 忽略 */
-  }
+  // 1-1：与 inp.log 同一口径（1MB 封顶、保留最近 512KB），异步追加；旧实现无上限。
+  appendWithRotation(
+    path.join(app.getPath('userData'), 'desktop-layer.log'),
+    '[' + new Date().toISOString() + '] ' + msg + '\n',
+    { maxBytes: 1024 * 1024, keepBytes: 512 * 1024 },
+  )
 }
 function readJsonFile(file) {
   try {

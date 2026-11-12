@@ -2,7 +2,7 @@ const express = require('express');
 const { db } = require('../db');
 const { renameStudentRefs } = require('../services/studentRename');
 const {
-  queryAll, insertRow, updateRow, deleteRow, moveRow,
+  queryAll, insertRow, updateRow, deleteRow, deleteRows, moveRow,
   addColumn, deleteColumn, reorderRows, moveColumn, importRows, renameColumn
 } = require('../services/tableService');
 const { clearTableColumnsCache } = require('./ai/ai.helpers');
@@ -75,6 +75,19 @@ function createDynamicTableRouter(tableName, options = {}) {
     try {
       deleteRow(tableName, req.params.id, { minCount });
       res.json({ message: '删除成功' });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // POST /batch-delete —— 批量删除：一次请求删 N 条（原来是前端逐条 DELETE，来回 N 次）。
+  // 整批在 tableService.deleteRows 的一个事务里，任一 id 失败整批回滚。
+  // minCount 行数下限保护与单条 DELETE 同源（同一份 options），批量路径绕不过去。
+  router.post('/batch-delete', (req, res) => {
+    try {
+      const { ids } = req.body || {};
+      const result = deleteRows(tableName, ids, { minCount });
+      res.json({ message: '删除成功', deleted: result.deleted });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

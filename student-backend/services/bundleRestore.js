@@ -84,8 +84,9 @@ async function applyVerifiedBundle({ tmpDir, meta, manifest, slug, username, bod
 
   // restoreBundle 内部已经做了「先断连接 → 写临时文件 → integrity_check → 通过才覆盖」，
   // 这里不再自己写一遍（两处写库逻辑迟早会分叉）。
-  const data = fs.readFileSync(path.join(dbDir, dbFile)).toString('base64')
-  const result = dbManager.restoreBundle({ slug, username, data, dbKey, encrypted: isEncrypted })
+  // 传 srcPath 而不是 base64：解包出来的库文件已经在磁盘上，再读进内存转 base64 只会在
+  // 100MB 级库上白占约 230MB 堆（133MB 字符串 + 100MB Buffer）—— 2-11 要消的就是这段。
+  const result = dbManager.restoreBundle({ slug, username, srcPath: path.join(dbDir, dbFile), dbKey, encrypted: isEncrypted })
   aiHelpers.clearTableColumnsCache()
 
   // 目录替换：只在包里**确实有内容**时替换。

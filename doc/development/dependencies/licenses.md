@@ -69,6 +69,7 @@
 | `ui-ux-pro-max-cli` | 2.15.0 | MIT（`package.json` 声明） | 包内未附 LICENSE 文件 |
 | `electron` | 45.2.3 | MIT | Copyright (c) Electron contributors |
 | `electron-builder` | 26.17.0 | MIT | Copyright (c) 2015 Loopline Systems |
+| `esbuild` | 0.28.2 | MIT | Copyright (c) 2020 Evan Wallace |
 | `@electron/rebuild` | 4.2.1 | MIT | Copyright (c) Contributors to the Electron project |
 | `concurrently` | 10.0.6 | MIT | Copyright (c) 2015 Kimmo Brunfeldt |
 | `wait-on` | 9.5.1 | MIT | Copyright (c) 2015 Jeff Barczewski |

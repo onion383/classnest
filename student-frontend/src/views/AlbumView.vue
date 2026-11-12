@@ -108,7 +108,7 @@
             >
               <h2 class="text-lg font-semibold text-text mb-3 flex items-center gap-2">
                 <span class="px-2 py-0.5 bg-info/10 text-info rounded text-sm">{{ v.g.date }}</span>
-                <span class="text-xs text-text-muted">{{ v.g.photos.length }} 张</span>
+                <span class="text-xs text-text-muted">{{ groupCountOf(v.g) }} 张</span>
                 <!-- 日期来源提示：日期组里混有读不到拍摄时间的照片时给出个数（读不到的那些单独归「未知时间」） -->
                 <span
                   v-if="groupDateHint(v.g)"
@@ -117,8 +117,10 @@
                 >{{ groupDateHint(v.g) }}</span>
               </h2>
               <div class="flex flex-wrap gap-3">
+                <!-- 分页加载中：高度已按 count 预留好，这里只占位提示，不等同于「这个日期没有照片」 -->
+                <div v-if="!v.g.photos" class="text-sm text-text-muted py-2">加载中…</div>
                 <div
-                  v-for="p in v.g.photos"
+                  v-for="p in (v.g.photos || [])"
                   :key="p.id"
                   @click="onCellClick(p)"
                   @pointerenter="onCellHover(p)"
@@ -252,7 +254,7 @@
           <!-- 时间轴视图：选中的是照片，动作为移动到其他相册 -->
           <template v-else>
             <span class="text-sm text-text whitespace-nowrap">已选 <span class="font-semibold tabular-nums">{{ selectedCount }}</span> 张</span>
-            <button @click="selectAllPhotos" class="px-3 py-1 rounded-full bg-surface-hover text-text border border-border text-sm transition-theme whitespace-nowrap">全选</button>
+            <button @click="selectAllPhotos" :title="hasUnloadedGroups ? '相册照片按日期分页加载，全选只包含已加载的部分；继续往下滚可以加载更多' : ''" class="px-3 py-1 rounded-full bg-surface-hover text-text border border-border text-sm transition-theme whitespace-nowrap">{{ hasUnloadedGroups ? '全选已加载' : '全选' }}</button>
             <button @click="clearSelection" class="px-3 py-1 rounded-full bg-surface-hover text-text border border-border text-sm transition-theme whitespace-nowrap">取消选择</button>
             <button
               @mouseenter="prefetch(loadMoveAlbumDialog)"
@@ -463,6 +465,10 @@ import { useUndoShortcut } from '../composables/useUndo.js'
 import { useAlbumScan } from '../composables/useAlbumScan.js'
 import { createLatest } from '../utils/latestOnly.js'
 import { usePhotoTimeline } from '../composables/usePhotoTimeline.js'
+import {
+  UNKNOWN_DATE, pageBefore, groupCountOf, firstUnloadedIndex, mergePhotoGroups,
+  buildGroupPlaceholders, syncGroupPlaceholders,
+} from '../composables/albumPhotoPages.js'
 import { useThumbBatch } from '../composables/useThumbBatch.js'
 import VideoThumb from '../components/import-export/VideoThumb.vue'
 import AppSelect from '../components/base/AppSelect.vue'
@@ -472,6 +478,7 @@ import EmptySnapshot from '../components/base/EmptySnapshot.vue'
 import IconGlyph from '../components/base/IconGlyph.vue'
 import { albumThumbUrl, albumFileUrl } from '../utils/albumMedia'
 import { pad2 } from '../utils/dateTime.js'
+import { getPhotoInfo, setPhotoInfo, clearPhotoInfo } from '../utils/photoInfoCache.js'
 import '../styles/dialog-transition.css'
 import { INVOKE } from '../electronChannels.js'
 
@@ -526,7 +533,7 @@ const mediaReady = ref(false)
 const infoVisible = ref(false)
 const infoLoading = ref(false)
 const photoInfo = ref(null)
-const infoCache = new Map()
+// 1-4：缓存搬到 utils/photoInfoCache.js（200 条上限的 LRU + 换号清空），这里只读写
 
 // 视频播放状态
 const videoEl = ref(null)
@@ -627,7 +634,7 @@ function seekTimeline(offset) {
 // 分组标题旁的来源标记：整组都有 EXIF 时不显示（「未知时间」组由后端统一命名，
 // 那里必然全是回退项，再标一次是冗余）；只有正常日期组里混进了无 EXIF 的照片才提示。
 function groupDateHint(g) {
-  if (g.date === '未知时间') return ''
+  if (g.date === UNKNOWN_DATE) return ''
   const ps = g.photos || []
   if (!ps.length) return ''
   const exifCount = ps.filter(p => p.date_src === 'exif').length
@@ -686,24 +693,98 @@ const sizeParts = computed(() => {
   return { value, unit }
 })
 
-// 照片列表请求序号：切换相册/刷新时先发的请求可能后到，旧相册的照片不能写进新相册（B06-07）
+// 照片请求序号：切换相册/刷新时先发的请求可能后到，旧相册的照片不能写进新相册（B06-07）
 const photosSeq = createLatest()
+
+/* ===== 分页加载：先拿「日期索引」，再按需补照片行 =====
+ *
+ * 以前是一次 GET /photos 把整册照片拉下来 —— 五万张就是十几 MB JSON，
+ * 而相册页是虚拟滚动，一屏其实只要十来个日期组。
+ *
+ * 现在分两步：
+ *   ① GET /dates   → [{date, count}]，只有日期和每组张数（469 天也就十几 KB）
+ *   ② GET /photos?days=8&before=D → 只取需要的那些天的照片行
+ *
+ * 为什么先要日期索引（而不是直接按页取）：总高度、年刻度尺、跳转位置全都依赖
+ * 「一共有多少组、每组多高」。有了 count，布局一次算准，之后加载只填照片不改变高度，
+ * 滚动条不会随加载一下一下变长。
+ *
+ * 分页口径保证「同一天绝不跨页」（后端按天累加），所以合并时只需按 date 整组替换，
+ * 不存在「某天加载了一半」的中间态。
+ */
+const PAGE_DAYS = 8
+// 正在请求的锚点日期：滚动会连续触发 ensureLoaded，同一段别重复发
+const pageInFlight = new Set()
+// 每次重载（切相册/刷新）自增：晚到的旧请求不能把照片写进新的一批分组
+let loadEpoch = 0
+// 当前 groups 属于哪本相册：对账（sync）只在同一本相册内做，跨相册必须重建
+let groupsAlbumId = null
+
+// 日期步进 / 页锚点 / 整组合并 / 组头张数 都在纯函数模块里（可 node 单测），
+// 这里只负责发请求与把结果写回响应式分组。
+async function ensureLoaded(fromIdx) {
+  const gs = groups.value
+  const j = firstUnloadedIndex(gs, fromIdx)
+  if (j === -1) return
+  const albumAtStart = activeAlbumId.value
+  const epoch = loadEpoch
+  const anchorDate = gs[j].date
+  if (pageInFlight.has(anchorDate)) return
+  pageInFlight.add(anchorDate)
+  try {
+    const res = await axios.get(`/api/album/${albumAtStart}/photos`, {
+      params: { days: PAGE_DAYS, before: pageBefore(anchorDate) },
+      headers: authHeaders(),
+    })
+    // 期间换了相册或重载过：这批属于上一批分组，写进去就是张冠李戴
+    if (epoch !== loadEpoch || albumAtStart !== activeAlbumId.value) return
+    if (mergePhotoGroups(groups.value, res.data && res.data.data)) {
+      refreshThumbBatch()
+      /* 合并完必须主动再查一次「视口里还有没有没加载的组」。
+         不能指望 watch(visibleGroups) 再触发一次：合并只改 photos，
+         而 count 通常等于原值 —— layout 与 visibleGroups 都不会重算，
+         watcher 也就不会再跑。表现出来就是「第一页填不满一屏时停在『加载中…』，
+         要手动滚一下才继续」。 */
+      ensureVisibleLoaded()
+    }
+  } catch (e) {
+    if (epoch !== loadEpoch) return
+    reportError(e, { action: '加载照片' })
+    console.error(e)
+  } finally {
+    pageInFlight.delete(anchorDate)
+  }
+}
 
 async function loadPhotos(first = true) {
   const my = photosSeq.begin()
-  if (!activeAlbumId.value) { groups.value = []; return }
+  if (!activeAlbumId.value) { groups.value = []; groupsAlbumId = null; return }
+  /* 对账只能在同一本相册内做。
+   * 日期字符串各相册之间高度重合（2026-11-12 这种），跨相册复用分组对象
+   * 会把上一本的 photos 数组原样带过来 —— 表现是「切过去先看到别人的照片」。 */
+  const albumId = activeAlbumId.value
+  const sameAlbum = groupsAlbumId === albumId
+  loadEpoch++
+  pageInFlight.clear()
   try {
-    const res = await axios.get(`/api/album/${activeAlbumId.value}/photos`, { headers: authHeaders() })
-    // 期间已切到别的相册（或又刷新了一次）：这批照片已过期，丢弃
+    const res = await axios.get(`/api/album/${albumId}/dates`, { headers: authHeaders() })
+    // 期间已切到别的相册（或又刷新了一次）：这批已过期，丢弃
     if (!photosSeq.isCurrent(my)) return
-    groups.value = res.data.data || []
+    const rows = res.data && res.data.data
+    // 对账而不是重建：扫描期间这个方法每 800ms 被调一次，
+    // 整表重建会让所有格子卸载再挂载（用户看到整片闪）。见 syncGroupPlaceholders 的注释。
+    groups.value = sameAlbum ? syncGroupPlaceholders(groups.value, rows) : buildGroupPlaceholders(rows)
+    groupsAlbumId = albumId
     if (first) {
       // 切换相册/刷新后回到顶部并重新计量
       await nextTick()
       resetTimeline()
+      // 新相册：从第一组开始填
+      await ensureLoaded(0)
+    } else {
+      // 扫描期间的渐进刷新：只补视口里空着/张数变了的组，不碰滚动位置
+      ensureVisibleLoaded()
     }
-    // 照片列表换新了 → 立即触发一次批量预取（不等滚动）
-    refreshThumbBatch()
   } catch (e) {
     // 照片接口的失败在这里统一处理，避免被调用方误报成「相册列表加载失败」
     if (!photosSeq.isCurrent(my)) return
@@ -711,6 +792,18 @@ async function loadPhotos(first = true) {
     console.error(e)
   }
 }
+
+// 视口里出现还没加载的分组就补上：初始填满一屏、往下滚、刻度尺跳转都靠这一条。
+// flush:'post' —— 等 DOM 落位再发请求，避免刚 resetTimeline 就按旧 scrollTop 算一遍。
+function ensureVisibleLoaded() {
+  const list = visibleGroups.value
+  if (!list.length) return
+  const miss = list.find((v) => !v.g.photos)
+  if (!miss) return
+  const gi = groups.value.indexOf(miss.g)
+  if (gi >= 0) ensureLoaded(gi)
+}
+watch(visibleGroups, ensureVisibleLoaded, { flush: 'post' })
 
 function selectAlbum(id) {
   // 切相册时清空多选：不同相册的照片 id 不能混在一起移动
@@ -1022,6 +1115,10 @@ function selectAllPhotos() {
   if (next.size) selectMode.value = true
 }
 
+// 有没有还没加载的日期组：分页后「全选」只能全选已加载的，按钮文案要说实话，
+// 否则用户以为选中了整册、实际只选了看到的那一段。
+const hasUnloadedGroups = computed(() => groups.value.some(g => !g.photos))
+
 function toggleSelect(id) {
   const next = new Set(selectedIds.value)
   if (next.has(id)) next.delete(id)
@@ -1146,13 +1243,36 @@ function viewPhoto(p) {
   // 信息面板开着时跟着切到新照片（面板位置保持不动，只换内容）
   if (infoVisible.value) loadPhotoInfo(viewer.value)
 }
-// 在扁平列表中平移当前项，首尾循环
-function stepPhoto(dir) {
-  const list = allPhotos.value
-  if (!list.length || !viewer.value) return
-  const idx = list.findIndex(p => p.id === viewer.value.id)
+// 在扁平列表中平移当前项。
+// 相册是分页加载的，走到已加载范围的边界时先把相邻那段补上；补不到（真到整册头尾）
+// 就在已加载范围内首尾循环 —— 与原来的循环行为一致，只是补了一次加载。
+function groupIndexOfPhoto(id) {
+  for (let i = 0; i < groups.value.length; i++) {
+    const ps = groups.value[i].photos
+    if (ps && ps.some(p => p.id === id)) return i
+  }
+  return -1
+}
+async function stepPhoto(dir) {
+  if (!viewer.value) return
+  const cur = viewer.value.id
+  let list = allPhotos.value
+  let idx = list.findIndex(p => p.id === cur)
   if (idx === -1) return
-  viewPhoto(list[(idx + dir + list.length) % list.length])
+  let next = idx + dir
+  if (next < 0 || next >= list.length) {
+    const gi = groupIndexOfPhoto(cur)
+    const want = gi + dir
+    if (gi !== -1 && want >= 0 && want < groups.value.length && !groups.value[want].photos) {
+      await ensureLoaded(want)
+      list = allPhotos.value
+      idx = list.findIndex(p => p.id === cur)
+      if (idx === -1) return
+      next = idx + dir
+    }
+  }
+  if (next < 0 || next >= list.length) next = (next + list.length) % list.length
+  viewPhoto(list[next])
 }
 function prevPhoto() { stepPhoto(-1) }
 function nextPhoto() { stepPhoto(1) }
@@ -1186,13 +1306,14 @@ function fmtBytes(n) {
 
 async function loadPhotoInfo(p) {
   if (!p) return
-  if (infoCache.has(p.id)) { photoInfo.value = infoCache.get(p.id); return }
+  const cachedInfo = getPhotoInfo(p.id)
+  if (cachedInfo) { photoInfo.value = cachedInfo; return }
   infoLoading.value = true
   photoInfo.value = null
   try {
     const res = await axios.get(`/api/album/photo/${p.id}/info`, { headers: authHeaders() })
     if (res.data && res.data.success) {
-      infoCache.set(p.id, res.data.data)
+      setPhotoInfo(p.id, res.data.data)
       // 请求期间可能已经切到别的照片：只有仍是当前这张才写入，避免旧结果盖掉新面板
       if (viewer.value && viewer.value.id === p.id) photoInfo.value = res.data.data
     }
@@ -1361,6 +1482,8 @@ onBeforeUnmount(() => {
   // 悬停预取的定时器与在途下载同理：页面走后不该再拉原图
   onCellHoverEnd()
   releasePrefetch()
+  // 1-4：信息面板缓存随页面卸载清空（跨次打开本来也不复用，避免长期驻留元数据）
+  clearPhotoInfo()
 })
 </script>
 

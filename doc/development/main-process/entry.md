@@ -88,7 +88,7 @@ classnest/
 
 **`ipcMain.handle`（请求-响应）**：
 
-`open-external`（仅 http/https）、`get-master-key`（安全通道主密钥）、`set-content-protection`（敏感内容防截屏）、`copy-sensitive-text`（剪贴板 TTL（有效期）清理）、`get-pending-notification`（取迁移/引导提示）、`launch-plan`（启动计划）、`get-setup-warmup`（引导预热状态）、`set-initial-data-dir`、`set-data-dir`、`set-db-encryption`、`set-thumbs-dir`、`set-skills-dir`。
+`open-external`（仅 http/https）、`get-master-key`（安全通道主密钥）、`secure-handshake`（安全通道握手报文桥，只转发公钥）、`set-content-protection`（敏感内容防截屏）、`copy-sensitive-text`（剪贴板 TTL（有效期）清理）、`get-pending-notification`（取迁移/引导提示）、`launch-plan`（启动计划）、`get-setup-warmup`（引导预热状态）、`set-initial-data-dir`、`set-data-dir`、`set-db-encryption`、`set-thumbs-dir`、`set-skills-dir`。
 
 **`ipcMain.on`（单向通道）**：
 

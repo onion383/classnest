@@ -3,6 +3,8 @@ node_modules/
 node_modules_old/
 dist/
 dist_empty/
+# 后端单文件 bundle 产物（student-backend/build.bundle.mjs 生成）
+student-backend/app.bundle.js
 
 # 环境变量
 .env

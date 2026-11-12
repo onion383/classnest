@@ -73,7 +73,7 @@ classnest/
 - **定位**：后端 HTTP 路由层（`student-backend/routes/`），负责挂载点、接口清单与每个接口的处理链。
 - **公共逻辑**：所有业务接口经 `auth(['teacher'])`（鉴权中间件，只允许教师角色）→ `JWT`（登录令牌）校验 → `dbManager.withDb`（按当前库执行回调的包装函数）绑定当前库；路由内做参数校验、`sanitize`（数据清洗）清洗、事务写库、撤销登记与统一 JSON 响应。
 - **局限**：不展开数据层加密/多库细节、安全通道握手、AI 提案与撤销执行器内部实现；这些见 [data-layer.md](./data-layer.md)、[topics/security.md](../topics/security.md)、[topics/ai.md](../topics/ai.md)。
-- **规模**：共 228 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
+- **规模**：共 229 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
 
 
 ### 处理标准的写法
@@ -165,6 +165,7 @@ flowchart TD
 | POST | `/` | 插入行；`atPosition` 指定插入点；`minCount` 保持最少行数 |
 | PUT | `/:id` | 更新整行或单元格；先 sanitize 再写 |
 | DELETE | `/:id` | 删行；受 `minCount` 限制 |
+| POST | `/batch-delete` | 批量删行（`{ ids: [] }`）：`tableService.deleteRows` 整批一个事务，任一 id 不存在 / 受保护关系 / 低于 `minCount` 都整批回滚 |
 | POST | `/move-row` | 行移动（重排 position） |
 | POST | `/move` | 批量移动/重排 |
 | POST | `/add-column` | 新增列（写 `table_meta` 与 ALTER TABLE） |
@@ -211,6 +212,11 @@ flowchart TD
 
 #### [`routes/dashboard.js`](../../../student-backend/routes/dashboard.js)（`/api/dashboard`） · 看板聚合路由
 看板聚合只读接口（部分数据与 `widget-settings/class-info` 共用）。
+
+- **响应（v6 · 2-1 起摘要化）**：`{ schedule, duty, countdowns, leaves, students:[{id,姓名}], activities, album, summary }`。
+- **不再下发**：全量 `scores` / `fees`；`students` 只保留 `id + 姓名`（值日卡片按 id 显示姓名用）。
+- **`summary`**：`studentCount / scoreCount / feeCount / topScores(今日 Top4，扣分为负、小组行用 group_name) / feeBalance / monthIncome / monthExpense`，口径与改造前 `DashboardView` 的三个 computed 逐项一致。
+- **实测**（45 人 / 1000 条加减分 / 120 条班费）：整包 358.8KB → **8.9KB**（-97.5%），`JSON.parse` 0.82ms → 0.03ms；`PERF_STARTUP=1` 时首屏聚合日志会带响应体积与各域行数。
 
 ### 5. 历史快照工厂
 

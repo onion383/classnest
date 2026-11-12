@@ -16,6 +16,7 @@
 const { app, ipcMain } = require('electron')
 const { getPrivateWorkingSetKB } = require('./main.privateWorkingSet')
 const startupTimer = require('./main.startup-timer')
+const { startEventLoopSampling, readEventLoopStats, markEventLoopWindow } = require('./main.eventloop')
 
 // 窗口 / 后端句柄出口：由 registerPerfIpc 注入
 let getMainWindow = () => null
@@ -212,9 +213,14 @@ function procMemKB(p) {
 // 由主进程定时采样，不依赖设置页是否打开——「最高」自程序启动即开始统计。
 const MEM_SAMPLE_INTERVAL = 5000
 const MEM_AVG_WINDOW = 60000
+// 首采延后：启动瞬间与首屏并行会抢 worker/IPC；等首屏可见后再采第一次。
+const MEM_FIRST_DELAY = 2000
+// 启动后第一个事件循环观测窗口：覆盖建窗 + 后端 fork + 首屏渲染
+const EVENT_LOOP_FIRST_MARK = 3000
 let memHistory = []        // [{ t, kb }]，仅保留近一分钟的样本
 let memMaxKB = 0           // 自启动以来的最高总计
 let memSampleTimer = null
+let memFirstTimer = null
 let memSampling = false
 
 function recordMemSample(kb) {
@@ -237,16 +243,41 @@ async function sampleMemTotal() {
   if (memSampling) return
   memSampling = true
   try {
+    // 采集链路由 app.getAppMetrics + 后端 mem-report IPC + PDH worker 三段组成，
+    // 任一段变慢都应能看见；>30ms 留一条日志，正常路径不刷屏。
+    const t0 = process.hrtime.bigint()
     const procs = await collectProcList()
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6
+    if (ms > 30) {
+      try { console.log(`[perf] 内存采集 ${Math.round(ms)}ms`) } catch (_) { /* 日志失败静默 */ }
+    }
     recordMemSample(procs.reduce((s, p) => s + procMemKB(p), 0))
   } catch (_) { /* 采样失败静默忽略 */ }
   finally { memSampling = false }
 }
 
 function startMemSampling() {
-  if (memSampleTimer) return
-  sampleMemTotal()
-  memSampleTimer = setInterval(sampleMemTotal, MEM_SAMPLE_INTERVAL)
+  if (memSampleTimer || memFirstTimer) return
+  // 主进程事件循环观测：与内存采样一起启动，但读数独立（面板快照 / 启动窗口各读一次）。
+  startEventLoopSampling()
+  memFirstTimer = setTimeout(() => {
+    memFirstTimer = null
+    sampleMemTotal()
+    memSampleTimer = setInterval(sampleMemTotal, MEM_SAMPLE_INTERVAL)
+  }, MEM_FIRST_DELAY)
+  setTimeout(() => markEventLoopWindow('启动后'), EVENT_LOOP_FIRST_MARK)
+  // 2-16：首屏请求发生在 400~700ms，这里在 1s 时无条件读一次窗口分位数，
+  // 判断 app:// 协议派发前的主进程事件循环是否被启动期同步工作占住。
+  if (process.env.PERF_STARTUP === '1') {
+    setTimeout(() => {
+      try {
+        const s = readEventLoopStats({ reset: true })
+        console.log(s
+          ? `[perf] 事件循环 启动后1s p50=${s.p50}ms p95=${s.p95}ms max=${s.max}ms 样本=${s.count}`
+          : '[perf] 事件循环 启动后1s 不可用')
+      } catch (_) { /* 打点失败静默 */ }
+    }, 1000)
+  }
 }
 
 function registerPerfIpc(opts = {}) {
@@ -282,7 +313,7 @@ function registerPerfIpc(opts = {}) {
       widget: !!((widgetWindow && !widgetWindow.isDestroyed()) || (desktopWidgetWindow && !desktopWidgetWindow.isDestroyed())),
       backend: procs.some((p) => p.kind === 'backend'),
     }
-    return { procs, alive, total, avg1min: memAvgKB(), max: memMaxKB, frontKB, backendKB, otherKB }
+    return { procs, alive, total, avg1min: memAvgKB(), max: memMaxKB, frontKB, backendKB, otherKB, eventLoop: readEventLoopStats({ reset: true }) }
   })
 
   // 重启前端：直接重载主窗口页面

@@ -30,11 +30,13 @@
             >
               <h2 class="text-lg font-semibold text-text mb-3 flex items-center gap-2">
                 <span class="px-2 py-0.5 bg-info/10 text-info rounded text-sm">{{ v.g.date }}</span>
-                <span class="text-xs text-text-muted">{{ v.g.photos.length }} 张</span>
+                <span class="text-xs text-text-muted">{{ groupCountOf(v.g) }} 张</span>
               </h2>
               <div class="flex flex-wrap gap-3">
+                <!-- 分页加载中：高度已按张数预留，这里只占位提示 -->
+                <div v-if="!v.g.photos" class="text-sm text-text-muted py-2">加载中…</div>
                 <div
-                  v-for="p in v.g.photos"
+                  v-for="p in (v.g.photos || [])"
                   :key="p.id"
                   @click="toggle(p)"
                   class="rounded-lg overflow-hidden bg-bg border cursor-pointer group relative picker-cell"
@@ -78,6 +80,9 @@ import axios from 'axios'
 import DialogShell from '../base/DialogShell.vue'
 import VideoThumb from '../import-export/VideoThumb.vue'
 import { usePhotoTimeline } from '../../composables/usePhotoTimeline.js'
+import {
+  pageBefore, groupCountOf, firstUnloadedIndex, mergePhotoGroups, buildGroupPlaceholders, selectionCount,
+} from '../../composables/albumPhotoPages.js'
 import { useThumbBatch } from '../../composables/useThumbBatch.js'
 import { albumThumbUrl } from '../../utils/albumMedia'
 import '../../styles/dialog-transition.css'
@@ -86,17 +91,24 @@ const props = defineProps({
   visible: { type: Boolean, default: false },
   albumId: { type: [Number, String, null], default: null },
   albumName: { type: String, default: '' },
-  // 上次已选的照片 id：再次打开同一相册时恢复勾选状态
-  initialIds: { type: Array, default: () => [] },
+  /* 上次的选择，再次打开同一相册时原样恢复。
+   * 必须是一个「描述」而不是「照片 id 列表」：
+   * 相册是分页加载的，回到弹窗时那些照片大概率还没加载 ——
+   * 按 id 列表恢复的话，没加载的直接被过滤掉，勾选会静默丢失。 */
+  initial: { type: Object, default: null },
 })
-// confirm：把选中的照片对象数组交回给「新建相册」弹窗
+// confirm：把「选择描述」交回给「新建相册」弹窗（见 confirm() 的注释）
 const emit = defineEmits(['close', 'confirm'])
 
 const loading = ref(false)
 const groups = ref([])
-// 选中的照片 id 集合；同时保留 id → 照片对象，确认时按选择顺序无关地取对象
-const selected = ref(new Set())
-const photoMap = new Map()
+/* 选中状态 = 一条「描述」，不依赖照片有没有加载：
+ *   allOfAlbum=true  → 选了源相册全部，excluded 是要排除掉的那几张
+ *   allOfAlbum=false → ids 是显式勾选的
+ * 这样「整册全选」不需要前端先拿全部照片（一万张就是一万个 id 的传输 + 一万次 DOM 绑定）。 */
+const allOfAlbum = ref(false)
+const ids = ref(new Set())
+const excluded = ref(new Set())
 
 const { containerRef, cellStyle, totalH, visibleGroups, onScroll, reset } = usePhotoTimeline(groups)
 
@@ -136,53 +148,106 @@ function onThumbError(e) {
   if (e.target && e.target.src !== THUMB_PLACEHOLDER) e.target.src = THUMB_PLACEHOLDER
 }
 
-const allPhotos = computed(() => groups.value.flatMap(g => g.photos || []))
-const selectedCount = computed(() => selected.value.size)
+// 源相册总张数：由日期索引求和，不需要照片行就能算（「已选 N 张」靠它）
+const totalCount = computed(() => groups.value.reduce((a, g) => a + groupCountOf(g), 0))
+const selectedCount = computed(() => selectionCount({
+  allOfAlbum: allOfAlbum.value, ids: ids.value, exclude: excluded.value,
+}, totalCount.value))
 
 function isSelected(id) {
-  return selected.value.has(id)
+  return allOfAlbum.value ? !excluded.value.has(id) : ids.value.has(id)
 }
 
 function toggle(p) {
-  const next = new Set(selected.value)
+  const target = allOfAlbum.value ? excluded : ids
+  const next = new Set(target.value)
   if (next.has(p.id)) next.delete(p.id)
   else next.add(p.id)
-  selected.value = next
+  target.value = next
 }
 
 function selectAll() {
-  const next = new Set()
-  for (const p of allPhotos.value) next.add(p.id)
-  selected.value = next
+  // 整册：只记一个标记。真正展开在后端（POST /api/album 的 all_from）。
+  allOfAlbum.value = true
+  excluded.value = new Set()
+  ids.value = new Set()
 }
 
 function clearSelection() {
-  selected.value = new Set()
+  allOfAlbum.value = false
+  ids.value = new Set()
+  excluded.value = new Set()
 }
 
 // 读取守卫：快速换相册 / 关掉再开时，先发的请求后回来会把新相册的列表
 // 覆盖成旧相册的内容（缩略图与勾选全对不上）。只认最后一次。
 const loadGuard = createLatest()
+const PAGE_DAYS = 8
+const pageInFlight = new Set()
+let loadEpoch = 0
+
+// 与相册页同一套分页：先拿日期索引（含每组张数，布局一次算准），再按需补照片行。
+async function ensureLoaded(fromIdx) {
+  const gs = groups.value
+  const j = firstUnloadedIndex(gs, fromIdx)
+  if (j === -1) return
+  const albumAtStart = props.albumId
+  const epoch = loadEpoch
+  const anchorDate = gs[j].date
+  if (pageInFlight.has(anchorDate)) return
+  pageInFlight.add(anchorDate)
+  try {
+    const res = await axios.get(`/api/album/${albumAtStart}/photos`, {
+      params: { days: PAGE_DAYS, before: pageBefore(anchorDate) },
+      headers: authHeaders(),
+    })
+    if (epoch !== loadEpoch || albumAtStart !== props.albumId) return
+    if (mergePhotoGroups(groups.value, res.data && res.data.data)) {
+      refreshThumbBatch()
+      ensureVisibleLoaded()
+    }
+  } catch (err) {
+    if (epoch !== loadEpoch) return
+    reportError(err, { action: '读取照片' })
+  } finally {
+    pageInFlight.delete(anchorDate)
+  }
+}
+
+function ensureVisibleLoaded() {
+  const list = visibleGroups.value
+  if (!list.length) return
+  const miss = list.find((v) => !v.g.photos)
+  if (!miss) return
+  const gi = groups.value.indexOf(miss.g)
+  if (gi >= 0) ensureLoaded(gi)
+}
+
 async function load() {
   if (!props.albumId) { groups.value = []; return }
   const token = loadGuard.begin()
   loading.value = true
+  loadEpoch++
+  pageInFlight.clear()
   // 换了相册 → 旧的 objectURL 全作废（照片 id 不同，留着会显示错图）
   clearThumbBatch()
   try {
-    const res = await axios.get(`/api/album/${props.albumId}/photos`, { headers: authHeaders() })
+    const res = await axios.get(`/api/album/${props.albumId}/dates`, { headers: authHeaders() })
     if (!loadGuard.isCurrent(token)) return
-    groups.value = res.data.data || []
-    photoMap.clear()
-    for (const g of groups.value) for (const p of g.photos || []) photoMap.set(p.id, p)
-    // 恢复上次在这个相册里勾过的照片（只保留仍然存在的）
-    const keep = new Set()
-    for (const id of props.initialIds) if (photoMap.has(id)) keep.add(id)
-    selected.value = keep
+    groups.value = buildGroupPlaceholders(res.data && res.data.data)
+    // 恢复上次的选择：原样采纳。**不能按「照片已加载」过滤** ——
+    // 分页后这里绝大多数照片都还没加载，过滤等于把用户的勾选悄悄丢掉。
+    const init = props.initial
+    if (init && Number(init.albumId) === Number(props.albumId)) {
+      allOfAlbum.value = !!init.allOfAlbum
+      ids.value = new Set(init.ids || [])
+      excluded.value = new Set(init.exclude || [])
+    } else {
+      clearSelection()
+    }
     await nextTick()
     reset()
-    // 列表就绪 → 立即触发一次批量预取（不等滚动）
-    refreshThumbBatch()
+    await ensureLoaded(0)
   } catch (err) {
     if (!loadGuard.isCurrent(token)) return
     groups.value = []
@@ -192,9 +257,20 @@ async function load() {
   }
 }
 
+// 视口里出现还没加载的分组就补上（滚动、跳转都靠这一条）
+watch(visibleGroups, () => { ensureVisibleLoaded() }, { flush: 'post' })
+
+/* 确认时交回的是「选择描述」，不是照片对象数组。
+ * 原来交的是对象数组，而调用方只用到了 p.id —— 分页之后这个约定就行不通了：
+ * 没加载的照片根本不在前端，拿不到对象。描述交给后端展开，一万张也不用传一万个 id。 */
 function confirm() {
-  const picked = [...selected.value].map(id => photoMap.get(id)).filter(Boolean)
-  emit('confirm', picked)
+  emit('confirm', {
+    albumId: props.albumId,
+    allOfAlbum: allOfAlbum.value,
+    ids: allOfAlbum.value ? [] : [...ids.value],
+    exclude: allOfAlbum.value ? [...excluded.value] : [],
+    total: totalCount.value,
+  })
 }
 
 // immediate：弹窗随 v-if 挂载时 visible 直接为 true，不 immediate 会漏掉首次加载

@@ -134,7 +134,11 @@ export function usePhotoTimeline(groupsRef, options = {}) {
   const cellStyle = computed(() => ({ width: cell.value + 'px', height: cell.value + 'px' }))
 
   function groupHeight(g) {
-    const n = g.photos ? g.photos.length : 0
+    /* 张数优先取 count（后端「日期索引」给出的该组总张数）。
+       分页加载时 photos 可能还没到，但高度必须按真实张数预留 ——
+       否则每加载一页总高度就变长一次，滚动条会自己跳。
+       count 缺省时退回 photos.length（选照片弹窗仍是一次全量取，走这条）。 */
+    const n = g.count != null ? g.count : (g.photos ? g.photos.length : 0)
     const rows = n ? Math.ceil(n / cols.value) : 0
     return HEADER + (rows ? rows * cell.value + (rows - 1) * GAP : 0)
   }

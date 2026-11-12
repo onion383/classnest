@@ -19,6 +19,7 @@
 // =========================================================================
 
 import { SEND } from '../electronChannels.js'
+import { createLongtaskObserver, longTaskRow, LONG_TASK_KEEP } from './inpLongtask.js'
 
 const DEV = import.meta.env.DEV
 // 只记录 ≥40ms 的交互，过滤掉大量无关紧要的快速点击
@@ -37,7 +38,10 @@ const DIALOG_SEL = '[role="dialog"], [class*="dialog"], [class*="Dialog"], [clas
 
 const byCategory = new Map() // 类别 -> stats
 const byTarget = new Map()   // '事件 → 元素' -> stats
+// 不挂在交互上的主线程长任务（数据到达后批量渲染 / markdown 重解析 / 排表同步段）
+const longTasks = []
 let observer = null
+let longObserver = null
 let pendingSinceDump = 0
 
 // 目标元素做成人能看懂的短标签：tag#id.class「按钮文案」
@@ -97,6 +101,19 @@ function record(entry) {
   pendingSinceDump++
 }
 
+// 长任务：不挂交互，按「路由 + 焦点元素」归属；只留最近 N 条，防止 payload 无限涨
+function recordLongTask(entry) {
+  try {
+    const target = typeof document !== 'undefined'
+      ? labelOf(document.activeElement)
+      : ''
+    const route = typeof location !== 'undefined' ? (location.hash || location.pathname || '') : ''
+    longTasks.push(longTaskRow(entry, { route, target }))
+    if (longTasks.length > LONG_TASK_KEEP) longTasks.splice(0, longTasks.length - LONG_TASK_KEEP)
+    pendingSinceDump++
+  } catch (_) { /* 归属失败也不能影响页面 */ }
+}
+
 function toRows(map, keyName, limit) {
   const rows = [...map.entries()]
     .map(([key, b]) => ({
@@ -114,30 +131,44 @@ function toRows(map, keyName, limit) {
 
 // 导出汇总：同时打印、回传主进程落盘，并把数据 return 出去（供 CDP 脚本读取）
 function dump(reason) {
-  if (!byCategory.size) {
-    console.log(`[inp] 暂无 ≥${MIN_DURATION}ms 的交互样本`)
-    return { reason, categories: [], details: [] }
+  if (!byCategory.size && !longTasks.length) {
+    console.log(`[inp] 暂无 ≥${MIN_DURATION}ms 的交互样本或 ≥16ms 的长任务`)
+    return { reason, categories: [], details: [], longTasks: [] }
   }
   const categories = toRows(byCategory, '类别')
   const details = toRows(byTarget, '交互', DETAIL_TOP)
-  console.log(`[inp] 按交互类别（${reason}，单位 ms）`)
-  console.table(categories)
-  console.log(`[inp] 最慢交互明细 Top ${details.length}`)
-  console.table(details)
+  if (categories.length) {
+    console.log(`[inp] 按交互类别（${reason}，单位 ms）`)
+    console.table(categories)
+    console.log(`[inp] 最慢交互明细 Top ${details.length}`)
+    console.table(details)
+  }
+  if (longTasks.length) {
+    console.log(`[inp] 主线程长任务（${reason}，≥16ms，最近 ${longTasks.length} 条）`)
+    console.table(longTasks)
+  }
   // 同步一份给主进程落盘（electron/main.inpLog.js → <数据目录>/inp.log）。
   // 探针只在 dev 安装，打包版不会走到这里，通道名也不会被使用。
-  try { window.electron?.send?.(SEND.INP_REPORT, { reason, categories, details }) } catch (_) {}
-  return { reason, categories, details }
+  try { window.electron?.send?.(SEND.INP_REPORT, { reason, categories, details, longTasks }) } catch (_) {}
+  return { reason, categories, details, longTasks }
 }
 
 export function installInpProbe() {
-  if (!DEV || observer) return
+  if (!DEV || observer || longObserver) return
   if (typeof PerformanceObserver === 'undefined') return
   try {
     observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) record(entry)
     })
     observer.observe({ type: 'event', buffered: true, durationThreshold: MIN_DURATION })
+    // 主线程长任务：不挂在交互上的阻塞（批量渲染 / 重解析 / 排表同步段）只有这个观察者能看见。
+    // 不允许该能力时返回 null，事件观察者照常工作。
+    longObserver = createLongtaskObserver({
+      Observer: PerformanceObserver,
+      supported: !!PerformanceObserver.supportedEntryTypes?.includes?.('longtask'),
+      onRecord: recordLongTask,
+      warn: (err) => console.warn('[inp] 长任务观察器启用失败:', err?.message || err),
+    })
     // 只在 dev 启用、且 installInpProbe 有 observer 短路保护，进程内只会有一个定时器；
     // 页面级探针不提供停止入口，故不保存句柄（原先存了 autoTimer 却从未 clear）
     setInterval(() => {
@@ -149,10 +180,11 @@ export function installInpProbe() {
     window.__inpReset = () => {
       byCategory.clear()
       byTarget.clear()
+      longTasks.length = 0
       pendingSinceDump = 0
       console.log('[inp] 已清空')
     }
-    console.log(`[inp] 归因探针已启用（仅统计 ≥${MIN_DURATION}ms 的用户交互）；__inp() 导出并返回汇总、__inpReset() 清空`)
+    console.log(`[inp] 归因探针已启用（≥${MIN_DURATION}ms 交互 + ≥16ms 主线程长任务）；__inp() 导出并返回汇总、__inpReset() 清空`)
   } catch (err) {
     console.warn('[inp] 探针启用失败:', err?.message || err)
   }

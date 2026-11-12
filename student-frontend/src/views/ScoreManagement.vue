@@ -133,6 +133,7 @@
           @save-cell="saveCell"
           @delete-row="onDeleteRow"
           @swap-rows="onSwapRows"
+          @scroll-end="loadMore"
           @swap-columns="onSwapColumns"
           @edit-row="openEditRow"
         />
@@ -191,7 +192,7 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
-import { ref, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { reportError } from '../utils/reportError.js'
 import axios from 'axios'
@@ -229,8 +230,21 @@ const loading = ref(false)
 const students = ref([])
 // 加分对象：personal 个人加分 / group 小组加分（完全独立，各自有记录与统计）
 const scoreMode = ref('personal')
-const scores = ref([])       // 个人加分记录（source !== 'group'）
-const groupScores = ref([])  // 小组加分记录（source === 'group'）
+const scores = ref([])       // 个人加分记录（source !== 'group'），已加载部分
+const groupScores = ref([])  // 小组加分记录（source === 'group'），已加载部分
+// 今日记录单独拉（?date=today）：列表默认只加载第一页，今天的记录不一定在里面，
+// 而「今日时间轴」和「今日人数/项目数」要的是今天全部，不能靠列表顺带（v6 · 2-23）。
+const todayAll = ref([])
+// 分页游标：两个加分对象各自独立 —— 共用一个 offset 会在切换时错位
+const PAGE_SIZE = 50
+const pageState = reactive({
+  personal: { offset: 0, hasMore: true, loading: false },
+  group: { offset: 0, hasMore: true, loading: false },
+})
+// 统计全量是否已加载：避免来回切页签反复拉整表；增删改后由 resetPaging 归零。
+// 声明必须在这里（loadAll 在模块顶层就会被调用），放到函数旁边会踩 TDZ ——
+// 「Cannot access 'fullLoaded' before initialization」会被 catch 吞成「加载失败」。
+const fullLoaded = reactive({ personal: false, group: false })
 const statMode = ref('add')
 const addDialogVisible = ref(false)
 const addDialogMounted = ref(false)
@@ -295,7 +309,9 @@ const recordMap = computed(() => {
   todayRecords.value.forEach(r => { m[r.id] = r })
   return m
 })
-const todayRecords = computed(() => activeData.value.filter(r => String(r.加分时间 || '').startsWith(todayStart.value)))
+// 今日记录来自独立请求（?date=today，后端已按日过滤），这里只按加分对象分流。
+// 不再从 activeData（列表已加载部分）里 filter —— 列表只有第一页时那样会漏数据。
+const todayRecords = computed(() => todayAll.value.filter(r => isGroup.value ? r.source === 'group' : r.source !== 'group'))
 const todayAddRecords = computed(() => todayRecords.value.filter(r => r.类型 !== '扣分'))
 const todaySubRecords = computed(() => todayRecords.value.filter(r => r.类型 === '扣分'))
 const todayAddItems = computed(() => new Set(todayAddRecords.value.map(r => r.项目).filter(Boolean)).size)
@@ -414,7 +430,13 @@ function _applyRowFocus() {
       const id = Number(key)
       const mode = scores.value.some(r => r.id === id) ? 'personal'
         : groupScores.value.some(r => r.id === id) ? 'group' : null
-      if (!mode) return null
+      if (!mode) {
+        // 列表默认只有第一页，目标可能还在后面：两个加分对象各补一次全量，
+        // helper 会在下一轮重试时命中（返回 null 就是「还没准备好」，不是失败）
+        if (!fullLoaded.personal) void loadFullOf('personal')
+        if (!fullLoaded.group) void loadFullOf('group')
+        return null
+      }
       if (scoreMode.value !== mode) {
         scoreMode.value = mode
         buildScoreRows()
@@ -424,20 +446,98 @@ function _applyRowFocus() {
     }
   })
 }
-async function loadAll() {
-  loading.value = true
+// ---------- 成绩数据加载（v6 · 2-23：列表分页 + 今日单拉 + 统计按需全量）----------
+// 三种需求各不相同，不能共用一次「全量拉取」：
+//   · 列表：默认只拿第一页，滚到底再续（GET /scores?source=&limit=&offset=）
+//   · 今日时间轴：要今天全部，单独按日拉（GET /scores?date=）
+//   · 加分统计：要全量汇总，只在切到统计页签时拉一次（GET /scores?source= 不带 limit）
+
+// 统计全量是否已加载的声明已上移到 pageState 旁边（顶层 loadAll 会先用到它，见那里的注释）
+
+function resetPaging() {
+  for (const k of ['personal', 'group']) Object.assign(pageState[k], { offset: 0, hasMore: true, loading: false })
+  fullLoaded.personal = false
+  fullLoaded.group = false
+}
+
+// 拉某一页并追加/替换到对应加分对象的数组
+async function fetchPage(mode, offset, { replace = false } = {}) {
+  const st = pageState[mode]
+  if (st.loading) return false
+  st.loading = true
   try {
-    const [stuRes, scoreRes] = await Promise.all([
-      axios.get(`${API}/students`),
-      axios.get(`${API}/scores`)
-    ])
-    const all = scoreRes.data.data || []
-    students.value = stuRes.data.data || []
-    scores.value = all.filter(r => r.source !== 'group')
-    groupScores.value = all.filter(r => r.source === 'group')
+    const res = await axios.get(`${API}/scores`, { params: { source: mode, limit: PAGE_SIZE, offset } })
+    const rows = (res.data && res.data.data) || []
+    const target = mode === 'group' ? groupScores : scores
+    target.value = replace ? rows : target.value.concat(rows)
+    st.offset = offset + rows.length
+    st.hasMore = !!(res.data && res.data.hasMore)
     buildScoreRows()
     return true
   } catch (err) {
+    console.error('[score] 加载失败:', err)
+    useNotification().error('加载失败')
+    return false
+  } finally {
+    st.loading = false
+  }
+}
+
+// 滚到底时续下一页（DynamicTable 的 scroll-end 触发）
+async function loadMore() {
+  const mode = scoreMode.value
+  const st = pageState[mode]
+  if (st.loading || !st.hasMore) return
+  await fetchPage(mode, st.offset)
+}
+
+// 今日记录：按日整拉一次（含个人与小组，前端按加分对象分流）
+async function loadToday() {
+  try {
+    const res = await axios.get(`${API}/scores`, { params: { date: todayStart.value } })
+    todayAll.value = (res.data && res.data.data) || []
+  } catch (_) {
+    // 今日卡片属次要信息：失败不清空已有值，也不打断主列表加载
+  }
+}
+
+// 把某个加分对象补成全量（列表分页只加载了第一页，统计/跨页定位需要完整数据）
+async function loadFullOf(mode) {
+  try {
+    const res = await axios.get(`${API}/scores`, { params: { source: mode } })
+    const rows = (res.data && res.data.data) || []
+    if (mode === 'group') groupScores.value = rows
+    else scores.value = rows
+    Object.assign(pageState[mode], { offset: rows.length, hasMore: false })
+    fullLoaded[mode] = true
+    buildScoreRows()
+    return true
+  } catch (err) {
+    console.error('[score] 加载失败:', err)
+    useNotification().error('加载失败')
+    return false
+  }
+}
+async function loadFullForStats() {
+  return loadFullOf(scoreMode.value)
+}
+
+async function loadAll() {
+  loading.value = true
+  try {
+    resetPaging()
+    const mode = scoreMode.value
+    const [stuRes] = await Promise.all([
+      axios.get(`${API}/students`),
+      fetchPage(mode, 0, { replace: true }),
+      loadToday(),
+    ])
+    students.value = stuRes.data.data || []
+    // 统计页签还开着：它要的是全量，光第一页会让汇总变小
+    if (activeTab.value === 'stats') await loadFullForStats()
+    return true
+  } catch (err) {
+    console.error('[score] 加载失败:', err)
     useNotification().error('加载失败')
     return false
   } finally {
@@ -448,6 +548,18 @@ async function refresh() {
   // 失败时 loadAll 已弹「加载失败」，这里不再重复提示，更不会误报「已刷新」
   if (await loadAll()) useNotification().success('已刷新 加分管理 数据')
 }
+// 切换加分对象：该对象还没加载过就先拿第一页（否则列表空着像没数据）；
+// 统计页签开着时还要补全量，否则换对象后统计仍停在第一页的范围。
+watch(scoreMode, async (mode) => {
+  if (!pageState[mode].offset) await fetchPage(mode, 0, { replace: true })
+  if (activeTab.value === 'stats' && !fullLoaded[mode]) await loadFullForStats()
+})
+// 切到「加分统计」时才拉全量：进页面只看列表的话，没必要为汇总读整表
+watch(activeTab, async (tab) => {
+  if (tab === 'stats' && !fullLoaded[scoreMode.value]) await loadFullForStats()
+})
+// 跨天：今日卡片的日期变了，要重拉今日那份（列表不受影响）
+watch(todayStart, () => { void loadToday() })
 async function refreshStats() {
   if (await loadAll()) useNotification().success('已刷新 加分统计 数据')
 }

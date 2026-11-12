@@ -3,7 +3,7 @@
 //
 // 由 main.js 在模块加载期调用 registerWebviewGuard({ getMainWindow, isDev }) 注册
 // app.on('web-contents-created')。依赖注入：主窗口引用以 getter 闭包注入（调用时取当前值），
-// isDev 由 main.js 传入（与 !app.isPackaged 一致）。原实现内嵌于 main.js，此处为等价的纯搬运。
+// isDev 由 main.js 传入（取 main.env 的唯一口径）。原实现内嵌于 main.js，此处为等价的纯搬运。
 // =========================================================================
 
 const { app } = require('electron')

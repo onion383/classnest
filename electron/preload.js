@@ -49,6 +49,8 @@ const onceMap = new Map()
 // 渲染进程全局标记：主进程通过 additionalArguments 传入 --secure-channel。
 // 前端只在置位后才对业务 JSON API 启用加密传输（见 composables/secureAxios.js）。
 contextBridge.exposeInMainWorld('__SECURE_CHANNEL__', process.argv.includes('--secure-channel'))
+// 打包版长任务采样开关：主进程在 PERF_LONG_TASK=1 时注入该参数，渲染层据此安装观察器。
+contextBridge.exposeInMainWorld('__PERF_LONG_TASK__', process.argv.includes('--perf-long-task'))
 
 contextBridge.exposeInMainWorld('electron', {
   // 向主进程发送消息（单向）

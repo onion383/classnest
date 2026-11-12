@@ -25,6 +25,9 @@ function migrateScore(conn) {
 
   // 优化：加分按学生过滤 + 时间排序展示
   conn.exec(`CREATE INDEX IF NOT EXISTS idx_score_student_time ON score_records (student_id, 加分时间);`);
+  // 列表分页（v6 · 2-23）：GET /api/scores 的排序键是 `加分时间 DESC, id DESC`，
+  // 没这个索引时每一页都要把整表排一遍（分页只省了传输和渲染，省不了排序）。
+  conn.exec(`CREATE INDEX IF NOT EXISTS idx_score_time ON score_records (加分时间 DESC, id DESC);`);
 }
 
 module.exports = { migrateScore };

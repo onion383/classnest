@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { registerUserScopedReset, userScopedGeneration } from '../utils/userScopedCache.js'
-import { createPhaseLog, logSummary, perfNow } from '../utils/perfMark.js'
+import { createPhaseLog, logSummary, perfNow, phaseLogOf, logResourceTiming } from '../utils/perfMark.js'
 
 // ===========================================================================
 // 首屏数据预取：Dashboard 首页所需的 9 份数据，改由后端聚合接口 /api/dashboard
@@ -37,7 +37,11 @@ function bootSummary(tag, config, perfLog) {
   if (summaryMarked) return
   summaryMarked = true
   const retries = (config && config.__retryCount) || 0
-  logSummary(`首屏请求汇总 ${tag} 重试${retries}次`, perfLog)
+  // 必须取 config 上的收集器：axios 深拷贝了 __perf，原 perfLog 的 phases 是空的。
+  logSummary(`首屏请求汇总 ${tag} 重试${retries}次`, phaseLogOf(config, perfLog))
+  // 资源计时：区分「请求已发起但渲染线程忙、尚未出网」与「已出网、后端/网络慢」。
+  // 放到下一宏任务：Resource Timing 条目通常在响应消费完的当前任务之后才注册。
+  try { setTimeout(() => logResourceTiming('/api/dashboard', '首屏资源计时'), 0) } catch (_) { /* 打点失败静默 */ }
 }
 
 // 登出/换号必须丢掉这份快照：它是整个库的数据（成绩/班费/学生名册），
@@ -45,17 +49,28 @@ function bootSummary(tag, config, perfLog) {
 registerUserScopedReset(() => { dataCache = null; pending = null })
 
 // 兜底归一：聚合接口已按约定返回各键，这里只补缺省值，保证调用方拿到的形状稳定。
+// v6 · 2-1 起后端不再下发全量 scores / fees（首页只用聚合值），students 只保留 id+姓名；
+// 缺 summary 时按空班处理，页面显示 0 而不是崩掉。
+const EMPTY_SUMMARY = {
+  studentCount: 0,
+  scoreCount: 0,
+  feeCount: 0,
+  topScores: [],
+  feeBalance: 0,
+  monthIncome: 0,
+  monthExpense: 0,
+}
 function normalize(d) {
+  const summary = (d && d.summary) || EMPTY_SUMMARY
   return {
     schedule: (d && d.schedule) || { cells: [], settings: {} },
     duty: (d && d.duty) || { cells: {}, settings: {} },
     countdowns: (d && d.countdowns) || [],
     leaves: (d && d.leaves) || [],
     students: (d && d.students) || [],
-    scores: (d && d.scores) || [],
     activities: (d && d.activities) || [],
-    fees: (d && d.fees) || [],
     album: (d && d.album) || [],
+    summary: { ...EMPTY_SUMMARY, ...summary },
   }
 }
 

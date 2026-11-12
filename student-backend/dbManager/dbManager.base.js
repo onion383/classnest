@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const { AsyncLocalStorage } = require('async_hooks');
 const { normalizePhrase } = require('../services/recoveryKey');
+const { BACKEND_ROOT } = require('../utils/backendRoot');
 
 // 原生模块懒加载：后端子进程启动时不加载 .node 二进制，首次真正需要打开
 // 数据库时才 require，缩短 app.listen 就绪信号的时间，让主窗口更早出现。
@@ -20,9 +21,9 @@ function getDatabase() {
 }
 
 // 加载 .env（若存在），使密钥可从配置文件读取而不硬编码
-// 注意：本文件位于 student-backend/dbManager/ 下，.env 与数据目录仍在 student-backend/ 层。
+// 注意：.env 与数据目录都在 student-backend/ 层，bundle 后 __dirname 语义会变，故走 BACKEND_ROOT。
 (function loadEnvFile() {
-  const envFile = path.join(__dirname, '..', '.env');
+  const envFile = path.join(BACKEND_ROOT, '.env');
   try {
     const content = fs.readFileSync(envFile, 'utf8');
     for (const line of content.split(/\r?\n/)) {
@@ -44,7 +45,7 @@ const WRAP_KEY = crypto.createHash('sha256').update(MASTER_KEY).digest();
 // 数据目录优先取环境变量（打包后由 Electron 主进程指向 userData），兜底用 student-backend/data
 const dataDir = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
-  : path.join(__dirname, '..', 'data');
+  : path.join(BACKEND_ROOT, 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 // 可写资源目录：上传文件（收据/背景图）统一放 dataDir 下，避免打包后 __dirname 位于只读

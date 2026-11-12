@@ -8,7 +8,7 @@
 // =========================================================================
 
 const path = require('path')
-const { app } = require('electron')
+const { isDev } = require('./main.env')
 
 // IPC 通道名单一来源（与渲染层 src/electronChannels.js 共用同一份 JSON）。
 // preload 运行在 sandbox 里，无法 require 本地文件，故由主进程读取后经 additionalArguments
@@ -28,7 +28,6 @@ const ipcAuth = require('./main.ipc-auth')
 // ipcRole：该窗口的角色（main/widget/desktop-widget/setup/migration）——
 //          决定注入 preload 的 IPC 白名单范围；不传则给全量名单（不裁剪）。
 function buildWebPreferences({ devTools, backgroundThrottling, webviewTag, ipcRole } = {}) {
-  const isDev = !app.isPackaged
   // 按角色裁剪通道名单；角色未知时退回全量（不因裁剪把功能掐死），
   // 但主进程侧的运行时校验仍然生效（fail-closed）。
   const allowed = ipcRole
@@ -42,8 +41,13 @@ function buildWebPreferences({ devTools, backgroundThrottling, webviewTag, ipcRo
     // contextIsolation + nodeIntegration:false 仍是软件层兜底。
     sandbox: true,
     // 注入渲染进程 argv：--secure-channel 供 preload 暴露 window.__SECURE_CHANNEL__；
-    // --ipc-channels 传 IPC 通道白名单（sandbox 下 preload 不能 require 本地文件，只能这样传）。
-    additionalArguments: ['--secure-channel', '--ipc-channels=' + JSON.stringify(allowed)],
+    // --ipc-channels 传 IPC 通道白名单（sandbox 下 preload 不能 require 本地文件，只能这样传）；
+    // --perf-long-task 仅在 PERF_LONG_TASK=1 时注入，供打包版按需采样主线程长任务。
+    additionalArguments: [
+      '--secure-channel',
+      '--ipc-channels=' + JSON.stringify(allowed),
+      ...(process.env.PERF_LONG_TASK === '1' ? ['--perf-long-task'] : []),
+    ],
     // webSecurity 仅开发模式关闭（用于加载自签名 https 的 Vite 服务）；
     // 生产环境必须保持开启，禁止在打包后关闭网页安全策略。
     webSecurity: !isDev,

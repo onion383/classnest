@@ -24,9 +24,10 @@
     "docs:sync": "node testjs/tools/docs-sync.mjs",
     "build": "cd student-frontend && npm run build",
     "build:new": "node student-frontend/dev-vite.js --vue36 build",
+    "build:backend": "node student-backend/build.bundle.mjs",
     "build:win:inno": "node electron/inno/compile.mjs",
-    "electron:build": "npm run build && electron-builder --dir && npm run build:win:inno",
-    "electron:buildnew": "npm run build:new && electron-builder --dir --config.directories.output=release36 && npm run build:win:inno -- release36",
+    "electron:build": "npm run build && npm run build:backend && electron-builder --dir && npm run build:win:inno",
+    "electron:buildnew": "npm run build:new && npm run build:backend && electron-builder --dir --config.directories.output=release36 && npm run build:win:inno -- release36",
     "postinstall": "cd student-backend && npm install",
     "lint": "eslint student-frontend/src student-frontend/*.js student-backend electron",
     "test:behavior": "node testjs/run-behavior.js",
@@ -34,8 +35,7 @@
     "test:all": "node testjs/run-all.js"
   },
   "dependencies": {
-    "koffi": "^3.3.3",
-    "ui-ux-pro-max-cli": "^2.15.0"
+    "koffi": "^3.3.3"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.1",
@@ -43,9 +43,11 @@
     "concurrently": "^10.0.6",
     "electron": "45.2.3",
     "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "eslint": "^10.13.0",
     "eslint-plugin-vue": "^10.11.1",
     "globals": "^17.13.0",
+    "ui-ux-pro-max-cli": "^2.15.0",
     "wait-on": "^9.5.1"
   }
 }

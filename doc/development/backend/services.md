@@ -27,6 +27,7 @@ classnest/
 │   │   ├── ocr.js  # 文字识别
 │   │   ├── pdfDomShim.js  # PDF DOM 兼容层
 │   │   ├── pendingRegs.js  # 注册草稿暂存
+│   │   ├── perfMem.js  # 导出内存峰值探针（v6 · 0-5）：PERF_EXPORT=1 时在导出前后采 process.memoryUsage()，打 rss/heap/external 差值；默认返回 null，零开销
 │   │   ├── provisionalStudents.js  # 临时学生建档
 │   │   ├── receiptTrash.js  # 收据文件移进 dataDir/receipt-trash/。收据扩到视频后，删除只改数据库数…
 │   │   ├── recoveryKey.js  # 恢复密钥
@@ -84,7 +85,7 @@ classnest/
 
 #### [`services/tableService.js`](../../../student-backend/services/tableService.js) · 表格服务
 - **定位**：学生表与班费表共用的动态列表格逻辑，被 [`routes/dynamicTable.js`](../../../student-backend/routes/dynamicTable.js) 包成 `REST`（用 URL + HTTP 方法表达资源操作的接口风格）。
-- **导出**：`queryAll`（查全部）、`insertRow`（插入行）、`updateRow`（更新行）、`deleteRow`（删除行）、`moveRow`（移动行）、`addColumn`（新增列）、`deleteColumn`（删除列）、`reorderRows`（重排行）、`moveColumn`（移动列）、`importRows`（批量导入）、`renameColumn`（重命名列）。
+- **导出**：`queryAll`（查全部）、`insertRow`（插入行）、`updateRow`（更新行）、`deleteRow`（删除行）、`deleteRows`（批量删除，整批一个事务，任一失败整批回滚）、`moveRow`（移动行）、`addColumn`（新增列）、`deleteColumn`（删除列）、`reorderRows`（重排行）、`moveColumn`（移动列）、`importRows`（批量导入）、`renameColumn`（重命名列）。
 - 内部：列元数据存 `table_meta.sort_order`（表元数据表的排序列）；`importRows` 自动补建缺失列并 `transaction`（事务）插入；`insertRow` 支持 `atPosition`（插入位置）与 `minCount`（最少行数）。
 - **注意事项**：列名正则白名单，保留字段 `id/position/atPosition` 不可直接写；至少保留一个数据列。
 
@@ -201,8 +202,10 @@ classnest/
 ### 3. 安全与文件
 
 #### [`services/secureChannel.js`](../../../student-backend/services/secureChannel.js) · 安全通道
-- **导出**：`initMaster`、`hasMaster`、`sessionCount`、`genServerEphemeral`、`deriveEcdhShared`、`deriveSessionKey`、`seal`、`open`、`performHandshake`、`getSessionKey`、`destroySession`、`bindAuth`、`getBoundAuth`、`unbindAuth`、`requestDecrypt`、`responseEncrypt`、`SESSION_TTL_MS`。
+- **导出**：`initMaster`、`hasMaster`、`sessionCount`、`genServerEphemeral`、`deriveEcdhShared`、`deriveSessionKey`、`seal`、`open`、`performHandshake`、`getSessionKey`、`destroySession`、`bindAuth`、`getBoundAuth`、`unbindAuth`、`requestDecrypt`、`responseEncrypt`、`cleanupSessions`、`cleanupNonces`、`sweepNow`、`startIdleSweep`、`stopIdleSweep`、`IDLE_SWEEP_MS`、`SESSION_TTL_MS`。
 - 模块加载时 `initMaster(process.env.SECURE_MASTER)`；无 master 时全部降级为明文直通。
+- **空闲清扫（v6 · 1-5）**：`initMaster` 成功后启动 60s 一次的 `setInterval(...).unref()`，同时清 `sessions`（15 分钟 TTL）与 `usedNonces`（120 秒窗口）；握手/凭据路径上的清扫保留作兜底。`unref` 保证不拖住进程退出。
+- **响应单次序列化（v6 · 1-2）**：`responseEncrypt` 的加密分支直接把信封拼成 `{"d":"…"}` 交给 `res.send`，不再让 `res.json({ d })` 二次序列化（大响应下那等于把整段 base64 再拼一遍）。输出与 `JSON.stringify({ d })` 逐字节一致。
 - 与前端 [`composables/secureChannel.js`](../../../student-frontend/src/composables/secureChannel.js) 参数一一对应。
 
 #### [`services/sanitize.js`](../../../student-backend/services/sanitize.js) · 数据清洗
@@ -259,8 +262,10 @@ classnest/
 | [`utils/slugScopes.js`](../../../student-backend/utils/slugScopes.js) | 按库（slug）隔离的进程内状态：各库 `album_photos.id` 独立自增，裸 id 键 / 全局攒批会串库。状态自己登记，登出统一失效 | `safeSlug`、`createSlugBuckets`、`createSlugBatch`、`clearAllForSlug` |
 | [`utils/securityLevel.js`](../../../student-backend/utils/securityLevel.js) | 账号安全等级判定（`plain` / `nopass` / `password` / `privacy`）。**口径单源**：设置页判档与「本机信息恢复」分流都走这里，各写一份会分叉成「显示免密、登录却要密码」。明文库判定排在密码判定之前（明文档不该有密码哈希） | `resolveSecurityLevel` |
 | [`utils/semester.js`](../../../student-backend/utils/semester.js) | 学期推荐值（按当前月份推学期名与起止日期）。**两个调用方共用这一份**：设置页「增加学期」与课表路由、首次引导页（引导时库还没打开，走 routes 的实现会直接撞上未打开的 db）。抄两份会导致「设置页推荐的学期和引导页不一样」 | `autoSemester` |
+| [`utils/backendRoot.js`](../../../student-backend/utils/backendRoot.js) | 后端根目录（`student-backend/`）的唯一来源。打包时后端被 esbuild 合成单文件（v6 · 2-17），合并后所有模块共用一个 `__dirname`，源码态 `path.resolve(__dirname, '..')` 会整体上移一级；`.env`、`data/`、`resources/`、`worker.scan.js` 这些「相对后端根目录」的路径统一走这里。源码态按本文件位置推导，bundle 态由主进程 fork 时注入 `BACKEND_ROOT` | `BACKEND_ROOT` |
 | [`services/zipWriter.js`](../../../student-backend/services/zipWriter.js) | ZIP 的共用零件（不含打包流程）：CRC32（含增量版，供流式大文件边读边算）、归档内路径净化、ZipCrypto key 流。**刻意不用 AES**：Windows 资源管理器只认传统加密，AES 必须装 7-Zip，普通用户会看到「文件已损坏」；代价是只能防随手打开，不能当强加密宣传。无第三方依赖（后端原有依赖里没有 zip 写库） | `crc32`、`crc32Start/Update/End`、`sanitizeEntryName`、`createZipCrypto` |
 | [`services/zipStream.js`](../../../student-backend/services/zipStream.js) | 流式 ZIP 写入（备份包 / 数据导出共用）：条目「边读边写」，任何时刻只持有一个 256KB 块；明文条目用数据描述符（bit 3），加密条目把 CRC 写进本地头（ZipCrypto 校验口令要用），文件条目加密时走 store 以便写头前就拿到尺寸。**单一入口**：不允许再出现「全部读进内存再拼终包」的第二套实现（v6 · P2-01：旧实现同时驻留 raw / deflate / parts / 终包四份） | `createZipWriter`、`writeZip` |
+| [`services/perfMem.js`](../../../student-backend/services/perfMem.js) | 导出内存峰值探针（v6 · 0-5）：`PERF_EXPORT=1` 时 `memSnapshot()` 采 `process.memoryUsage()`，导出 `finally` 里用 `logExportMemory(label, before)` 打 rss / heap / external 差值；关闭时两个函数分别返回 `null` 与空操作，普通导出零额外开销。用环境变量而非面板开关，是为了真机大收据导出时不用重新打包 | `memSnapshot`、`logExportMemory`、`enabled` |
 | [`services/uploadSignatures.js`](../../../student-backend/services/uploadSignatures.js) | 收据上传的类型判定：扩展名白名单（图片 20MB / PDF 30MB / ooxml 30MB / ole 30MB / 视频 200MB / 纯文本 md 5MB）+ 真实字节魔数。**md 没有魔数**，判据改成「前 512 字节没有 NUL 字节、且非空」（二进制改后缀开头几乎必然带 0x00；512 而不是 16，是因为 16 字节太短，二进制可能还没出现 NUL）。**Windows 上 docx/xlsx 的 mimetype 不可靠**，multer 只按扩展名初筛，真正判断走魔数。另含 `decodeFileName`：busboy 按 latin1 解析 multipart 文件名，中文名会变成乱码，这里按 latin1→字节→utf8 转回来（转换出 `�` 说明原字节不是 UTF-8，返回原串防二次破坏） | `KINDS`、`EXT_TO_KIND`、`ALLOWED_EXT_RE`、`sniff`、`checkUpload`、`decodeFileName` |
 | [`services/receiptTrash.js`](../../../student-backend/services/receiptTrash.js) | 收据文件移进 `dataDir/receipt-trash/`。收据扩到视频后，删除只改数据库数组会让 uploads 悄悄涨到几个 G。**安全边界：一律 `path.basename` 再拼回 uploads**，`../`、绝对路径、反斜杠穿越都出不去 —— 这个函数能搬动磁盘文件，边界写错就是「把机器上任意文件挪走」的入口 | `moveReceiptsToTrash` |
 

@@ -23,8 +23,9 @@ const { pipeline } = require('node:stream/promises')
 const { createZipWriter } = require('./zipStream')
 const { sanitizeEntryName } = require('./zipWriter')
 const { createRequire } = require('node:module')
+const { BACKEND_ROOT } = require('../utils/backendRoot')
 
-const ROOT = path.resolve(__dirname, '..')
+const ROOT = BACKEND_ROOT
 const yauzl = createRequire(path.join(ROOT, 'package.json'))('yauzl')
 
 // 包里这三个文件由 v3 固定写入 / 读取

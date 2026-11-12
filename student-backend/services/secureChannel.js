@@ -26,11 +26,32 @@ const AUTH_TS_SKEW_MS = 60 * 1000;
 const AUTH_NONCE_TTL_MS = 120 * 1000;
 const usedNonces = new Map(); // nonce -> 首次出现时间
 
+// 性能分段（v6 性能专题 0-3）：默认关闭。PERF_SECURE=1 时给 seal/open 打耗时与字节数，
+// 用来判断「握手 235ms 残留 / 首屏 95ms 回路」里密码学占多少。默认零开销，不要常开。
+const PERF_SECURE = process.env.PERF_SECURE === '1';
+function measureCrypto(name, bytes, run) {
+  if (!PERF_SECURE) return run();
+  const t0 = process.hrtime.bigint();
+  try {
+    return run();
+  } finally {
+    try {
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      const size = Number.isFinite(bytes) ? `/${bytes}B` : '';
+      console.log(`[perf] ${name} ${ms.toFixed(2)}ms${size}`);
+    } catch (_) { /* 打点失败静默 */ }
+  }
+}
+
 // 64 位 hex(32 bytes) 主密钥
 const KM_RE = /^[0-9a-f]{64}$/;
 let K_MASTER = '';
 function initMaster(master) {
-  if (typeof master === 'string' && KM_RE.test(master)) K_MASTER = master;
+  if (typeof master === 'string' && KM_RE.test(master)) {
+    K_MASTER = master;
+    // 1-5：安全通道启用后才需要清扫（未启用时两个 Map 始终为空）
+    startIdleSweep();
+  }
 }
 function hasMaster() { return !!K_MASTER; }
 
@@ -63,11 +84,13 @@ function deriveSessionKey(shared) {
 
 // AES-256-GCM 加密 -> base64(nonce).base64(tag).base64(ciphertext)
 function seal(key, plaintextBuf) {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv(CIPHER, key, iv);
-  const enc = Buffer.concat([cipher.update(plaintextBuf), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return [iv.toString('base64'), tag.toString('base64'), enc.toString('base64')].join('.');
+  return measureCrypto('seal', plaintextBuf.length, () => {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv(CIPHER, key, iv);
+    const enc = Buffer.concat([cipher.update(plaintextBuf), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return [iv.toString('base64'), tag.toString('base64'), enc.toString('base64')].join('.');
+  });
 }
 
 // 解密 seal() 输出
@@ -77,9 +100,11 @@ function open(key, packaged) {
   const iv = Buffer.from(parts[0], 'base64');
   const tag = Buffer.from(parts[1], 'base64');
   const enc = Buffer.from(parts[2], 'base64');
-  const decipher = crypto.createDecipheriv(CIPHER, key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(enc), decipher.final()]);
+  return measureCrypto('open', enc.length, () => {
+    const decipher = crypto.createDecipheriv(CIPHER, key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(enc), decipher.final()]);
+  });
 }
 
 // 一次握手：前端交来 pub -> 返回 后端 pub + sessionId
@@ -170,7 +195,14 @@ function responseEncrypt(req, res, next) {
       const buf = Buffer.from(JSON.stringify(data), 'utf8');
       const key = getSessionKey(sid); // 取会话的密钥本身（sessions.get 返回的是 { key, createdAt } 对象）
       if (key) {
-        return originalJson({ d: seal(key, buf) });
+        // 1-2：信封直接拼字符串 + res.send，不再走一次 res.json({ d })。
+        // 原实现：先 JSON.stringify(data) 喂 seal（第一次），再让 res.json 把
+        // { d: '很长的 base64' } 序列化一次（第二次）—— 后者等于把整段密文逐字符再拼一遍。
+        // 输出与 JSON.stringify({ d }) 逐字节一致（d 是 base64 + 点，无需转义）。
+        const d = seal(key, buf);
+        res.type('application/json; charset=utf-8');
+        res.send('{"d":' + JSON.stringify(d) + '}');
+        return;
       }
     }
     return originalJson(data);
@@ -222,20 +254,42 @@ function requestAuthProof(req, res, next) {
   return next();
 }
 
-// 清理过期会话
-function cleanupSessions() {
-  const now = Date.now();
+// 清理过期会话（now 可注入，便于单测直接推进时钟）
+function cleanupSessions(now = Date.now()) {
   for (const [id, s] of sessions) {
     if (now - s.createdAt > SESSION_TTL_MS) sessions.delete(id);
   }
 }
 
 // 清理重放记忆（窗口外的 nonce 不再需要拦截）
-function cleanupNonces() {
-  const now = Date.now();
+function cleanupNonces(now = Date.now()) {
   for (const [n, at] of usedNonces) {
     if (now - at > AUTH_NONCE_TTL_MS) usedNonces.delete(n);
   }
+}
+
+// 1-5：空闲期周期清扫。上面两个 Map 原先只在「下一次握手 / 下一次凭据请求」时清，
+// 挂机不用电脑时过期会话（15 分钟）与 nonce（120 秒）会一直滞留在内存里。
+// 请求路径上的清扫保留作兜底；unref 保证定时器不拖住进程退出。
+const IDLE_SWEEP_MS = 60 * 1000;
+let idleSweepTimer = null;
+
+function sweepNow(now = Date.now()) {
+  cleanupSessions(now);
+  cleanupNonces(now);
+}
+
+function startIdleSweep(intervalMs = IDLE_SWEEP_MS) {
+  if (idleSweepTimer) return idleSweepTimer;
+  idleSweepTimer = setInterval(() => sweepNow(), intervalMs);
+  if (idleSweepTimer.unref) idleSweepTimer.unref();
+  return idleSweepTimer;
+}
+
+function stopIdleSweep() {
+  if (!idleSweepTimer) return;
+  clearInterval(idleSweepTimer);
+  idleSweepTimer = null;
 }
 
 // 流式响应分帧加密（SSE 场景）：SSE 是逐帧 res.write，无法用 res.json 统一包装，
@@ -254,6 +308,7 @@ module.exports = {
   initMaster, hasMaster, sessionCount,
   genServerEphemeral, deriveEcdhShared, deriveSessionKey,
   seal, open, performHandshake, getSessionKey, destroySession,
+  cleanupSessions, cleanupNonces, sweepNow, startIdleSweep, stopIdleSweep, IDLE_SWEEP_MS,
   bindAuth, getBoundAuth, unbindAuth,
   requestDecrypt, responseEncrypt, requestAuthProof, encodeStreamEvent,
   SESSION_TTL_MS,

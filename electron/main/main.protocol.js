@@ -11,8 +11,9 @@
 const { app, session, protocol } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const { createApiProxy, nodeFetch } = require('./main.api-proxy')
 
-const isDev = !app.isPackaged
+const { isDev } = require('./main.env')
 
 // 打包模式静态资源 MIME 表
 const MIME = {
@@ -147,10 +148,44 @@ function setupAppProtocol() {
   const { Readable } = require('stream')
   const serveFile = (file, headers) =>
     new Response(Readable.toWeb(fs.createReadStream(file)), { headers })
-  const serveIndex = () =>
-    serveFile(indexHtml, { 'content-type': MIME['.html'], 'cache-control': 'no-cache' })
 
-  protocol.handle('app', (req) => {
+  // 内容安全策略（打包版生效；开发模式页面由 Vite dev server 提供，不走这里）。
+  // 只放行实际用到的三类「非 self」资源，其余一律拒绝：
+  //   · style 'unsafe-inline' —— Vue 的 scoped 样式与运行时动态内联样式（改主题色/进度条宽度）依赖它；
+  //   · img/media http://127.0.0.1:3000 —— 相册与背景图走媒体绝对地址（Lax Cookie 要求同站请求）；
+  //   · img data: blob: —— 图标与本地预览图。
+  // script 只允许 'self'：生产构建没有 eval，也不需要外链脚本。
+  const CSP = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: http://127.0.0.1:3000",
+    "media-src 'self' blob: http://127.0.0.1:3000",
+    "font-src 'self' data:",
+    "connect-src 'self' http://127.0.0.1:3000",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ')
+  // 引导页例外：setup.html 内联了一小段「程序正在干嘛」的状态提示脚本。
+  // 它必须在 HTML 里内联 —— 那段代码的意义就是「Vue 还没挂载时先显示点什么」，
+  // 挪成外部文件会多一次请求、正好毁掉它的用途。只对这一页放开内联脚本。
+  const CSP_SETUP = CSP.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+  const htmlHeadersFor = (name) => ({
+    'content-type': MIME['.html'],
+    'cache-control': 'no-cache',
+    'content-security-policy': name === 'setup.html' ? CSP_SETUP : CSP,
+  })
+  const serveIndex = () => serveFile(indexHtml, htmlHeadersFor('index.html'))
+
+  // B1：/api/* 同源代理到后端；其余路径仍走静态文件。
+  // 2-16 对照：底层从 net.fetch 换成 Node http.request，绕过 Chromium 网络服务。
+  const proxyApi = createApiProxy({ fetchImpl: nodeFetch })
+
+  protocol.handle('app', async (req) => {
+    const proxied = await proxyApi(req)
+    if (proxied) return proxied
+
     let p
     let file
     try {
@@ -175,7 +210,7 @@ function setupAppProtocol() {
       const name = p.replace(/^\/+/, '')
       // 已登记的顶级入口直接给；其余 html 路径按 SPA 路由回退
       if (!name.includes('/') && htmlEntries.has(name)) {
-        return serveFile(file, { 'content-type': MIME['.html'], 'cache-control': 'no-cache' })
+        return serveFile(file, htmlHeadersFor(name))
       }
       return serveIndex()
     }

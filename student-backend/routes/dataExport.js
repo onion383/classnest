@@ -17,6 +17,7 @@ const router = express.Router();
 const { db } = require('../db');
 const { safeJson } = require('../utils/json');
 const { writeZip } = require('../services/zipStream');
+const { memSnapshot, logExportMemory } = require('../services/perfMem');
 // 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
 const dutyConfig = require('../services/dutyConfig');
 const { SEAT_CELL, columnLabels, rowIsAisle } = require('../services/seatGrid');
@@ -33,6 +34,14 @@ function all(sql, params = []) {
 }
 function get(sql, params = []) {
   try { return db.prepare(sql).get(...params); } catch (_) { return null; }
+}
+
+// 1-3：只取行数，不物化整表。
+// `/tables` 以前为了一个数字调用 build() —— 那会把整张表建成行对象再丢掉。
+// 这里直接 COUNT(*)，代价与表大小无关；表不存在时 `get` 已吞掉异常返回 null。
+function countOf(tableName) {
+  const row = get(`SELECT COUNT(*) AS n FROM ${tableName}`);
+  return Number(row && row.n) || 0;
 }
 
 // { fields, rows } —— rows 为对象数组，字段顺序由 fields 决定
@@ -465,26 +474,28 @@ function tSettings() {
 // py：表名的拼音首字母，供设置页搜索框用（与 SettingsView 的搜索同一个匹配口径：
 // 命中「表名片段」或「拼音首字母」即算匹配，输入 xs 能找到「学生名单」）。
 // 它必须和 label 一起维护 —— 探针里有断言守着（长度按 label 的中/英文字数算）。
+// count：只给「一行对应物理表一行」的表实现（1-3）。座位/值日/课程表/设置是整块 JSON
+// 的单一文档，行数由内容派生，没有对应物理表，因此不提供 count、由 build 兜底。
 const TABLES = [
-  { key: 'students', label: '学生名单', py: 'xsmd', build: tStudents },
-  { key: 'scores', label: '成绩记录', py: 'cjjl', build: tScores },
-  { key: 'fees', label: '班费记录', py: 'bfjl', build: tFees },
-  { key: 'leaves', label: '请假记录', py: 'qjjl', build: tLeaves },
+  { key: 'students', label: '学生名单', py: 'xsmd', build: tStudents, count: () => countOf('students') },
+  { key: 'scores', label: '成绩记录', py: 'cjjl', build: tScores, count: () => countOf('score_records') },
+  { key: 'fees', label: '班费记录', py: 'bfjl', build: tFees, count: () => countOf('fee_records') },
+  { key: 'leaves', label: '请假记录', py: 'qjjl', build: tLeaves, count: () => countOf('leave_records') },
   { key: 'seats', label: '座位表', py: 'zwb', build: tSeats },
   { key: 'duties', label: '值日表', py: 'zrb', build: () => tDuties('daily') },
   { key: 'dutiesBig', label: '值日表（大扫除）', py: 'zrbdsc', build: () => tDuties('big') },
   { key: 'schedule', label: '课程表', py: 'kcb', build: tSchedule },
-  { key: 'semesters', label: '学期列表', py: 'xqlb', build: tSemesters },
-  { key: 'groups', label: '小组', py: 'xz', build: tGroups },
-  { key: 'cadres', label: '班干', py: 'bg', build: tCadres },
-  { key: 'activities', label: '活动', py: 'hd', build: tActivities },
-  { key: 'countdowns', label: '倒计时', py: 'djs', build: tCountdowns },
-  { key: 'albums', label: '相册索引', py: 'xcsy', build: tAlbums },
-  { key: 'albumPhotos', label: '相册照片清单', py: 'xczpqd', build: tAlbumPhotos },
-  { key: 'domainHistory', label: '课程历史', py: 'kcls', build: tDomainHistory },
-  { key: 'undoHistory', label: '撤销记录', py: 'cxjl', build: tUndoHistory },
-  { key: 'aiConversations', label: 'AI 对话', py: 'aidh', build: tAiConversations },
-  { key: 'aiMessages', label: 'AI 消息', py: 'aixx', build: tAiMessages },
+  { key: 'semesters', label: '学期列表', py: 'xqlb', build: tSemesters, count: () => countOf('semesters') },
+  { key: 'groups', label: '小组', py: 'xz', build: tGroups, count: () => countOf('groups') },
+  { key: 'cadres', label: '班干', py: 'bg', build: tCadres, count: () => countOf('cadres') },
+  { key: 'activities', label: '活动', py: 'hd', build: tActivities, count: () => countOf('activities') },
+  { key: 'countdowns', label: '倒计时', py: 'djs', build: tCountdowns, count: () => countOf('countdowns') },
+  { key: 'albums', label: '相册索引', py: 'xcsy', build: tAlbums, count: () => countOf('albums') },
+  { key: 'albumPhotos', label: '相册照片清单', py: 'xczpqd', build: tAlbumPhotos, count: () => countOf('album_photos') },
+  { key: 'domainHistory', label: '课程历史', py: 'kcls', build: tDomainHistory, count: () => countOf('domain_history') },
+  { key: 'undoHistory', label: '撤销记录', py: 'cxjl', build: tUndoHistory, count: () => countOf('undo_history') },
+  { key: 'aiConversations', label: 'AI 对话', py: 'aidh', build: tAiConversations, count: () => countOf('ai_conversations') },
+  { key: 'aiMessages', label: 'AI 消息', py: 'aixx', build: tAiMessages, count: () => countOf('ai_messages') },
   { key: 'settings', label: '应用设置', py: 'yysz', build: tSettings },
 ];
 
@@ -495,7 +506,9 @@ router.get('/tables', (req, res) => {
   const list = TABLES.map((t) => {
     let count = 0;
     try {
-      count = (t.build() || { rows: [] }).rows.length;
+      // 1-3：有 count() 的表只取行数；座位/值日/课程表/设置是「整块 JSON」单一文档，
+      // 行数由内容派生，仍走 build（成本与表大小无关，且没有对应的物理表）。
+      count = t.count ? t.count() : (t.build() || { rows: [] }).rows.length;
     } catch (_) { count = 0; }
     return { key: t.key, label: t.label, py: t.py, count };
   });
@@ -595,13 +608,19 @@ router.post('/zip', async (req, res) => {
     `attachment; filename="export.zip"; filename*=UTF-8''${encodeURIComponent(safeName + '.zip')}`
   );
   // 不设 Content-Length：长度要等整包写完才知道，预置就等于把流式又变回「先拼完」
+  // PERF_EXPORT=1 时记录导出前后内存差值；默认空操作，不影响普通导出。
+  const memBefore = memSnapshot();
+  let finished = false;
   try {
     await writeZip(items, res, { password });
     res.end();
+    finished = true;
   } catch (err) {
     // 已经开始写响应体了：只能中断连接，让客户端看到「下载不完整」而不是一个坏包
     console.error('[data] 导出 zip 失败:', err && err.message);
     try { res.destroy(); } catch (_) { /* 已断开 */ }
+  } finally {
+    logExportMemory(finished ? 'zip 完成' : 'zip 失败', memBefore);
   }
 });
 

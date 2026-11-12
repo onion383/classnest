@@ -40,9 +40,14 @@ test('分派函数覆盖三种文件，且 .zip 走 File 句柄而不是路径',
   assert.ok(!/SELECT_DB_FILE/.test(src), '登录页不该再引用 select-db-file 通道')
 })
 
-test('v2 包仍受 64MB 上限保护（主进程那条限制删掉后要有人接住）', () => {
+test('v2 JSON 备份通道已整体下线：解析分支、恢复接口、状态字段都不许回潮', () => {
   const src = read('student-frontend/src/views/Login.vue')
-  assert.match(src, /file\.size > 64 \* 1024 \* 1024/, 'v2 的 .json 要全文读进内存，必须自己判大小')
+  // 原先这里判的是「v2 的 .json 必须自己判 64MB 上限」—— 那条前提随着 v2 下线消失了。
+  // 现在要守的是相反的事：不许有人把 v2 那条「全文读进内存 + base64 恢复」的通路加回来。
+  assert.ok(!/pickJsonBundle/.test(src), 'v2 的 JSON 解析函数必须已删除')
+  assert.ok(!/restoreBundle/.test(src), 'v2 的整包状态字段必须已删除')
+  assert.ok(!/account\/restore-offline/.test(src), 'v2 的离线恢复接口不能再被调用')
+  assert.match(src, /旧版 JSON 备份已不再支持/, '选到 .json 要给出可读提示，不能静默什么都不做')
 })
 
 test('通道清理三处对账：调用点 / 通道清单 / 授权表都不再有 select-db-file', () => {

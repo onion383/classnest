@@ -21,9 +21,49 @@ function listOrders() {
   return db.prepare('SELECT * FROM leave_records ORDER BY position, id').all();
 }
 
-// GET /api/leaves 全量列表（不设 HTTP 缓存：安全模式下响应是会话绑定的密文，且请假增删后要立刻可见）
+// ---------- 分页与范围过滤（v6 · 2-23）----------
+// 请假记录会随学期线性增长，列表改成滚动加载后每次只要一屏；
+// 但「今日到班」要的是另一批数据（请假中 + 今天已返校），得单独按范围取。
+// hasMore 用「多取一条」判定，不跑 COUNT —— 与 services/searchLimits 同一口径。
+const PAGE_MAX = 200;
+
+function pageOf(query) {
+  const q = query || {};
+  const n = Number(q.limit);
+  const limit = Number.isFinite(n) && n > 0 ? Math.min(Math.trunc(n), PAGE_MAX) : 0;
+  const o = Number(q.offset);
+  const offset = Number.isFinite(o) && o > 0 ? Math.trunc(o) : 0;
+  return { limit, offset };
+}
+
+// scope=today → 今日到班需要的两类记录：
+//   · 状态「请假中」（还没回来的人）
+//   · 状态「已返校」且返校时间是今天（今天回来的人）
+// 这两类散布在整张表里，不能靠列表第一页顺带，所以单独取。
+function scopeClause(scope, date) {
+  if (scope !== 'today') return null;
+  const d = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+  if (!d) return { sql: "状态 = '请假中'", params: [] };
+  return { sql: "(状态 = '请假中' OR (状态 = '已返校' AND 返校时间 LIKE ?))", params: [`${d}%`] };
+}
+
+// GET /api/leaves            → 全量 { data }（挂件、导出、AI 工具都依赖这个语义）
+// GET /api/leaves?limit=50&offset=0[&scope=today&date=YYYY-MM-DD] → 分页 { data, hasMore }
 router.get('/', (req, res) => {
-  res.json({ data: listOrders() });
+  const q = req.query || {};
+  const { limit, offset } = pageOf(q);
+  const sc = scopeClause(q.scope, q.date);
+  const where = sc ? ` WHERE ${sc.sql}` : '';
+  const params = sc ? sc.params : [];
+  const tail = ' ORDER BY position, id';
+  if (!limit) {
+    return res.json({ data: db.prepare(`SELECT * FROM leave_records${where}${tail}`).all(...params) });
+  }
+  const rows = db.prepare(
+    `SELECT * FROM leave_records${where}${tail} LIMIT ? OFFSET ?`
+  ).all(...params, limit + 1, offset);
+  const hasMore = rows.length > limit;
+  res.json({ data: hasMore ? rows.slice(0, limit) : rows, hasMore });
 });
 
 // POST /api/leaves 添加请假（学生联系方式从学生表自动带出）

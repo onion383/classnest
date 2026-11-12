@@ -142,6 +142,7 @@ npm run dev:new            # 3.6 通道只起 Vite
 | `npm run electron:dev36`                               | Vite + Electron（3.6 预览）                             |
 | `npm run dev` / `dev:new`                              | 仅 Vite（3.5 / 3.6）                                   |
 | `npm run build` / `build:new`                          | 仅构建前端（3.5 / 3.6）                                    |
+| `npm run build:backend`                                | 把后端合成单文件 `student-backend/app.bundle.js`（启动优化）        |
 | `npm run electron:build`                               | 前端 → electron-builder（`--dir`）→ Inno，产物在 `release/` |
 | `npm run electron:buildnew`                            | 同上，走 3.6 通道，产物在 `release36/`                        |
 | `npm run build:win:inno`                               | 只编译安装包（需先有 unpacked 产物）                             |

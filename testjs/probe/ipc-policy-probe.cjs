@@ -124,6 +124,14 @@ for (const role of [auth.ROLE.WIDGET, auth.ROLE.DESKTOP_WIDGET, auth.ROLE.SETUP,
     `get-master-key 应授权给 ${role}（该窗口装了 apiClient，会建安全通道）`
   )
 }
+// secure-handshake（2-19）与 get-master-key 是同一批窗口的两半：
+// 前者发握手报文、后者取主密钥，缺一条该窗口的首屏请求就会 401。
+// 两者角色集合必须完全一致 —— 只改一边正是最容易漏的那种错。
+const sameRoles = (a, b) => [...(a || [])].sort().join(',') === [...(b || [])].sort().join(',')
+assert(
+  sameRoles(policy['secure-handshake'], policy['get-master-key']),
+  `secure-handshake 的授权必须与 get-master-key 一致，实际 [${(policy['secure-handshake'] || []).join(', ')}] vs [${(policy['get-master-key'] || []).join(', ')}]`
+)
 
 // ---------- 4) fail-closed：表外通道一律拒绝 ----------
 const fakeEvent = (role) => ({ sender: { __ipcRole: role } })

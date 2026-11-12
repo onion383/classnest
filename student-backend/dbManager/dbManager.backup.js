@@ -41,8 +41,13 @@ function exportBundle(slug) {
 // 供备份/恢复：写入教师库文件并在 index 登记（幂等）。
 // 参数 dbKey 为「已解出的库钥匙」（明文，仅加密库需要）——由调用方用密码/助记词解出的，本处只负责落盘与登记。
 // encrypted=false 表示恢复的是一个明文库，不包裹库钥匙、登记为明文。
-function restoreBundle({ slug, username, data, dbKey, encrypted = true }) {
-  if (!slug || !username || typeof data !== 'string') {
+//
+// 库内容有两种给法，二选一：
+//   · srcPath：磁盘上的现成库文件（v3 ZIP 解包后的产物）——**优先**，直接内核复制，JS 堆零驻留；
+//   · data：base64 字符串（旧 v2 JSON 包与单测用）——要先解码成 Buffer 再写，100MB 库会在
+//     堆里同时存在 base64 字符串（约 133MB）+ 解码 Buffer（100MB），这是 2-11 要消掉的峰值。
+function restoreBundle({ slug, username, data, srcPath, dbKey, encrypted = true }) {
+  if (!slug || !username || (typeof srcPath !== 'string' && typeof data !== 'string')) {
     throw new Error('备份数据不完整');
   }
   if (encrypted && !dbKey) {
@@ -63,8 +68,11 @@ function restoreBundle({ slug, username, data, dbKey, encrypted = true }) {
   // 备份包可能上传到一半/损坏，直接覆盖会把「能用的旧库」也一起毁掉，
   // 而且损坏的库一旦登记就能通过登录校验，故障延后且更难排查（审查 v4 · B05-13）。
   const tmpPath = filePath + '.restore-tmp';
-  const bytes = Buffer.from(data, 'base64');
-  fs.writeFileSync(tmpPath, bytes);
+  if (typeof srcPath === 'string') {
+    fs.copyFileSync(srcPath, tmpPath);
+  } else {
+    fs.writeFileSync(tmpPath, Buffer.from(data, 'base64'));
+  }
   try {
     const Database = getDatabase();
     let conn = null;

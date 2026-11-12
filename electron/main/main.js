@@ -4,6 +4,12 @@ const { app, BrowserWindow, ipcMain, shell, protocol, Menu, clipboard } = requir
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
+// 启动期同步 IO 打点（v6 性能专题 1-10）：必须在任何业务模块 require 之前安装，
+// 否则前面那段读盘统计不到。默认零开销 —— 仅 PERF_STARTUP=1 时真的替换 fs 方法。
+const startupIo = require('./main.startup-io')
+startupIo.install(fs)
+// 开发/打包模式唯一口径（见 main.env.js：Electron 45 下 app.isPackaged 在源码模式也返回 true）
+const { isDev, isPackaged } = require('./main.env')
 
 // 品牌更名（campus-assistant → classnest）：旧版 userData 目录整体迁移，避免升级后「数据不见了」。
 // - 旧目录存在、新目录不存在：直接重命名（同盘秒完成）。
@@ -51,7 +57,7 @@ async function pathExists(p) {
 
 // 【启动剖析打点·仅开发模式】主进程模块 require 逐项计时。打点只在 dev 生效：
 // 打包版 _profMark 是空操作，既不写控制台也不写时间线。
-const _profOn = !app.isPackaged
+const _profOn = isDev
 const _profMark = (name, t0) => {
   if (!_profOn) return
   startupTimer.mark(t0 ? `${name}（${Date.now() - t0}ms）` : name)
@@ -103,8 +109,8 @@ const webviewGuard = _profReq('./main.webview-guard')
 // 此前它被无条件 require —— 等于 prod 每次启动白付一次读盘（实测 prof 打点 ~48ms）。
 // 与 main.inpLog 同款处理：仅开发模式加载。
 // 注意 prod 下 devLoader 为 null，唯一在顶层取值的 widget 注入点已做判空；
-// 其余调用点所处的 if (isDev) 分支与本条件完全等价（isDev = !app.isPackaged），不会碰到 null。
-const devLoader = app.isPackaged ? null : _profReq('./main.dev-loader')
+// 其余调用点所处的 if (isDev) 分支与此条件完全等价（同一个 main.env 口径），不会碰到 null。
+const devLoader = isPackaged ? null : _profReq('./main.dev-loader')
 const pathGuard = _profReq('./main.path-guard')
 
 // 安装目录（打包后为只读 asar 所在位置）加入保护目录：
@@ -144,8 +150,6 @@ let mainWindowChrome = 'native'
 
 // 关闭确认菜单状态（shutdownMenuOpen / allowMainClose / mainRendererShutdownReady）
 // 与系统托盘已迁至 tray.js（见 tray.js：handleMainClose / resetShutdownState / registerTrayIpc）
-
-const isDev = !app.isPackaged
 
 // 低版本系统提示调试开关：改为 1 时无条件显示提示画面（忽略真实系统版本与「不再提示」标记），
 // 便于本地反复预览；改为 0 恢复按真实系统版本判定。也可用环境变量 OS_WARN_FORCE=1 临时覆盖。
@@ -242,7 +246,7 @@ widget.registerWidgetIpc({
 
 // INP 归因落盘（仅开发模式）：渲染层探针把交互耗时汇总经 'inp-report' 发来，
 // 追加写入 <数据目录>/inp.log。打包版既不 require 该模块、也不注册通道。
-if (!app.isPackaged) require('./main.inpLog').registerInpLogIpc()
+if (isDev) require('./main.inpLog').registerInpLogIpc()
 
 // 单实例锁：防止手快点多次图标导致同时跑出多个应用实例。
 // 第一个实例拿到锁；后续实例 requestSingleInstanceLock 返回 false，直接退出，
@@ -370,6 +374,8 @@ function createMainWindow() {
     devLoader.pollViteAndNavigate(win)
   } else {
     backend.setBootStatus('正在加载界面…')
+    // B1：页面仍用 app://local 源（origin 隔离不变），/api 由自定义协议代理到后端，
+    // 页面与 API 同源 → 不发 CORS 预检。
     win.loadURL('app://local/index.html')
   }
 
@@ -386,7 +392,9 @@ function createMainWindow() {
   const LATE_STARTUP_LABELS = [
     '占位页移除', '路由就绪', '样式就绪', '主题样式就绪',
     '首页数据发起', '首页数据就绪', '首页数据失败', '首屏请求汇总',
-    '握手开始', '握手完成', '握手失败',
+    '首屏资源计时', '首屏发送开始',
+    '长任务', '派发后宏任务', '派发后帧',
+    '握手开始', '握手完成', '握手失败', '握手请求发出', '握手响应到达',
   ]
   const lateStartupLogged = new Set()
   win.webContents.on('console-message', (event, level, message) => {
@@ -661,7 +669,7 @@ app.whenReady().then(() => {
     proceedStartup()
 
     // 版本更新：启动后延迟做一次「检查 + 下载」（避开首屏关键路径，仅打包环境）
-    if (app.isPackaged) {
+    if (isPackaged) {
       setTimeout(() => { getUpdater().runUpdateFlow() }, 8000)
     }
 
@@ -672,6 +680,9 @@ app.whenReady().then(() => {
     // 用已登记的候选时刻（窗口首次显示）收尾——settleProvisional 会触发下面的回调，无需另写落盘。
     startupTimer.onFinal(() => {
       setTimeout(() => {
+        // 同步 IO 汇总必须在 report 之前：它是往时间线补一条 mark，
+        // 放后面就漏在本次报告之外（saveLog 里那几次同步 IO 不计入，属预期）。
+        startupIo.summarize()
         startupTimer.report()
         startupTimer.saveLog()
       }, 800)
@@ -721,6 +732,10 @@ webviewGuard.registerWebviewGuard({ getMainWindow: () => mainWindow, isDev })
 
 // 安全通道主密钥：提供给渲染进程（含工具箱/桌面组件）参与前后端 HKDF 派生态。
 ipcMain.handle('get-master-key', () => getMasterKey())
+
+// 安全通道握手报文桥（2-19）：渲染层只把公钥经 IPC 交过来，主进程直连后端换回
+// 后端公钥 + sessionId。私钥与会话密钥始终留在渲染层（详见 main.secure-bridge.js）。
+require('./main.secure-bridge').registerSecureBridgeIpc()
 
 // 恢复词等敏感内容：展示期间令窗口排除在屏幕捕获之外（Windows 走 SetWindowDisplayAffinity，
 // 截图/录屏得到黑块），关闭或离开设置页时立即恢复。
@@ -1134,6 +1149,7 @@ function createSetupWindow(plan = launchPlan) {
     // 直接探测 setup.html：命中即跳转，等待期间 Vite 已顺带编译好该页面
     devLoader.loadUrlWithRetry(win, 'http://127.0.0.1:5173/setup.html')
   } else {
+    // B1：引导窗口同样保持 app://local，/api 由协议代理，origin 隔离不变。
     win.loadURL('app://local/setup.html')
   }
 

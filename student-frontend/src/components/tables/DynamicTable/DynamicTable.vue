@@ -454,6 +454,8 @@ const emit = defineEmits([
     'startEdit', 'saveCell', 'moveRow', 'deleteRow', 'addNewRowAtBottom',
     'updateNewRow', 'manageReceipt', 'swapRows', 'swapColumns', 'moveSelectedRows',
     'selectionChange',
+    // 表格滚动到底部（距底 <120px 时触发一次）：分页列表用它做「滚到哪加载到哪」
+    'scroll-end',
     // 操作列「修改」：带上整行，页面据此打开自己的编辑弹窗（各页表单字段不同，只有页面知道该弹什么）
     'editRow',
     // 加载失败态里的「重试」
@@ -824,7 +826,19 @@ function syncVirtualActive() {
     // 视口高由 initVirtual / ResizeObserver 维护，不在滚动事件里读 clientHeight（避免触发布局）。
 function onBodyScroll(e) {
       if (!e.target) return;
-      ctx._scrollTop = e.target.scrollTop;
+      const el = e.target;
+      ctx._scrollTop = el.scrollTop;
+      // 滚到底部附近就抛 scroll-end：分页列表据此「滚到哪加载到哪」。
+      // 用 armed 标志去重 —— 到底后继续滚会持续触发 scroll，没有这个标志会刷出一串请求。
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      if (nearBottom) {
+        if (ctx._scrollEndArmed !== false) {
+          ctx._scrollEndArmed = false;
+          emit('scroll-end');
+        }
+      } else {
+        ctx._scrollEndArmed = true;
+      }
       if (!ctx.virtualOn.value) return;
       ctx.recalcWindow();
     }

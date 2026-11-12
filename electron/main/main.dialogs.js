@@ -29,7 +29,7 @@ const contract = require('./main.ipc-contract')
 
 const fsp = fs.promises
 
-const isDev = !app.isPackaged
+const { isDev } = require('./main.env')
 
 // 渲染层 → 主进程 → 写盘通道的统一体积上限：避免超大 payload 在主进程再复制一份。
 const MAX_WRITE_BYTES = 50 * 1024 * 1024

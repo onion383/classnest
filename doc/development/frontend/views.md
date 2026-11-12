@@ -73,7 +73,7 @@ classnest/
 | [`DashboardView.vue`](../../../student-frontend/src/views/DashboardView.vue) | `/` | 概览首页：班级信息大框 + 卡片瀑布流 | `GET/PUT /api/widget-settings/class-info`、`GET /api/album/{id}/photos`、`/photo/{id}/thumb` |
 | [`ClassroomView.vue`](../../../student-frontend/src/views/ClassroomView.vue) | `/students` | 学生信息 / 班干部管理（`Tabs`，标签页） | `GET/POST/PUT/DELETE /api/students`（动态表 `factory`（工厂））、`/api/cadres` |
 | [`FeeManagement.vue`](../../../student-frontend/src/views/FeeManagement.vue) | `/fee` | 班费记录 + 收据上传 | `/api/fee-records`、`POST /api/fee-records/upload-receipt` |
-| [`Login.vue`](../../../student-frontend/src/views/Login.vue) | `/login` | 登录 / 注册 / 恢复密钥 / 离线恢复 / 找回密码 | `/api/db-login`、`/api/login`、`/api/register`、`/api/account/restore-offline`、`/api/recover-password` |
+| [`Login.vue`](../../../student-frontend/src/views/Login.vue) | `/login` | 登录 / 注册 / 恢复密钥 / 离线恢复（仅 .zip）/ 找回密码 | `/api/db-login`、`/api/login`、`/api/register`、`/api/account/restore-zip-offline`、`/api/recover-password` |
 | [`SettingsView/`](../../../student-frontend/src/views/SettingsView/SettingsView.vue) | `/settings` | 账号 / 撤销记录 / 外观 / 工具箱 / 桌面组件 / 路径 / 数据 / 性能 / 数据库 | `/api/undo`、`/api/account/*`、`/api/widget-settings` |
 | [`ScheduleView/`](../../../student-frontend/src/views/ScheduleView/ScheduleView.vue) | `/schedule` | 实行课表 / 一般课表、周历史 | `/api/schedule`、`/master`、`/settings`、`/history`、`/snapshot`、`/apply-master` |
 | [`SeatView.vue`](../../../student-frontend/src/views/SeatView.vue) | `/seats` | 座位编排、模板、历史、回填 | `/api/seats`、`/master/cell`、`/history`、`/snapshot`、`/apply-master` |
@@ -89,7 +89,8 @@ classnest/
 ### 页面细节
 
 ### DashboardView
-- 数据：由 [`useDashboardData.js`](../../../student-frontend/src/composables/useDashboardData.js) 的 `ensureDashboardData()`（确保首页数据）并行拉取 9 个接口（schedule / duty / countdowns / leaves / students / scores / activities / fee-records / album），模块级缓存 + `pending`（进行中请求）去重。
+- 数据：由 [`useDashboardData.js`](../../../student-frontend/src/composables/useDashboardData.js) 的 `ensureDashboardData()`（确保首页数据）取 `/api/dashboard` 聚合（schedule / duty / countdowns / leaves / students / activities / album + `summary`），模块级缓存 + `pending`（进行中请求）去重。
+- **摘要口径（v6 · 2-1）**：全量 `scores` / `fees` 不再随首屏下发；今日加分 Top4 与班费「余额 / 本月收入 / 本月支出」由后端 `summary` 算好，人数与值日姓名用瘦身后的 `students`（只有 `id+姓名`）。真实班级规模下整包 358.8KB → 8.9KB。
 - 交互：班级信息大框可编辑，写回 `PUT /api/widget-settings/class-info`；倒计时卡片取 `countdowns`；相册卡片取相册首图缩略图。
 - 注意：首屏不等待懒加载路由 `chunk`（代码分包），数据由路由守卫提前预热。
 

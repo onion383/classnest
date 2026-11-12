@@ -606,28 +606,16 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       try {
         // 删除前先留整行快照：一次勾选删除是一步操作，撤销也应一步回来
         const removed = rows.value.filter(s => selectedIds.includes(s.id)).map(s => ({ ...s }))
-        // 并行删除所有选中行，逐个收集结果（不再静默吞错）
-        const results = await Promise.all(selectedIds.map(async id => {
-          try {
-            await axios.delete(`${apiBase}/${id}`)
-            return { ok: true }
-          } catch (err) {
-            return { ok: false, msg: err.response?.data?.error || '删除失败' }
-          }
-        }))
+        // 一次请求删整批：原来逐条 DELETE 要来回 N 次；后端整批一个事务，任一 id 失败整批回滚，
+        // 因此不再有「部分成功」的半截状态，撤销只需登记整批。
+        await axios.post(`${apiBase}/batch-delete`, { ids: selectedIds })
         await fetchRows()
-        // 只把真正删掉的行登记进撤销：失败的删除还在库里，记进去会让撤销重复插入
-        const failedIds = selectedIds.filter((_, i) => !results[i].ok)
-        const deleted = removed.filter(r => !failedIds.includes(r.id))
-        if (deleted.length) recordRowsBatchDelete(undoTableKey, deleted)
+        if (removed.length) recordRowsBatchDelete(undoTableKey, removed)
         selectedCount.value = 0
         selectedRowKeys.value = []
-        const fails = results.filter(r => !r.ok)
-        if (fails.length) {
-          notifyError('部分记录删除失败，请重试')
-        }
       } catch (err) {
-        showAlert('删除失败')
+        notifyError(err.response?.data?.error || '删除失败')
+        await fetchRows()
       }
     })
   }
@@ -692,15 +680,14 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       try {
         // 删前留整行：一次清理是一步操作，撤销一步回来
         const removed = rows.value.filter(s => ids.includes(s.id)).map(s => ({ ...s }))
-        for (const id of ids) {
-          await axios.delete(`${apiBase}/${id}`)
-        }
+        // 一次 POST 删整批（原来逐条 await DELETE，N 条要 N 次往返）
+        await axios.post(`${apiBase}/batch-delete`, { ids })
         await fetchRows()
         if (removed.length) recordRowsBatchDelete(undoTableKey, removed)
         dedupeDialogVisible.value = false
         showAlert('已成功删除所选重复数据')
       } catch (err) {
-        showAlert('删除重复数据失败')
+        showAlert(err.response?.data?.error || '删除重复数据失败')
       }
     })
   }

@@ -14,6 +14,8 @@
 import { INVOKE } from '../electronChannels.js'
 import { registerUserScopedReset } from '../utils/userScopedCache.js'
 import { waitForBackendReady } from '../utils/backendReady.js'
+import { startCryptoStat } from '../utils/cryptoStat.js'
+import { apiBaseUrl } from '../utils/backendOrigin.js'
 
 const subtle = crypto.subtle
 // 回环地址用 IPv4 字面量，别写 localhost：
@@ -25,7 +27,9 @@ const subtle = crypto.subtle
 //   本文件 BASE / httpClient.backendBaseUrl / apiUrl.apiUrl / main.dialogs 背景图 URL /
 //   main.js waitBackendReady / vite.config 的两处 proxy target。
 //   CORS_ORIGIN_RE 与 Host 校验本来都允许 127.0.0.1，无需改后端。
-const BASE = 'http://127.0.0.1:3000'
+// 握手地址与业务 API 共用同一口径：B1 下页面是 app://local，/api 由主进程协议代理，
+// 始终使用相对路径，不再跨源。
+function BASE() { return apiBaseUrl() }
 
 let kMaster = null
 let sessionKey = null
@@ -63,12 +67,15 @@ function randomNonce() {
   return b64(b)
 }
 
-async function encryptAuthProof(token) {
+async function encryptAuthProof(token, perf) {
+  const endProof = startCryptoStat(perf, '凭据加密')
   const { sessionId: sid, sessionKey: key } = await ensureSession()
   const payload = { ts: Date.now(), n: randomNonce() }
   if (token) payload.token = token
+  const plain = utf8(JSON.stringify(payload))
   const iv = new Uint8Array(12); crypto.getRandomValues(iv)
-  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, utf8(JSON.stringify(payload))))
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, plain))
+  endProof(plain.length)
   const tag = ct.subarray(ct.length - 16)
   const body = ct.subarray(0, ct.length - 16)
   return [sid, b64(iv), b64(tag), b64(body)].join('.')
@@ -83,7 +90,7 @@ export function resetAuthBinding() { authBound = false }
 //   安全模式 → X-Auth-Proof 密文凭据（已绑定且未强制时凭据内不含 token）
 //   明文模式 → Authorization: Bearer（兼容未启用安全通道的环境）
 // forceToken：绑定失效后重试时必须带 token 重新建立绑定。
-export async function applyAuthHeader(headers, token, { forceToken = false } = {}) {
+export async function applyAuthHeader(headers, token, { forceToken = false, perf = null } = {}) {
   const h = headers || {}
   delete h.Authorization
   delete h['X-Auth-Proof']
@@ -91,7 +98,7 @@ export async function applyAuthHeader(headers, token, { forceToken = false } = {
   if (safe()) {
     try {
       const withToken = forceToken || !authBound
-      h['X-Auth-Proof'] = await encryptAuthProof(withToken ? token : '')
+      h['X-Auth-Proof'] = await encryptAuthProof(withToken ? token : '', perf)
       return withToken
     } catch (e) {
       // 握手异常时退化为明文头：后端会以 auth-required 拒绝并触发一次重建会话的重试。
@@ -141,6 +148,8 @@ let pendingSession = null
 // 重建会话。这条打点用来确认「首屏那几百毫秒」是否花在这里。只记录首次。
 let hsStartMarked = false
 let hsEndMarked = false
+// 握手 fetch 的「发出 / 到达」两戳只记首次（见 ensureSession 内的 2-18 归因说明）。
+let hsFetchMarked = false
 function hsMark(name) {
   try {
     console.log(`[startup] ${name} @${Math.round(performance.timeOrigin + performance.now())}`)
@@ -172,26 +181,29 @@ async function ensureSession() {
     // 275~299ms 慢簇，5/5 批）。这里补上对齐：已就绪时 Promise.resolve 零成本，未就绪
     // 则等 backend-ready 广播，BACKEND_STATUS 主动查询兜住「广播早于监听注册」的竞态；
     // 该查询返回的是主进程收到后端 listen 上报后才置位的标志，不会提前放行。
-    // 位置刻意放在 IPC 分段之后、keygen 分段之前：等待计入 keygen 分段，保持
-    // 「IPC（预取版本指纹）」与「fetch（慢簇判据）」两个分段口径不变，打点一行未动。
     // 超时只 resolve(false)、不抛错，这里刻意不判返回值：裸 fetch 照常发出，由既有
     // axios「不可达 → 等 backend-ready → 重试」链接管。多抛一种错只会让后端真挂时
     // 每轮重试都白等一遍超时（最多 6 轮）。1500ms 已覆盖实测后端就绪 341~595ms。
-    await waitForBackendReady(1500)
-
-    // 前端 ephemeral P-256
-    const kp = await subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
+    //
+    // 2-18：前端的 ephemeral 密钥生成与就绪等待**并行**。两者无数据依赖（generateKey
+    // 跑在浏览器密码学线程，等待是纯等网络），串行会把生成耗时整段加到关键路径上；
+    // 并行后该段 ≈ max(等待, 生成)，实测首屏少 ~13ms。分段名仍叫 keygen，口径变为
+    // 「就绪 + 生成」的合并段，与 IPC / fetch 比较时只看绝对值，不要再按旧含义拆读。
+    const [, kp] = await Promise.all([
+      waitForBackendReady(1500),
+      subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']),
+    ])
     const pub = b64(new Uint8Array(await subtle.exportKey('raw', kp.publicKey)))
     seg('keygen')
 
-    // 裸握手（握手不能加密，用 fetch 避免触发 axios 拦截器）
-    const resp = await fetch(BASE + '/api/secure/handshake', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pub }),
-    })
-    if (!resp.ok) throw new Error('secure channel: handshake failed ' + resp.status)
-    const peer = await resp.json()
+    // 裸握手（握手不能加密，不触发 axios 拦截器）
+    // 2-18 归因：握手是本应用第一条网络请求，往返里一直有 ~50ms 找不到归属。
+    // 发出/到达各打一戳，与主进程 [perf] proxy 进入 的 epoch 对齐，即可判定花费落在哪一段。
+    // 只记首次，避免换号重握手时污染时间线。
+    const firstFetch = !hsFetchMarked
+    if (firstFetch) { hsFetchMarked = true; hsMark('握手请求发出') }
+    const peer = await requestHandshake(pub)
+    if (firstFetch) hsMark('握手响应到达')
     seg('fetch')
 
     const peerPub = await subtle.importKey('raw', unb64(peer.pub), { name: 'ECDH', namedCurve: 'P-256' }, false, [])
@@ -218,23 +230,51 @@ async function ensureSession() {
   return pendingSession
 }
 
-export async function encryptBody(obj) {
+// 发握手报文（2-19）：两种传输，返回形状一致。
+//   · 有 Electron 外壳：走 IPC，主进程用 Node http 直连后端。省掉 app:// 的一次派发
+//     与回程（实测 ~19ms）；过 IPC 的只有公钥与 sessionId，私钥与会话密钥不出渲染层。
+//   · 纯浏览器（没有 window.electron）：退回 app:// 相对路径的裸 fetch，行为同旧版。
+async function requestHandshake(pub) {
+  const api = typeof window !== 'undefined' ? window.electron : null
+  if (api && typeof api.invoke === 'function') {
+    const res = await api.invoke(INVOKE.SECURE_HANDSHAKE, pub)
+    if (res && res.outcome === 'ok' && typeof res.pub === 'string' && res.sessionId) {
+      return { pub: res.pub, sessionId: res.sessionId }
+    }
+    // 失败原因由主进程给（main.ipc-contract 的 fail()），透出来便于定位
+    throw new Error('secure channel: ' + ((res && res.error) || 'handshake failed'))
+  }
+  const resp = await fetch(BASE() + '/api/secure/handshake', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pub }),
+  })
+  if (!resp.ok) throw new Error('secure channel: handshake failed ' + resp.status)
+  return resp.json()
+}
+
+export async function encryptBody(obj, perf) {
   const { sessionId: sid, sessionKey: key } = await ensureSession()
+  const endEncrypt = startCryptoStat(perf, '请求加密')
+  const plain = utf8(JSON.stringify(obj))
   const iv = new Uint8Array(12); crypto.getRandomValues(iv)
-  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, utf8(JSON.stringify(obj))))
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, plain))
+  endEncrypt(plain.length)
   const tag = ct.subarray(ct.length - 16)
   const body = ct.subarray(0, ct.length - 16)
   return { session: sid, d: b64(iv) + '.' + b64(tag) + '.' + b64(body) }
 }
 
-export async function decryptBody(d) {
+export async function decryptBody(d, perf) {
   const { sessionKey: key } = await ensureSession()
   const parts = String(d).split('.')
   if (parts.length !== 3) throw new Error('bad secure packet')
   const iv = unb64(parts[0]); const tag = unb64(parts[1]); const body = unb64(parts[2])
   const full = new Uint8Array(body.length + tag.length)
   full.set(body); full.set(tag, body.length)
+  const endDecrypt = startCryptoStat(perf, '响应解密')
   const pt = await subtle.decrypt({ name: 'AES-GCM', iv }, key, full)
+  endDecrypt(full.length)
   return JSON.parse(new TextDecoder().decode(pt))
 }
 

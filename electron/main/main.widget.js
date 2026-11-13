@@ -26,7 +26,8 @@
 
 const fs = require('fs')
 const path = require('path')
-const { app, BrowserWindow, ipcMain, Menu, screen } = require('electron')
+const { app, BrowserWindow, Menu, screen } = require('electron')
+const { CH, IPC } = require('./channels')
 const startupTimer = require('./main.startup-timer')
 const { buildWebPreferences } = require('./main.web-prefs')
 // IPC 授权层：登记本模块创建的两个窗口（工具箱浮窗 / 桌面小组件）的角色。
@@ -155,7 +156,7 @@ function createWidgetWindow() {
 
   widgetWindow.on('blur', () => {
     if (widgetWindow && !widgetWindow.isDestroyed()) {
-      widgetWindow.webContents.send('from-main', { type: 'blur' })
+      widgetWindow.webContents.send(CH.FROM_MAIN, { type: 'blur' })
     }
   })
 
@@ -217,7 +218,7 @@ function exitToolbox() {
   hideWidgetWindow()
   const mainWindow = getMainWindow()
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('from-main', { type: 'toolbox-close-request' })
+    mainWindow.webContents.send(CH.FROM_MAIN, { type: 'toolbox-close-request' })
   }
 }
 
@@ -485,7 +486,7 @@ function navigateMainWhenReady(mainWindow, page) {
     if (!url || url.startsWith('data:') || wc.isLoading()) return
     done = true
     cleanup()
-    wc.send('from-main', { type: 'navigate', path: page })
+    wc.send(CH.FROM_MAIN, { type: 'navigate', path: page })
   }
   // 主窗口在等待期间被销毁：不再等，直接收尾
   const onDestroyed = () => {
@@ -522,7 +523,7 @@ function registerWidgetIpc(opts = {}) {
   // 工具箱**不在这里建**：它的开关存在后端库里，渲染层登录后读到才下发
   // （widget-set-session-visible）；未启用就根本不该有这个窗口 ——
   // 早先无条件建窗再让浮窗自己隐藏，屏幕上会先闪一下。
-  ipcMain.on('widgets-ready', (event, enabled) => {
+  IPC.on(CH.WIDGETS_READY, (event, enabled) => {
     const mainWindow = getMainWindow()
     if (!mainWindow || mainWindow.isDestroyed()) return
     if (event.sender !== mainWindow.webContents) return
@@ -530,7 +531,7 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 设置页切换「桌面小组件」开关时实时建/关窗口（不依赖空闲时机）
-  ipcMain.on('desktop-widget-enabled', (event, enabled) => {
+  IPC.on(CH.DESKTOP_WIDGET_ENABLED, (event, enabled) => {
     const mainWindow = getMainWindow()
     if (!mainWindow || mainWindow.isDestroyed()) return
     if (event.sender !== mainWindow.webContents) return
@@ -539,7 +540,7 @@ function registerWidgetIpc(opts = {}) {
 
   // 读取置底的实际状态（渲染层只用于日志与拖动手柄样式；置底是唯一形态，没有开关）。
   // autoDisabled/faultStreak 是独立进程时代的字段，保留形状、恒为 false/0。
-  ipcMain.handle('get-desktop-layer-state', () => ({
+  IPC.handle(CH.GET_DESKTOP_LAYER_STATE, () => ({
     desktopLayerEnabled: desktopLayerOn,
     autoDisabled: false,
     faultStreak: 0,
@@ -547,7 +548,7 @@ function registerWidgetIpc(opts = {}) {
 
   // ===== 桌面小组件窗口 IPC =====
   // 渲染层内容就绪：Vue 挂载完成且骨架 DOM 已生成。此时才显示窗口（置底模式下先插层再显示）。
-  ipcMain.on('desktop-widget-content-ready', (event) => {
+  IPC.on(CH.DESKTOP_WIDGET_CONTENT_READY, (event) => {
     const win = desktopWidgetWindow
     if (!win || win.isDestroyed() || event.sender !== win.webContents) return
     desktopContentReady = true
@@ -560,7 +561,7 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 拖动：起点缓存内容矩形，每帧连宽高一起传（只改位置会让窗口越拖越大）
-  ipcMain.on('desktop-widget-drag-start', (event, pos) => {
+  IPC.on(CH.DESKTOP_WIDGET_DRAG_START, (event, pos) => {
     const win = desktopWidgetWindow
     if (!win || win.isDestroyed() || event.sender !== win.webContents || !pos) return
     try {
@@ -572,7 +573,7 @@ function registerWidgetIpc(opts = {}) {
     desktopDragMouse = [pos.screenX, pos.screenY]
   })
 
-  ipcMain.on('desktop-widget-drag-move', (event, pos) => {
+  IPC.on(CH.DESKTOP_WIDGET_DRAG_MOVE, (event, pos) => {
     const win = desktopWidgetWindow
     if (!win || win.isDestroyed() || event.sender !== win.webContents || !pos) return
     if (!desktopDragBounds || !desktopDragMouse) return
@@ -592,7 +593,7 @@ function registerWidgetIpc(opts = {}) {
     win.setContentBounds({ x: nx, y: ny, width, height })
   })
 
-  ipcMain.on('desktop-widget-drag-end', (event) => {
+  IPC.on(CH.DESKTOP_WIDGET_DRAG_END, (event) => {
     const win = desktopWidgetWindow
     if (!win || win.isDestroyed() || event.sender !== win.webContents) return
     if (desktopDragBounds) {
@@ -614,7 +615,7 @@ function registerWidgetIpc(opts = {}) {
 
   // 点击组件面板（课程 / 值日 / 人数 / 倒计时）：唤醒主窗口并切路由。
   // 窗口就在本进程里，直接调用 openMainPage，不再需要父子进程消息中转。
-  ipcMain.on('desktop-widget-open-page', (event, page) => {
+  IPC.on(CH.DESKTOP_WIDGET_OPEN_PAGE, (event, page) => {
     const win = desktopWidgetWindow
     if (!win || win.isDestroyed() || event.sender !== win.webContents) return
     if (typeof page === 'string' && page.startsWith('/')) openMainPage(page)
@@ -623,7 +624,7 @@ function registerWidgetIpc(opts = {}) {
   // 调整小组件窗口大小（带边界保护，防止超出屏幕）
   // 入参 [width, height] 为「视觉内容」尺寸；窗口实际会比它大 2*M，四周多出的部分用于绘制阴影。
   // 窗口位置保持不变——因为渲染层内容相对窗口固定偏移 M，所以视觉内容在屏幕上的位置不会变。
-  ipcMain.on('widget-resize', (event, [width, height]) => {
+  IPC.on(CH.WIDGET_RESIZE, (event, [width, height]) => {
     if (fromWidgetWindow(event)) {
       const M = WIDGET_SHADOW_MARGIN
       widgetWindow.setContentSize(width + M * 2, height + M * 2)
@@ -631,7 +632,7 @@ function registerWidgetIpc(opts = {}) {
       currentWidgetSize = [actualW, actualH]
 
       // 回执：告知渲染层窗口尺寸已生效，便于其「先改尺寸、再显示内容」，避免固定延时造成的空窗
-      try { widgetWindow.webContents.send('from-main', { type: 'widget-resized', width: actualW, height: actualH }) } catch (_) { /* 忽略 */ }
+      try { widgetWindow.webContents.send(CH.FROM_MAIN, { type: 'widget-resized', width: actualW, height: actualH }) } catch (_) { /* 忽略 */ }
 
       // 边界保护：保证「视觉内容」（去掉阴影边距后的部分）不越出屏幕。
       // 因视觉内容相对窗口左上角偏移 M，窗口本身允许向外溢出 M。
@@ -648,7 +649,7 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 将窗口居中显示（同时保存居中前的位置，以便关闭工具后恢复）
-  ipcMain.on('widget-center', (event) => {
+  IPC.on(CH.WIDGET_CENTER, (event) => {
     if (fromWidgetWindow(event)) {
       lastIconPosition = widgetWindow.getPosition()
       widgetWindow.center()
@@ -656,14 +657,14 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 恢复图标之前保存的位置
-  ipcMain.on('widget-restore-position', (event) => {
+  IPC.on(CH.WIDGET_RESTORE_POSITION, (event) => {
     if (fromWidgetWindow(event) && lastIconPosition) {
       widgetWindow.setPosition(lastIconPosition[0], lastIconPosition[1])
     }
   })
 
   // 全屏小组件（用于注释工具）
-  ipcMain.on('widget-fullscreen', (event) => {
+  IPC.on(CH.WIDGET_FULLSCREEN, (event) => {
     if (fromWidgetWindow(event)) {
       preFullscreenBounds = {
         pos: widgetWindow.getPosition(),
@@ -679,7 +680,7 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 从全屏恢复
-  ipcMain.on('widget-restore', (event) => {
+  IPC.on(CH.WIDGET_RESTORE, (event) => {
     if (fromWidgetWindow(event) && preFullscreenBounds) {
       widgetWindow.setPosition(preFullscreenBounds.pos[0], preFullscreenBounds.pos[1])
       widgetWindow.setContentSize(preFullscreenBounds.size[0], preFullscreenBounds.size[1])
@@ -691,7 +692,7 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 设置工具箱可见性
-  ipcMain.on('widget-set-visible', (event, visible) => {
+  IPC.on(CH.WIDGET_SET_VISIBLE, (event, visible) => {
     if (fromWidgetWindow(event)) {
       if (visible) {
         widgetWindow.setOpacity(1)
@@ -705,7 +706,7 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 拖动开始：记录窗口初始位置、尺寸和鼠标初始位置
-  ipcMain.on('widget-drag-start', (event, { screenX, screenY }) => {
+  IPC.on(CH.WIDGET_DRAG_START, (event, { screenX, screenY }) => {
     if (fromWidgetWindow(event)) {
       dragStartWindowPos = widgetWindow.getPosition()
       dragStartWindowSize = widgetWindow.getSize()
@@ -716,7 +717,7 @@ function registerWidgetIpc(opts = {}) {
   // 工具箱浮窗右键菜单：「关闭工具箱」= 连同持久化开关一起关掉（设置页的「是否启用工具箱」
   // 会同步变为关闭，下次启动也不再出现）。
   // 注意：渲染层菜单面板里的「退出工具箱」按钮走同一个 exitToolbox（见下方 widget-exit）。
-  ipcMain.on('widget-context-menu', (event) => {
+  IPC.on(CH.WIDGET_CONTEXT_MENU, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     const menu = Menu.buildFromTemplate([
       {
@@ -728,14 +729,14 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 菜单面板里的「退出工具箱」按钮（二次确认在渲染层做，确认后才会发这条）
-  ipcMain.on('widget-exit', (event) => {
+  IPC.on(CH.WIDGET_EXIT, (event) => {
     if (!widgetWindow || widgetWindow.isDestroyed()) return
     if (event.sender !== widgetWindow.webContents) return
     exitToolbox()
   })
 
   // 会话级「本次启用工具箱」：仅影响本次运行浮窗显隐，不持久化
-  ipcMain.on('widget-set-session-visible', (event, enabled) => {
+  IPC.on(CH.WIDGET_SET_SESSION_VISIBLE, (event, enabled) => {
     sessionWidgetEnabled = !!enabled
     // 开启即按需重建并显示；关闭即销毁窗口释放渲染进程，位置由 lastWidgetBounds 记忆
     if (sessionWidgetEnabled) showWidgetWindow()
@@ -743,13 +744,13 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 读取会话级开关；未初始化（尚未注入本次默认值）返回 null
-  ipcMain.handle('get-session-widget-visible', () => sessionWidgetEnabled)
+  IPC.handle(CH.GET_SESSION_WIDGET_VISIBLE, () => sessionWidgetEnabled)
 
   // 桌面组件与主窗口同 origin，token 直接读自己的 localStorage；
   // 原来的 get-main-token IPC 已随独立进程一起删除。
 
   // 拖动中：使用 setContentBounds 与 setContentSize 保持一致，避免 setBounds/setSize 边界计算差异
-  ipcMain.on('widget-drag-move', (event, { screenX, screenY }) => {
+  IPC.on(CH.WIDGET_DRAG_MOVE, (event, { screenX, screenY }) => {
     if (fromWidgetWindow(event) && dragStartWindowPos && dragStartMousePos && dragStartWindowSize) {
       const dx = screenX - dragStartMousePos[0]
       const dy = screenY - dragStartMousePos[1]
@@ -768,7 +769,7 @@ function registerWidgetIpc(opts = {}) {
   })
 
   // 拖动结束：确保尺寸正确
-  ipcMain.on('widget-drag-end', (event) => {
+  IPC.on(CH.WIDGET_DRAG_END, (event) => {
     if (fromWidgetWindow(event)) {
       const w = currentWidgetSize[0]
       const h = currentWidgetSize[1]
@@ -779,7 +780,7 @@ function registerWidgetIpc(opts = {}) {
   // 主应用 -> 所有小组件窗口（工具箱浮窗 + 桌面挂件）。
   // 桌面挂件此前收不到这条中继，业务数据变更只能等 5 分钟轮询；settings-changed
   // 与新增的 data-changed 共用这一条路，不新增 IPC 通道名。
-  ipcMain.on('to-widget', (event, data) => {
+  IPC.on(CH.TO_WIDGET, (event, data) => {
     relayToWidgetWindows(data, [widgetWindow, desktopWidgetWindow])
   })
 

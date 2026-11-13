@@ -55,8 +55,23 @@ function findTableNameArrays(src, names) {
 function findIpcLiterals(src) {
   const out = [];
   const re = /(?:ipcMain\.(?:on|handle|once)|webContents\.send|\.send)\s*\(\s*'([^']+)'/g;
+  const code = stripLineComments(src);
   let m;
-  while ((m = re.exec(src))) out.push(m[1]);
+  while ((m = re.exec(code))) out.push(m[1]);
+  return out;
+}
+
+// 档 C · M11 的守卫：主进程注册/发送 IPC 时是否还在手写通道名。
+// 与 findIpcLiterals 的区别：这里返回「调用形态」而不只是通道名，便于直观看违规写法。
+function findInlineIpc(src) {
+  const code = stripLineComments(src);
+  const out = [];
+  for (const m of code.matchAll(/\bipcMain\.(handle|on|once)\s*\(\s*'([^']+)'/g)) {
+    out.push(`ipcMain.${m[1]}('${m[2]}')`);
+  }
+  for (const m of code.matchAll(/\.send\s*\(\s*'([^']+)'/g)) {
+    out.push(`send('${m[1]}')`);
+  }
   return out;
 }
 
@@ -164,4 +179,28 @@ test('6-3 反证：注入一个未登记的通道名必须被识别出来', () =
   // 负样本：真通道不应被误报
   const real = json.invoke[0];
   assert.deepStrictEqual(findIpcLiterals(`ipcMain.handle('${real}', () => {})`).filter((n) => !known.has(n)), []);
+});
+
+// ---------- 档 C · M11：主进程注册侧也走同一份名单 ----------
+
+test('主进程 IPC 注册/发送不再手写通道名（全部走 channels.js 常量）', () => {
+  const files = walk('electron/main').filter((f) => !f.endsWith('/channels.js'));
+  const offenders = [];
+  for (const f of files) {
+    for (const hit of findInlineIpc(read(f))) offenders.push(`${f}: ${hit}`);
+  }
+  assert.deepStrictEqual(offenders, [], `主进程仍在内联 IPC 通道名，请改用 CH.*：\n${offenders.join('\n')}`);
+});
+
+test('6-3 反证：内联通道名能被识别，常量写法不误报', () => {
+  assert.deepStrictEqual(findInlineIpc("ipcMain.handle('quit-app', () => {})"), ["ipcMain.handle('quit-app')"]);
+  assert.deepStrictEqual(findInlineIpc("mainWindow.webContents.send('from-main', {})"), ["send('from-main')"]);
+  assert.deepStrictEqual(findInlineIpc('// 旧写法 ipcMain.on(\'x\') 已删'), []);
+  assert.deepStrictEqual(findInlineIpc('IPC.handle(CH.QUIT_APP, () => {})'), []);
+});
+
+test('channels.js 与 ipc-channels.json 同源（生成器幂等，禁止手改）', async () => {
+  const { renderChannels } = await import('../../testjs/tools/gen-channels.mjs');
+  const expected = renderChannels(JSON.parse(read('electron/ipc-channels.json')));
+  assert.strictEqual(read('electron/main/channels.js'), expected, 'channels.js 已漂移，请运行 npm run channels:gen');
 });

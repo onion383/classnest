@@ -7,6 +7,7 @@
 // =========================================================================
 
 const { app } = require('electron')
+const { CH } = require('./channels')
 const { isHttpUrl } = require('./main.path-guard')
 
 // 右侧网页抽屉用 <webview> 内嵌外部网页的安全护栏（外部内容视为不可信）：
@@ -75,7 +76,7 @@ function registerWebviewGuard({ getMainWindow, isDev }) {
         e.preventDefault()
         const mainWindow = getMainWindow()
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('from-main', { type: 'link-download-blocked' })
+          mainWindow.webContents.send(CH.FROM_MAIN, { type: 'link-download-blocked' })
         }
       })
     }

@@ -12,7 +12,8 @@
 //   resetShutdownState / beginCloseWithoutMenu / handleMainClose / isTrayAlive 等。
 // =========================================================================
 
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage } = require('electron')
+const { app, BrowserWindow, Menu, Tray, nativeImage } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
 
@@ -68,7 +69,7 @@ function requestShutdownMenu(win) {
   if (!mainRendererShutdownReady) return false
   const ex = (w) => !!(w && !w.isDestroyed())
   try {
-    win.webContents.send('from-main', {
+    win.webContents.send(CH.FROM_MAIN, {
       type: 'shutdown-menu',
       hasToolbox: ex(getWidgetWindow()),
       hasDesktop: ex(getDesktopWidgetWindow()),
@@ -172,7 +173,7 @@ function registerTrayIpc(opts = {}) {
   if (typeof opts.createMainWindow === 'function') createMainWindow = opts.createMainWindow
 
   // 渲染层回报：就绪标记 / 用户选择（action）/ 取消
-  ipcMain.on('shutdown-action', (event, data) => {
+  IPC.on(CH.SHUTDOWN_ACTION, (event, data) => {
     if (!data) return
     if (data === 'ready' || data?.type === 'ready') { mainRendererShutdownReady = true; return }
     if (data === 'cancel' || data?.action === 'cancel') { shutdownMenuOpen = false; return }
@@ -181,19 +182,19 @@ function registerTrayIpc(opts = {}) {
   })
 
   // 最小化
-  ipcMain.on('win-minimize', (event) => {
+  IPC.on(CH.WIN_MINIMIZE, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win) win.minimize()
   })
   // 最大化 / 还原
-  ipcMain.on('win-maximize-toggle', (event) => {
+  IPC.on(CH.WIN_MAXIMIZE_TOGGLE, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return
     if (win.isMaximized()) win.unmaximize()
     else win.maximize()
   })
   // 关闭
-  ipcMain.on('win-close', (event) => {
+  IPC.on(CH.WIN_CLOSE, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win) win.close()
   })

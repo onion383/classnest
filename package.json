@@ -22,6 +22,7 @@
     "check:boundaries:strict": "node testjs/tools/error-boundary-check.cjs --strict",
     "docs:verify": "node testjs/tools/docs-verify.mjs",
     "docs:sync": "node testjs/tools/docs-sync.mjs",
+    "channels:gen": "node testjs/tools/gen-channels.mjs",
     "build": "cd student-frontend && npm run build",
     "build:new": "node student-frontend/dev-vite.js --vue36 build",
     "build:backend": "node student-backend/build.bundle.mjs",

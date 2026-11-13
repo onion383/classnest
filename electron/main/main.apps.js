@@ -11,7 +11,8 @@
 // 上次访问目录复用 dialogs.js 的 getDialogDir/setDialogDir，保持跨对话框一致。
 // =========================================================================
 
-const { app, ipcMain, dialog, shell } = require('electron')
+const { app, dialog, shell } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
 const { getDialogDir, setDialogDir } = require('./main.dialogs')
@@ -61,7 +62,7 @@ function registerAppsIpc(opts = {}) {
   if (typeof opts.getMainWindow === 'function') getMainWindow = opts.getMainWindow
 
   // 打开"选择软件程序/快捷方式"对话框，并提取其图标为 dataURL 返回
-  ipcMain.handle('apps-select-file', async () => {
+  IPC.handle(CH.APPS_SELECT_FILE, async () => {
     const mainWindow = getMainWindow()
     if (!mainWindow || mainWindow.isDestroyed()) return { canceled: true, error: '无主窗口' }
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -83,7 +84,7 @@ function registerAppsIpc(opts = {}) {
   // 拖拽添加：渲染层把从桌面拖入的文件/文件夹/快捷方式路径一次性发来，
   // 这里统一校验存在性并提取名称/图标。拖入的快捷方式可能指向已删除的文件，
   // 因此这里静默跳过不存在的路径即可。
-  ipcMain.handle('apps-resolve-paths', async (event, paths) => {
+  IPC.handle(CH.APPS_RESOLVE_PATHS, async (event, paths) => {
     const list = Array.isArray(paths) ? paths.slice(0, MAX_RESOLVE_PATHS) : []
     const out = []
     for (const p of list) {
@@ -97,7 +98,7 @@ function registerAppsIpc(opts = {}) {
   })
 
   // 点击启动常用软件（.lnk/.exe/.bat/文件夹/普通文件均可走 shell.openPath）
-  ipcMain.handle('apps-launch', (event, filePath) => {
+  IPC.handle(CH.APPS_LAUNCH, (event, filePath) => {
     // 列表由后端持久化，渲染层仍可能被篡改后传入任意路径；
     // 这里只拒绝「不存在」与「系统保护目录」，保留用户自装软件（多在 Program Files）。
     const safe = resolveSafeLaunchPath(filePath)

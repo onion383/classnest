@@ -145,7 +145,7 @@ test('接线：只有主窗口开启广播，且成功拦截器真的调用它',
 test('接线：主进程中继把桌面挂件放进同一张窗口表', () => {
   const widgetMain = code('electron/main/main.widget.js')
   assert.match(widgetMain, /require\('\.\/widget-relay'\)/)
-  assert.match(widgetMain, /ipcMain\.on\('to-widget'[\s\S]*?relayToWidgetWindows\(data, \[widgetWindow, desktopWidgetWindow\]\)/)
+  assert.match(widgetMain, /IPC\.on\(CH\.TO_WIDGET[\s\S]*?relayToWidgetWindows\(data, \[widgetWindow, desktopWidgetWindow\]\)/)
 
   // 不新增 IPC 通道名：data-changed 是 from-main 消息里的 type，不是新通道
   const channels = JSON.parse(read('electron/ipc-channels.json'))

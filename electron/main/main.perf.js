@@ -14,7 +14,8 @@
 // 由 main.js 的 onBackendMessage 转发调用 handleBackendMemReport / handleBackendGcReport。
 // =========================================================================
 
-const { app, ipcMain } = require('electron')
+const { app } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('node:path')
 const fsp = require('node:fs/promises')
 const { getPrivateWorkingSetKB } = require('./main.privateWorkingSet')
@@ -329,7 +330,7 @@ function registerPerfIpc(opts = {}) {
   if (typeof opts.getThumbsDir === 'function') getThumbsDir = opts.getThumbsDir
 
   // 内存快照：逐进程列表 + 前端/后端/小组件存活状态 + 总计/平均/最高汇总
-  ipcMain.handle('perf-snapshot', async () => {
+  IPC.handle(CH.PERF_SNAPSHOT, async () => {
     const procs = await collectProcList()
     const total = procs.reduce((s, p) => s + procMemKB(p), 0)
     // 面板打开时也记一笔，让「平均/最高」与逐进程列表的当前值保持同步
@@ -351,14 +352,14 @@ function registerPerfIpc(opts = {}) {
   })
 
   // 重启前端：直接重载主窗口页面
-  ipcMain.handle('perf-restart-frontend', () => {
+  IPC.handle(CH.PERF_RESTART_FRONTEND, () => {
     const mainWindow = getMainWindow()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload()
     return { ok: true }
   })
 
   // 重启小组件：销毁并重建原本存在的窗口，并尊重用户开关（关掉的不重新拉起）
-  ipcMain.handle('perf-restart-widget', () => {
+  IPC.handle(CH.PERF_RESTART_WIDGET, () => {
     // 工具箱浮窗：仅当原本存在时重建；重建后按会话级开关决定显隐
     const widgetWindow = getWidgetWindow()
     if (widgetWindow && !widgetWindow.isDestroyed()) {
@@ -379,14 +380,14 @@ function registerPerfIpc(opts = {}) {
   // 全部重启（含 Electron 本体）：先调度 relaunch，再走正常退出流程。
   // 用 app.quit() 而非 app.exit()：quit 会触发 before-quit → shutdownBackend，
   // 干净停掉后端子进程后再退出并拉起新实例，避免后端残留。
-  ipcMain.handle('perf-relaunch-app', () => {
+  IPC.handle(CH.PERF_RELAUNCH_APP, () => {
     app.relaunch()
     app.quit()
     return { ok: true }
   })
 
   // 手动 GC：主进程 global.gc + 各渲染进程 CDP 回收 + 后端自报 GC
-  ipcMain.handle('perf-gc', async () => {
+  IPC.handle(CH.PERF_GC, async () => {
     // 主进程
     let main = false
     try {
@@ -412,12 +413,12 @@ function registerPerfIpc(opts = {}) {
   })
 
   // 上次启动耗时与打点时间线
-  ipcMain.handle('perf-startup', () => startupTimer.getTimeline())
+  IPC.handle(CH.PERF_STARTUP, () => startupTimer.getTimeline())
 
   // 空间管理：磁盘占用按四类归账（软件本体 / 该账号 / 其他账号 / 微缩图）+ 其他兜底。
   // 只读扫描、不进 1s 轮询链：由设置页进入时与手动「重新统计」触发。
   // 返回体走统一契约（ok / fail）：前端据 outcome 区分「扫到 0」与「扫失败」。
-  ipcMain.handle('perf-disk-usage', async (_event, payload) => {
+  IPC.handle(CH.PERF_DISK_USAGE, async (_event, payload) => {
     const slug = payload && typeof payload.slug === 'string' ? payload.slug : ''
     try {
       const usage = await scanDiskUsage({
@@ -439,7 +440,7 @@ function registerPerfIpc(opts = {}) {
   // 日志是主进程写的（backend.log 的写流、inp.log/desktop-layer.log 的追加），
   // 放后端路由反而够不到 userData 根那份，所以在这里直接动手；
   // 报数用清理前后的实际体积差 —— 并发写入导致没清干净时不会虚报。
-  ipcMain.handle('perf-logs-clear', async () => {
+  IPC.handle(CH.PERF_LOGS_CLEAR, async () => {
     try {
       const files = logFilePaths(getDataDir(), [
         path.join(app.getPath('userData'), 'data'),

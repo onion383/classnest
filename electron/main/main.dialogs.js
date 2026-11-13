@@ -12,7 +12,8 @@
 // 本模块不直接持有窗口变量；lastDialogDir 作为本模块内部状态并提供 getter/setter 供 apps.js 复用。
 // =========================================================================
 
-const { app, BrowserWindow, ipcMain, desktopCapturer, screen, dialog, shell } = require('electron')
+const { app, BrowserWindow, desktopCapturer, screen, dialog, shell } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
 const { resolveDataDir, resolveThumbsDir, resolveSkillsDir } = require('./main.config')
@@ -88,7 +89,7 @@ function registerDialogsIpc(opts = {}) {
   // 返回 Electron 原生的 result（canceled/filePaths）—— 前端依赖这两个字段，不改形状。
   // 只用 contract.safeReject 补异常兜底：dialog 抛错时原先直接 reject，
   // 渲染层拿到的是 "Error invoking remote method"，真实原因全丢。
-  ipcMain.handle('select-folder', contract.safeReject(async (event) => {
+  IPC.handle(CH.SELECT_FOLDER, contract.safeReject(async (event) => {
     // 以调用方所在窗口为父窗口：首次安装引导期还没有主窗口，此时用引导窗口作父窗口，
     // 否则（mainWindow 为空）会直接返回空数组，导致引导里的「修改」按钮点了没反应。
     const senderWin = BrowserWindow.fromWebContents(event.sender)
@@ -113,7 +114,7 @@ function registerDialogsIpc(opts = {}) {
   // 保持原语义：路径非法时**返回** { error }（不 reject）—— 前端 AlbumManageDialog
   // 的 try/catch 只在 reject 时触发，改成 reject 会让它的错误提示多弹一次，
   // 那是行为变更、不在本次范围。契约层只把返回形状补齐（success 字段）。
-  ipcMain.handle('open-folder', contract.safe(async (event, folderPath) => {
+  IPC.handle(CH.OPEN_FOLDER, contract.safe(async (event, folderPath) => {
     // 渲染层传什么路径都不能直接交给系统：只放行已存在、非盘符根、非系统保护目录的绝对路径
     const safe = resolveSafeFolder(folderPath)
     if (safe.error) return contract.fail(safe.error)
@@ -123,7 +124,7 @@ function registerDialogsIpc(opts = {}) {
 
   // ========== 数据目录 / 缓存目录（可自定义，含整体搬迁） ==========
   // 当前数据目录与缓存目录信息（供设置页展示）
-  ipcMain.handle('get-data-directories', () => {
+  IPC.handle(CH.GET_DATA_DIRECTORIES, () => {
     return {
       dataDir: resolveDataDir(),
       thumbsDir: resolveThumbsDir(),
@@ -139,7 +140,7 @@ function registerDialogsIpc(opts = {}) {
 
   // 保存背景图片（用于大图片，前端传入 base64）
   // 写盘改成异步：背景图动辄几 MB，writeFileSync 会把主进程阻塞到写完为止。
-  ipcMain.handle('save-background-image', contract.safe(async (event, { name, base64 }) => {
+  IPC.handle(CH.SAVE_BACKGROUND_IMAGE, contract.safe(async (event, { name, base64 }) => {
     try {
       // 与「选择图片」路径对齐的 50MB 上限：base64 入口原先没有大小校验，
       // 一次超大 payload 就会在主进程里解码出数倍内存（B01-09）。
@@ -183,7 +184,7 @@ function registerDialogsIpc(opts = {}) {
   // 导出文件保存对话框：用户确认保存后才写入文件并返回
   // 包 contract.safe：dialog.showSaveDialog 本身也可能抛（窗口在弹出瞬间被销毁），
   // 原先这类异常直接 reject，渲染层拿到的真实原因全丢。
-  ipcMain.handle('save-file', contract.safe(async (event, { defaultName, data } = {}) => {
+  IPC.handle(CH.SAVE_FILE, contract.safe(async (event, { defaultName, data } = {}) => {
     const mainWindow = getMainWindow()
     if (!mainWindow || mainWindow.isDestroyed()) return contract.fail('主窗口不可用')
     // 数据体积先判：字符串按 UTF-8 字节数，ArrayBuffer/TypedArray 按 byteLength。
@@ -229,7 +230,7 @@ function registerDialogsIpc(opts = {}) {
   }))
 
   // 导出文件保存后：用系统默认应用打开
-  ipcMain.handle('open-file', contract.safe(async (event, { filePath }) => {
+  IPC.handle(CH.OPEN_FILE, contract.safe(async (event, { filePath }) => {
     if (!filePath) return contract.fail('缺少文件路径')
     const safe = resolveSafeOpenFile(filePath)
     if (safe.error) return contract.fail(safe.error)
@@ -251,7 +252,7 @@ function registerDialogsIpc(opts = {}) {
   // uploads 的，不在那个名单里，所以需要一条范围同样小的旁路：
   //   · 只认 uploads 根目录下的文件名（basename 压平，穿越不出去）
   //   · 挡掉可执行扩展名（见 BLOCKED_OPEN_EXTS）
-  ipcMain.handle('open-upload-file', contract.safe(async (event, { relPath } = {}) => {
+  IPC.handle(CH.OPEN_UPLOAD_FILE, contract.safe(async (event, { relPath } = {}) => {
     const root = path.resolve(path.join(resolveDataDir(), 'uploads'))
     const name = path.basename(String(relPath || ''))
     if (!name || name === '.' || name === '..') return contract.fail('缺少文件路径')
@@ -280,7 +281,7 @@ function registerDialogsIpc(opts = {}) {
   //   所以浮窗里的调用方（Note.vue / Screenshot.vue）必须**自己先藏内容**
   //   （见 student-frontend/src/subwindows/widget/captureHide.js），并传 hideWidget:false
   //   省掉这段必然无效的等待。这里的隐藏只对非透明窗口的调用方有意义。
-  ipcMain.handle('screenshot-capture', contract.safe(async (event, options) => {
+  IPC.handle(CH.SCREENSHOT_CAPTURE, contract.safe(async (event, options) => {
     const widgetWindow = getWidgetWindow()
     const hideWidget = options?.hideWidget !== false
     let wasVisible = false
@@ -423,7 +424,7 @@ function registerDialogsIpc(opts = {}) {
     if (st.widgetWasVisible) setWinOpacity(getWidgetWindow(), 1)
   }
 
-  ipcMain.handle('screenshot-region', contract.safe(async () => {
+  IPC.handle(CH.SCREENSHOT_REGION, contract.safe(async () => {
     const mainWindow = getMainWindow()
     if (!mainWindow || mainWindow.isDestroyed()) return contract.fail('主窗口不可用')
     // 上一次会话若还在，说明渲染层没走完流程。
@@ -493,7 +494,7 @@ function registerDialogsIpc(opts = {}) {
     }
   }))
 
-  ipcMain.handle('screenshot-region-show', contract.safe(async () => {
+  IPC.handle(CH.SCREENSHOT_REGION_SHOW, contract.safe(async () => {
     const st = regionSession
     if (!st || !st.window || st.window.isDestroyed()) {
       // 会话已失效（窗口没了/超时了）：清掉残留，别让后续截图一直撞「已有截屏进行中」
@@ -515,7 +516,7 @@ function registerDialogsIpc(opts = {}) {
     return contract.ok()
   }))
 
-  ipcMain.handle('screenshot-region-end', contract.safe(async () => {
+  IPC.handle(CH.SCREENSHOT_REGION_END, contract.safe(async () => {
     restoreAfterRegion()
     return contract.ok()
   }))
@@ -523,7 +524,7 @@ function registerDialogsIpc(opts = {}) {
   // 保存注释后的截图
   // 包 contract.safe：写盘失败（磁盘满/权限/路径失效）原先直接 reject，
   // 渲染层拿到的是 Electron 包装的 "Error invoking remote method"，真实原因全丢。
-  ipcMain.handle('note-save', contract.safe(async (event, uint8Array, options) => {
+  IPC.handle(CH.NOTE_SAVE, contract.safe(async (event, uint8Array, options) => {
     if (!uint8Array || typeof uint8Array.byteLength !== 'number') {
       return contract.fail('缺少截图数据')
     }

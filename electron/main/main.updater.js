@@ -12,7 +12,8 @@
 // （内部自带 mainWindow 空判与 isDestroyed 判空，本模块不直接持有窗口引用）。
 // =========================================================================
 
-const { app, ipcMain } = require('electron')
+const { app } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
 const { isPackaged } = require('./main.env')
@@ -275,10 +276,10 @@ function registerUpdateIpc(send) {
 
   pruneUpdateCache()
 
-  ipcMain.handle('get-app-version', () => app.getVersion())
+  IPC.handle(CH.GET_APP_VERSION, () => app.getVersion())
 
   // 检查更新：进入「关于」页 / 手动点击触发；立即返回当前状态快照，后续变化走 from-main 广播
-  ipcMain.handle('update-check', async () => {
+  IPC.handle(CH.UPDATE_CHECK, async () => {
     if (isPackaged) {
       // 打包环境：后台走完整「检查 + 下载」流程（立即返回，结果靠事件推送）
       runUpdateFlow()
@@ -301,7 +302,7 @@ function registerUpdateIpc(send) {
   // 安装互斥：双击「立即安装」时第二次点击会落在「上百 MB 哈希重算」窗口里，
   // 没有这把锁就会 spawn 两个安装器（审查 v5 · V5-027）。
   let installBusy = false
-  ipcMain.on('update-install', async () => {
+  IPC.on(CH.UPDATE_INSTALL, async () => {
     if (!isPackaged) return
     if (installBusy) return
     installBusy = true

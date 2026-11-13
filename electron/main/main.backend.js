@@ -16,7 +16,8 @@
 // onBackendMessage 把 mem-report / gc-report 转发给 perf.handleBackendMemReport / GcReport。
 // =========================================================================
 
-const { app, ipcMain } = require('electron')
+const { app } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('path')
 // 启动单飞守卫（纯 Promise，自身不 require electron，可单独单测）
 const { createSingleFlight } = require('./main.single-flight')
@@ -399,7 +400,7 @@ const startBackend = createSingleFlight(async () => {
 function broadcast(payload) {
   const wins = [getMainWindow(), getWidgetWindow(), getDesktopWidgetWindow(), getMigrationWindow(), getSetupWindow()]
   for (const w of wins) {
-    try { if (w && !w.isDestroyed()) w.webContents.send('from-main', payload) } catch (_) { /* 忽略 */ }
+    try { if (w && !w.isDestroyed()) w.webContents.send(CH.FROM_MAIN, payload) } catch (_) { /* 忽略 */ }
   }
 }
 
@@ -712,7 +713,7 @@ function registerBackendIpc(opts = {}) {
   if (typeof opts.getSetupWindow === 'function') getSetupWindow = opts.getSetupWindow
 
   // 用户点「重启后端」：复位重试计数与失败标记，先停掉旧进程再重新 fork，并重新武装看门狗
-  ipcMain.handle('restart-backend', async () => {
+  IPC.handle(CH.RESTART_BACKEND, async () => {
     clearBackendFailure()
     backendRestartCount = 0
     backendReady = false
@@ -722,13 +723,13 @@ function registerBackendIpc(opts = {}) {
   })
 
   // 失败态查询：兜住「主进程先失败、窗口后加载」的竞态
-  ipcMain.handle('backend-failure', () => backendFailed)
+  IPC.handle(CH.BACKEND_FAILURE, () => backendFailed)
 
   // 渲染层上报「请求没拿到响应」（连接被拒/中断）时调用：立刻做一次健康探测。
   // 把用户的每一次失败操作变成探针，不必等下一个 30s 心跳周期才发现后端不可达。
   // 探测成功 → 只是偶发（如请求被取消），不做任何处理；探测失败 → 后端确实不可达，立即走重连。
   // 启动阶段（backendReady 为假）一律不介入：那时该由启动看门狗与失败页负责，避免两套机制并行。
-  ipcMain.handle('probe-backend', async () => {
+  IPC.handle(CH.PROBE_BACKEND, async () => {
     if (app.isQuitting || !backendReady) return { ok: false, skipped: true }
     if (reconnecting) return { ok: false, reconnecting: true }
     if (probing) return { ok: false, skipped: true }
@@ -749,10 +750,10 @@ function registerBackendIpc(opts = {}) {
   })
 
   // 后端就绪状态查询：兜住「后端先就绪、渲染层后注册监听」的竞态（广播事件会漏掉这类窗口）
-  ipcMain.handle('backend-status', () => backendReady)
+  IPC.handle(CH.BACKEND_STATUS, () => backendReady)
 
   // 启动阶段状态查询：加载页据此补齐当前「程序正在干嘛」（兜住「页面后加载」的竞态）
-  ipcMain.handle('boot-status', () => bootStatusText)
+  IPC.handle(CH.BOOT_STATUS, () => bootStatusText)
 }
 
 module.exports = {

@@ -16,7 +16,7 @@
 // 打包版既不 require 本模块、也不注册该通道，不会产生任何日志文件。
 // =========================================================================
 
-const { ipcMain } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('path')
 const { isDev } = require('./main.env')
 const { resolveDataDir } = require('./main.config')
@@ -47,7 +47,7 @@ function formatLongTasks(rows) {
 
 function registerInpLogIpc() {
   if (!isDev) return // 打包版：不注册，永不落盘
-  ipcMain.on('inp-report', (_event, payload) => {
+  IPC.on(CH.INP_REPORT, (_event, payload) => {
     try {
       const p = payload || {}
       const categories = Array.isArray(p.categories) ? p.categories : []

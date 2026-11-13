@@ -1,6 +1,7 @@
 // 只保留 main.js 自身还在用的出口：托盘/菜单/通知/快捷键随各自模块迁出后不再需要
 // （Menu/Tray/nativeImage/globalShortcut/Notification → tray.js 等，screen → widget.js）
-const { app, BrowserWindow, ipcMain, shell, protocol, Menu, clipboard } = require('electron')
+const { app, BrowserWindow, shell, protocol, Menu, clipboard } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
@@ -168,7 +169,7 @@ function registerDeferredIpc() {
 
   // 版本更新 IPC。状态广播只发给主窗口（内部自带判空 + isDestroyed），故把出口函数注入 updater。
   getUpdater().registerUpdateIpc((payload) => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('from-main', payload)
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CH.FROM_MAIN, payload)
   })
 
   // 文件/文件夹对话框与本地文件读写 IPC
@@ -461,7 +462,7 @@ function createMainWindow() {
 // 见 perf.js：registerPerfIpc（perf-snapshot / perf-restart-frontend / perf-restart-widget / perf-gc / perf-startup）/ startMemSampling
 
 // 用户点「退出应用」：置退出标志以跳过主窗口「关闭确认菜单」的拦截，直接退出
-ipcMain.on('quit-app', () => {
+IPC.on(CH.QUIT_APP, () => {
   app.isQuitting = true
   app.quit()
 })
@@ -469,7 +470,7 @@ ipcMain.on('quit-app', () => {
 // 原生右键菜单：渲染层在「页面未自行处理右键」时发来请求（见前端 main.js 的全局 contextmenu 监听）。
 // Electron 默认不提供右键菜单，此前输入框/文本区右键没有任何反应；这里按上下文弹出系统原生菜单
 // （用 role 让系统负责文案本地化与撤销/剪切等可用态），右键手感更接近桌面应用。
-ipcMain.on('show-native-context-menu', (event, opts = {}) => {
+IPC.on(CH.SHOW_NATIVE_CONTEXT_MENU, (event, opts = {}) => {
   const win = BrowserWindow.fromWebContents(event.sender)
   if (!win || win.isDestroyed()) return
   const template = []
@@ -498,14 +499,14 @@ ipcMain.on('show-native-context-menu', (event, opts = {}) => {
 
 // AI 助手悬浮图标右键菜单：与工具箱一致，仅提供「本次退出」——
 // 本次运行隐藏悬浮图标与浮窗（不持久化，重启恢复），主程序与后端照常运行。
-ipcMain.on('ai-context-menu', (event) => {
+IPC.on(CH.AI_CONTEXT_MENU, (event) => {
   const win = BrowserWindow.fromWebContents(event.sender)
   if (!win || win.isDestroyed()) return
   const menu = Menu.buildFromTemplate([
     {
       label: '本次退出',
       click: () => {
-        if (!win.isDestroyed()) win.webContents.send('from-main', { type: 'ai-widget-exit' })
+        if (!win.isDestroyed()) win.webContents.send(CH.FROM_MAIN, { type: 'ai-widget-exit' })
       },
     },
   ])
@@ -700,7 +701,7 @@ app.whenReady().then(() => {
 // 后端就绪 / 启动阶段状态查询（backend-status / boot-status）已迁至 backend.js 的 registerBackendIpc
 
 // 在系统默认浏览器打开外链
-ipcMain.handle('open-external', (event, url) => {
+IPC.handle(CH.OPEN_EXTERNAL, (event, url) => {
   // 白名单判定统一走 path-guard：URL 解析后协议必须是 http/https 且有 host，
   // 比 startsWith('http') 更严（可挡掉 `http://` 之外的畸形串与凭据注入）。
   if (pathGuard.isHttpUrl(url)) {
@@ -720,7 +721,7 @@ webviewGuard.registerWebviewGuard({ getMainWindow: () => mainWindow, isDev })
 //   get-session-widget-visible / desktop-widget-* 等）已迁至 widget.js 的 registerWidgetIpc
 
 // 安全通道主密钥：提供给渲染进程（含工具箱/桌面组件）参与前后端 HKDF 派生态。
-ipcMain.handle('get-master-key', () => getMasterKey())
+IPC.handle(CH.GET_MASTER_KEY, () => getMasterKey())
 
 // 安全通道握手报文桥（2-19）：渲染层只把公钥经 IPC 交过来，主进程直连后端换回
 // 后端公钥 + sessionId。私钥与会话密钥始终留在渲染层（详见 main.secure-bridge.js）。
@@ -728,7 +729,7 @@ require('./main.secure-bridge').registerSecureBridgeIpc()
 
 // 恢复词等敏感内容：展示期间令窗口排除在屏幕捕获之外（Windows 走 SetWindowDisplayAffinity，
 // 截图/录屏得到黑块），关闭或离开设置页时立即恢复。
-ipcMain.handle('set-content-protection', (event, enabled) => {
+IPC.handle(CH.SET_CONTENT_PROTECTION, (event, enabled) => {
   const win = BrowserWindow.fromWebContents(event.sender)
   if (!win) return false
   try { win.setContentProtection(!!enabled) } catch (_) { return false }
@@ -737,7 +738,7 @@ ipcMain.handle('set-content-protection', (event, enabled) => {
 
 // 复制敏感文本：写剪贴板，并在 TTL 后「仅当剪贴板仍是这段文本」时清空，
 // 不覆盖用户后来复制的内容。默认 60 秒。
-ipcMain.handle('copy-sensitive-text', (event, { text, ttlMs } = {}) => {
+IPC.handle(CH.COPY_SENSITIVE_TEXT, (event, { text, ttlMs } = {}) => {
   if (typeof text !== 'string' || !text) return false
   clipboard.writeText(text)
   const ttl = Math.min(Math.max(Number(ttlMs) || 60000, 1000), 10 * 60 * 1000)
@@ -769,7 +770,7 @@ function recreateMainWindow(mode) {
   }
 }
 
-ipcMain.on('theme-chrome', (event, { mode }) => {
+IPC.on(CH.THEME_CHROME, (event, { mode }) => {
   const win = BrowserWindow.fromWebContents(event.sender)
   if (!win || win !== mainWindow) return
   // 统一无边框亚克力：无论渲染层报什么，都不再切换边框类型（mainWindowChrome 恒为 frameless，
@@ -788,7 +789,7 @@ ipcMain.on('theme-chrome', (event, { mode }) => {
 // 待主窗口展示的提示：迁移时主窗口正在重建，先暂存于此，等新主窗口加载完成主动取走再弹提示条
 // 形如 { type: 'success'|'info'|'warning'|'error', message: string }
 let pendingMainNotification = null
-ipcMain.handle('get-pending-notification', () => {
+IPC.handle(CH.GET_PENDING_NOTIFICATION, () => {
   const msg = pendingMainNotification
   pendingMainNotification = null
   return msg || null
@@ -807,7 +808,7 @@ let migrationContext = null
 // 向进度窗口推送消息（窗口不存在/已销毁时静默忽略）
 function sendMigration(payload) {
   if (migrationWindow && !migrationWindow.isDestroyed()) {
-    try { migrationWindow.webContents.send('from-main', payload) } catch (_) {}
+    try { migrationWindow.webContents.send(CH.FROM_MAIN, payload) } catch (_) {}
   }
 }
 
@@ -865,7 +866,7 @@ function waitMigrationReady(timeout = 4000) {
   })
 }
 
-ipcMain.on('migration-ready', (event) => {
+IPC.on(CH.MIGRATION_READY, (event) => {
   if (!migrationWindow || migrationWindow.isDestroyed()) return
   if (event.sender !== migrationWindow.webContents) return
   migrationUiReady = true
@@ -875,7 +876,7 @@ ipcMain.on('migration-ready', (event) => {
 // 迁移失败后用户点击「返回主界面」/ 加密转换结束后进度窗口回报结果：
 //   - 数据目录搬迁：按用户选择决定是否清理目标目录，再重开主窗口
 //   - 数据库加密转换：由进度窗口回报 ok，主进程据此准备提示条后重开主窗口
-ipcMain.on('migration-dismiss', async (event, data) => {
+IPC.on(CH.MIGRATION_DISMISS, async (event, data) => {
   if (!migrationWindow || migrationWindow.isDestroyed()) return
   if (event.sender !== migrationWindow.webContents) return
   const ctx = migrationContext
@@ -1024,7 +1025,7 @@ async function detectFirstRun() {
 // 向引导窗口推送预热进度（窗口不存在/已销毁时静默忽略）
 function sendSetupWarmup(payload) {
   if (setupWindow && !setupWindow.isDestroyed()) {
-    try { setupWindow.webContents.send('from-main', payload) } catch (_) {}
+    try { setupWindow.webContents.send(CH.FROM_MAIN, payload) } catch (_) {}
   }
 }
 function updateWarmup(phase, detail, percent, done = false) {
@@ -1146,7 +1147,7 @@ function createSetupWindow(plan = launchPlan) {
   return win
 }
 
-ipcMain.on('setup-ready', (event) => {
+IPC.on(CH.SETUP_READY, (event) => {
   if (!setupWindow || setupWindow.isDestroyed()) return
   if (event.sender !== setupWindow.webContents) return
   // 引导界面已挂载：dev 下此刻显示窗口（毛玻璃与引导界面同时出现）；prod 下窗口本就已显示
@@ -1160,7 +1161,7 @@ ipcMain.on('setup-ready', (event) => {
 })
 
 // 渲染层首屏画面：读取本次启动计划（是否先显示低版本提示 / 是否走引导）
-ipcMain.handle('launch-plan', (event) => {
+IPC.handle(CH.LAUNCH_PLAN, (event) => {
   if (setupWindow && !setupWindow.isDestroyed() && event.sender !== setupWindow.webContents) {
     return { warn: false, setup: false }
   }
@@ -1170,7 +1171,7 @@ ipcMain.handle('launch-plan', (event) => {
 // 低版本提示「忽略」：按勾选记录「不再提示」。
 // 若本次还需走引导（plan.setup），主进程不动窗口，由渲染层自行从提示画面切到欢迎画面；
 // 若只是提示（warn-only），提示画面即最后一屏——直接进主窗口并关闭启动窗口。
-ipcMain.on('launch-skip-warn', (event, payload) => {
+IPC.on(CH.LAUNCH_SKIP_WARN, (event, payload) => {
   if (!setupWindow || setupWindow.isDestroyed()) return
   if (event.sender !== setupWindow.webContents) return
   if (payload && payload.remember) {
@@ -1185,7 +1186,7 @@ ipcMain.on('launch-skip-warn', (event, payload) => {
 })
 
 // 低版本提示「获取最新的 Windows」：用默认浏览器打开系统下载页，随后退出班集
-ipcMain.on('launch-open-download', (event) => {
+IPC.on(CH.LAUNCH_OPEN_DOWNLOAD, (event) => {
   if (!setupWindow || setupWindow.isDestroyed()) return
   if (event.sender !== setupWindow.webContents) return
   shell.openExternal(WIN_DOWNLOAD_URL).catch(() => { /* 打不开浏览器时静默忽略，不影响退出 */ })
@@ -1194,7 +1195,7 @@ ipcMain.on('launch-open-download', (event) => {
 })
 
 // 引导完成：关闭引导窗口并创建主窗口（token 已写入同源 localStorage，主窗口据此直达首页）
-ipcMain.on('setup-complete', (event) => {
+IPC.on(CH.SETUP_COMPLETE, (event) => {
   if (!setupWindow || setupWindow.isDestroyed()) return
   if (event.sender !== setupWindow.webContents) return
   setupRunning = false
@@ -1209,7 +1210,7 @@ ipcMain.on('setup-complete', (event) => {
 // 放行引导窗口 close 拦截后 app.quit()，由 before-quit / window-all-closed 一并停掉后端子进程；
 // 不写「引导完成」标记（标记在 createSetupWindow 时已写下），因此下次启动仍会重新进入引导，
 // 绝不直接进入主窗口。
-ipcMain.on('setup-quit', (event) => {
+IPC.on(CH.SETUP_QUIT, (event) => {
   if (!setupWindow || setupWindow.isDestroyed()) return
   if (event.sender !== setupWindow.webContents) return
   setupRunning = false
@@ -1218,11 +1219,11 @@ ipcMain.on('setup-quit', (event) => {
 })
 
 // 供晚挂载的渲染层补齐预热状态
-ipcMain.handle('get-setup-warmup', () => setupWarmup)
+IPC.handle(CH.GET_SETUP_WARMUP, () => setupWarmup)
 
 // 引导期「储存设置」：写入初始数据/缓存目录。首次建库前直接写配置；
 // 若引导中已建库（数据目录已存在），复用安全搬迁流程移动文件，随后重启后端让新目录生效。
-ipcMain.handle('set-initial-data-dir', async (event, payload) => {
+IPC.handle(CH.SET_INITIAL_DATA_DIR, async (event, payload) => {
   const p = payload || {}
   // 引导期同样来自渲染层：沿用与设置页一致的目录校验，拒绝相对路径/盘符根/系统保护目录
   const safeData = p.dataDir ? pathGuard.resolveSafeWriteDir(p.dataDir) : null
@@ -1285,7 +1286,7 @@ ipcMain.handle('set-initial-data-dir', async (event, payload) => {
 //   预检（有效班主任库/无再读写）→ 校验源文件 → 复制（字节进度）→ 复检（失败单拷 + 全局哈希）→ 写配置；
 // 只有前面全部通过才切配置、删旧目录。配置写入失败会中止并保留旧目录，绝不产生「数据在新目录、
 // 配置却指向已删除旧目录」的错位状态。
-ipcMain.handle('set-data-dir', async (event, dir) => {
+IPC.handle(CH.SET_DATA_DIR, async (event, dir) => {
   if (migrationRunning) throw new Error('已有数据库迁移正在进行，请稍候')
   // 目录来自渲染层：只接受绝对路径，拒绝盘符根与系统保护目录（Windows/System32/安装目录等）
   const safe = pathGuard.resolveSafeWriteDir(dir)
@@ -1353,7 +1354,7 @@ ipcMain.handle('set-data-dir', async (event, dir) => {
 // 所以它是「能力已备好、入口未接」而不是死代码：**保留通道 + 授权给主窗口**，
 // 将来补一个设置项即可直接用；真要删，得连后端接口与迁移窗的 crypt 分支一起删。
 // 审查 v4 · B01-01 把这条记为死通道，与代码事实不符，已在台账更正。
-ipcMain.handle('set-db-encryption', async (event, payload) => {
+IPC.handle(CH.SET_DB_ENCRYPTION, async (event, payload) => {
   if (migrationRunning) throw new Error('已有数据库任务正在进行，请稍候')
   const encrypt = !!(payload && payload.encrypt)
   // 先取当前登录令牌交给进度窗口调用后端接口：接口只从 JWT 取 slug，绝不接受客户端传入 slug
@@ -1385,7 +1386,7 @@ ipcMain.handle('set-db-encryption', async (event, payload) => {
 
 // 变更「相册缩略图缓存目录」：缩略图是可再生的缓存，无需搬迁文件，
 // 直接更新配置并重启后端，让后端使用新缓存目录，已有小图按需重建。
-ipcMain.handle('set-thumbs-dir', async (event, dir) => {
+IPC.handle(CH.SET_THUMBS_DIR, async (event, dir) => {
   const safe = pathGuard.resolveSafeWriteDir(dir)
   if (safe.error) throw new Error(safe.error)
   const target = safe.path
@@ -1403,7 +1404,7 @@ ipcMain.handle('set-thumbs-dir', async (event, dir) => {
 
 // 变更「AI 技能 md 目录」：技能是文本文件，采用「复制 → 校验 → 切配置 → 删旧目录」，
 // 先复制保留旧目录，配置写失败则中止并保留旧目录，绝不产生「文件在新目录、配置却指向已删旧目录」的错位。
-ipcMain.handle('set-skills-dir', async (event, dir) => {
+IPC.handle(CH.SET_SKILLS_DIR, async (event, dir) => {
   const safe = pathGuard.resolveSafeWriteDir(dir)
   if (safe.error) throw new Error(safe.error)
   const target = safe.path

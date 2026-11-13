@@ -4,10 +4,11 @@
 // 检测到新 U 盘插入时，自动用文件资源管理器打开它（仅 Windows 生效）。
 // 开关持久化在 userData/usb-auto-open.json，与后端业务数据库解耦，主进程启动即可读到。
 //
-// 叶子模块：仅依赖 electron(app, shell, ipcMain) 与 path/fs，不反向依赖其它业务模块。
+// 叶子模块：仅依赖 electron(app, shell) 与 path/fs，不反向依赖其它业务模块。
 // =========================================================================
 
-const { app, shell, ipcMain } = require('electron')
+const { app, shell } = require('electron')
+const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
 
@@ -100,10 +101,10 @@ function isUsbAutoOpenEnabled() {
 // 注册 U盘自动打开相关的请求-响应式 IPC 通道
 function registerUsbIpc() {
   // 读取开关状态（供设置页初始化）
-  ipcMain.handle('get-usb-auto-open', () => ({ enabled: usbAutoOpenEnabled }))
+  IPC.handle(CH.GET_USB_AUTO_OPEN, () => ({ enabled: usbAutoOpenEnabled }))
 
   // 设置开关：持久化并实时启停监听
-  ipcMain.handle('set-usb-auto-open', (event, enabled) => {
+  IPC.handle(CH.SET_USB_AUTO_OPEN, (event, enabled) => {
     usbAutoOpenEnabled = !!enabled
     saveUsbAutoOpenConfig(usbAutoOpenEnabled)
     if (usbAutoOpenEnabled) startUsbWatch()

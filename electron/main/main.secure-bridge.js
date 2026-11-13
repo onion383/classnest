@@ -19,6 +19,7 @@
 // =========================================================================
 
 const { BACKEND_ORIGIN, nodeFetch } = require('./main.api-proxy')
+const { CH, IPC } = require('./channels')
 
 // P-256 未压缩公钥 raw 为 65 字节 → base64 88 字符。这里只校验形状，
 // 不解析密钥：解析与派生是渲染层的事，主进程只负责转发。
@@ -54,11 +55,9 @@ function createHandshakeBridge({ fetchImpl = nodeFetch, backendOrigin = BACKEND_
 // 注册 IPC。失败走 main.ipc-contract 的 fail()（不 reject）：
 // 渲染层读 outcome 决定重试，与其它通道同一套判据。
 function registerSecureBridgeIpc() {
-  // 不在顶层 require('electron')：上面的纯逻辑要能在普通 node 下单测
-  const { ipcMain } = require('electron')
   const { ok, fail } = require('./main.ipc-contract')
   const handshake = createHandshakeBridge()
-  ipcMain.handle('secure-handshake', async (_event, pub) => {
+  IPC.handle(CH.SECURE_HANDSHAKE, async (_event, pub) => {
     try {
       return ok(await handshake(pub))
     } catch (err) {

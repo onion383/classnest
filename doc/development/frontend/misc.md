@@ -140,7 +140,7 @@ classnest/
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，56 个）
+### 4. 工具（`src/utils/`，60 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |

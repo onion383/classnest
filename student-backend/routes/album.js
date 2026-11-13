@@ -6,6 +6,10 @@ const { db } = require('../db');
 const dbManager = require('../dbManager/dbManager');
 const { moveToTrash, deleteThumb } = require('../albumOps');
 const albumThumbs = require('../albumThumbs');
+// 「清理微缩图」只做文件删除（纯 fs，可单测）；索引与数据库一律不动，恢复靠 /thumb 的现场重建
+const { purgeThumbFiles } = require('../services/thumbPurge');
+// 「回收孤儿」按库对账后只删没被引用的 jpg（默认只读，apply=true 才真删）
+const { sweepThumbOrphans } = require('../services/thumbSweep');
 const { readExifDetail } = require('../albumExif');
 const { now } = require('../utils/sql');
 const { cleanText } = require('../services/sanitize');
@@ -63,52 +67,110 @@ function matchesEtag(header, etag) {
   return raw.split(',').some((t) => t.trim() === etag);
 }
 
-// ---------- 请求路径的缩略图现场生成：配额闸 + 超量转子进程 ----------
+// ---------- 请求路径的缩略图现场生成：**预览配额** ----------
 //
-// 扫描已经搬到子进程（worker.scan.js），主进程不再与扫描抢 CPU/线程池，
-// 所以这里的「现场生成」只应服务于「零星几张」的情形——用户正好滚到几张还没出图的格子。
-// 超过少量（ON_DEMAND_LIMIT）就整批丢给子进程生成：子进程有独立的 libuv 线程池，
-// 生成这些图不会拖慢主进程的其他接口（这正是拆进程换来的收益）。
+// 两个概念必须分开（2026-11-13 重构，别再合回去）：
+//   · **预览** = 用户此刻盯着的那一屏。要求「永远可用」：晚 200ms 可以，404 不行。
+//   · **生成** = 扫描阶段 2 / 子进程 demand 的后台补图。可以慢，慢十分钟也没人抱怨。
 //
-// 配额看的是**全局在途量**（在途 + 已转交子进程待生成），不能只看单次请求：
-// 否则前端连续 10 个请求各缺 5 张时，主进程会老老实实生成 50 张，限流等于没有。
-const ON_DEMAND_LIMIT = 8;
-let onDemandInflight = 0;
-// 已转交子进程、正在等它出图的 id（主进程不再重复生成，避免两边同时干同一件事）
+// 旧实现把两者塞进同一个额度，而且「有扫描任务在跑」时压到 8 ——
+// 一屏 40 张 vs 额度 8，32 张直接 404，前端 2.7 秒重试全落空，整屏「生成微缩图失败」。
+// 实测（90 张 2400×1800，一屏 40，连续 6 轮「150ms 后滑走」，每轮测 10 张单张）：
+//     扫描中额度 8 ：单张 200 只有 1/60，59 张 404（停止滚动约 3 秒后才恢复）
+//     空闲额度 48  ：60/60，0 张 404
+// 而 CPU 其实不缺：扫描在**子进程**，与主进程各有各的 MAX_CONCURRENT_THUMBS=4 信号量，
+// 16 核跑 4+4 路绰绰有余。这个额度管的是「允许多少张排队」，不是「允许多少并发」——
+// 把排队深度当成 CPU 配额来卡，就会在扫描期间把预览掐死。
+//
+// 所以现在：
+//   · 额度固定 PREVIEW_LIMIT，**不看扫描状态**
+//   · 已转交子进程待生成的 id（pendingInChild）**不再占额度**：那是子进程自己的活，
+//     没道理让盯着屏幕的人替它排队
+//   · 额度不够时**等一会儿**（PREVIEW_WAIT_MS），而不是立刻 404 / 丢给子进程排到十几分钟后
+const PREVIEW_LIMIT = 48;
+const PREVIEW_WAIT_MS = 400;
+// 批量接口里每次并发提交多少张（genThumb 内部并发闸是 4，一批 8 张正好排两轮）。
+// 拆批不只是为了限流：批与批之间才能检查「客户端还在不在」——
+// 一次 Promise.all 全发出去，前端 abort 之后 CPU 照样把活干完。
+const GEN_BATCH = 8;
+let previewInflight = 0;
+// 排队等额度的请求（FIFO）。{ n: 想要几张, resolve, timer }
+const previewWaiters = [];
+// 已转交子进程、正在等它出图的 id（仅用于记账 + 去重提示，**不再占预览额度**）
 //
 // 用 Map 而不是 Set：要记「转交时刻」。子进程补图**可能失败**（源文件被删、
 // 文件损坏），失败的 id 永远不会出现在子进程回报的 thumbs 列表里 —— 若无过期机制，
-// 它会永久留在集合里。而配额闸把待生成数算在内，于是攒够 8 个之后
-// 主进程就再也不肯现场生成任何图，所有缩略图请求恒 404（功能被锁死）。
-// 故设 TTL：超过 PENDING_TTL_MS 还没出图的 id 视为失败，重新放行。
+// 它会永久留在集合里。TTL 到点视为失败，下次请求重新走预览路径。
+//
+// 曾经它参与配额闸的减法（avail = 额度 − 在途 − pending），结果「子进程没干完的活」
+// 把浏览者挡在门外：滚几屏攒够 48 个 pending，主进程就不再生成任何图，所有请求恒 404。
+// 现在只做去重记账（同一张不必既转交又转交一次），不再影响谁能生成。
 //
 // **必须按 slug 分桶**：album_photos.id 各库独立自增，裸 id 做键会让库 A 的 id=5
-// 覆盖库 B 的 id=5，且 A 回报时会把 B 同号的待生成条目一起删掉（配额闸与去重守卫
-// 同时失效）。分桶本身交给 utils/slugScopes.js，别在这里另写一份全局 Map。
+// 覆盖库 B 的 id=5，且 A 回报时会把 B 同号的待生成条目一起删掉（去重守卫失效）。
+// 分桶本身交给 utils/slugScopes.js，别在这里另写一份全局 Map。
 const PENDING_TTL_MS = 60000;
 const PENDING_MAX_PER_SLUG = 2000;
 const pendingInChild = slugScopes.createSlugBuckets(() => new Map());
 
-// 申请现场生成配额。返回 false 表示本次拒绝（调用方应改为转交子进程 / 返回 404）。
-function claimOnDemand(count) {
-  const n = Math.max(0, count | 0);
-  if (!n) return true;
-  // 先清掉过期的僵尸 id，否则它们会把配额闸占死（见 PENDING_TTL_MS 说明）
-  sweepPendingInChild();
-  if (onDemandInflight + pendingInChild.totalSize() + n > ON_DEMAND_LIMIT) return false;
-  onDemandInflight += n;
-  return true;
+function previewAvail() {
+  return Math.max(0, PREVIEW_LIMIT - previewInflight);
 }
-function releaseOnDemand(count) {
-  onDemandInflight = Math.max(0, onDemandInflight - Math.max(0, count | 0));
+
+// 释放额度并唤醒等待者。
+// **有几个给几个**，不要求凑满某个等待者的 n：
+// 一屏 40 张排队时额度一次只腾出 1~4 个，凑满才唤醒会让它永远等不到。
+function releasePreview(count) {
+  const k = Math.max(0, count | 0);
+  if (!k) return;
+  previewInflight = Math.max(0, previewInflight - k);
+  while (previewWaiters.length) {
+    const avail = previewAvail();
+    if (avail <= 0) break;
+    const w = previewWaiters.shift();
+    clearTimeout(w.timer);
+    const got = Math.min(w.n, avail);
+    previewInflight += got;
+    w.resolve(got);
+  }
+}
+
+// 申请预览额度：最多 count 张。有就立刻给，没有就等到 timeoutMs（0 = 不等待）。
+// 返回实际拿到的数量，可能为 0 —— 调用方必须按返回值处理（不是布尔）。
+//
+// 为什么允许「等」：批量接口的响应头已经发出去了（流式），等待期间只是首帧晚一点，
+// 前端不会报错；而立刻返回 404 会直接触发前端 2.7 秒内的三次重试，几乎必然全落空。
+// 400ms 的依据：前端第一次重试在 100ms、第二次 200ms，后端在这之前把图给出去才算救回来。
+function claimPreviewUpTo(count, timeoutMs = 0) {
+  const want = Math.max(0, count | 0);
+  if (!want) return Promise.resolve(0);
+  const avail = previewAvail();
+  if (avail > 0) {
+    const got = Math.min(want, avail);
+    previewInflight += got;
+    return Promise.resolve(got);
+  }
+  if (timeoutMs <= 0) return Promise.resolve(0);
+  return new Promise((resolve) => {
+    const w = { n: want, resolve };
+    w.timer = setTimeout(() => {
+      const i = previewWaiters.indexOf(w);
+      if (i >= 0) previewWaiters.splice(i, 1);
+      resolve(0);
+    }, timeoutMs);
+    // 清掉过期的僵尸 id（见 PENDING_TTL_MS 说明）；与额度无关，只是顺带记账
+    sweepPendingInChild();
+    if (w.timer.unref) w.timer.unref();
+    previewWaiters.push(w);
+  });
 }
 
 // 把「这些 id 的缩略图还没生成」转交给子进程生成。
 //
 // 队列只保留 id（不存路径）：路径以库里的 album_photos.file_path 为唯一真源，
 // 子进程在库里查 id 对应的行再生成，避免与扫描写入的索引不一致。
-// 转交后这些 id 记进 pendingInChild：主进程在子进程出图前不再自己生成，
-// 免得两边同时对同一张照片跑 sharp（浪费 CPU，还会互相抢临时文件）。
+// 转交后这些 id 记进 pendingInChild —— **只做记账**：同一个 id 不重复入队，
+// 子进程回报后清掉。它不再决定主进程能不能生成（见上面的配额说明）。
 function deferThumbDemand(slug, ids) {
   if (!ids || !ids.length) return;
   const nowTs = Date.now();
@@ -417,8 +479,21 @@ router.get('/random-photo/thumb', async (req, res) => {
   try {
     // ORDER BY RANDOM() 是整表扫一遍，但只回一行、不物化结果集：
     // 实测 13k 行 1.2ms。真涨到几十万张时再换成「随机 rowid + 就近取」。
-    const row = db.prepare('SELECT id FROM album_photos ORDER BY RANDOM() LIMIT 1').get();
+    // exclude：首页「换一张」把当前这张排掉，否则照片少时大概率抽到同一张，
+    // 点了按钮画面没变。排除后查不到（库里只剩这一张）要退回不排除，
+    // 绝不能回 404 —— 那会让首页把现有配图清掉。
+    const exclude = Number(req.query && req.query.exclude) || 0;
+    const pick = (sql, args) => db.prepare(sql).get(...args);
+    let row = exclude
+      ? pick('SELECT id FROM album_photos WHERE id <> ? ORDER BY RANDOM() LIMIT 1', [exclude])
+      : pick('SELECT id FROM album_photos ORDER BY RANDOM() LIMIT 1', []);
+    if (!row) row = pick('SELECT id FROM album_photos ORDER BY RANDOM() LIMIT 1', []);
     if (!row) return res.status(404).json({ error: '还没有照片' });
+    // 首页配图点进去要能定位到「这一张」，所以把抽中的 id 随图一起带回去。
+    // 只带 id 不带元数据：首页不需要知道它属于哪本相册，点击时交给 /locate 现查，
+    // 免得响应头里塞文件名/路径（会进浏览器日志），也避免两处数据口径分叉。
+    // 二进制响应不走安全信道的 JSON 加密，CORS 已把该头列入 exposedHeaders。
+    res.setHeader('X-Photo-Id', String(row.id));
     // maxAge: 0 → no-store。URL 是固定的，让浏览器缓存 24h 的话首页永远是同一张。
     await sendThumb(res, row.id, { maxAge: 0 });
   } catch (err) {
@@ -448,6 +523,10 @@ router.get('/:id/status', (req, res) => {
     paused,
     scanned: task.scanned,
     total: task.total,
+    // 全量扫描分两阶段：index = 正在建索引（照片会一张张出现、但没有图），
+    // thumb = 索引已完整、正在补缩略图。前端据此显示阶段名，
+    // 否则两个阶段各自从 0 数，进度条会莫名其妙往回跳。
+    phase: task.phase || 'process',
     canceled: task.cancelled,
   });
 });
@@ -472,6 +551,8 @@ router.get('/tasks', (req, res) => {
         cancelled: !!task.cancelled,
         scanned: task.scanned || 0,
         total: task.total || 0,
+        // index = 建索引（照片一张张出现但还没图）/ thumb = 补缩略图（索引已完整）
+        phase: task.phase || 'process',
         startedAt: task.startedAt || '',
       });
     }
@@ -978,14 +1059,17 @@ router.get('/photo/:photoId/file', async (req, res) => {
 // 性能：先查内存索引/buffer 缓存（命中即零磁盘 IO），miss 才异步读盘；
 // 不用 fs.existsSync（同步 IO 会阻塞事件循环）。
 //
-// 低干扰：现场生成要过配额闸 claimOnDemand（见「后台扫描的低干扰约定」）。
-// 扫描期间主进程不能跟扫描抢 CPU/线程池，配额满了就把这个 id 记进需求队列，
-// 由扫描循环顺手补；本次直接 404，前端走占位，下次请求就拿到了。
+// 低干扰：现场生成要申请**预览额度** claimPreviewUpTo（见上面的配额说明）。
+// 额度不够时会先等 PREVIEW_WAIT_MS（400ms），仍然拿不到才转交子进程并返回 404。
+// 等待优于立刻 404：前端 2.7 秒的重试窗口里，第一次重试在 100ms、第二次 200ms，
+// 能在这之前把图给出去就不会被判「失败」。
 // 缩略图的统一出口：生成 / 版本升级 / 内存缓存 / 现场配额都在这一个函数里。
 // 抽出来是因为「首页随机一张」也要走同一条链路 —— 复制一份的话，
 // 缩略图版本升级、配额闸、排队逻辑迟早就只改一处、漏另一处。
 async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
-  let claimed = false;
+  // 本次实际占用的额度张数（不是布尔）。下面有两个可能各自申请一张的分支，
+  // 用布尔会「申请两次、只还一次」，配额慢慢泄漏直到闸门永远关死。
+  let claimed = 0;
   try {
     const slug = dbManager.currentSlug();
     const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(photoId));
@@ -993,13 +1077,14 @@ async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
     let tp = thumbOf(photo, slug);
     const stale = (photo.thumb_v || 0) < THUMB_VERSION;
     if (!tp || stale) {
-      if (!claimOnDemand(1)) {
+      const grant = await claimPreviewUpTo(1, PREVIEW_WAIT_MS);
+      if (!grant) {
         deferThumbDemand(slug, [photo.id]);
         return res.status(404).json({ error: '缩略图排队生成中' });
       }
-      claimed = true;
+      claimed += grant;
       const isVideo = mediaTypeOf(photo.file_name) === 'video';
-      const regenerated = await genThumb(photo.id, photo.file_path, isVideo, slug);
+      const regenerated = await genThumb(photo.id, photo.file_path, isVideo, slug, { shouldAbort: () => res.destroyed });
       if (regenerated) {
         tp = regenerated;
         db.prepare('UPDATE album_photos SET thumb_path = ?, thumb_v = ? WHERE id = ?').run(tp, THUMB_VERSION, photo.id);
@@ -1009,13 +1094,14 @@ async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
     // 读缓存（内存优先）：读不到说明文件已被外部删除 → 现场重建一次
     let buf = await albumThumbs.readThumb(tp);
     if (!buf) {
-      if (!claimOnDemand(1)) {
+      const grant = await claimPreviewUpTo(1, PREVIEW_WAIT_MS);
+      if (!grant) {
         deferThumbDemand(slug, [photo.id]);
         return res.status(404).json({ error: '缩略图排队生成中' });
       }
-      claimed = true;
+      claimed += grant;
       const isVideo = mediaTypeOf(photo.file_name) === 'video';
-      const regenerated = await genThumb(photo.id, photo.file_path, isVideo, slug);
+      const regenerated = await genThumb(photo.id, photo.file_path, isVideo, slug, { shouldAbort: () => res.destroyed });
       if (!regenerated) return res.status(404).json({ error: '缩略图生成失败' });
       db.prepare('UPDATE album_photos SET thumb_path = ?, thumb_v = ? WHERE id = ?').run(regenerated, THUMB_VERSION, photo.id);
       buf = await albumThumbs.readThumb(regenerated);
@@ -1029,7 +1115,7 @@ async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {
-    if (claimed) releaseOnDemand(1);
+    if (claimed) releasePreview(claimed);
   }
 }
 
@@ -1042,15 +1128,43 @@ router.get('/photo/:photoId/thumb', (req, res) => sendThumb(res, req.params.phot
 // 逐个并发 6 → 2.43 ms/张；批量每批 100 张 → 0.19 ms/张（约 10 倍）。
 //
 // 请求体：{ ids: [photoId, ...] }（也支持 query ?ids=1,2,3）
-// 响应：二进制，每张图「4 字节小端长度 + JPEG 数据」逐张拼接；
-//       响应头 X-Thumb-Ids 给出本次实际返回的 photoId 顺序（逗号分隔）。
-// 缺图的 photoId 不会出现在响应里（源文件已删除、生成失败，或本次过不了配额排队中），
+//
+// 响应：**流式**二进制。每帧「id(4 字节小端) + len(4 字节小端) + JPEG len 字节」，
+//       按生成完成的先后写入 socket —— 一帧到达前端就能立刻渲染一张，
+//       不必等整批收完（用户看到的是图一张张冒出来，而不是干等后突然全出）。
+//       帧自带 id，所以**不保证顺序**：谁先生成完谁先发。前端按 id 落位，不靠顺序对位。
+//
+//       为什么不用响应头 X-Thumb-Ids：流式下实际返回哪些 id 是边生成边确定的，
+//       无法在写第一帧之前预知。原格式（纯长度前缀 + 头部给 id 表）正是为此要改。
+//
+// 缺图的 photoId 不会出现在流里（源文件已删除、生成失败，或本次过不了配额排队中），
 // 前端对这些格子回落到单张 /thumb 接口即可；下次请求就会拿到图。
 // 缺图默认会现场生成（与单张接口同一套 genThumb 逻辑）—— 否则新扫描进来的照片
 // thumb_v=0，批量会全部落空，接口形同虚设。生成受 MAX_CONCURRENT_THUMBS 信号量约束。
 // 低干扰：缺图的两阶段处理（见「后台扫描的低干扰约定」）。
 //   第一阶段：整批缺图数过配额闸 → 主进程现场生成（用户无感知，格子立刻有图）；
 //   第二阶段：过不了闸 → 全部记进需求队列交给扫描任务，本次直接跳过。
+// GET /api/album/photo/:photoId/locate —— 首页随机配图点击后的跨页定位。
+//
+// 首页只带 ?photo=<id> 进来（见 DashboardView），这里按 id 查它属于哪本相册、哪一天：
+// 相册页据此切相册、把时间轴滚到那一天，再打开这张图的查看器。
+// 不复用 /info：那条会 stat 源文件 + 读 EXIF（10~20ms、还要处理文件丢失），
+// 定位只需要索引表里的一行；也不复用 /photos：那是整册分页，不该为一张图拉一页。
+router.get('/photo/:photoId/locate', (req, res) => {
+  try {
+    // 网格用的 PHOTO_COLS 不含 album_id（同一册里每行都一样，纯属冗余），
+    // 但定位恰恰要靠它切到对应相册，所以这里单独补一列。
+    const photo = db.prepare(
+      `SELECT ${PHOTO_COLS}, album_id FROM album_photos WHERE id = ?`
+    ).get(Number(req.params.photoId));
+    if (!photo) return res.status(404).json({ error: '照片不存在' });
+    // 其余列与网格照片对象同源，查看器 / 左右翻页可直接把这一行当一张照片用
+    res.json({ success: true, data: photo });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/album/photo/:photoId/info 返回「照片信息」面板所需的元数据
 //
 // 为什么不把这些字段存进 album_photos：色域、设备、GPS 只在「打开某一张看详情」时才用得上，
@@ -1092,10 +1206,15 @@ router.get('/photo/:photoId/info', async (req, res) => {
   }
 });
 
-// 不做「截断式」处理（只生成前 N 张、其余排队）：那样用户会看到同一屏里
-// 靠前的格子有图、靠后的没有，比全都没有更难解释。
+// 先申请**预览额度**再生成：额度是按「一屏」设计的（PREVIEW_LIMIT=48），
+// 正常一屏 20~40 张一次全拿到，不会截断；只有极端情形（多个窗口同时刷、或连着发
+// 好几个请求把额度占满）才会拿到一部分 —— 那部分先出图，剩下的等 400ms 后仍拿不到
+// 才交给子进程。核心原则：**预览永远不排队等后台任务**。
 router.post('/photo/thumbs', async (req, res) => {
   let claimed = 0;
+  // 已经 writeHead 之后，catch 里再 res.status(500).json() 会抛 ERR_HTTP_HEADERS_SENT，
+  // 把「一张图生成失败」升级成「整个请求 500 且响应头已污染」。用这个标志分流。
+  let streaming = false;
   try {
     const slug = dbManager.currentSlug();
     const body = req.body || {};
@@ -1106,11 +1225,58 @@ router.post('/photo/thumbs', async (req, res) => {
     ids = (ids || []).map(Number).filter(v => Number.isInteger(v) && v > 0);
     // 上限保护：一次最多 200 张，避免超大请求打爆内存
     ids = ids.slice(0, 200);
-    if (!ids.length) {
-      res.setHeader('Content-Type', 'application/octet-stream');
-      res.setHeader('X-Thumb-Ids', '');
-      return res.end(Buffer.alloc(0));
-    }
+
+    /* 立即把响应头写出去：前端 fetch 在响应头到达时就 resolve，
+     * 于是它可以马上开始读流；同时这也让「一张都没有」的情形变成
+     * 「200 + 空流」而不是「挂到超时才返回」，语义一致。 */
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      // 每帧都是当前这一屏的实时结果，不能缓存（否则清完缩略图还会拿到旧的空流）
+      'Cache-Control': 'no-store',
+      // 本项目只有回环 HTTP，没有反代；写上是防以后加中间层时它把流攒成整包，
+      // 流式静默退化成「等全部生成完才吐」——这种退化不会有任何报错。
+      'X-Accel-Buffering': 'no',
+    });
+    streaming = true;
+
+    /* 客户端断开感知（「插队」的另一半）：前端滑走会 abort 这批请求，
+     * 但 Node 不会因为 HTTP 断开就中断 handler —— 不显式检查的话这批图照跑完，
+     * 配额一直占着，用户新滑到的一屏反而排不上队。
+     *
+     * 必须挂 **res** 而不是 req：Node 16 起 IncomingMessage 的 'close' 语义变了 ——
+     * 请求体读完就触发，不代表连接断了。挂 req 的话 clientGone 从第一帧起就是 true，
+     * 所有帧都被跳过（表现：响应 200 但零帧，前端全部回落单张）。
+     * res 的 'close' 才对应响应侧结束；正常结束时 writableEnded 已是 true，不会误判。 */
+    let clientGone = false;
+    // 已经真正提交给 genThumb 的张数（它们确实在占 CPU / 信号量槽位）。
+    // 断开时**不**收回这部分（收了就等于超卖，新请求排到不存在的空位上），
+    // 只收回「还没轮到」的 —— 那才是白占着的额度。
+    // 效果：abort 后新请求几乎立刻拿到额度，不用等当前这批 8 张跑完。
+    let started = 0;
+    const releaseUnstarted = () => {
+      const idle = claimed - started;
+      if (idle <= 0) return;
+      claimed -= idle;
+      releasePreview(idle);
+    };
+    res.on('close', () => {
+      if (res.writableEnded) return;
+      clientGone = true;
+      releaseUnstarted();
+    });
+
+    /* 写一帧：id + len + JPEG 合成**一个** Buffer 再一次 write。
+     * 必须合成单次调用 —— 分两次 write(head) / write(data)，并发生成时
+     * 别的任务的帧会插进中间，前端读到「半张图 + 半张图」直接解析崩。 */
+    const writeFrame = (id, buf) => {
+      if (clientGone) return;
+      const head = Buffer.alloc(8);
+      head.writeUInt32LE(id, 0);
+      head.writeUInt32LE(buf.length, 4);
+      res.write(Buffer.concat([head, buf]));
+    };
+
+    if (!ids.length) return res.end();
     // 先从库里取索引行（要 file_name 判断是否视频、file_path 用于现场生成）
     // better-sqlite3 不支持 IN (?) 的展开参数，必须用问号占位逐个绑定
     const placeholders = ids.map(() => '?').join(',');
@@ -1119,8 +1285,6 @@ router.post('/photo/thumbs', async (req, res) => {
 
     // 先把「已有缓存的」和「缺图的」分开：配额闸只看缺图数，
     // 否则一个 200 张的请求会因为「其中180 张已缓存」被误拒。
-    const parts = [];
-    const gotIds = [];
     const missing = [];
     for (const id of ids) {
       const r = byId.get(id);
@@ -1132,54 +1296,130 @@ router.post('/photo/thumbs', async (req, res) => {
         albumThumbs.rememberThumb(slug, id, p, THUMB_VERSION, null);
         const buf = await albumThumbs.readThumb(p);
         if (buf) {
-          // 每张图「4 字节小端长度 + JPEG 数据」逐张拼接（前端可流式解析）
-          const head = Buffer.alloc(4);
-          head.writeUInt32LE(buf.length, 0);
-          parts.push(head, buf);
-          gotIds.push(id);
+          // 已缓存的先发：这部分零生成成本，用户进相册第一眼就有图
+          writeFrame(id, buf);
           continue;
         }
       }
       missing.push(r);
     }
     if (missing.length) {
-      if (claimOnDemand(missing.length)) {
-        claimed = missing.length;
-        for (const r of missing) {
-          // 必须生成：否则新扫描进来的照片 thumb_v=0，批量会全部落空，接口形同虚设。
-          // 生成受 MAX_CONCURRENT_THUMBS 信号量约束。
-          const isVideo = mediaTypeOf(r.file_name) === 'video';
-          const p = await genThumb(r.id, r.file_path, isVideo, slug);
-          if (!p) continue;
-          db.prepare('UPDATE album_photos SET thumb_path = ?, thumb_v = ? WHERE id = ?').run(p, THUMB_VERSION, r.id);
-          albumThumbs.rememberThumb(slug, r.id, p, THUMB_VERSION, null);
-          const buf = await albumThumbs.readThumb(p);
-          if (!buf) continue;
-          const head = Buffer.alloc(4);
-          head.writeUInt32LE(buf.length, 0);
-          parts.push(head, buf);
-          gotIds.push(r.id);
+      // 申请**预览额度**：最多给 missing.length 张，不够就等 400ms。
+      // 不再「整批放弃丢给子进程」—— 那是把预览排到扫描后面去，等于十几分钟后才出图。
+      const grant = await claimPreviewUpTo(missing.length, PREVIEW_WAIT_MS);
+      if (grant > 0) {
+        claimed = grant;
+        const rows = missing.slice(0, grant);
+        /* 分批并发：每批 GEN_BATCH 张（genThumb 内部自有 4 路并发闸），批与批之间
+         * 看一眼客户端还在不在。一次 Promise.all 把所有任务都发出去就停不下来了 ——
+         * 那等于「中断」只省了网络，CPU 照跑。
+         *
+         * 批内**不攒结果、生成一张就写一张**：这是整个流式响应的意义所在。
+         * 攒到批末再一起写，用户仍要等整批（8 张）都好了才看到第一张，体感照样是卡顿。 */
+        for (let i = 0; i < rows.length && !clientGone; i += GEN_BATCH) {
+          // 提交到这一批时更新「已开始」水位：abort 时只收回这之后的额度
+          started = Math.min(rows.length, i + GEN_BATCH);
+          await Promise.all(rows.slice(i, i + GEN_BATCH).map(async (r) => {
+            if (clientGone) return;
+            // 必须生成：否则新扫描进来的照片 thumb_v=0，批量会全部落空，接口形同虚设。
+            const isVideo = mediaTypeOf(r.file_name) === 'video';
+            // 第四参数：抢到并发槽位后再看一眼客户端还在不在。当前批 8 张里只有 4 张
+            // 能立刻开工，另外 4 张在排队 —— 用户滑走时那 4 张还没开始，不该再白解码一次。
+            const p = await genThumb(r.id, r.file_path, isVideo, slug, { shouldAbort: () => clientGone });
+            if (!p || clientGone) return;
+            db.prepare('UPDATE album_photos SET thumb_path = ?, thumb_v = ? WHERE id = ?').run(p, THUMB_VERSION, r.id);
+            albumThumbs.rememberThumb(slug, r.id, p, THUMB_VERSION, null);
+            const buf = await albumThumbs.readThumb(p);
+            if (!buf) return;
+            writeFrame(r.id, buf);
+          }));
         }
-      } else {
-        // 过不了配额：丢给扫描任务顺带补，本次不生成。
-        deferThumbDemand(slug, missing.map(r => r.id));
+      }
+      if (grant < missing.length) {
+        // 等了 400ms 仍然拿不到额度的那部分，才丢给子进程顺带补。
+        // 正常情况下（PREVIEW_LIMIT=48 ≥ 一屏）这里不会触发。
+        deferThumbDemand(slug, missing.slice(grant).map(r => r.id));
       }
     }
-    if (!parts.length) {
-      res.setHeader('Content-Type', 'application/octet-stream');
-      res.setHeader('X-Thumb-Ids', '');
-      return res.end(Buffer.alloc(0));
-    }
-    const body2 = Buffer.concat(parts);
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Length', body2.length);
-    res.setHeader('X-Thumb-Ids', gotIds.join(','));
-    res.setHeader('Cache-Control', 'private, max-age=86400');
-    return res.end(body2);
+    // 流到此结束：前端读到 EOF 就知道「这一批发完了」。
+    // 没出现在流里的 id 就是这次确实没有图（源文件没了 / 生成失败 / 还在子进程那边排队）。
+    return res.end();
   } catch (err) {
+    // 已经开流：只能截断响应。响应头早发出去了，这里 res.status(500) 会抛
+    // ERR_HTTP_HEADERS_SENT，把「一张图生成失败」升级成「整个请求崩掉」。
+    // 前端读到 EOF 会把没拿到的格子回落单张 /thumb，由单张那条路自己处理失败。
+    if (streaming) {
+      try { res.end(); } catch (_) { /* socket 已断，忽略 */ }
+      return;
+    }
     res.status(500).json({ error: err.message });
   } finally {
-    if (claimed) releaseOnDemand(claimed);
+    // releaseUnstarted 已把「没轮到」的部分还掉了，这里只还「真的跑过」的。
+    // 幂等：claimed 被减到 0 时不会重复释放。
+    if (claimed) releasePreview(claimed);
+  }
+});
+
+// POST /api/album/thumbs/purge —— 清理图片微缩图缓存（**只删文件，索引一行不动**）
+//
+// 为什么清全部账号、而不是只清当前账号：设置页「空间管理」里那一格数字就是整个
+// 缩略图目录的合计（main.disk-usage.js 按目录算，不区分 slug）。清理范围必须和
+// 统计口径一致，否则用户点完看到数字只掉一小截，会以为没生效。
+// 删的是磁盘文件，与「库有没有打开」无关 —— 当前没登录的账号也一并清掉。
+//
+// 索引与恢复：album_photos 一行不删、thumb_path / thumb_v 不改（索引完整保留）。
+//   · 当前账号：内存索引与 buffer 缓存一并清空（albumThumbs.purgeCache），
+//     下次请求这批 id 时批量接口 miss → 回落到单张 /thumb 现场重建
+//   · 其他账号：下次登录打开相册时 /thumb 读不到文件 → genThumb 重建并写回它自己的库
+// 「写入发生在它登录时」，所以不存在「改不了别人的库」的问题。
+//
+// 扫描进行中也允许清理：被清掉的那几张扫描会重新生成，只是白删一次，不会出错。
+router.post('/thumbs/purge', async (req, res) => {
+  try {
+    const result = await purgeThumbFiles(THUMB_DIR);
+    // 必须清内存缓存：否则进程内继续从 buffer 吐旧图，磁盘上也永远不重建
+    albumThumbs.purgeCache();
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/album/thumbs/sweep —— 回收「没有索引引用」的缩略图
+//
+// 与 purge 的区别：purge 删全部（强制重建），sweep 只删孤儿（正在用的图一张不动）。
+// 默认**只读对账**：返回 { orphans, bytes, skipped, slugs }，不删任何文件。
+// 前端先拿这个数字给用户确认，再带 { apply:true } 发第二次才真删。
+//
+// 对账口径由 services/thumbSweep.js 定义，这里只负责「某个 slug 现在还有哪些 photoId」：
+//   · 登记在册 → withDb 打开库取 album_photos.id 全集
+//   · 登记没有**且**库文件也没有 → null（账号删了，整个目录是孤儿）
+//   · 库文件还在但登记丢了 → undefined（可能是数据迁移，跳过，不猜）
+//   · 超级隐私库未解锁 / 库打不开 → undefined（跳过，绝不把「读不到」当成「没有」）
+// 一个 slug 对不上账，就整个跳过它，其它账号照常回收。
+router.post('/thumbs/sweep', async (req, res) => {
+  try {
+    const apply = !!(req.body && req.body.apply);
+    const getLiveIds = async (slug) => {
+      const rec = dbManager.registryFindBySlug(slug);
+      const dbExists = await fsp.access(path.join(dbManager.dataDir, `${slug}.db`))
+        .then(() => true).catch(() => false);
+      if (!rec) return dbExists ? undefined : null;
+      try {
+        return dbManager.withDb(slug, () => new Set(
+          dbManager.current().prepare('SELECT id FROM album_photos').all().map(r => r.id)
+        ));
+      } catch (_) {
+        return undefined;
+      }
+    };
+    const result = await sweepThumbOrphans(THUMB_DIR, { getLiveIds, apply });
+    // 删过文件就清掉内存索引：否则进程内仍按旧路径吐 buffer，磁盘上却已经没了。
+    // 只删孤儿时也清，是因为被删的 id 可能还残留在索引里（删账号留下的那种）。
+    if (apply && result.deleted) albumThumbs.purgeCache();
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

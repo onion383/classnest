@@ -37,16 +37,23 @@
                 @ended="playing = false"
               ></video>
             </div>
-            <!-- 图片：滚轮缩放只挂在外层容器上 -->
+            <!-- 图片：滚轮缩放与拖动平移都挂在外层容器上（捕获指针，甩出舞台也能继续拖） -->
             <div
               v-else
-              class="absolute inset-0 flex items-center justify-center p-6 overflow-hidden preview-media"
-              :class="mediaReady ? 'media-in' : 'media-waiting'"
+              ref="stageEl"
+              class="absolute inset-0 flex items-center justify-center p-6 overflow-hidden preview-media viewer-pan-surface"
+              :class="[mediaReady ? 'media-in' : 'media-waiting', stageClass]"
               @wheel.prevent="onWheel"
+              @pointerdown="onPanDown"
+              @pointermove="onPanMove"
+              @pointerup="onPanUp"
+              @pointercancel="onPanCancel"
             >
               <img
+                ref="mediaEl"
                 :src="current ? current.src : ''"
                 class="max-w-full max-h-full select-none transition-transform duration-100 viewer-media"
+                :class="mediaClass"
                 :style="mediaStyle"
                 draggable="false"
                 decoding="async"
@@ -107,6 +114,7 @@
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
 import AppSelect from '../base/AppSelect.vue'
+import { useViewerPan } from '../../composables/useViewerPan.js'
 
 defineOptions({ name: 'MediaViewer' })
 
@@ -125,6 +133,9 @@ const RATE_OPTIONS = [
 
 const rotation = ref(0)
 const zoom = ref(1)
+// 平移作用在这两个元素上：舞台算可视余量，img 承载 transform
+const stageEl = ref(null)
+const mediaEl = ref(null)
 // 首帧就绪才播放进入动画：冷加载时 img 要下载+解码才撑开，动画提前跑会变成「先空一下再硬砸出来」
 const mediaReady = ref(false)
 const videoEl = ref(null)
@@ -135,12 +146,20 @@ const playbackRate = ref(1)
 const dragging = ref(false)
 
 const current = computed(() => props.items[props.index] || null)
-const mediaStyle = computed(() => ({ transform: `rotate(${rotation.value}deg) scale(${zoom.value})` }))
+// 全部解构到 <script setup> 顶层再交给模板：Vapor 模板只认顶层绑定，
+// 写成 pan.onPointerMove 这类嵌套访问不会自动解包里面的 ref。
+const {
+  style: mediaStyle, stageClass, mediaClass,
+  onPointerDown: onPanDown, onPointerMove: onPanMove,
+  onPointerUp: onPanUp, onPointerCancel: onPanCancel,
+  reset: resetPan,
+} = useViewerPan({ zoom, rotation, stageRef: stageEl, mediaRef: mediaEl })
 
 // 换项/打开时复位视角；翻页不重播进入动画。
 // 注意不能写成 ([v], [oldV]) => —— immediate 首次调用时 oldValue 是 undefined，
 // 直接解构会抛「undefined is not iterable」，组件一挂载就炸。
 watch(() => [props.visible, props.index], (val, oldVal) => {
+  resetPan()
   const v = val[0]
   const prevVisible = Array.isArray(oldVal) ? oldVal[0] : false
   if (!v) {
@@ -172,7 +191,7 @@ function rotate(dir) {
 }
 function zoomIn() { zoom.value = Math.min(5, zoom.value + 0.25) }
 function zoomOut() { zoom.value = Math.max(0.2, zoom.value - 0.25) }
-function resetView() { rotation.value = 0; zoom.value = 1 }
+function resetView() { resetPan(); rotation.value = 0; zoom.value = 1 }
 function onWheel(e) {
   zoom.value = Math.min(5, Math.max(0.2, zoom.value + (e.deltaY < 0 ? 0.1 : -0.1)))
 }

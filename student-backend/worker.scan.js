@@ -154,7 +154,9 @@ async function runScan(slug, albumId, mode, resumeFrom, token) {
 
   const onProgress = (t) => {
     flushThumbs(slug);
-    send({ type: 'progress', slug, albumId, scanned: t.scanned, total: t.total });
+    // phase 必须一起报：全量扫描分「建索引 / 补缩略图」两阶段，
+    // 两阶段的 scanned/total 各自从 0 开始数，不带上阶段名前端会看到进度条往回跳。
+    send({ type: 'progress', slug, albumId, scanned: t.scanned, total: t.total, phase: t.phase });
   };
 
   try {

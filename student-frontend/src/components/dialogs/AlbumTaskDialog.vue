@@ -41,7 +41,7 @@
               <span class="text-sm text-text truncate" :title="a.name">{{ albumLabel(a.name) }}</span>
               <span v-if="isQueued(a.id)" class="text-[11px] text-info flex-shrink-0">排队中</span>
               <span v-else-if="taskOf(a.id)" class="text-[11px] flex-shrink-0" :class="taskOf(a.id).paused ? 'text-warning' : 'text-info'">
-                {{ taskOf(a.id).paused ? '已暂停' : modeLabel(taskOf(a.id).mode) }}
+                {{ taskOf(a.id).paused ? '已暂停' : phaseLabel(taskOf(a.id)) }}
               </span>
             </div>
             <div class="task-actions flex items-center justify-end gap-2 flex-shrink-0">
@@ -112,6 +112,21 @@ const authHeaders = () => ({ Authorization: 'Bearer ' + token() })
 
 function modeLabel(mode) {
   return mode === 'full' ? '全量更新' : '增量更新'
+}
+
+/* 全量扫描分两阶段，进度条按「当前阶段」走（各自 0→100%）。
+ * 必须把阶段名显示出来，否则用户看到进度条从 100% 跳回 0%，会以为任务重跑了。
+ *
+ *   建索引   —— stat + 读 EXIF，几毫秒一张；跑完相册里照片就齐了（还没有图）
+ *   补缩略图 —— 索引已完整，这一步才真正生成图，慢的那一段都在这里
+ */
+function phaseLabel(t) {
+  if (!t) return ''
+  const base = modeLabel(t.mode)
+  if (t.mode !== 'full') return base
+  if (t.phase === 'index') return `${base} · 建索引`
+  if (t.phase === 'thumb') return `${base} · 补缩略图`
+  return base
 }
 
 // 行标题：相册名本身可能已经带了「相册」二字，避免出现「XX相册相册照片」

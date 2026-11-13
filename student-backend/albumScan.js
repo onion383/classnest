@@ -130,7 +130,11 @@ function releaseThumbSlot() {
 
 // 生成 320px JPEG 小图：图片用 sharp 处理竖拍 EXIF 方向；视频用 ffmpeg 抓第 0.1 秒帧。
 // 输出按库隔离到 {thumbsDir}/{slug}/{photoId}.jpg；成功返回路径，失败返回 ''（调用方退回占位）。
-async function genThumb(photoId, filePath, isVideo, slug) {
+//
+// opts.shouldAbort（可选）：抢到并发槽位之后、真正解码之前调一次；返回 true 就放弃这一张。
+// 用途是「用户滑走了，队列里还没开工的那些就别开工」——见下面 acquireThumbSlot 之后的检查。
+// 注意它**不能**中断已经开始解码的那张：sharp 的调用没法从外面掐断，只能等它返回。
+async function genThumb(photoId, filePath, isVideo, slug, opts) {
   // 缩略图按库隔离：各库的 album_photos.id 都从 1 开始自增，若只按 {photoId}.jpg
   // 命名并共用一个目录，不同库的同号照片会互相覆盖（串图）。
   const s = slug || albumThumbs.safeSlug('');
@@ -142,6 +146,12 @@ async function genThumb(photoId, filePath, isVideo, slug) {
   const tmp = path.join(albumThumbs.thumbsDirFor(s), `${photoId}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.jpg`);
   await acquireThumbSlot();
   try {
+    /* 排队期间可能已经「没人要了」：批量接口一次提交 8 张，只有 4 张能立刻拿到槽位，
+     * 另外 4 张在这里排队。用户滑走时，前 4 张正在解码（掐不断），
+     * 但这 4 张还没开工 —— 不检查的话它们会依次拿到槽位、把 4 次解码白跑一遍。
+     * 检查放在 acquire **之后**：放前面只能拦住「还没排到」的一小撮，
+     * 而排队结束后才是真正决定「要不要花这次 CPU」的时刻。 */
+    if (opts && typeof opts.shouldAbort === 'function' && opts.shouldAbort()) return '';
     if (isVideo) {
       // 用 LGPL 版 ffmpeg 抓帧（独立二进制命令行调用，不链接进主程序）。
       const ffmpegPath = await ensureFfmpeg();
@@ -173,6 +183,27 @@ async function genThumb(photoId, filePath, isVideo, slug) {
   } finally {
     releaseThumbSlot();
   }
+}
+
+// 一次 readdir 拿到该账号**已落盘**的缩略图 id 集合，供增量扫描 O(1) 判断。
+//
+// 为什么不用 fsp.stat 逐张查：53016 张就是 53016 次 IO；readdir 一次拿回文件名列表，
+// 之后纯内存查。也不用 fs.existsSync —— 同步 IO 会阻塞整个后端事件循环。
+//
+// **只判「在不在」，不读内容**：已经生成的 jpg 不太可能自己损坏，
+// 真遇到坏图就靠「全量更新」无条件重建（那是它的语义）。
+// 临时文件名形如 {id}.{ts}.jpg → Number(...) 得 NaN，天然被排除。
+async function presentThumbIds(slug) {
+  const ids = new Set();
+  try {
+    const names = await fsp.readdir(albumThumbs.thumbsDirFor(slug));
+    for (const n of names) {
+      if (!n.endsWith('.jpg')) continue;
+      const id = Number(n.slice(0, -4));
+      if (Number.isInteger(id) && id > 0) ids.add(id);
+    }
+  } catch (_) { /* 目录还不存在 = 一张都没有，全补 */ }
+  return ids;
 }
 
 // 查已生成的缩略图路径：命中内存索引且版本不落后则返回，否则返回 ''（需重建）。
@@ -266,8 +297,11 @@ function createThumbWriter(conn) {
 function claimScanTask(conn, albumId, mode, token, resumeFrom) {
   try {
     if (resumeFrom) {
-      // 续扫：保留断点，只更新归属与状态
-      conn.prepare(`UPDATE album_scan_tasks SET mode = ?, phase = 'process', state = 'running', token = ?, updated_at = ?
+      // 续扫：保留断点，只更新归属与状态。
+      // **不动 phase**：它现在承载「上次停在哪一阶段」——'index' = 索引还没跑完，
+      // 'thumb' = 索引已完整、只差补缩略图。写成固定值会让续扫分不清阶段，
+      // 于是「索引早就写完了」的情况还要从头再读一遍全部 EXIF。
+      conn.prepare(`UPDATE album_scan_tasks SET mode = ?, state = 'running', token = ?, updated_at = ?
         WHERE album_id = ?`)
         .run(mode, token, now(), albumId);
     } else {
@@ -543,7 +577,9 @@ async function deletePhotosNotIn(conn, albumId, task, foundPaths, slug, trust = 
 // token：本次扫描的归属标识（主进程派活时生成、经 IPC 传进来）。
 // 库表的读写都以它为限定条件，避免与「另一次扫描」串扰。
 function newTask(mode, token) {
-  return { cancelled: false, paused: false, scanned: 0, total: 0, mode, token: token || 0, startedAt: now() };
+  // phase：全量扫描分两阶段（'index' 建索引 / 'thumb' 补缩略图），
+  // 进度条和续扫都靠它区分。增量/虚拟扫描不分阶段，一直是 'process'。
+  return { cancelled: false, paused: false, scanned: 0, total: 0, mode, phase: 'process', token: token || 0, startedAt: now() };
 }
 
 // ---- 全量扫描：清空旧索引后重新扫描（前端会逐步显示新索引的数据） ----
@@ -563,16 +599,41 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
   const resuming = !!resumeFrom;
   const task = newTask('full', token);
 
+  /* ============ 两阶段：先建索引，再补缩略图 ============
+   *
+   * 实测（1000 张 4000×3000 手机原图）：
+   *   阶段1 索引：stat + 读 EXIF → 4.8 ms/张 → 全部只要 4.8 秒
+   *   阶段2 缩略图：decode + resize + 写盘 → 83 ms/张 → 83 秒
+   * 原来两者在同一个循环里交替，用户要干等 ~88 秒才能看到完整的网格。
+   * 拆开后 5 秒就有完整索引（能排序、能滚动、能看到总张数），缩略图在后面慢慢补。
+   *
+   * 「有索引但没缩略图」这个状态系统本来就支持：缩略图缺失时批量接口会现场生成，
+   * 续扫也会回头补。所以拆成两阶段不会留下无法恢复的半成品。
+   *
+   * 全量扫描的语义**没有变**：阶段2 仍然无条件重建每一张缩略图（用户点全量更新
+   * 就是来刷缓存的 —— 缩略图文件损坏、源图被换但 mtime 没变，这些靠 THUMB_VERSION
+   * 兜不住）。变的是「先让用户看到全部照片，再慢慢把图补上」。
+   *
+   * 增量扫描不拆：它的文件清单只有变动的那些，量小；拆开反而多一轮遍历。 */
+  const resumingPhase = resuming
+    ? (conn.prepare('SELECT phase FROM album_scan_tasks WHERE album_id = ? AND token = ?')
+      .get(albumId, task.token) || {}).phase || ''
+    : '';
+  // 上次已经跑完索引阶段 → 这一轮直接从补图开始
+  const indexDone = resumingPhase === 'thumb';
+
   // 落一条「进行中」的记录：进程被杀时能据此续扫。
   // 注意：这一行由**主进程**在派活时就写好（claimScanTask，含 token 与 state=running），
   // 子进程只负责推进断点（persistScanProgress，带 token 限定）。
   // 若这里再写一次 state，会把主进程写的「停止」指令抹掉（用户以为停了其实没停）。
-  if (resuming) persistScanProgress(conn, albumId, task.token, 'full', 'process', resumeFrom, 0, 0, true);
+  if (resuming) persistScanProgress(conn, albumId, task.token, 'full', indexDone ? 'thumb' : 'index', resumeFrom, 0, 0, true);
 
   try {
     const insert = conn.prepare('INSERT OR IGNORE INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     const updateMeta = conn.prepare('UPDATE album_photos SET file_name = ?, file_size = ?, mtime = ?, photo_date = ?, exif_date = ?, date_src = ? WHERE id = ?');
     const pickRow = conn.prepare('SELECT id FROM album_photos WHERE album_id = ? AND file_path = ?');
+    // 补图阶段只需要 id（定位行）—— 全量扫描无条件重建，不看 thumb_path 有没有
+    const pickThumb = conn.prepare('SELECT id FROM album_photos WHERE album_id = ? AND file_path = ?');
     const thumbWriter = createThumbWriter(conn);
 
     // 递归扫整个目录树（含子文件夹）：整个树的媒体文件都进这一个相册的索引。
@@ -585,36 +646,29 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
     const collected = await collectMediaFiles(album.folder_path, task, conn, albumId);
     if (collected === null) return;
     const { files, complete } = collected;
-    // 断点定位：找到 resumeFrom 在清单中的位置，从它的**下一个**开始处理。
-    // 找不到（文件被删了）则从头开始（稳妥：INSERT OR IGNORE 会跳过已存在的）。
+    /* ================= 阶段 1：建立索引（**不**生成缩略图） =================
+     * 这一阶段只做 stat + 读 EXIF + 写 album_photos，实测 4.8 ms/张。
+     * 跑完后相册里已有全部照片与正确的拍摄时间：网格能完整显示、正确排序、
+     * 张数是对的，只是图还没出来 —— 这正是用户要的「先全部索引再慢慢补图」。 */
     let startIdx = 0;
-    if (resuming) {
+    if (!indexDone && resuming) {
+      // 续扫：上次停在索引阶段的某个文件，从它的下一个继续。
+      // 找不到（文件被删了）则从头开始（INSERT OR IGNORE 会跳过已存在的）。
       const at = files.findIndex(f => f.full === resumeFrom);
       startIdx = at >= 0 ? at + 1 : 0;
-      // 补缺：断点之前（含）的文件里，可能有「索引已建但缩略图没生成成功」的
-      // （genThumb 失败时只写索引、不写 thumb_path）。续扫跳过它们就会永远缺图，
-      // 所以这里回头把缺缩略图的补上。只补缺的那些，正常的一律跳过。
-      if (startIdx > 0) {
-        const pick = conn.prepare('SELECT id, thumb_path, thumb_v FROM album_photos WHERE album_id = ? AND file_path = ?');
-        for (let i = 0; i < startIdx; i++) {
-          const f = files[i];
-          const row = pick.get(albumId, f.full);
-          if (!row) continue;
-          if (row.thumb_path && (row.thumb_v || 0) >= THUMB_VERSION) continue;
-          const tp = await genThumb(row.id, f.full, VIDEO_EXT.test(f.name), slug);
-          if (tp) thumbWriter.add(row.id, tp);
-        }
-      }
     }
+    task.phase = 'index';
     // 续扫时把已跳过的部分计入 scanned，进度条不会倒退
     task.scanned = startIdx;
+    task.total = files.length;
     // 「文件循环是否完整跑完」必须用显式标记表达，不能拿进度计数去推断。
     // 原来用 `scanned >= files.length` 当清理门，而 scanned 只在处理成功时才 +1：
     // 只要有一个文件 stat 失败（刚被删 / 被占用 / 权限不足）或被 `continue` 跳过，
     // 清理门就永远不成立 → 整个「索引有、磁盘无」清理被跳过，
     // 用户删掉的照片索引行会一直残留在相册里（B05-10）。
     let loopCompleted = true;
-    for (let i = startIdx; i < files.length; i++) {
+    if (!indexDone) {
+      for (let i = startIdx; i < files.length; i++) {
       const { name, full } = files[i];
       if (!await waitWhilePaused(conn, task, albumId)) { loopCompleted = false; break }
       try {
@@ -629,26 +683,15 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
         // 现在保留旧行，就要在这里把元数据刷新一遍 —— 否则「全量更新」会退化成增量更新
         // （缩略图版本升级、文件名/大小变化、EXIF 补读都不会生效）。
         const existingRow = pickRow.get(albumId, full);
-        let photoId;
         if (existingRow) {
-          photoId = existingRow.id;
-          updateMeta.run(name, st.size, mtime, when.date, when.exif, when.src, photoId);
+          updateMeta.run(name, st.size, mtime, when.date, when.exif, when.src, existingRow.id);
         } else {
-          const ri = insert.run(albumId, full, name, st.size, mtime, when.date, when.exif, when.src);
-          // INSERT OR IGNORE 冲突时 changes=0，此时 lastInsertRowid 是**上一次**插入的残留值，
-          // 直接拿它写缩略图会写到别的行上。冲突时改为回查真实 id。
-          photoId = ri.lastInsertRowid;
-          if (ri.changes === 0) {
-            const row = pickRow.get(albumId, full);
-            if (!row) continue;
-            photoId = row.id;
-          }
+          // 不再需要回查 id：这个阶段不生成缩略图，冲突（并发插入）时那行本来就在。
+          insert.run(albumId, full, name, st.size, mtime, when.date, when.exif, when.src);
         }
-        // 全量更新：无条件重建缩略图（这正是「全量」与「增量」的区别 —— 用户用它来刷新缓存）
-        const tp = await genThumb(photoId, full, isVideo, slug);
-        if (tp) thumbWriter.add(photoId, tp);
+        // 注意这里**没有** genThumb：缩略图统一放到阶段 2 生成。
         // 处理完这个文件才推进断点（中途崩溃时这个文件会重扫，代价很小）
-        persistScanProgress(conn, albumId, task.token, 'full', 'process', full, task.scanned, task.total, false);
+        persistScanProgress(conn, albumId, task.token, 'full', 'index', full, task.scanned, task.total, false);
       } catch (_) {}
       // 每 SCAN_YIELD_EVERY 个文件主动让出一次事件循环：
       // 文件循环里有 await stat 与 await genThumb（sharp 单张约 20ms），
@@ -657,8 +700,8 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
         await yieldLoop();
         if (onProgress) onProgress(task);
       }
+      }
     }
-    thumbWriter.flush();
 
     // 文件循环被停止/暂停而提前 break 时**不能**做清理：清单只处理了一部分，
     // 拿它判断「磁盘上已删除」会把后半段还没扫的索引全删了（续扫时尤其致命）。
@@ -669,6 +712,58 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
       const foundPaths = new Set(files.map(f => f.full));
       await deletePhotosNotIn(conn, albumId, task, foundPaths, slug, complete);
     }
+
+    /* ================= 阶段 2：生成缩略图 =================
+     * 到这一步索引已经完整（照片全在、时间排序正确），所以此时用户已经能
+     * 完整浏览相册，只是图还没出来。剩下的事就是慢慢把图补上。
+     *
+     * 全量扫描**无条件重建**每一张：用户点「全量更新」就是来刷缓存的
+     * （缩略图文件损坏、源图被替换但 mtime 没变 —— 这些靠 THUMB_VERSION 兜不住）。
+     * 所以这里不看 thumb_path 有没有、也不看文件在不在，一律重算。
+     *
+     * 这与**增量更新**是刻意相反的两套语义（用户拍板）：
+     * 那边「已有缩略图就跳过、只补丢的」，这边「有没有都重来」。
+     * 别把增量的 presentThumbIds 判据搬到这里 —— 那样全量更新就失去了
+     * 「修坏图」这个唯一入口。
+     *
+     * 中断语义：停在哪个文件就记哪个。续扫时 phase='thumb' → 直接从
+     * 这个文件之后继续补图，**不会重新读一遍全部 EXIF**。 */
+    let thumbCompleted = true;
+    if (loopCompleted) {
+      let thumbStart = 0;
+      if (indexDone && resuming) {
+        // 上次死在补图阶段：索引是完整的，从断点之后接着补
+        const at = files.findIndex(f => f.full === resumeFrom);
+        thumbStart = at >= 0 ? at + 1 : 0;
+      }
+      task.phase = 'thumb';
+      task.scanned = thumbStart;
+      task.total = files.length;
+      for (let i = thumbStart; i < files.length; i++) {
+        const { name, full } = files[i];
+        if (!await waitWhilePaused(conn, task, albumId)) { thumbCompleted = false; break }
+        try {
+          // 放开头就记：它是进度条的分子，也是断点依据（和阶段 1 同理）
+          task.scanned++;
+          const row = pickThumb.get(albumId, full);
+          if (row) {
+            const tp = await genThumb(row.id, full, VIDEO_EXT.test(name), slug);
+            if (tp) thumbWriter.add(row.id, tp);
+          }
+          persistScanProgress(conn, albumId, task.token, 'full', 'thumb', full, task.scanned, task.total, false);
+        } catch (_) {}
+        // 每 SCAN_YIELD_EVERY 个文件让出一次事件循环：
+        // genThumb 单张就要几十毫秒，攒一批不让出后端会明显发闷。
+        if (task.scanned % SCAN_YIELD_EVERY === 0) {
+          await yieldLoop();
+          if (onProgress) onProgress(task);
+        }
+      }
+      thumbWriter.flush();
+    }
+
+    // 补图没跑完（用户停止/暂停）→ 保留断点，下次续扫只补剩下的图
+    if (!thumbCompleted) return;
 
     conn.prepare('UPDATE albums SET updated_at = ? WHERE id = ?').run(now(), albumId);
     // 跑完了：清掉持久化记录（下次不需要续扫）
@@ -706,6 +801,12 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
       existing.set(r.file_path, r);
     }
 
+    /* 已落盘的缩略图 id 集合（一次 readdir，不是逐张 stat）。
+     * 增量更新的语义现在是「**跳过已经有的**，只补丢的」—— 不管是预览现场生成的、
+     * 上次扫描生成的，还是全量更新重建的，只要文件在且版本达标就不重做。
+     * 与全量更新正好相反：那边无条件重建每一张，是用户主动来刷缓存的入口。 */
+    const present = await presentThumbIds(slug);
+
     const foundPaths = new Set();
 
     // 递归扫整个目录树（含子文件夹），与全量扫描同一套遍历
@@ -725,15 +826,19 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
     if (resuming) {
       const at = files.findIndex(f => f.full === resumeFrom);
       startIdx = at >= 0 ? at + 1 : 0;
-      // 补缺：断点之前的文件里可能有「索引已建但缩略图没生成成功」的，续扫回头补上
+      // 补缺：断点之前的文件里可能有「索引已建但缩略图没生成成功 / 后来丢了」的，
+      // 续扫回头补上。判据与主循环一致：版本达标 **且** 文件确实在磁盘上才算有。
       if (startIdx > 0) {
         for (let i = 0; i < startIdx; i++) {
           const f = files[i];
           const old = existing.get(f.full);
           if (!old) continue;
-          if (old.thumb_path && (old.thumb_v || 0) >= THUMB_VERSION) continue;
+          if ((old.thumb_v || 0) >= THUMB_VERSION && present.has(old.id)) continue;
           const tp = await genThumb(old.id, f.full, VIDEO_EXT.test(f.name), slug);
-          if (tp) thumbWriter.add(old.id, tp);
+          if (tp) {
+            thumbWriter.add(old.id, tp);
+            present.add(old.id);
+          }
         }
       }
     }
@@ -756,16 +861,29 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
         const old = existing.get(full);
 
         if (old) {
-          // 文件已存在：mtime 变了要重算日期（缩略图也只在 mtime 真的变了才重建：
-          // 图没变时重建是白费 CPU）
+          // 文件已存在：mtime 变了 = **源图变了**，必须重算日期并重建缩略图。
+          // 这是「跳过已有」的唯一例外 —— 缩略图还在，但它对应的是旧图，留着就是显示错图。
           if (old.mtime !== mtime) {
             const isVideo = VIDEO_EXT.test(name);
             const when = await resolvePhotoDate(full, mtime, isVideo);
             updateMeta.run(name, st.size, mtime, when.date, when.exif, when.src, old.id);
             const tp = await genThumb(old.id, full, isVideo, slug);
-            if (tp) thumbWriter.add(old.id, tp);
+            if (tp) {
+              thumbWriter.add(old.id, tp);
+              present.add(old.id);
+            }
+          } else if ((old.thumb_v || 0) < THUMB_VERSION || !present.has(old.id)) {
+            // 索引正常、源图没变，但缩略图丢了（或版本落后）→ **补齐**。
+            // 这正是增量更新以前漏掉的：mtime 相同就直接 continue，
+            // 「点过清理微缩图」「生成失败」「文件被外部删掉」都永远补不回来。
+            // 只判文件在不在，不读内容（已生成的 jpg 不太可能自己损坏）。
+            const tp = await genThumb(old.id, full, VIDEO_EXT.test(name), slug);
+            if (tp) {
+              thumbWriter.add(old.id, tp);
+              present.add(old.id);
+            }
           }
-          // mtime 相同则跳过
+          // 其余情况：缩略图在、版本达标、源图没变 → 跳过（不白烧 CPU）
         } else {
           // 新文件：插入索引 + 生成缩略图
           const isVideo = VIDEO_EXT.test(name);

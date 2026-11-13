@@ -83,9 +83,11 @@ const CHECKS = [
   },
   {
     id: 'C5',
-    name: '配额闸用各桶 totalSize() 之和，不能用单桶 size',
-    pass: (s) => /onDemandInflight \+ pendingInChild\.totalSize\(\) \+ n/.test(s['routes/album.js'])
-      && !/pendingInChild\.size \+ n/.test(s['routes/album.js']),
+    name: '预览额度与 pending 解耦（pending 只记账，不再从额度里减）',
+    // 2026-11-13 改：pendingInChild 曾参与配额减法，导致「子进程没干完的活把浏览者挡在门外」
+    // （滚几屏攒够额度，所有缩略图请求恒 404）。现在它只做去重记账。
+    pass: (s) => /const PREVIEW_LIMIT = \d+/.test(s['routes/album.js'])
+      && !/pendingInChild\.totalSize\(\)/.test(s['routes/album.js']),
   },
   {
     id: 'C6',

@@ -177,6 +177,25 @@
   box-shadow: var(--av-media-shadow);
 }
 
+/* ===== 放大后拖动平移 =====
+ * 位移量仍由 :style 的 transform 驱动（见 composables/useViewerPan.js），这里只管
+ * 光标和补间：按钮缩放要平滑，拖动必须逐帧跟手，两者不能共用一条
+ * transition-transform —— 拖动时不掐掉 duration-100，图像会慢半拍黏在鼠标后面。
+ * !important 用来压过 Tailwind 的 .transition-transform / .duration-100。
+ * touch-action:none 是给触屏/触控板留的，否则 pointermove 会被浏览器当成滚屏收走。 */
+.album-viewer .viewer-pan-surface {
+  touch-action: none;
+}
+.album-viewer .viewer-pan-surface.viewer-can-pan {
+  cursor: grab;
+}
+.album-viewer .viewer-pan-surface.viewer-panning {
+  cursor: grabbing;
+}
+.album-viewer .viewer-media.viewer-panning {
+  transition: none !important;
+}
+
 /* ===== 照片信息侧边栏 ===== */
 /* 关闭按钮和左右箭头都挂在 .viewer-stage 上，定位相对【媒体区】而不是整个查看器。
    于是信息面板挤压时，它们会跟着媒体区一起左移，不必再为它们单独写一条动画去和

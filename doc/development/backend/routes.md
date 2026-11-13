@@ -73,7 +73,7 @@ classnest/
 - **定位**：后端 HTTP 路由层（`student-backend/routes/`），负责挂载点、接口清单与每个接口的处理链。
 - **公共逻辑**：所有业务接口经 `auth(['teacher'])`（鉴权中间件，只允许教师角色）→ `JWT`（登录令牌）校验 → `dbManager.withDb`（按当前库执行回调的包装函数）绑定当前库；路由内做参数校验、`sanitize`（数据清洗）清洗、事务写库、撤销登记与统一 JSON 响应。
 - **局限**：不展开数据层加密/多库细节、安全通道握手、AI 提案与撤销执行器内部实现；这些见 [data-layer.md](./data-layer.md)、[topics/security.md](../topics/security.md)、[topics/ai.md](../topics/ai.md)。
-- **规模**：共 229 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
+- **规模**：共 232 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
 
 
 ### 处理标准的写法
@@ -243,8 +243,10 @@ flowchart TD
 | POST | `/tasks/resume` | 按断点续扫（`{albumIds}` 可指定） |
 | GET | `/:id/photos` | 照片列表（`photo_date DESC, mtime DESC, id DESC`） |
 | GET | `/photo/:photoId/file` | 原文件（鉴权后流式） |
-| GET | `/photo/:photoId/thumb` | 缩略图（缓存命中即返回，过期按 `thumb_v` 重建） |
-| POST | `/photo/thumbs` | 批量缩略图（≤200；二进制「长度+JPEG」拼接，`X-Thumb-Ids` 响应头） |
+| GET | `/photo/:photoId/thumb` | 缩略图（缓存命中即返回，过期按 `thumb_v` 重建；缺图现场生成，额度不足先等 400ms 再转交子进程） |
+| POST | `/photo/thumbs` | 批量缩略图（≤200；**流式**，逐帧「id+长度+JPEG」，生成一张发一张；缺图按预览额度 `PREVIEW_LIMIT=48` 现场生成，**不随扫描状态变化**，客户端断开立刻归还未用额度） |
+| POST | `/thumbs/purge` | 清理**所有账号**的缩略图缓存文件（索引一行不动，`/thumb` 按需重建） |
+| POST | `/thumbs/sweep` | 回收**孤儿**微缩图：默认只读对账（返回 `orphans/bytes/skipped/slugs`），`{apply:true}` 才真删；只删库里没有对应 `photoId` 的 jpg、无主账号目录、旧扁平结构残留；库打不开的 slug 整目录跳过 |
 | GET | `/photo/:photoId/save-as` | 另存为 |
 | DELETE | `/photo/:photoId` | 删除（移入应用内回收站，可撤销） |
 | POST | `/photos/move` | 照片索引移动到虚拟相册（可撤销 `album_photo_move`） |
@@ -312,6 +314,10 @@ flowchart TD
 设置页「数据管理」的数据源与打包出口。只读业务表 + 流式打包，不写库。
 
 - `GET /tables` —— 表清单与行数（20 张业务表），前端据此渲染列表。每条带 `py`（表名拼音首字母，供搜索框用：输入 `xs` 能命中「学生名单」），**它必须跟 `label` 一起维护**，探针按「表名里的中/英文字数」核对长度。
+- `POST /vacuum` —— 「整理」当前账号库：先 `wal_checkpoint(TRUNCATE)` 把 WAL 落回主库，再 `VACUUM` 重写整份库，把删除记录后留在 freelist 里的空闲页真正还给磁盘，结束后再 checkpoint 一次。返回 `{ beforeBytes, afterBytes, freedBytes, freelistBefore, freelistAfter, durationMs, noop? }`（`freedBytes` = 主库 + `-wal` 的前后差，不为负）。
+  - **没有空闲页直接 noop 返回**，不做全库重写（耗时与库体积成正比：实测 50MB/75ms、150MB/387ms、400MB/1.1s，约 3ms/MB）。前端此时提示「没有可回收的空间」。
+  - **只由用户显式触发**：better-sqlite3 是同步 API，VACUUM 期间独占连接并阻塞后端事件循环（百 MB 级在百毫秒~秒级），所以不做定时/自动整理；前端在此期间用全屏遮罩挡住交互，避免点击产生排队请求。
+  - 相册扫描或导入持有读事务时 SQLite 返回 `SQLITE_BUSY`，这里如实回 500 并提示「稍后再试」，不自动重试、不排队。
 - `POST /sources { keys }` —— 取指定表的数据，返回 `{ fields, rows }`，形状与 `ExportExcel` 组件完全一致（前端因此能直接复用那套导出实现，不必重写格式逻辑）。
 - `POST /zip { entries: [{ name, data(base64) }], password, filename, receiptGroups?, includeReceipts? }` —— 把若干文件打成一个 zip 返回字节流（可选 ZipCrypto 加密）。前端用现有 `save-file` 通道落盘，所以**不需要新增 IPC 通道**。
   - **流式**：条目边读边写进响应，任何时刻只持有一个 256KB 块；收据只登记磁盘路径（写入器里读盘），不在这里 `readFileSync` 进内存。响应**不设 `Content-Length`**（长度要等整包写完才知道，预置就等于把流式又变回「先拼完」）。

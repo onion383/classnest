@@ -245,10 +245,12 @@ classnest/
 
 | 文件 | 定位 | 关键导出 |
 | --- | --- | --- |
-| [`albumScan.js`](../../../student-backend/albumScan.js) | 扫描引擎（主/子进程共用）：递归收集、断点推进、缩略图、批量写库、暂停等待 | `collectMediaFiles`、`fullScan`、`incrementalScan`、`refreshVirtual`、`resolvePhotoDate`、`genThumb`、`createThumbWriter`、`claimScanTask`、`waitWhilePaused` |
+| [`albumScan.js`](../../../student-backend/albumScan.js) | 扫描引擎（主/子进程共用）：递归收集、断点推进、缩略图、批量写库、暂停等待。**全量扫描分两阶段**：先建索引（4.8ms/张），再**无条件重建**每一张缩略图（83ms/张）；**增量更新相反**：已有缩略图就跳过，只补丢的（`presentThumbIds` 一次 readdir），仅 mtime 变化时强制重建 | `collectMediaFiles`、`fullScan`、`incrementalScan`、`refreshVirtual`、`presentThumbIds`、`resolvePhotoDate`、`genThumb`、`createThumbWriter`、`claimScanTask`、`waitWhilePaused` |
 | [`scanWorker.js`](../../../student-backend/scanWorker.js) | 扫描子进程生命周期与 IPC（懒启动、空闲 60s 退出、崩溃限流重建） | `dispatchScan`、`dispatchResume`、`requestStop`、`requestPause`、`forwardDemand`、`lockDb`、`shutdown`、`killNow` |
 | [`worker.scan.js`](../../../student-backend/worker.scan.js) | 子进程本体（按 IPC 跑扫描与补图队列） | 无导出 |
-| [`albumThumbs.js`](../../../student-backend/albumThumbs.js) | 缩略图按库隔离 + 64MB LRU + 批量二进制读取 | `thumbPathFor`、`rememberThumb`、`lookupThumb`、`readThumb`、`readThumbBatch` |
+| [`albumThumbs.js`](../../../student-backend/albumThumbs.js) | 缩略图按库隔离 + 64MB LRU + 批量二进制读取 | `thumbPathFor`、`rememberThumb`、`lookupThumb`、`readThumb`、`readThumbBatch`、`purgeCache` |
+| [`services/thumbPurge.js`](../../../student-backend/services/thumbPurge.js) | 清理缩略图文件（只删文件，不碰索引；逐文件容错，回报删除数与字节数） | `purgeThumbFiles`、`collectTargets` |
+| [`services/thumbSweep.js`](../../../student-backend/services/thumbSweep.js) | 按库对账回收孤儿缩略图（默认只读，`apply=true` 才删；库打不开则整目录跳过） | `sweepThumbOrphans` |
 | [`albumExif.js`](../../../student-backend/albumExif.js) | EXIF/XMP 拍摄时间（读不到就是空串，**不拿 mtime 冒充**） | `readExifDate`、`normalizeExifDate`、`readExifBuf`、`readXmp`、`readExifDetail` |
 | [`albumOps.js`](../../../student-backend/albumOps.js) | 回收站移入/恢复、删缩略图 | `TRASH_DIR`、`trashPathFor`、`moveToTrash`、`restoreToOriginal`、`deleteThumb` |
 

@@ -86,7 +86,8 @@ app.use(cors({
   },
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Proof'],
-  exposedHeaders: ['X-Auth-Required', 'X-Renewed-Token', 'X-Renewed-Media'],
+  // X-Photo-Id：首页随机配图的照片 id，随二进制缩略图一起回，用来从首页点进相册时定位到这一张。
+  exposedHeaders: ['X-Auth-Required', 'X-Renewed-Token', 'X-Renewed-Media', 'X-Photo-Id'],
 }));
 
 // Host 校验：仅接受本机回环地址的请求，阻断「任意网页/DNS rebinding 探测 localhost API」。

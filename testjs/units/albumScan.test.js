@@ -282,8 +282,10 @@ test('清理门：两个扫描循环都用显式完成标记，不再拿进度�
   assert.ok(marks.length >= 6,
     `loopCompleted 出现 ${marks.length} 次，两个循环各需 声明/中断/判断 三处（>=6）`)
   const incs = code.match(/task\.scanned\+\+/g) || []
-  assert.equal(incs.length, 4,
-    `task.scanned++ 出现 ${incs.length} 次（全量 1 + 增量 1 + 虚拟 2）。多了说明又有人在循环末尾重复计数`)
+  // 全量现在**两个循环**（阶段1 建索引 / 阶段2 补缩略图）各计一次，所以是 2 而不是 1。
+  // 这个数字的用处是「每个循环里只许有一次」——多了就说明又有人在循环末尾重复计数。
+  assert.equal(incs.length, 5,
+    `task.scanned++ 出现 ${incs.length} 次（全量两阶段各 1 + 增量 1 + 虚拟 2）。多了说明又有人在循环末尾重复计数`)
 })
 
 test.after(async () => {

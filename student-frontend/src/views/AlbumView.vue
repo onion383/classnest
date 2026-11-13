@@ -101,8 +101,8 @@
           <div ref="containerRef" class="flex-1 overflow-auto min-h-0 album-scroll" @scroll="onScroll">
           <div class="relative" :style="{ height: totalH + 'px' }">
             <div
-              v-for="v in visibleGroups"
-              :key="v.g.date"
+              v-for="v in renderedGroups"
+              :key="v.date"
               class="absolute left-0 right-0 mb-8 album-group"
               :style="{ top: v.offset + 'px' }"
             >
@@ -116,45 +116,73 @@
                   :title="`${groupDateHint(v.g)}：图片里没有可读的拍摄时间，已单独归到时间轴最底部的「未知时间」`"
                 >{{ groupDateHint(v.g) }}</span>
               </h2>
-              <div class="flex flex-wrap gap-3">
+              <div class="relative" :style="{ height: v.contentH + 'px' }">
                 <!-- 分页加载中：高度已按 count 预留好，这里只占位提示，不等同于「这个日期没有照片」 -->
-                <div v-if="!v.g.photos" class="text-sm text-text-muted py-2">加载中…</div>
+                <div v-if="!v.loaded" class="text-sm text-text-muted py-2">加载中…</div>
+                <!-- 组内按行裁剪：每行一个绝对定位容器，行位置由「列数 × 格宽」直接算出来。
+                     原来这里是 flex-wrap + 整组 v-for，一天几千张就会有几千个格子常驻 DOM。 -->
                 <div
-                  v-for="p in (v.g.photos || [])"
-                  :key="p.id"
-                  @click="onCellClick(p)"
-                  @pointerenter="onCellHover(p)"
-                  @pointerdown="onCellPointerDown(p, $event)"
-                  @pointermove="onCellPointerMove"
-                  @pointerup="onCellPointerUp"
-                  @pointercancel="onCellPointerUp"
-                  @pointerleave="onCellPointerUp"
-                  class="rounded-lg overflow-hidden bg-bg border cursor-pointer group relative photo-cell select-none"
-                  :class="selectMode && isSelected(p.id) ? 'border-info ring-2 ring-info' : 'border-border'"
-                  :style="cellStyle"
-                  :data-cell-id="p.id"
+                  v-for="row in v.rows"
+                  :key="row.n"
+                  class="absolute left-0 flex gap-3"
+                  :style="{ top: row.top + 'px' }"
                 >
-                  <VideoThumb v-if="isVideo(p)" :src="thumbSrc(p)" />
-                  <!-- 缩略图未就绪时不渲染 <img>：先挂一张空图、等 blob 到了再赋值 src，
-                       浏览器会把 src 变化当成换图、清帧重解码，画面上就是「图片在圆角框里闪一下」。
-                       顺便去掉 loading="lazy" —— 虚拟滚动已把挂载范围压到视口 ±900px，
-                       再叠一层浏览器懒加载等于让这 900px 缓冲白留，图片反而更晚出现。 -->
-                  <img
-                    v-else-if="thumbSrc(p)"
-                    :src="thumbSrc(p)"
-                    :alt="p.file_name"
-                    class="w-full h-full object-cover"
-                    decoding="async"
-                    draggable="false"
-                    @error="onThumbError"
-                  />
-                  <!-- 多选态：左上角勾选标记 -->
-                  <span
-                    v-if="selectMode"
-                    class="absolute top-1.5 left-1.5 z-10 w-5 h-5 rounded-md border-2 flex items-center justify-center text-[11px] leading-none"
-                    :class="isSelected(p.id) ? 'bg-info border-info text-text-inverse' : 'bg-black/25 border-white/85 text-transparent'"
-                  >✓</span>
-                  <div class="photo-mask" :class="{ 'photo-mask--sel': selectMode && isSelected(p.id) }"></div>
+                  <div
+                    v-for="p in row.photos"
+                    :key="p.id"
+                    @click="onCellClick(p)"
+                    @pointerenter="onCellHover(p)"
+                    @pointerdown="onCellPointerDown(p, $event)"
+                    @pointermove="onCellPointerMove"
+                    @pointerup="onCellPointerUp"
+                    @pointercancel="onCellPointerUp"
+                    @pointerleave="onCellPointerUp"
+                    class="shrink-0 rounded-lg overflow-hidden bg-bg border cursor-pointer group relative photo-cell select-none"
+                    :class="selectMode && isSelected(p.id) ? 'border-info ring-2 ring-info' : 'border-border'"
+                    :style="cellStyle"
+                    :data-cell-id="p.id"
+                  >
+                    <VideoThumb v-if="isVideo(p)" :src="thumbSrc(p)" />
+                    <!-- 缩略图未就绪时不渲染 <img>：先挂一张空图、等 blob 到了再赋值 src，
+                         浏览器会把 src 变化当成换图、清帧重解码，画面上就是「图片在圆角框里闪一下」。
+                         顺便去掉 loading="lazy" —— 虚拟滚动已把挂载范围压到视口 ±900px，
+                         再叠一层浏览器懒加载等于让这 900px 缓冲白留，图片反而更晚出现。
+
+                         加载失败时**不移除** <img>，只把它藏起来（opacity-0）：
+                         重试靠 src 里的 &r=N 变化触发，<img> 不在 DOM 里就没人重新发请求。 -->
+                    <img
+                      v-if="!isVideo(p) && thumbSrc(p)"
+                      :src="thumbSrc(p)"
+                      :alt="p.file_name"
+                      class="w-full h-full object-cover"
+                      :class="thumbBroken.has(p.id) ? 'opacity-0' : ''"
+                      decoding="async"
+                      draggable="false"
+                      @error="onThumbError($event, p.id)"
+                      @load="onThumbLoad(p.id)"
+                    />
+                    <!-- 占位层：图还没到 / 加载失败时盖在格子上。
+                         以前这里什么都不画，<img> 加载失败后浏览器会把 alt 文本（文件名）
+                         和破图图标一起渲染出来 —— 就是用户看到的「裂缝」。 -->
+                    <div
+                      v-if="!isVideo(p) && (!thumbSrc(p) || thumbBroken.has(p.id))"
+                      class="thumb-ph absolute inset-0 flex flex-col items-center justify-center gap-1 px-2 text-center select-none text-text-muted"
+                    >
+                      <svg viewBox="0 0 160 160" class="w-7 h-7 opacity-40 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="6">
+                        <circle cx="80" cy="68" r="17" />
+                        <path d="M28 132 Q50 96 80 118 T162 98" />
+                      </svg>
+                      <span class="text-[11px] leading-tight">{{ thumbPhTitle(p.id) }}</span>
+                      <span class="text-[10px] leading-tight opacity-75">可直接点击此处查看原图</span>
+                    </div>
+                    <!-- 多选态：左上角勾选标记 -->
+                    <span
+                      v-if="selectMode"
+                      class="absolute top-1.5 left-1.5 z-10 w-5 h-5 rounded-md border-2 flex items-center justify-center text-[11px] leading-none"
+                      :class="isSelected(p.id) ? 'bg-info border-info text-text-inverse' : 'bg-black/25 border-white/85 text-transparent'"
+                    >✓</span>
+                    <div class="photo-mask" :class="{ 'photo-mask--sel': selectMode && isSelected(p.id) }"></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -218,7 +246,7 @@
                 class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
                 loading="lazy"
                 decoding="async"
-                @error="onThumbError"
+                @error="onThumbError($event)"
               />
               <div v-else class="w-full h-full flex flex-col items-center justify-center gap-1 text-text-muted text-xs">
                 <IconGlyph name="folder" :size="22" />
@@ -350,17 +378,25 @@
           @ended="playing = false"
         ></video>
       </div>
-      <!-- 图片查看区：滚轮缩放只挂在外层容器上（原来 img 上还挂了一份重复监听，
-           多出来的非 passive wheel 监听既浪费又会在 devtools 里刷 Violation 提示） -->
+      <!-- 图片查看区：滚轮缩放与拖动平移都只挂在外层容器上。
+           原来 img 上还挂了一份重复 wheel 监听，多出来的非 passive 监听既浪费又会在
+           devtools 里刷 Violation 提示；拖动用 setPointerCapture，甩出舞台也能继续拖。 -->
       <div
         v-else
-        class="absolute inset-0 flex items-center justify-center p-6 overflow-hidden preview-media"
-        :class="mediaReady ? 'media-in' : 'media-waiting'"
+        ref="stageEl"
+        class="absolute inset-0 flex items-center justify-center p-6 overflow-hidden preview-media viewer-pan-surface"
+        :class="[mediaReady ? 'media-in' : 'media-waiting', stageClass]"
         @wheel.prevent="onZoomWheel"
+        @pointerdown="onPanDown"
+        @pointermove="onPanMove"
+        @pointerup="onPanUp"
+        @pointercancel="onPanCancel"
       >
         <img
+          ref="mediaEl"
           :src="photoSrc(viewer)"
           class="max-w-full max-h-full select-none transition-transform duration-100 viewer-media"
+          :class="mediaClass"
           :style="viewerStyle"
           draggable="false"
           decoding="async"
@@ -465,11 +501,14 @@ import { useUndoShortcut } from '../composables/useUndo.js'
 import { useAlbumScan } from '../composables/useAlbumScan.js'
 import { createLatest } from '../utils/latestOnly.js'
 import { usePhotoTimeline } from '../composables/usePhotoTimeline.js'
+import { visibleGridRows } from '../utils/albumGridRows.js'
 import {
   UNKNOWN_DATE, pageBefore, groupCountOf, firstUnloadedIndex, mergePhotoGroups,
   buildGroupPlaceholders, syncGroupPlaceholders,
 } from '../composables/albumPhotoPages.js'
 import { useThumbBatch } from '../composables/useThumbBatch.js'
+import { useDisposables } from '../utils/disposables.js'
+import { useViewerPan } from '../composables/useViewerPan.js'
 import VideoThumb from '../components/import-export/VideoThumb.vue'
 import AppSelect from '../components/base/AppSelect.vue'
 import ViewSwitch from '../components/base/ViewSwitch.vue'
@@ -524,6 +563,9 @@ const exportMounted = ref(false)
 const viewer = ref(null)
 const rotation = ref(0)
 const zoom = ref(1)
+// 平移作用在这两个元素上：舞台算可视余量，img 承载 transform
+const stageEl = ref(null)
+const mediaEl = ref(null)
 // 媒体首帧就绪：驱动「进入动画」的起跑线（为什么不用 Transition 的 enter-active，见 style 块注释）。
 // 首次打开为 false，等 img @load / video loadeddata 才置 true；翻页时直接为 true（不重播动画）。
 const mediaReady = ref(false)
@@ -580,20 +622,106 @@ function photoSrc(p) {
 function thumbSrc(p) {
   const u = batchThumbUrl(p.id)
   if (u === undefined) return ''
-  return u || albumThumbUrl(p.id)
+  return u || withThumbRetry(p.id)
 }
 
 // 相册卡片封面：后端已按「mtime 最新的一张图片」给出 cover_photo_id，直接用它的缩略图
 function coverSrc(a) {
-  return albumThumbUrl(a.cover_photo_id)
+  return withThumbRetry(a.cover_photo_id)
 }
 
 // 缩略图生成失败/源文件缺失等导致的 404：换为中性占位图，避免网格出现破图图标
 const THUMB_PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="100%" height="100%" fill="#f3f4f6"/><g fill="none" stroke="#d1d5db" stroke-width="4"><circle cx="80" cy="70" r="18"/><path d="M30 132 Q52 96 82 118 T160 100" fill="none"/></g></svg>`
 )
-function onThumbError(e) {
-  if (e.target && e.target.src !== THUMB_PLACEHOLDER) e.target.src = THUMB_PLACEHOLDER
+
+/* 缩略图加载失败的自愈重试 —— 404 不等于「这张照片没有缩略图」。
+ *
+ * 两个常见来源：清理微缩图之后（整本相册零缓存），以及可见区一次要的图超出后端
+ * 配额闸（超出的那部分转给扫描子进程生成，主进程当场返回 404「排队生成中」）。
+ * 这两种都是**几秒内就会好**的短暂状态。
+ *
+ * 之前的写法是 error 就换中性占位图，而占位图是 data URI —— <img> 的 src 已经
+ * 被 DOM 改成它了，而模板里 :src 算出来的仍是原来那个 URL，Vapor 比较后认为
+ * 「没变化」就不碰 DOM，于是这个格子**永久空白**，刷新页面之前再也不会重试。
+ *
+ * 现在按 100 / 200 / 2400ms 退避重试（URL 加 &r=N，让浏览器真的重发，
+ * 而不是沿用上一次的失败结果），三次都拿不到才认定这张确实没有图、贴占位图。 */
+const THUMB_RETRY_MAX = 3
+// 退避梯度（毫秒），按「先抢快、再兜底」排：
+//   100 / 200  —— 后端并发生成一屏图通常几百毫秒，头两次就是抢这个窗口，别让用户干等
+//   2400       —— 前两次还没好的，多半是超出了同步配额、正由扫描子进程补，给足时间
+// 早先的 600/1200/2400 用户实测「感觉挺久的」：明明图 300ms 就好了，却还要干等。
+const THUMB_RETRY_DELAYS = [100, 200, 2400]
+// photoId → 已重试次数（进 URL 参数，必须是响应式的：变了要重渲染 <img>）
+const thumbRetry = ref(new Map())
+// photoId → 这一刻是否「加载失败、正在显示占位层」。
+// 和 thumbRetry 分开：thumbRetry 记「试了几次」，thumbBroken 记「现在该不该盖住那张破图」。
+// 必须整体替换 Set —— Vapor 对 Set 的原位 add/delete 不敏感，不换引用界面不会变。
+const thumbBroken = ref(new Set())
+// photoId → 已排期到的次数。只用来防重复排期（同一轮失败会连发多个 error）。
+const thumbRetryScheduled = new Map()
+const thumbD = useDisposables()
+
+function markThumbBroken(photoId, broken) {
+  if (thumbBroken.value.has(photoId) === broken) return
+  const s = new Set(thumbBroken.value)
+  if (broken) s.add(photoId)
+  else s.delete(photoId)
+  thumbBroken.value = s
+}
+
+/* 占位层标题。两种状态：
+ *   生成微缩图失败 —— 重试用尽（100 + 200 + 2400ms 都没拿到）
+ *   正在生成微缩图 —— 其余情况，包括「批量请求还没回来」那几十毫秒
+ *                     （它确实在路上了，不该报失败）
+ *
+ * 为什么不区分「超时」和「失败」：<img> 的 error 事件拿不到 HTTP 状态码，
+ * 404（排队中）、超时、解码失败在浏览器看来是同一件事。硬造一个「超时」标签
+ * 只能靠自己计时猜，会经常猜错 —— 那比统一文案更误导。 */
+function thumbPhTitle(photoId) {
+  return (thumbRetry.value.get(photoId) || 0) >= THUMB_RETRY_MAX
+    ? '生成微缩图失败'
+    : '正在生成微缩图'
+}
+
+function onThumbLoad(photoId) {
+  markThumbBroken(photoId, false)
+  // 只有「当前走的是单张接口」才打标：blob 命中的不需要（它在批量缓存里，
+  // 本来就不会重新进批量），而且 blob 被内存回收后若还留在 loaded 里，
+  // 这张图之后会永远拿不到图（load 里直接跳过它）。
+  if (!batchThumbUrl(photoId)) markThumbLoaded(photoId)
+}
+
+function withThumbRetry(photoId) {
+  const url = albumThumbUrl(photoId)
+  const n = thumbRetry.value.get(photoId) || 0
+  return n ? `${url}&r=${n}` : url
+}
+
+function onThumbError(e, photoId) {
+  const id = photoId
+  if (id == null) {
+    // 相册封面：模板里没有占位层，退回贴 data URI 占位（保持原行为）
+    if (e.target && e.target.src !== THUMB_PLACEHOLDER) e.target.src = THUMB_PLACEHOLDER
+    return
+  }
+  /* 先把占位层盖上，**再**排重试。
+   * 原来这里是「重试期间 return，什么都不做」—— 图一直处于加载失败状态，
+   * 浏览器就会把 alt 文本（文件名）和破图图标画出来，在 100/200/2400ms
+   * 的重试窗口里一直显示，就是用户截图里那排「裂缝」。 */
+  markThumbBroken(id, true)
+  const n = thumbRetry.value.get(id) || 0
+  if (n >= THUMB_RETRY_MAX) return // 用尽：占位层显示「生成微缩图失败」
+  // 这一轮已经排过期了就不再排（同一个 <img> 可能连发多次 error）
+  if ((thumbRetryScheduled.get(id) || 0) !== n) return
+  thumbRetryScheduled.set(id, n + 1)
+  thumbD.timeout(() => {
+    const m = new Map(thumbRetry.value)
+    m.set(id, n + 1)
+    // src 变成 &r=n+1 → <img> 真的重新发请求；成功时 @load 会把占位层撤掉
+    thumbRetry.value = m
+  }, THUMB_RETRY_DELAYS[Math.min(n, THUMB_RETRY_DELAYS.length - 1)])
 }
 
 function fmtTime(t) {
@@ -606,19 +734,47 @@ function fmtTime(t) {
 const activeAlbum = computed(() => albums.value.find(a => a.id === activeAlbumId.value))
 // 虚拟相册没有绑定文件夹，索引来自别的相册，刷新/重扫对它没有意义
 const activeAlbumIsVirtual = computed(() => activeAlbum.value?.kind === 'virtual')
-const viewerStyle = computed(() => {
-  // 旋转必须走 rotation 这个 ref：曾经把角度存在 viewer.value._rot 上（普通字段），
-  // computed 追踪不到它 → 点旋转按钮改完角度也不重渲染，按钮看起来像坏的。
-  return { transform: `rotate(${rotation.value}deg) scale(${zoom.value})` }
-})
+// 旋转必须走 rotation 这个 ref：曾经把角度存在 viewer.value._rot 上（普通字段），
+// computed 追踪不到它 → 点旋转按钮改完角度也不重渲染，按钮看起来像坏的。
+// 现在 transform 由 useViewerPan 统一产出（多一条 translate），依然必须依赖这两个 ref。
+// 全部解构到 <script setup> 顶层再交给模板：Vapor 模板只认顶层绑定，
+// 写成 pan.onPointerMove 这类嵌套访问不会自动解包里面的 ref。
+const {
+  style: viewerStyle, stageClass, mediaClass,
+  onPointerDown: onPanDown, onPointerMove: onPanMove,
+  onPointerUp: onPanUp, onPointerCancel: onPanCancel,
+  reset: resetPan,
+} = useViewerPan({ zoom, rotation, stageRef: stageEl, mediaRef: mediaEl })
 
 /* ===== 网格窗口化虚拟滚动 =====
  * 逻辑已抽到 composables/usePhotoTimeline.js（与「选择照片」弹窗共用）：
  * 以“日期分组”为窗口单元，外部用总高度撑起滚动条，内部只挂载视口附近（含缓冲）的分组。 */
 const {
-  containerRef, scrollTop, clientH, cellStyle, totalH, visibleGroups, layout,
+  containerRef, scrollTop, clientH, cellStyle, totalH, visibleGroups, layout, resizing,
+  cols, cell, gridGeom,
   measure, onScroll, onResize, reset: resetTimeline,
 } = usePhotoTimeline(groups)
+
+/* ===== 组内也做虚拟滚动：只渲染视口附近的那几行 =====
+ * visibleGroups 只裁剪到「哪几天」，一天几千张时那一组仍会全部渲染。
+ * 按行裁剪后 DOM 里的格子数从「几千」降到「一屏几十」，改窗口大小时的全量重排、
+ * measureViewportIds 的逐个 getBoundingClientRect、FLIP 的遍历成本一起降下来。
+ * 几何常量与列数全部来自 usePhotoTimeline，和 groupHeight / layout 同源。 */
+const renderedGroups = computed(() => {
+  const st = scrollTop.value
+  const h = clientH.value
+  const c = cols.value
+  const sz = cell.value
+  return visibleGroups.value.map(v => ({
+    date: v.g.date,
+    g: v.g,
+    offset: v.offset,
+    ...visibleGridRows({
+      offset: v.offset, count: v.g.count, photos: v.g.photos,
+      scrollTop: st, clientH: h, cols: c, cell: sz, ...gridGeom,
+    }),
+  }))
+})
 
 /* ===== 右侧年份刻度尺 =====
  * 刻度尺的定位基准就是 layout 里的分组偏移（每个分组带 date + offset），
@@ -648,18 +804,84 @@ function groupDateHint(g) {
  * 免得几十上百个 <img> 各自发一次请求（受浏览器同源并发连接数限制）。
  * 批量没取到的（服务端还没缓存缩略图）自动回落到单张 /thumb 接口，功能不变。
  * 实测：批量 0.19 ms/张 vs 逐个并发 2.43 ms/张。 */
-const visiblePhotoIds = computed(() => {
-  const out = []
-  for (const v of visibleGroups.value) {
-    for (const p of (v.g.photos || [])) out.push(p.id)
+/* 批量预取要哪些 id：**只取真正在视口里的格子**，不按日期分组取。
+ *
+ * 以前是按 visibleGroups 取「每个可见组的全部照片」。而一个组就是一天 ——
+ * 一屏常常压着 2~3 天，一次就要出去好几百个 id（再按 CHUNK=100 分几轮发）。
+ * 清理微缩图之后这些全要现场生成：用户滑走时这批还在跑，新滑到的一屏只能排队，
+ * 这就是「想插队」的由来。
+ *
+ * 现在改成 DOM 实测：滚动容器里带 data-cell-id 的格子，谁的矩形和视口相交就取谁，
+ * 上下各留 VIEWPORT_PAD（约两行，滚动时不至于一格一格地追）。
+ * 典型一屏 20 张 → 请求量 40 张上下，一屏的量级。
+ *
+ * 「挂载范围」仍由 usePhotoTimeline 的 900px 缓冲决定，两者互不影响：
+ * 挂了但没请求的格子，thumbUrlFor 返回 undefined，`<img>` 根本不渲染（不会出破图），
+ * 滚过去时这里量到就会补请求。 */
+const VIEWPORT_PAD = 480
+const viewportPhotoIds = ref([])
+let viewportTimer = 0
+let lastMeasureAt = 0
+function measureViewportIds() {
+  const el = containerRef.value
+  if (!el) return
+  const box = el.getBoundingClientRect()
+  const padTop = box.top - VIEWPORT_PAD
+  const padBottom = box.bottom + VIEWPORT_PAD
+  /* 分两档收集，**视口内的排在前面**：
+   *   ① inView：矩形真的落在可视区内 —— 用户眼睛正盯着这十几张
+   *   ② buffer：只有加上下各 480px 才相交 —— 在屏幕外，滚过去才看得到
+   * 请求列表按这个顺序发出去，后端就按这个顺序生成（`missing` 按请求序 push，
+   * 再按 GEN_BATCH 分批），所以视口内先返回、缓冲带后补。
+   *
+   * 不分档的话就是纯 DOM 顺序 —— 缓冲带里屏幕外那二十几张会和视口内靠下的
+   * 几张抢同一批生成槽，用户明明在盯着看的那格却要等到最后。 */
+  const inView = []
+  const buffer = []
+  for (const node of el.querySelectorAll('[data-cell-id]')) {
+    const r = node.getBoundingClientRect()
+    if (r.bottom < padTop || r.top > padBottom) continue
+    const id = Number(node.dataset.cellId)
+    // querySelectorAll 是文档顺序，所以两档内部都是「从上到下」，符合阅读顺序
+    if (r.bottom >= box.top && r.top <= box.bottom) inView.push(id)
+    else buffer.push(id)
   }
-  return out
-})
+  const out = inView.concat(buffer)
+  const prev = viewportPhotoIds.value
+  // 只在真的变了才写：scrollTop 每帧都在动，无脑赋值会让下游 watch 每帧醒一次。
+  // 逐项比较包含顺序 —— 顺序现在有意义（视口内优先），不能只比长度。
+  if (prev.length !== out.length || prev.some((v, i) => v !== out[i])) viewportPhotoIds.value = out
+}
+// 节流 80ms；尾部必须补一次（否则最后一次滚动被吞，视口里的图永远不请求）
+function scheduleMeasure() {
+  /* 拖动窗口期间**不重测视口**：布局每帧都在变，测出来的 id 序列每帧都不同，
+   * 下游 useThumbBatch 会把它当成「用户滑走了」而 abort 正在生成的批量请求，
+   * 于是后端刚解码到一半就被掐断、下一帧又从头来 —— 拖多久就卡多久。
+   * 布局本身照旧跟手（usePhotoTimeline 的 measure 不受影响），这里冻结的只是
+   * 「视口里有哪些格子」这个判断：拖动时眼睛看的基本还是原来那批照片。 */
+  if (resizing.value || viewportTimer) return
+  const wait = Math.max(0, 80 - (Date.now() - lastMeasureAt))
+  viewportTimer = setTimeout(() => {
+    viewportTimer = 0
+    if (resizing.value) return // 定时器是在拖动开始前排的，此刻可能已经进安静窗口
+    lastMeasureAt = Date.now()
+    measureViewportIds()
+  }, wait)
+}
+// 松手后必须补测一次：拖动期间视口范围、列数都变了，冻结期间攒下的差异要结算。
+// 少了这一条，改完窗口大小后新露出来的那几格会一直不请求缩略图。
+watch(resizing, (v) => { if (!v) scheduleMeasure() })
+// 滚动与分组变化都会改变「视口里有哪些格子」。
+// flush:'post' 保证 DOM 已按新的 scrollTop / 新分组排好位置再量。
+watch([scrollTop, visibleGroups], scheduleMeasure, { flush: 'post' })
+thumbD.add(() => { if (viewportTimer) { clearTimeout(viewportTimer); viewportTimer = 0 } })
+
 const {
   thumbUrlFor: batchThumbUrl,
   refresh: refreshThumbBatch,
   clear: clearThumbBatch,
-} = useThumbBatch(() => visiblePhotoIds.value)
+  markLoaded: markThumbLoaded,
+} = useThumbBatch(() => viewportPhotoIds.value)
 
 async function loadAlbums(first = true) {
   // 相册列表失败原先直接抛到调用方（多为未处理的 Promise 拒绝），界面既不提示也不刷新；
@@ -811,10 +1033,16 @@ function selectAlbum(id) {
   if (activeAlbumId.value !== id) {
     // 换了相册 → 旧的 objectURL 全作废（照片 id 不同，留着会显示错图）
     clearThumbBatch()
+    // 重试计数同样作废：新相册的 id 会重用，留着会让新照片带着旧的 &r=N 参数
+    thumbRetry.value = new Map()
+    thumbRetryScheduled.clear()
+    thumbBroken.value = new Set()
   }
   activeAlbumId.value = id
-  // loadPhotos 内部已捕获并提示，这里不需要再包一层 catch
-  loadPhotos()
+  // loadPhotos 内部已捕获并提示，这里不需要再包一层 catch。
+  // 返回 Promise：跨页定位要在日期索引/占位分组就绪之后才能按日期算 scrollTop，
+  // 调用方（applyPhotoFocus）需要 await；其余调用方忽略返回值，行为不变。
+  return loadPhotos()
 }
 
 // 相册 tab 点卡片：切到时间轴，只看这个相册的照片（按日期分组排列）
@@ -844,6 +1072,54 @@ const route = useRoute()
 const router = useRouter()
 // 行定位宿主：显式传路由对象（身份稳定供 useRowFocus 记签名；不再经实例代理）
 const rowFocusHost = createRowFocusHost(route, router)
+// 跨页定位：/album?photo=<照片id>（首页随机配图点进来）。
+// 与 ?focus=<相册id> 分开：focus 是全局搜索定位「相册」，photo 定位「一张具体的图」；
+// 两套 id 各自自增，照片 id 完全可能等于某个相册 id，共用一个参数会串台。
+let focusingPhotoId = 0
+async function applyPhotoFocus() {
+  const raw = route.query.photo
+  if (raw == null || raw === '') return
+  const id = Number(raw)
+  if (!Number.isInteger(id) || id <= 0) return
+  // 首次挂载时 activated 可能早于 onMounted 里的 loadAlbums，此刻相册列表还没回来：
+  // 直接返回且不清 query，等 onMounted 数据就绪后再调一次。
+  if (!albums.value.length) return
+  // 同一次跳转里 onActivated 与 watch(query) 各会触发一遍
+  if (focusingPhotoId === id) return
+  focusingPhotoId = id
+  try {
+    const res = await axios.get(`/api/album/photo/${id}/locate`, { headers: authHeaders() })
+    const p = res.data && res.data.data
+    if (!p) return
+    activeTab.value = 'timeline'
+    // 照片所在相册还在才切过去；相册被删/照片被移走时留在当前相册，只打开这张图
+    if (p.album_id && albums.value.some(a => a.id === p.album_id) && activeAlbumId.value !== p.album_id) {
+      await selectAlbum(p.album_id)
+    }
+    await nextTick()
+    // 分组占位在 /dates 回来后就有，offset 不必等照片行加载完就能算准；
+    // 滚过去后视口变化会由 watch(visibleGroups) 自动补上这一天的照片。
+    const date = p.photo_date || UNKNOWN_DATE
+    const hit = layout.value.items.find(v => v.g.date === date)
+    if (hit) {
+      seekTimeline(hit.offset)
+      // 同步 ref：切 tab 的 watcher 会按 scrollTop.value 回写容器，不同步会被它拉回旧位置
+      const el = containerRef.value
+      if (el) scrollTop.value = el.scrollTop
+    }
+    // 直接打开这张图：locate 返回的列与网格照片同源，查看器和左右翻页都能用
+    viewPhoto(p)
+  } catch (_) {
+    // 照片刚被删 / 接口失败：安静地留在相册页，别用报错打断跳转
+  } finally {
+    // 定位只做一次：清掉 query，回退/刷新/切回不再重复弹查看器
+    const q = { ...route.query }
+    delete q.photo
+    router.replace({ path: route.path, query: q })
+    focusingPhotoId = 0
+  }
+}
+
 function applyFocus() {
   applyRouteRowFocus(rowFocusHost, {
     parse: (key) => {
@@ -925,6 +1201,16 @@ async function refreshAll() {
     // 踢一脚观察器立即探测，扫描马上进入快刷
     scheduleScanWatch(0)
     await pollScan()
+    /* 清掉重试计数再重拉数据。
+     * 不这么做的话，「刷新」对已经贴了占位图的格子毫无作用：占位图是直接写进 DOM 的
+     * data URI，而模板算出来的 src 仍是同一个 URL（&r=3），比较后「没变化」→ 不重设 →
+     * 不重新请求。清空计数会让 URL 退回不带 &r= 的版本，值变了才会真的重发。
+     * 只清计数、不动已拿到的 blob，避免整屏图重新解码闪一下。 */
+    thumbRetry.value = new Map()
+    thumbRetryScheduled.clear()
+    // 占位层状态也要清：刷新的本意就是「再给这些图一次机会」，
+    // 不清的话用尽重试的格子会一直挂着「生成微缩图失败」。
+    thumbBroken.value = new Set()
     await loadAlbums()
     useNotification().success(isVirtual ? '虚拟相册已更新' : '照片索引已更新')
   } catch (err) {
@@ -1230,6 +1516,7 @@ async function onPhotosMoved() {
 function viewPhoto(p) {
   // 翻页（查看器已经开着）不播进入动画：图片是直接替换的，媒体层会一直保持 media-in 状态
   const reopening = !!viewer.value
+  resetPan()
   rotation.value = 0
   zoom.value = 1
   // 视频状态复位
@@ -1284,13 +1571,14 @@ function rotate(dir) {
 function zoomIn() { zoom.value = Math.min(5, zoom.value + 0.25) }
 function zoomOut() { zoom.value = Math.max(0.2, zoom.value - 0.25) }
 function resetView() {
+  resetPan()
   rotation.value = 0
   zoom.value = 1
 }
 function onZoomWheel(e) {
   zoom.value = Math.min(5, Math.max(0.2, zoom.value + (e.deltaY < 0 ? 0.1 : -0.1)))
 }
-function closeViewer() { viewer.value = null; infoVisible.value = false }
+function closeViewer() { resetPan(); viewer.value = null; infoVisible.value = false }
 
 // ---- 照片信息面板 ----
 // 字节数格式化。0 / null 返回空串，由模板统一显示「未知」——
@@ -1415,6 +1703,7 @@ async function deletePhoto(p) {
         photo: { id: p.id, album_id: activeAlbum.value?.id, file_path: p.file_path, file_name: p.file_name, file_size: p.file_size, mtime: p.mtime, photo_date: p.photo_date, exif_date: p.exif_date, date_src: p.date_src }
       }
     })
+    resetPan()
     viewer.value = null
     useNotification().success('已移入回收站')
     loadPhotos()
@@ -1429,6 +1718,7 @@ onMounted(async () => {
   await nextTick()
   measure()
   applyFocus()
+  applyPhotoFocus()
   // 扫描渐进刷新观察器：任何入口发起的扫描都边扫边刷
   startScanWatch()
 })
@@ -1448,6 +1738,7 @@ let savedScrollTop = 0
 
 onActivated(() => {
   applyFocus()
+  applyPhotoFocus()
   // KeepAlive 首次挂载也会触发 activated；startScanWatch 幂等，重复调用无害
   startScanWatch()
   // 此刻 DOM 已插回文档，但滚动位置在 0，必须等渲染完再写 scrollTop
@@ -1463,6 +1754,7 @@ onActivated(() => {
   })
 })
 watch(() => route.query.focus, applyFocus)
+watch(() => route.query.photo, applyPhotoFocus)
 
 // 被 KeepAlive 缓存时定时器要停（见 scanWatch 注释），否则切走后仍在发请求。
 // 顺手记下滚动位置 —— 只能读 onScroll 维护的 ref：onDeactivated 触发时 DOM 已被移出文档，

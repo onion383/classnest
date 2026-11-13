@@ -203,6 +203,20 @@ function dropBuf(filePath) {
   if (b) { bufBytes -= b.length; bufCache.delete(filePath); }
 }
 
+// ---------------------------------------------------------------------------
+// 整体清空：「清理微缩图」用
+// ---------------------------------------------------------------------------
+// 删了磁盘文件却不清内存缓存的话，进程内会继续从 bufCache 直接吐旧图 ——
+// 用户看到的是「清了但图还在」，而磁盘上其实已经没有文件了，
+// 直到进程重启才会走「读不到 → 重建」的路径。两处口径必须一起清。
+// 索引一并清空：它是「文件已经在磁盘上」的判据（见文件头），文件没了判据就是假的。
+function purgeCache() {
+  indexBySlug.clear();
+  indexBytes = 0;
+  bufCache.clear();
+  bufBytes = 0;
+}
+
 // 统计信息（供调试 / 后续加监控）
 function cacheStats() {
   return {
@@ -276,5 +290,6 @@ module.exports = {
   forgetAlbum,
   readThumb,
   readThumbBatch,
+  purgeCache,
   cacheStats,
 };

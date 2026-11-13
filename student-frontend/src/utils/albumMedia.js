@@ -22,71 +22,104 @@ export function albumFileUrl(photoId) {
 }
 
 // ---------------------------------------------------------------------------
-// 批量取缩略图（性能优化）
+// 批量取缩略图（**流式**）
 // ---------------------------------------------------------------------------
 // 网格一次要显示几十上百张缩略图，逐个 <img> 请求受浏览器同源并发连接数限制
 // （HTTP/1.1 通常 6 条），往返开销占比很高。实测批量比逐个快约 10 倍
 // （0.19 ms/张 vs 2.43 ms/张）。
 //
-// 响应格式：每张图「4 字节小端长度 + JPEG 数据」逐张拼接，
-// 配合响应头 X-Thumb-Ids 给出实际返回的 photoId 顺序。
-// 缺图的 photoId 不会出现在响应里（服务端不现场生成缩略图，太重），
-// 这些格子回落到单张 albumThumbUrl 即可。
+// 响应是**流**：每帧「id(4 字节小端) + len(4 字节小端) + JPEG len 字节」，
+// 服务端生成完一张就发一张。前端边收边渲染 —— 第一张约 200ms 就到，
+// 而不是等整批（几秒）收完才一次性全出。这是「感觉慢」的主要来源：
+// 后端生成 40 张本来就要 1~2 秒（一张 4000×3000 的原图解码就要 80ms，
+// 这是 CPU 物理下限，跟 sharp 调参无关），但用户不必等最后一张才知道有图。
+//
+// 帧自带 id，所以**不保证顺序**（谁先生成完谁先发）。原来的实现靠响应头
+// X-Thumb-Ids 与段序对位，流式下做不到 —— 写第一帧时还不知道会发出哪些 id。
+//
+// 服务端会为缺图的照片现场生成（受配额闸限制），所以「流里没有」= 这次确实没有，
+// 调用方回落到单张 /thumb 即可。
 
 // 一次最多请求多少张（与服务端上限 200 对齐，留余量）
 const BATCH_MAX = 200
 
-// 解析批量响应 → [{ id, blob }]
-// 段数由 X-Thumb-Ids 决定（服务端保证 id 数与段数一致）
-export function parseThumbBatch(buffer, idsHeader) {
-  const ids = (idsHeader || '').split(',').filter(Boolean).map(Number).filter(Boolean)
-  if (!ids.length || !buffer || !buffer.byteLength) return []
-  // 兼容 ArrayBuffer（fetch res.arrayBuffer()）与 TypedArray 视图两种入参：
-  // 生产调用方传的是 ArrayBuffer，直接读 .buffer/.byteOffset 会得到 undefined 并抛错。
-  const ab = buffer instanceof ArrayBuffer
-    ? buffer
-    : (ArrayBuffer.isView(buffer) ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) : null)
-  if (!ab) return []
-  const dv = new DataView(ab)
-  const out = []
-  let off = 0
-  for (const id of ids) {
-    if (off + 4 > ab.byteLength) break
-    const len = dv.getUint32(off, true)
-    off += 4
-    if (len <= 0 || off + len > ab.byteLength) break
-    out.push({ id, blob: new Blob([ab.slice(off, off + len)], { type: 'image/jpeg' }) })
-    off += len
+// 增量帧解析器：喂任意切分的字节块，吐出完整帧 [{ id, bytes }]。
+//
+// 必须能处理「一帧被切在两半」：fetch 的 reader 按网络到达给块，
+// 不保证按帧对齐（一帧 8KB，很可能跨两个 chunk）。攒不够就留着等下次 push。
+export function createThumbFrameParser() {
+  let pending = new Uint8Array(0)
+  return function push(chunk) {
+    if (chunk && chunk.length) {
+      if (pending.length) {
+        const merged = new Uint8Array(pending.length + chunk.length)
+        merged.set(pending, 0)
+        merged.set(chunk, pending.length)
+        pending = merged
+      } else {
+        // 不直接持有 chunk：reader 可能复用同一个底层 ArrayBuffer，
+        // 后续 slice 走的是拷贝，这里只借用引用是安全的。
+        pending = chunk
+      }
+    }
+    const out = []
+    let off = 0
+    for (;;) {
+      if (pending.length - off < 8) break
+      const dv = new DataView(pending.buffer, pending.byteOffset + off, 8)
+      const id = dv.getUint32(0, true)
+      const len = dv.getUint32(4, true)
+      if (pending.length - off - 8 < len) break
+      out.push({ id, bytes: pending.slice(off + 8, off + 8 + len) })
+      off += 8 + len
+    }
+    if (off) pending = pending.slice(off)
+    return out
   }
-  return out
 }
 
-// 批量取缩略图，返回 Map<photoId, blob>
+// 流式取缩略图。每解析出一张就立刻调 onThumb(photoId, blob)。
 //
-// 三种结果必须能分辨，别再把它们塌成一种：
-//   Map（可能为空） → 请求成功。空 Map 表示「服务端确实没有这些缩略图」，
-//                     调用方可以永久放弃批量、回落单张 /thumb。
-//   null            → 这次**没拿到**（网络断、后端 5xx、响应解析失败）。
-//                     这不代表服务端没图，必须允许重试 —— 原先四种失败全塌成空 Map，
-//                     一次抖动就把这些 id 永久判成「没有」，批量预取对它们彻底失效，
-//                     只能逐张回落，10 倍性能优化静默没了。
-export async function fetchThumbBatch(photoIds) {
+// 返回值：
+//   'ok'  → 流正常结束（收到几张就是几张，没收到的是服务端确实没有）
+//   null  → 这次没拿到（网络断 / 后端 5xx / abort）。**不代表服务端没图**，必须允许重试。
+//           调用方要自己先判 signal.aborted，别把 abort 当成「没拿到」去排重试。
+export async function streamThumbBatch(photoIds, signal, onThumb) {
   const ids = (photoIds || []).filter(v => Number.isInteger(v) && v > 0).slice(0, BATCH_MAX)
-  if (!ids.length) return new Map()
+  if (!ids.length) return 'ok'
+  let reader = null
   try {
-    // 走统一封装：安全模式下凭据是 X-Auth-Proof 密文头（裸 Authorization 会被后端拒绝）
+    // 走统一封装：安全模式下凭据是 X-Auth-Proof 密文头（裸 Authorization 会被后端拒绝）。
+    // apiFetch 只在 content-type 是 application/json 时才包装 res.json，
+    // 二进制流原样返回，所以 res.body 可以直接读。
     const res = await apiFetch('/api/album/photo/thumbs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
+      signal,
     })
     if (!res.ok) return null
-    const buf = await res.arrayBuffer()
-    const list = parseThumbBatch(buf, res.headers.get('X-Thumb-Ids'))
-    const map = new Map()
-    for (const { id, blob } of list) map.set(id, blob)
-    return map
+    const parser = createThumbFrameParser()
+    const emit = (frames) => {
+      for (const f of frames) onThumb(f.id, new Blob([f.bytes], { type: 'image/jpeg' }))
+    }
+    if (!res.body) {
+      // 理论上不会走到（Electron 的 Chromium 一定支持流）；留着是为了万一
+      // 被某层中间件吃掉 body 时，功能退化成「整包读」而不是「一张都没有」。
+      emit(parser(new Uint8Array(await res.arrayBuffer())))
+      return 'ok'
+    }
+    reader = res.body.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      emit(parser(value))
+    }
+    return 'ok'
   } catch (_) {
+    // abort 也会走到这里（reader.read() 抛 AbortError）。把连接明确放掉，
+    // 别让 socket 挂到 GC 才回收。
+    if (reader) { try { reader.cancel() } catch (_) { /* 已经断了 */ } }
     return null
   }
 }

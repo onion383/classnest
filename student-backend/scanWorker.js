@@ -128,6 +128,8 @@ function onWorkerMessage(msg) {
       if (t) {
         t.scanned = msg.scanned || 0;
         t.total = msg.total || 0;
+        // 全量扫描分两阶段，各自从 0 数；不带上阶段名，前端会看到进度条往回跳
+        t.phase = msg.phase || t.phase;
       }
       break;
     }
@@ -212,6 +214,9 @@ function dispatchScan(slug, albumId, mode, resumeFrom) {
     slug,
     token,
     mode: mode || 'incremental',
+    // 全量扫描的第一阶段是「建索引」；子进程第一次报进度就会用真值覆盖它。
+    // 不预置的话，前一百毫秒里前端只能显示「全量更新」，看不出在干什么。
+    phase: (mode || 'incremental') === 'full' ? 'index' : 'process',
     scanned: 0,
     total: 0,
     startedAt: new Date().toISOString(),
@@ -249,6 +254,7 @@ function dispatchResume(tasks) {
       slug: t.slug,
       token,
       mode: t.mode || 'incremental',
+      phase: (t.mode || 'incremental') === 'full' ? 'index' : 'process',
       scanned: t.scanned || 0,
       total: t.total || 0,
       startedAt: new Date().toISOString(),
@@ -310,8 +316,9 @@ function safeCurrentConn() {
 
 // 把「缺缩略图」的需求转给子进程生成。
 //
-// 分工（用户拍板）：主进程只做**少量**补齐（配额闸 ON_DEMAND_LIMIT），
-// 超过一定数量就丢给子进程 —— 免得主进程被批量请求拖慢。
+// 分工：主进程负责**用户正在看的那一屏**（预览额度 PREVIEW_LIMIT，固定 48，不看扫描状态），
+// 只有等满 PREVIEW_WAIT_MS 仍拿不到额度的那部分才转到这里 —— 以前是「超过 8 张就整批转交」，
+// 结果扫描期间一屏 40 张有 32 张被推到这里排到十几分钟后，前端 2.7 秒重试全落空。
 // 子进程有独立的 libuv 线程池，生成这些图不影响主进程的其他接口。
 function forwardDemand(slug, ids) {
   if (!ids || !ids.length) return 0;

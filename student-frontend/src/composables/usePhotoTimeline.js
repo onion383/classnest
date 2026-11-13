@@ -38,6 +38,28 @@ export function usePhotoTimeline(groupsRef, options = {}) {
   const cell = ref(150)
   let rafId = 0
 
+  /* ===== 拖动窗口期间的「安静窗口」 =====
+   * 布局照旧跟手（measure 一次不动，见下面 onResize），但**视口重测与缩略图预取**
+   * 要在这段时间里安静下来。原因：改窗口宽度会让 visibleGroups 每帧变一次，
+   * 下游 measureViewportIds 每 80ms 扫一遍所有 [data-cell-id] 的 rect，
+   * 紧接着 useThumbBatch 把它当成「用户滑走了」→ abort 正在生成的批量请求
+   * → 后端 clientGone 停手 → 前端又发一批 → 4000×3000 原图从头解码。
+   * 拖动不停，这个环就不停，前后端 CPU 同时打满 = 用户说的「卡死」。
+   *
+   * 用「最后一次 resize 之后静默 RESIZE_IDLE_MS」判定松手，而不是监听
+   * pointerup / mouseup：拖的是窗口边框，指针事件根本不会进页面。 */
+  const RESIZE_IDLE_MS = options.resizeIdleMs ?? 180
+  const resizing = ref(false)
+  let resizeIdleTimer = 0
+  function beginResize() {
+    resizing.value = true
+    if (resizeIdleTimer) clearTimeout(resizeIdleTimer)
+    resizeIdleTimer = setTimeout(() => {
+      resizeIdleTimer = 0
+      resizing.value = false
+    }, RESIZE_IDLE_MS)
+  }
+
   // ===== 列数自适应：单一宽度区间映射 =====
   // 规则：单张格子宽 ≥ CELL_MIN 的前提下，尽量少用列数（格子尽量大）。
   //   n = 满足「n 列时 cellAt(n) ≥ CELL_MIN」的最大 n
@@ -296,6 +318,7 @@ export function usePhotoTimeline(groupsRef, options = {}) {
   }
 
   function onResize() {
+    beginResize()
     schedule()
   }
 
@@ -326,13 +349,17 @@ export function usePhotoTimeline(groupsRef, options = {}) {
 
   onBeforeUnmount(() => {
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
+    if (resizeIdleTimer) { clearTimeout(resizeIdleTimer); resizeIdleTimer = 0 }
     if (resizeObs) resizeObs.disconnect()
     clearFlip()
   })
 
   return {
     containerRef, scrollTop, clientH, viewW, cols, cell,
-    cellStyle, layout, totalH, visibleGroups,
+    cellStyle, layout, totalH, visibleGroups, resizing,
+    // 组内按行裁剪要用到同一套几何常量：两处各写一份 12/40/900 迟早分叉，
+    // 分叉的表现就是「行算出来的位置和滚动条对不上，滚过去一片空白」。
+    gridGeom: { gap: GAP, header: HEADER, buffer: BUFFER },
     measure, onScroll, onResize, reset,
   }
 }

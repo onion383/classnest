@@ -154,15 +154,49 @@ function setupAppProtocol() {
   //   · style 'unsafe-inline' —— Vue 的 scoped 样式与运行时动态内联样式（改主题色/进度条宽度）依赖它；
   //   · img/media http://127.0.0.1:3000 —— 相册与背景图走媒体绝对地址（Lax Cookie 要求同站请求）；
   //   · img data: blob: —— 图标与本地预览图。
-  // script 只允许 'self'：生产构建没有 eval，也不需要外链脚本。
+  // 脚本只允许 'self'（生产构建没有 eval，也不需要外链脚本），但有两处内联脚本必须放行：
+  //
+  // ① 构建产物里样式表带 onload="this.media='all'"（vite.config.js 的 nonBlockingCss 加的，
+  //    作用是把首帧不阻塞的 media="print" 切回 all）。**内联事件处理器属于 script-src 管辖**，
+  //    不放行就会被拦下，4 个入口 CSS 永远停在 media=print —— 整页只剩运行时动态插入的组件 CSS，
+  //    基础布局与工具类全部失效（2026-11-12 打包版「样式全乱」的根因，dev 走 Vite 所以看不出来）。
+  // ② 首屏占位里的主题抢跑脚本（splash/splash.html），在 Vue 挂载前把 data-theme/data-mode
+  //    写到 <html> 上，不放行则深色模式启动先闪一下浅色。
+  //
+  // 不用 'unsafe-inline'：那等于允许任意内联脚本执行；只放行这两段固定内容的 sha256。
+  // 事件处理器那条还需 'unsafe-hashes'（否则 hash 只匹配 <script> 块、不匹配 onload 属性）。
+  //
+  // ③ 'wasm-unsafe-eval'：PDF 导出的中文字体子集化走 harfbuzz 的 wasm
+  //    （student-frontend/src/utils/hbSubset.js）。CSP3 把 WebAssembly.compile/instantiate
+  //    归为「脚本执行」，没有这条就抛
+  //    「Compiling or instantiating WebAssembly module violates ... script-src」。
+  //    少了它不会让导出失败（pdfFont.js 会退回全量字体），但 PDF 从 121KB/22ms 变成
+  //    1.78MB/386ms，且只有 console.warn —— 静默退化，很难发现（2026-11-12 实测）。
+  //    它只放行 wasm 字节码编译，不等于 'unsafe-eval'（仍不能用 eval/new Function 执行字符串）。
+  // ⚠️ 三处必须同步：改 vite.config.js 里那句 handler 或 splash/splash.html 里的脚本，
+  //    就要重算对应 hash。忘了改不会有任何报错，只会让打包版静默失去基础样式 / 深色防闪白
+  //    （单测 packaged-csp 会把两个 hash 与源内容对账，改漏一处就红）。
+  const CSS_ONLOAD_HASH = 'sha256-MhtPZXr7+LpJUY5qtMutB+qWfQtMaPccfe7QXtCcEYc='
+  const SPLASH_SCRIPT_HASH = 'sha256-WLc7cp/RKX95aLX2rMwaWD5aJ5PbXZ6yw3+iOa9Nwys='
+  const SCRIPT_SRC = `script-src 'self' 'unsafe-hashes' 'wasm-unsafe-eval' '${CSS_ONLOAD_HASH}' '${SPLASH_SCRIPT_HASH}'`
+  // frame-src 必须显式写出：CSP 没写 frame-src 时由 default-src 回落，而 default-src 'self'
+  // 只认同源 app://，会把 <iframe> 一律拦掉。全库唯一在应用内使用 iframe 的地方是
+  // ReceiptDialog 的 PDF 预览（src = resourceUrl(path) → BACKEND_ORIGIN + path），
+  // 少了这一条打包版点开 PDF 就是一片空白（dev 模式不发 CSP，所以看不出来）。
+  // blob: 留给本地生成的预览地址（resourceUrl 对 blob:/data: 原样返回）。
+  // 别与下面的 frame-ancestors 混：frame-src 管「本页能不能嵌别人」，
+  // frame-ancestors 管「本页能不能被别人嵌」。
+  // ⚠️ 这里写死的后端 origin 与 student-frontend/src/utils/backendOrigin.js 的
+  //    BACKEND_ORIGIN 必须一致，改端口要一起改（单测 packaged-csp 会对账）。
   const CSP = [
     "default-src 'self'",
-    "script-src 'self'",
+    SCRIPT_SRC,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: http://127.0.0.1:3000",
     "media-src 'self' blob: http://127.0.0.1:3000",
     "font-src 'self' data:",
     "connect-src 'self' http://127.0.0.1:3000",
+    "frame-src 'self' http://127.0.0.1:3000 blob:",
     "object-src 'none'",
     "base-uri 'none'",
     "frame-ancestors 'none'",
@@ -170,7 +204,7 @@ function setupAppProtocol() {
   // 引导页例外：setup.html 内联了一小段「程序正在干嘛」的状态提示脚本。
   // 它必须在 HTML 里内联 —— 那段代码的意义就是「Vue 还没挂载时先显示点什么」，
   // 挪成外部文件会多一次请求、正好毁掉它的用途。只对这一页放开内联脚本。
-  const CSP_SETUP = CSP.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+  const CSP_SETUP = CSP.replace(SCRIPT_SRC, `${SCRIPT_SRC} 'unsafe-inline'`)
   const htmlHeadersFor = (name) => ({
     'content-type': MIME['.html'],
     'cache-control': 'no-cache',

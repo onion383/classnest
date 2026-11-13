@@ -15,7 +15,9 @@
 // =========================================================================
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createBackendDb } = require('./_db-express-fixture.cjs')
+const path = require('node:path')
+const fs = require('node:fs')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
 // 公共夹具：内存库 + db.js Proxy / dbManager.current 的进程级 stub（见 _db-express-fixture.cjs）
 const fx = createBackendDb({ label: 'album-paging' })
@@ -188,4 +190,15 @@ test('参数校验：days 越界 / before 格式错 → 400，不是 500', async
   }
   const r = await fetch(`${base}/${ALBUM_ID}/photos?days=3&before=2025-1-1`)
   assert.equal(r.status, 400, 'before 必须是补零的 YYYY-MM-DD')
+})
+
+// ---------------------------------------------------------------------------
+// M12-B2：相册索引的语句已收进 services/albumStore，SQL 不许再长回路由
+// ---------------------------------------------------------------------------
+test('SQL 出口：album 路由只经 albumStore，不留裸 SQL', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'student-backend/routes/album.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+  assert.ok(!/db\.prepare\(/.test(code), 'album 路由不许再有裸 SQL（应走 services/albumStore）')
+  assert.match(code, /albumStore\.listPhotos\(/, '整册照片必须经 albumStore 读取')
+  assert.match(code, /albumStore\.copyPhotoRow\(/, '索引复制必须经 albumStore（thumb_path 置空的口径只有一份）')
 })

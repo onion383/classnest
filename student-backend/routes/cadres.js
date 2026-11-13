@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { db } = require('../db');
+const cadreStore = require('../services/cadreStore');
 const { cleanText } = require('../services/sanitize');
 
 // ======================== 数据读写 ========================
@@ -8,16 +9,14 @@ const { cleanText } = require('../services/sanitize');
 
 // 读取全部职务节点
 function allCadres() {
-  return db.prepare('SELECT * FROM cadres ORDER BY sort_order, id').all();
+  return cadreStore.allCadres();
 }
 
 // 组装成树并附上担任学生
 function buildTree() {
   const all = allCadres();
-  // sort_order 一并返回：撤销「移除担任学生」要按整行恢复，缺了它恢复后成员会挤到最前面
-  const membersStmt = db.prepare('SELECT id, cadre_id, student_id, student_name, sort_order FROM cadre_members WHERE cadre_id = ? ORDER BY sort_order, id');
   const byId = new Map();
-  all.forEach(c => byId.set(c.id, { ...c, children: [], members: membersStmt.all(c.id) }));
+  all.forEach(c => byId.set(c.id, { ...c, children: [], members: cadreStore.membersOf(c.id) }));
   const roots = [];
   for (const node of byId.values()) {
     if (node.parent_id && byId.has(node.parent_id)) {
@@ -42,19 +41,18 @@ router.post('/', (req, res) => {
   const parentId = Number(req.body.parent_id) || 0;
   const maxCount = Math.max(1, Number(req.body.max_count) || 1);
   // 校验父职务存在（若指定）
-  if (parentId && !db.prepare('SELECT id FROM cadres WHERE id=?').get(parentId)) {
+  if (parentId && !cadreStore.cadreExists(parentId)) {
     return res.status(400).json({ error: '上级职务不存在' });
   }
-  const maxSort = db.prepare('SELECT COALESCE(MAX(sort_order),0) AS max FROM cadres').get().max;
-  const info = db.prepare('INSERT INTO cadres (name, parent_id, max_count, sort_order) VALUES (?,?,?,?)')
-    .run(name, parentId, maxCount, maxSort + 1);
+  const maxSort = cadreStore.maxSort();
+  const info = cadreStore.insertCadre(name, parentId, maxCount, maxSort + 1);
   res.json({ id: info.lastInsertRowid, tree: buildTree() });
 });
 
 // 更新职务
 router.put('/:id', (req, res) => {
     const id = Number(req.params.id);
-  const node = db.prepare('SELECT * FROM cadres WHERE id=?').get(id);
+  const node = cadreStore.findCadre(id);
   if (!node) return res.status(404).json({ error: '职务不存在' });
   const name = req.body.name !== undefined ? cleanText(req.body.name) : node.name;
   if (!name) return res.status(400).json({ error: '职务名不能为空' });
@@ -69,25 +67,20 @@ router.put('/:id', (req, res) => {
       if (cur === id) return res.status(400).json({ error: '不能把职务挂到自己的下级' });
       if (visited.has(cur)) break;
       visited.add(cur);
-      const p = db.prepare('SELECT parent_id FROM cadres WHERE id=?').get(cur);
-      cur = p ? p.parent_id : 0;
+      const p = cadreStore.findParentId(cur);
+      cur = p ? p : 0;
     }
   }
-  db.prepare('UPDATE cadres SET name=?, parent_id=?, max_count=? WHERE id=?').run(name, parentId, maxCount, id);
+  cadreStore.updateCadre(id, name, parentId, maxCount);
   res.json({ tree: buildTree() });
 });
 
 // 删除职务：级联删除其担任学生，其直接子职务上移挂到被删职务的上级
 router.delete('/:id', (req, res) => {
     const id = Number(req.params.id);
-  const node = db.prepare('SELECT * FROM cadres WHERE id=?').get(id);
+  const node = cadreStore.findCadre(id);
   if (!node) return res.status(404).json({ error: '职务不存在' });
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM cadre_members WHERE cadre_id=?').run(id);
-    db.prepare('UPDATE cadres SET parent_id=? WHERE parent_id=?').run(node.parent_id, id);
-    db.prepare('DELETE FROM cadres WHERE id=?').run(id);
-  });
-  tx();
+  cadreStore.deleteCadreCascade(id, node.parent_id);
   res.json({ tree: buildTree() });
 });
 
@@ -95,7 +88,7 @@ router.delete('/:id', (req, res) => {
 // 为职务添加担任学生（student_id 可空，用于值日输入产生的"仅姓名"学生）
 router.post('/:id/members', (req, res) => {
     const cadreId = Number(req.params.id);
-  const cadre = db.prepare('SELECT id, name, max_count FROM cadres WHERE id=?').get(cadreId);
+  const cadre = cadreStore.findCadreBasic(cadreId);
   if (!cadre) {
     return res.status(404).json({ error: '职务不存在' });
   }
@@ -105,27 +98,26 @@ router.post('/:id/members', (req, res) => {
   // max_count 原来只有渲染层拦（CadreManage.vue）：直接调接口能给一个 1 人职务塞任意多人，
   // 班级页会显示成「任命 5/1」。这里补上同一句判断。
   const maxCount = Math.max(1, Number(cadre.max_count) || 1);
-  const curCount = db.prepare('SELECT COUNT(*) AS n FROM cadre_members WHERE cadre_id=?').get(cadreId).n;
+  const curCount = cadreStore.countMembers(cadreId);
   if (curCount >= maxCount) {
     return res.status(400).json({ error: `「${cadre.name}」人数已达上限 ${maxCount} 人` });
   }
-  const maxSort = db.prepare('SELECT COALESCE(MAX(sort_order),0) AS max FROM cadre_members WHERE cadre_id=?').get(cadreId).max;
-  const info = db.prepare('INSERT INTO cadre_members (cadre_id, student_id, student_name, sort_order) VALUES (?,?,?,?)')
-    .run(cadreId, studentId, studentName, maxSort + 1);
+  const maxSort = cadreStore.maxMemberSort(cadreId);
+  const info = cadreStore.insertMember(cadreId, studentId, studentName, maxSort + 1);
   res.json({ id: info.lastInsertRowid, tree: buildTree() });
 });
 
 // 移除担任学生
 router.delete('/members/:id', (req, res) => {
     const id = Number(req.params.id);
-  db.prepare('DELETE FROM cadre_members WHERE id=?').run(id);
+  cadreStore.deleteMember(id);
   res.json({ tree: buildTree() });
 });
 
 // 移动职务：挂到 parentId(0=顶级) 下第 index 位（排序），index 为去掉自身后目标位置，可为 null 表示放在末尾
 router.post('/:id/move', (req, res) => {
     const id = Number(req.params.id);
-  const node = db.prepare('SELECT * FROM cadres WHERE id=?').get(id);
+  const node = cadreStore.findCadre(id);
   if (!node) return res.status(404).json({ error: '职务不存在' });
   const parentId = Number(req.body.parent_id) || 0;
   let index = Number.isFinite(req.body.index) ? Number(req.body.index) : null;
@@ -137,31 +129,21 @@ router.post('/:id/move', (req, res) => {
       if (cur === id) return res.status(400).json({ error: '不能把职务挂到自己的下级' });
       if (visited.has(cur)) break;
       visited.add(cur);
-      const p = db.prepare('SELECT parent_id FROM cadres WHERE id=?').get(cur);
-      cur = p ? p.parent_id : 0;
+      const p = cadreStore.findParentId(cur);
+      cur = p ? p : 0;
     }
   }
-  const tx = db.transaction(() => {
-    const children = db.prepare('SELECT id FROM cadres WHERE parent_id=? ORDER BY sort_order, id')
-      .all(parentId).map(r => r.id).filter(x => x !== id);
-    if (index == null || index < 0) index = children.length;
-    if (index > children.length) index = children.length;
-    children.splice(index, 0, id);
-    const stmt = db.prepare('UPDATE cadres SET sort_order=? WHERE id=?');
-    children.forEach((cid, i) => stmt.run(i, cid));
-    db.prepare('UPDATE cadres SET parent_id=? WHERE id=?').run(parentId, id);
-  });
-  tx();
+  cadreStore.moveCadre(id, parentId, index);
   res.json({ tree: buildTree() });
 });
 
 // 移动担任学生：挂到 cadreId 下第 index 位（index 为去掉自身后的目标位置，null 表示末尾）
 router.post('/members/:id/move', (req, res) => {
     const id = Number(req.params.id);
-  const mem = db.prepare('SELECT * FROM cadre_members WHERE id=?').get(id);
+  const mem = cadreStore.findMember(id);
   if (!mem) return res.status(404).json({ error: '担任学生不存在' });
   const cadreId = Number(req.body.cadre_id) || 0;
-  const target = db.prepare('SELECT name, max_count FROM cadres WHERE id=?').get(cadreId);
+  const target = cadreStore.findCadreBasic(cadreId);
   if (!target) {
     return res.status(400).json({ error: '职务不存在' });
   }
@@ -170,23 +152,13 @@ router.post('/members/:id/move', (req, res) => {
   // 同一职务内拖动人数不变，不需要校验。
   if (Number(mem.cadre_id) !== cadreId) {
     const maxCount = Math.max(1, Number(target.max_count) || 1);
-    const curCount = db.prepare('SELECT COUNT(*) AS n FROM cadre_members WHERE cadre_id=?').get(cadreId).n;
+    const curCount = cadreStore.countMembers(cadreId);
     if (curCount >= maxCount) {
       return res.status(400).json({ error: `「${target.name}」人数已达上限 ${maxCount} 人` });
     }
   }
   let index = Number.isFinite(req.body.index) ? Number(req.body.index) : null;
-  const tx = db.transaction(() => {
-    const list = db.prepare('SELECT id FROM cadre_members WHERE cadre_id=? ORDER BY sort_order, id')
-      .all(cadreId).map(r => r.id).filter(x => x !== id);
-    if (index == null || index < 0) index = list.length;
-    if (index > list.length) index = list.length;
-    list.splice(index, 0, id);
-    const stmt = db.prepare('UPDATE cadre_members SET sort_order=? WHERE id=?');
-    list.forEach((mid, i) => stmt.run(i, mid));
-    db.prepare('UPDATE cadre_members SET cadre_id=? WHERE id=?').run(cadreId, id);
-  });
-  tx();
+  cadreStore.moveMember(id, cadreId, index);
   res.json({ tree: buildTree() });
 });
 
@@ -243,40 +215,30 @@ router.post('/import', (req, res) => {
     const created = { cadres: [], members: [] };
 
     const tx = db.transaction(() => {
-      const findParent = db.prepare('SELECT id FROM cadres WHERE name = ? ORDER BY id LIMIT 2');
-      const findNode = db.prepare('SELECT id, name, max_count FROM cadres WHERE name = ? AND parent_id = ? ORDER BY id LIMIT 1');
-      const insertNode = db.prepare('INSERT INTO cadres (name, parent_id, max_count, sort_order) VALUES (?, ?, ?, ?)');
-      const maxNodeSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM cadres');
-      const findMember = db.prepare('SELECT id FROM cadre_members WHERE cadre_id = ? AND student_name = ?');
-      const countMembers = db.prepare('SELECT COUNT(*) AS n FROM cadre_members WHERE cadre_id = ?');
-      const maxMemberSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM cadre_members WHERE cadre_id = ?');
-      const insertMember = db.prepare('INSERT INTO cadre_members (cadre_id, student_id, student_name, sort_order) VALUES (?, ?, ?, ?)');
-      const findStudent = db.prepare('SELECT id FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2');
-
       for (const item of list) {
         let parentId = 0;
         if (item.parentName) {
-          const parents = findParent.all(item.parentName);
+          const parents = cadreStore.findCadresByName(item.parentName);
           if (parents.length === 0) throw new Error(`第 ${item.rowNo} 行的上级职务「${item.parentName}」不存在`);
           if (parents.length > 1) throw new Error(`第 ${item.rowNo} 行的上级职务「${item.parentName}」有重名，请先在页面里区分`);
           parentId = parents[0].id;
         }
-        let node = findNode.get(item.title, parentId);
+        let node = cadreStore.findCadreByNameAndParent(item.title, parentId);
         if (!node) {
-          const sort = maxNodeSort.get().m + 1;
-          const info = insertNode.run(item.title, parentId, item.maxCount || 1, sort);
+          const sort = cadreStore.maxSort() + 1;
+          const info = cadreStore.insertCadre(item.title, parentId, item.maxCount || 1, sort);
           node = { id: info.lastInsertRowid, name: item.title, max_count: item.maxCount || 1 };
           created.cadres.push({ id: node.id, name: node.name, parent_id: parentId, max_count: node.max_count, sort_order: sort });
         }
         for (const name of item.students) {
-          if (findMember.get(node.id, name)) continue;
-          if (countMembers.get(node.id).n >= node.max_count) {
+          if (cadreStore.findMemberByName(node.id, name)) continue;
+          if (cadreStore.countMembers(node.id) >= node.max_count) {
             throw new Error(`第 ${item.rowNo} 行：「${node.name}」人数已达上限 ${node.max_count} 人`);
           }
-          const sameName = findStudent.all(name);
+          const sameName = cadreStore.findStudentIdsByName(name);
           const studentId = sameName.length === 1 ? sameName[0].id : null;
-          const sort = maxMemberSort.get(node.id).m + 1;
-          const infoMember = insertMember.run(node.id, studentId, name, sort);
+          const sort = cadreStore.maxMemberSort(node.id) + 1;
+          const infoMember = cadreStore.insertMember(node.id, studentId, name, sort);
           created.members.push({
             id: infoMember.lastInsertRowid,
             cadre_id: node.id,

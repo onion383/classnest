@@ -13,17 +13,27 @@ classnest/
 │   │   └── historyRoutes.js  # 历史快照路由工厂
 │   ├── services/
 │   │   ├── accountRename.js  # 改用户名的跨库两写（带补偿）
+│   │   ├── activityStore.js  # activities 的 SQL 出口（列表、删除、导入批量插入）
+│   │   ├── aiConfigStore.js  # ai_settings / ai_models 的 SQL 出口（开关、启用模型、密钥复用判断）
+│   │   ├── aiConversationStore.js  # ai_conversations / ai_messages 的 SQL 出口（会话与消息分页、标题、摘要、token 记账）
+│   │   ├── aiStore.js  # AI 域（routes/ai/**）的 SQL 出口：表结构缓存、引用统计、工具所需的各业务表查询、单行 CRUD
+│   │   ├── albumStore.js  # 相册索引（albums / album_photos）的 SQL 出口；事务留在路由（夹着缩略图与扫描的 FS 副作用）
 │   │   ├── backupArchive.js  # 备份包 v3 写包
 │   │   ├── bcryptAsync.js  # 用户名规则
 │   │   ├── bundleRestore.js  # 备份包落盘还原
 │   │   ├── businessRules.js  # 业务规则校验
+│   │   ├── cadreStore.js  # cadres / cadre_members 的 SQL 出口（树形层级、成员排序、级联删除）
+│   │   ├── countdownStore.js  # countdowns 的 SQL 出口
 │   │   ├── createdRows.js  # 导入结果回读
 │   │   ├── credentialChange.js  # 凭证变更动作层
 │   │   ├── dutyCells.js
 │   │   ├── dutyConfig.js  # 值日列名与模式配置
 │   │   ├── dutyCycle.js  # 大扫除命中日
 │   │   ├── dutyMode.js  # 值日单元格工具
+│   │   ├── exportQuery.js  # 导出侧的只读查询出口：单表读失败返回空结果，不拖垮整份导出
 │   │   ├── ffmpeg.js  # 视频处理封装
+│   │   ├── groupDim.js  # 分组维度 / 小组 / 成员的 SQL 出口，含「必须在同一事务里才一致」的复合操作（改组数、删维度、移动成员、导入）
+│   │   ├── leaveStore.js  # 请假记录与今日到班列顺序的 SQL 出口；分页 hasMore 用「多取一条」判定
 │   │   ├── ocr.js  # 文字识别
 │   │   ├── pdfDomShim.js  # PDF DOM 兼容层
 │   │   ├── pendingRegs.js  # 注册草稿暂存
@@ -32,19 +42,25 @@ classnest/
 │   │   ├── receiptTrash.js  # 收据文件移进 dataDir/receipt-trash/。收据扩到视频后，删除只改数据库数…
 │   │   ├── recoveryKey.js  # 恢复密钥
 │   │   ├── sanitize.js  # 数据清洗
+│   │   ├── scoreStore.js  # score_records 的 SQL 出口（列表分页、导入、首页摘要口径）
 │   │   ├── searchLimits.js  # 全局搜索分页
+│   │   ├── searchQuery.js  # 全局搜索的查询实现：各数据源 SQL / 内存 JSON 源的构造、分页与展示文案
 │   │   ├── seatGrid.js  # 座位网格几何（后端纯计算）
 │   │   ├── seatSnapshot.js  # 座位快照 payload
 │   │   ├── seatWrite.js  # 座位单格写入唯一入口
 │   │   ├── secureChannel.js  # 安全通道
+│   │   ├── semesterStore.js  # semesters 的 SQL 出口，并持有「当前学期」的唯一判定（slotStore.semesterRange 复用）
 │   │   ├── sessions.js  # 登录会话
 │   │   ├── slotStore.js  # 槽位存储
 │   │   ├── studentRelations.js  # 学生引用维护
 │   │   ├── studentRename.js  # 学生改名级联
 │   │   ├── tableService.js  # 表格服务
+│   │   ├── undoStore.js  # 撤销记录表与执行器动作的 SQL 出口（复合动作带事务；FS 顺序留在执行器）
 │   │   ├── unzipSafe.js  # 安全解压
 │   │   ├── uploadSignatures.js  # 收据上传的类型判定：扩展名白名单（图片 20MB / PDF 30MB / ooxml 30…
+│   │   ├── userStore.js  # users 的 SQL 出口（登录取凭据、改用户名、改密码、恢复哈希）
 │   │   ├── usernameRules.js
+│   │   ├── widgetSettingsStore.js  # widget_settings 的 SQL 出口（挂件设置、桌面应用列表、班级信息）
 │   │   ├── zipStream.js  # 流式 ZIP 写入（备份包 / 数据导出共用）：条目「边读边写」，任何时刻只持有一个 256…
 │   │   └── zipWriter.js  # ZIP 的共用零件（不含打包流程）：CRC32（含增量版，供流式大文件边读边算）、归档内路径…
 │   ├── utils/
@@ -53,7 +69,8 @@ classnest/
 │   │   ├── securityLevel.js  # 账号安全等级判定（plain / nopass / password / privacy）。…
 │   │   ├── semester.js  # 学期推荐值（按当前月份推学期名与起止日期）。两个调用方共用这一份：设置页「增加学期」与课表路…
 │   │   ├── slugScopes.js  # 按库（slug）隔离的进程内状态：各库 album_photos.id 独立自增，裸 id …
-│   │   └── sql.js  # SQL 辅助
+│   │   ├── sql.js  # SQL 辅助
+│   │   └── textHead.js  # 只读文件头部 N 个字符（避免「为截断而整份读入」）
 │   ├── albumExif.js  # EXIF/XMP 拍摄时间（读不到就是空串，不拿 mtime 冒充）
 │   ├── albumOps.js  # 回收站移入/恢复、删缩略图
 │   ├── albumScan.js  # 扫描引擎（主/子进程共用）：递归收集、断点推进、缩略图、批量写库、暂停等待
@@ -261,6 +278,7 @@ classnest/
 | [`utils/date.js`](../../../student-backend/utils/date.js) | 本地日期字符串 | `pad2`、`localDateStr`、`todayStr` |
 | [`utils/json.js`](../../../student-backend/utils/json.js) | JSON 安全读写 | `safeJson`、`readDocJson` |
 | [`utils/sql.js`](../../../student-backend/utils/sql.js) | SQL 辅助 | `now`、`isDateStr`、`cleanUp`、`maxPosition`、`buildInsert`、`buildUpdate` |
+| [`utils/textHead.js`](../../../student-backend/utils/textHead.js) | 只读文件头部 N 个字符：按字节读够用就停，避免「为截断而整份读入」（20MB 的 txt 会先变成约 40MB 的 UTF-16 字符串）；读满时裁掉落在多字节序列中间的不完整尾字节，不产生 U+FFFD | `readTextHead`、`decodeHead`、`trimIncomplete` |
 | [`utils/slugScopes.js`](../../../student-backend/utils/slugScopes.js) | 按库（slug）隔离的进程内状态：各库 `album_photos.id` 独立自增，裸 id 键 / 全局攒批会串库。状态自己登记，登出统一失效 | `safeSlug`、`createSlugBuckets`、`createSlugBatch`、`clearAllForSlug` |
 | [`utils/securityLevel.js`](../../../student-backend/utils/securityLevel.js) | 账号安全等级判定（`plain` / `nopass` / `password` / `privacy`）。**口径单源**：设置页判档与「本机信息恢复」分流都走这里，各写一份会分叉成「显示免密、登录却要密码」。明文库判定排在密码判定之前（明文档不该有密码哈希） | `resolveSecurityLevel` |
 | [`utils/semester.js`](../../../student-backend/utils/semester.js) | 学期推荐值（按当前月份推学期名与起止日期）。**两个调用方共用这一份**：设置页「增加学期」与课表路由、首次引导页（引导时库还没打开，走 routes 的实现会直接撞上未打开的 db）。抄两份会导致「设置页推荐的学期和引导页不一样」 | `autoSemester` |
@@ -270,6 +288,36 @@ classnest/
 | [`services/perfMem.js`](../../../student-backend/services/perfMem.js) | 导出内存峰值探针（v6 · 0-5）：`PERF_EXPORT=1` 时 `memSnapshot()` 采 `process.memoryUsage()`，导出 `finally` 里用 `logExportMemory(label, before)` 打 rss / heap / external 差值；关闭时两个函数分别返回 `null` 与空操作，普通导出零额外开销。用环境变量而非面板开关，是为了真机大收据导出时不用重新打包 | `memSnapshot`、`logExportMemory`、`enabled` |
 | [`services/uploadSignatures.js`](../../../student-backend/services/uploadSignatures.js) | 收据上传的类型判定：扩展名白名单（图片 20MB / PDF 30MB / ooxml 30MB / ole 30MB / 视频 200MB / 纯文本 md 5MB）+ 真实字节魔数。**md 没有魔数**，判据改成「前 512 字节没有 NUL 字节、且非空」（二进制改后缀开头几乎必然带 0x00；512 而不是 16，是因为 16 字节太短，二进制可能还没出现 NUL）。**Windows 上 docx/xlsx 的 mimetype 不可靠**，multer 只按扩展名初筛，真正判断走魔数。另含 `decodeFileName`：busboy 按 latin1 解析 multipart 文件名，中文名会变成乱码，这里按 latin1→字节→utf8 转回来（转换出 `�` 说明原字节不是 UTF-8，返回原串防二次破坏） | `KINDS`、`EXT_TO_KIND`、`ALLOWED_EXT_RE`、`sniff`、`checkUpload`、`decodeFileName` |
 | [`services/receiptTrash.js`](../../../student-backend/services/receiptTrash.js) | 收据文件移进 `dataDir/receipt-trash/`。收据扩到视频后，删除只改数据库数组会让 uploads 悄悄涨到几个 G。**安全边界：一律 `path.basename` 再拼回 uploads**，`../`、绝对路径、反斜杠穿越都出不去 —— 这个函数能搬动磁盘文件，边界写错就是「把机器上任意文件挪走」的入口 | `moveReceiptsToTrash` |
+
+
+### 6. 数据访问出口（SQL 下沉）
+
+> 档 C · M12：路由层不再持有裸 SQL。语句按「一张表的同一件事只有一份实现」收进各域 store，新增调用方不会各抄一条。
+
+| 文件 | 覆盖的表 / 职责 | 关键导出 |
+| --- | --- | --- |
+| [`services/activityStore.js`](../../../student-backend/services/activityStore.js) | `activities`：列表、删除、导入批量插入 | `readAll`、`removeById`、`insertMany` |
+| [`services/countdownStore.js`](../../../student-backend/services/countdownStore.js) | `countdowns`：列表、删除、导入批量插入 | `readAll`、`removeById`、`insertMany` |
+| [`services/scoreStore.js`](../../../student-backend/services/scoreStore.js) | `score_records`：全量/分页列表、学生定位、导入、首页摘要 | `readAll`、`list`、`findStudentById`、`insertMany`、`dashboardSummary` |
+| [`services/leaveStore.js`](../../../student-backend/services/leaveStore.js) | `leave_records` + 今日到班列顺序：全量与分页列表、学生带出、三态写、导入、列顺序替换 | `readList`、`findWindow`、`markReturned`、`markUnreturned`、`markCanceled`、`insertMany`、`listTodayColumns`、`replaceTodayColumns` |
+| [`services/cadreStore.js`](../../../student-backend/services/cadreStore.js) | `cadres` / `cadre_members`：树形层级、排序、级联删除、按名查重 | `allCadres`、`membersOf`、`insertCadre`、`deleteCadreCascade`、`moveCadre`、`moveMember`、`findStudentIdsByName` |
+| [`services/groupDim.js`](../../../student-backend/services/groupDim.js) | 分组维度 / 小组 / 成员：CRUD 与复合事务操作（改组数、删维度带快照、移动成员、智能分组写回、导入） | `createDimension`、`updateDimension`、`deleteDimension`、`moveDimension`、`addMember`、`moveMember`、`importMembers` |
+| [`services/semesterStore.js`](../../../student-backend/services/semesterStore.js) | `semesters`：列表、增删改、切换当前；**「当前学期」的唯一判定**（无标记时回退最新一条） | `list`、`findCurrent`、`findById`、`create`、`setCurrent`、`update`、`updateRange`、`remove` |
+| [`services/searchQuery.js`](../../../student-backend/services/searchQuery.js) | 全局搜索的查询实现：各数据源 SQL 与内存 JSON 源、分页、展示文案 | `runSearch` |
+| [`services/userStore.js`](../../../student-backend/services/userStore.js) | `users`：登录取凭据、改用户名、改密码、恢复哈希 | `findById`、`findCredentials`、`updateUsername`、`updatePassword`、`updateRecoveryHash` |
+| [`services/widgetSettingsStore.js`](../../../student-backend/services/widgetSettingsStore.js) | `widget_settings`：挂件设置、桌面应用列表、班级信息 | `readSettings`、`updateSettings`、`readDesktopApps`、`writeDesktopApps` |
+| [`services/aiStore.js`](../../../student-backend/services/aiStore.js) | AI 域（`routes/ai/**`）：表结构缓存、引用统计、工具所需的各业务表查询、按表单行 CRUD | `tableColumns`、`countReferences`、`rowsByIds`、`insertRow`、`updateColumns`、`deleteRow`、`queryAll` |
+| [`services/aiConfigStore.js`](../../../student-backend/services/aiConfigStore.js) | `ai_settings` / `ai_models`：开关、启用模型、密钥复用判断、模型 CRUD | `readFlags`、`readActiveModel`、`listModels`、`activateModel`、`updateModel`、`setReasoning` |
+| [`services/aiConversationStore.js`](../../../student-backend/services/aiConversationStore.js) | `ai_conversations` / `ai_messages`：会话与消息分页、标题、摘要、token 记账 | `listConversations`、`listMessagesPage`、`insertMessage`、`updateMessage`、`getSummary`、`updateSummary` |
+| [`services/albumStore.js`](../../../student-backend/services/albumStore.js) | 相册索引 `albums` / `album_photos`：列表与封面、照片分页、索引复制与删除、缩略图路径、日期计数 | `listAlbums`、`listPhotos`、`photoDateCountsPage`、`copyPhotoRow`、`updateThumbPath`、`randomPhotoId` |
+| [`services/exportQuery.js`](../../../student-backend/services/exportQuery.js) | 导出侧只读查询：单表读取失败返回空结果，不拖垮整份导出 | `all`、`get`、`countOf` |
+| [`services/undoStore.js`](../../../student-backend/services/undoStore.js) | `undo_history` + 撤销执行器：记录入栈与每 key 淘汰、方向 CAS、按批次取 id、各执行器的复合动作（删维度 / 合并相册 / 删职务 / 删学生 / 相册增删 / 照片移动）、动态表行级与网格列写 | `push`、`claimDir`、`idsByOrigin`、`restoreDimension`、`restoreMergedAlbum`、`restoreStudentCascade`、`applyRowPositions`、`writeGridSnapshot` |
+
+- **搬进 store 判据（三档）**：①单例槽位读 —— 直接用 `slotStore.getDoc(逻辑名)`，路由里不再抄列清单（那份清单是 `SPEC` 的手抄副本，加列时会静默漏读）；②单表语句 —— 进对应 `*Store`，路由只做参数归一与字段清洗；③「必须在一个事务里才一致」的复合操作 —— 整条进 service，事务边界跟着数据操作走，路由只收结果（`groupDim` 的改组数、删维度带快照、移动成员都属这一档）。
+- **例外：事务里夹着文件系统副作用时，事务留在路由**（`album`：先 `unlink` 缩略图再删索引、删完派发或停止 `scanWorker`）。搬进 service 会把「先删缓存再删库」的顺序藏起来，评审时看不见。
+- **依赖方向**：store 只依赖 `db` 与同级 service，不得反向 require `routes/`。`serializeColVal` 导出在 `routes/ai/ai.helpers.js`，因此 `aiStore` 只拼语句与绑定，序列化仍由路由完成。
+- **撤销域（B8）的额外一条**：带文件系统副作用的顺序留在执行器 —— 照片「先搬文件再插索引」「先删索引再搬文件」、相册删缩略图、加相册后派发扫描；`undoStore` 只提供 `insertPhotoIndex` / `deletePhotoIndex` / `insertAlbumWithPhotos` 这类纯 DB 段，事务由 `runInTransaction` 提供。
+- **守卫**：每条下沉过的路由都有「不许出现 `db.prepare(`，且必须真的调用对应 store」的判据（`leaves-paging`、`seat-cell-write`、`ai-doc-transaction`、`semester-crud`、`group-manage`、`album-paging`），逐条做过变异反证。
 
 ---
 

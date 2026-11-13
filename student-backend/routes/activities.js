@@ -3,18 +3,14 @@ const router = express.Router();
 const { db, renumber } = require('../db');
 const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../utils/sql');
 const { readRowsByIds } = require('../services/createdRows');
+const activityStore = require('../services/activityStore');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['时间', '主题', '地点', '简介', '参与人员'];
 
-// 全量列表（共用于 GET /api/activities 与 /api/dashboard）
-function readAll() {
-  return db.prepare('SELECT * FROM activities ORDER BY position, id').all();
-}
-
 // GET /api/activities 全量列表
 router.get('/', (req, res) => {
-    res.json({ data: readAll() });
+    res.json({ data: activityStore.readAll() });
 });
 
 // POST /api/activities 新增
@@ -43,7 +39,7 @@ router.put('/:id', (req, res) => {
 
 // DELETE /api/activities/:id 删除
 router.delete('/:id', (req, res) => {
-    db.prepare('DELETE FROM activities WHERE id = ?').run(Number(req.params.id));
+    activityStore.removeById(Number(req.params.id));
   renumber('activities');
   res.json({ message: '删除成功' });
 });
@@ -68,9 +64,6 @@ router.post('/import', (req, res) => {
     };
 
     const startPos = maxPosition('activities');
-    const insert = db.prepare(
-      `INSERT INTO activities (时间, 主题, 地点, 参与人员, 简介, created_at, position) VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
 
     const list = rows.map((row, idx) => {
       const rowNo = idx + 1;
@@ -86,14 +79,7 @@ router.post('/import', (req, res) => {
       return { ...data, created_at: now(), position: startPos + idx + 1 };
     });
 
-    const insertMany = db.transaction((items) => {
-      const ids = [];
-      for (const item of items) {
-        ids.push(Number(insert.run(item.时间, item.主题, item.地点, item.参与人员, item.简介, item.created_at, item.position).lastInsertRowid));
-      }
-      return ids;
-    });
-    const ids = insertMany(list);
+    const ids = activityStore.insertMany(list);
     // created = 本次真正新建的行，供前端登记可撤销的批量导入（Q2-06）
     res.json({ message: `成功导入 ${list.length} 条活动`, created: readRowsByIds('activities', ids) });
   } catch (err) {
@@ -103,4 +89,4 @@ router.post('/import', (req, res) => {
 
 module.exports = router;
 // 供 /api/dashboard 聚合复用（挂在 router 函数对象上，不影响既有路由）
-module.exports.readAll = readAll;
+module.exports.readAll = activityStore.readAll;

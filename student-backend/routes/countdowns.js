@@ -1,20 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const { db, renumber } = require('../db');
+const { renumber } = require('../db');
 const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../utils/sql');
 const { readRowsByIds } = require('../services/createdRows');
+const countdownStore = require('../services/countdownStore');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['名称', '截止日', '包含这一天'];
 
-// 全量列表（共用于 GET /api/countdowns 与 /api/dashboard）
-function readAll() {
-  return db.prepare('SELECT * FROM countdowns ORDER BY position, id').all();
-}
-
 // GET /api/countdowns 全量列表
 router.get('/', (req, res) => {
-    res.json({ data: readAll() });
+    res.json({ data: countdownStore.readAll() });
 });
 
 // POST /api/countdowns 新增
@@ -36,7 +32,7 @@ router.put('/:id', (req, res) => {
 
 // DELETE /api/countdowns/:id 删除
 router.delete('/:id', (req, res) => {
-    db.prepare('DELETE FROM countdowns WHERE id = ?').run(Number(req.params.id));
+    countdownStore.removeById(Number(req.params.id));
   renumber('countdowns');
   res.json({ message: '删除成功' });
 });
@@ -65,9 +61,6 @@ router.post('/import', (req, res) => {
     };
 
     const startPos = maxPosition('countdowns');
-    const insert = db.prepare(
-      `INSERT INTO countdowns (名称, 截止日, 包含这一天, created_at, position) VALUES (?, ?, ?, ?, ?)`
-    );
 
     const list = rows.map((row, idx) => {
       const rowNo = idx + 1;
@@ -83,14 +76,7 @@ router.post('/import', (req, res) => {
       return { ...data, created_at: now(), position: startPos + idx + 1 };
     });
 
-    const insertMany = db.transaction((items) => {
-      const ids = [];
-      for (const item of items) {
-        ids.push(Number(insert.run(item.名称, item.截止日, item.包含这一天, item.created_at, item.position).lastInsertRowid));
-      }
-      return ids;
-    });
-    const ids = insertMany(list);
+    const ids = countdownStore.insertMany(list);
     // created = 本次真正新建的行，供前端登记可撤销的批量导入（Q2-06）
     res.json({ message: `成功导入 ${list.length} 条倒计时`, created: readRowsByIds('countdowns', ids) });
   } catch (err) {
@@ -100,4 +86,4 @@ router.post('/import', (req, res) => {
 
 module.exports = router;
 // 供 /api/dashboard 聚合复用（挂在 router 函数对象上，不影响既有路由）
-module.exports.readAll = readAll;
+module.exports.readAll = countdownStore.readAll;

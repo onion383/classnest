@@ -250,6 +250,9 @@ flowchart TD
 | GET | `/photo/:photoId/save-as` | 另存为 |
 | DELETE | `/photo/:photoId` | 删除（移入应用内回收站，可撤销） |
 | POST | `/photos/move` | 照片索引移动到虚拟相册（可撤销 `album_photo_move`） |
+| GET | `/random-photo/thumb` | 随机一张照片的缩略图（首页配图；`exclude` 排掉当前张、排除后查不到仍退回不排除，不回 404；`X-Photo-Id` 带回 id 供点击定位） |
+| GET | `/:id/dates` | 该相册的「日期 → 张数」索引（时间轴年份尺与日期分页；`photo_date` 为空串的一组是未知时间） |
+| GET | `/photo/:photoId/locate` | 按 id 查所属相册与日期（首页随机图点击后跨页定位；只读索引一行，不 stat 源文件也不拉整册分页） |
 
 实现要点：扫描在独立子进程（[`scanWorker.js`](../../../student-backend/scanWorker.js)）；缩略图按库隔离（`{thumbsDir}/{slug}/{photoId}.jpg`）；场景细节见 [services.md](./services.md) 与 [data-layer.md](./data-layer.md)。
 

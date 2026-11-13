@@ -1,18 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db');
 const { now, cleanUp, buildInsert, buildUpdate } = require('../utils/sql');
 const { sanitizeField, normNumber } = require('../services/sanitize');
 const { readRowsByIds } = require('../services/createdRows');
 const { resolveOne } = require('../services/provisionalStudents');
+const scoreStore = require('../services/scoreStore');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['姓名', '学号', '类型', '项目', '分值', '原因', '加分时间', 'source', 'group_name', '成员数'];
-
-// 全量列表（统计页签 / 导出 / 兼容不带 limit 的旧调用）
-function readAll() {
-  return db.prepare('SELECT * FROM score_records ORDER BY 加分时间 DESC, id DESC').all();
-}
 
 // ---------- 分页（v6 · 2-23）----------
 // 背景：这个接口一次把整表返回，成绩会随学期线性增长（一学期上千条）。列表改成无限滚动后，
@@ -30,38 +25,13 @@ function pageOf(query) {
   return { limit, offset };
 }
 
-// source 过滤：'group' 只看小组加分；'personal' 只看个人（含历史数据里 source 为空的行）。
-function sourceClause(source) {
-  if (source === 'group') return { sql: "source = 'group'", params: [] };
-  if (source === 'personal') return { sql: "(source IS NULL OR source <> 'group')", params: [] };
-  return null;
-}
-
-// 日期过滤：只取某一天（YYYY-MM-DD 前缀）。今日时间轴要的是「今天全部」，
-// 不能靠列表第一页顺带 —— 今天若有一百条，第一页就只有今天，反过来今天就全被截断。
-function dateClause(date) {
-  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-  return { sql: '加分时间 LIKE ?', params: [`${date}%`] };
-}
-
 // GET /api/scores            → 全量 { data }
 // GET /api/scores?limit=50&offset=0[&source=personal|group][&date=YYYY-MM-DD]
 //   → 分页 { data, hasMore }
 router.get('/', (req, res) => {
   const { limit, offset } = pageOf(req.query);
   const q = req.query || {};
-  const parts = [sourceClause(q.source), dateClause(q.date)].filter(Boolean);
-  const where = parts.length ? ' WHERE ' + parts.map((p) => p.sql).join(' AND ') : '';
-  const params = parts.flatMap((p) => p.params);
-  const tail = ' ORDER BY 加分时间 DESC, id DESC';
-  if (!limit) {
-    return res.json({ data: db.prepare(`SELECT * FROM score_records${where}${tail}`).all(...params) });
-  }
-  const rows = db.prepare(
-    `SELECT * FROM score_records${where}${tail} LIMIT ? OFFSET ?`
-  ).all(...params, limit + 1, offset);
-  const hasMore = rows.length > limit;
-  res.json({ data: hasMore ? rows.slice(0, limit) : rows, hasMore });
+  res.json(scoreStore.list({ source: q.source, date: q.date, limit, offset }));
 });
 
 // POST /api/scores 添加加分（选学生自动带姓名学号；小组加分独立成一条 source='group' 记录）
@@ -82,7 +52,7 @@ router.post('/', (req, res) => {
     } else {
       data.source = 'personal';
       if (body.studentId) {
-        const stu = db.prepare('SELECT id, 姓名, 学号 FROM students WHERE id = ?').get(body.studentId);
+        const stu = scoreStore.findStudentById(body.studentId);
         if (!stu) return res.status(404).json({ error: '学生不存在' });
         data.student_id = stu.id;
         data.姓名 = sanitizeField(body.姓名 || stu.姓名, 'score_records', '姓名');
@@ -166,12 +136,6 @@ router.post('/import', (req, res) => {
       return '';
     };
 
-    const insert = db.prepare(
-      `INSERT INTO score_records
-        (student_id, 姓名, 学号, 类型, 项目, 分值, 原因, 加分时间, created_at, source, group_name, 成员数)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-
     const list = rows.map((row, idx) => {
       const rowNo = idx + 1;
       const groupName = cell(row, ['小组', '小组名', 'group_name']);
@@ -183,9 +147,9 @@ router.post('/import', (req, res) => {
 
       let student = null;
       if (!isGroup) {
-        if (xuehao) student = db.prepare('SELECT id, 姓名, 学号 FROM students WHERE 学号 = ?').get(xuehao) || null;
+        if (xuehao) student = scoreStore.findStudentByXuehao(xuehao);
         if (!student && name) {
-          const sameName = db.prepare('SELECT id, 姓名, 学号 FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2').all(name);
+          const sameName = scoreStore.findStudentsByName(name);
           if (sameName.length === 1) student = sameName[0];
         }
       }
@@ -212,18 +176,7 @@ router.post('/import', (req, res) => {
       };
     });
 
-    const insertMany = db.transaction((items) => {
-      const ids = [];
-      for (const item of items) {
-        ids.push(Number(insert.run(
-          item.student_id, item.姓名, item.学号, item.类型, item.项目,
-          item.分值, item.原因, item.加分时间, item.created_at,
-          item.source, item.group_name, item.成员数
-        ).lastInsertRowid));
-      }
-      return ids;
-    });
-    const ids = insertMany(list);
+    const ids = scoreStore.insertMany(list);
     // created = 本次真正新建的行，供前端登记一条可撤销的批量导入（Q2-06）
     res.json({ message: `成功导入 ${list.length} 条加分记录`, created: readRowsByIds('score_records', ids) });
   } catch (err) {
@@ -233,18 +186,6 @@ router.post('/import', (req, res) => {
 
 module.exports = router;
 // 供 /api/dashboard 聚合复用（挂在 router 函数对象上，不影响既有路由）
-module.exports.readAll = readAll;
+module.exports.readAll = scoreStore.readAll;
 // 首页摘要只要「条数 + 今日 Top4」，不必把整表读进内存（v6 · 2-23）
-module.exports.dashboardSummary = function dashboardSummary(today) {
-  const count = db.prepare('SELECT COUNT(*) AS n FROM score_records').get().n;
-  // 加分时间是「YYYY-MM-DD…」前缀，用 LIKE 前缀匹配与前端 startsWith(today) 同口径。
-  // 分值列在 schema 里声明为 REAL（数值亲和性），ORDER BY 本来就算数值排序；这里保留 CAST
-  // 只为兼容早期库里可能出现过的 TEXT 亲和性列 —— 在当前 schema 上是冗余的（已实测：
-  // 去掉 CAST 测试仍全绿，所以它没有被任何用例"锁住"，不能当成不可回退的判据）。
-  // 同分时按 id DESC：全量路径原本就是「已按 id DESC 排好 + JS 稳定排序」，等价可复现。
-  const top = db.prepare(
-    `SELECT 姓名, group_name, 分值, 类型 FROM score_records
-     WHERE 加分时间 LIKE ? ORDER BY CAST(分值 AS REAL) DESC, id DESC LIMIT 4`
-  ).all(`${today}%`);
-  return { count, top };
-};
+module.exports.dashboardSummary = scoreStore.dashboardSummary;

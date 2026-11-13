@@ -265,22 +265,27 @@ test('中英混合词：只有字母词走拼音，中文词仍按 LIKE 限定',
 // —— 接线源码判据（防「纯函数全绿但调用点没接」）——
 
 test('接线：后端每个结果源都走分页，SQL 与内存 JSON 都不例外', () => {
-  const src = read('student-backend/routes/search.js').replace(/^[ \t]*\/\/.*$/gm, '')
+  const src = read('student-backend/services/searchQuery.js').replace(/^[ \t]*\/\/.*$/gm, '')
   assert.ok(!/const (PER_GROUP|MAX_TERMS|PINYIN_VALUES)\s*=/.test(src), '又冒出硬编码常量')
   assert.match(src, /resolveSearchLimits, clipPage, windowOf/)
-  assert.match(src, /const limits = resolveSearchLimits\(req\.query\)/)
+  assert.match(src, /const limits = resolveSearchLimits\(query\)/)
   assert.equal((src.match(/LIMIT \? OFFSET \?/g) || []).length, 4, '四个 SQL 源都要 OFFSET')
   assert.equal((src.match(/clipPage\(/g) || []).length, 8, '八个结果源都要裁成一页')
   assert.equal((src.match(/windowOf\(/g) || []).length, 4, '四个内存型源都要按页取窗口')
   assert.equal((src.match(/const collectUpTo = limits\.offset \+ limits\.probeLimit/g) || []).length, 4)
   assert.match(src, /meta\.hasMore = pageState\.hasMore/)
-  assert.match(src, /res\.json\(\{ groups, meta \}\)/)
+  assert.match(src, /return \{ groups, meta \}/)
   assert.ok(!/truncated|maxPerGroup/.test(src), '不能退回「放大上限重查」那条路')
   assert.match(src, /splitTerms\(q, limits\.maxTerms\)/)
   assert.match(src, /primaryValues\(src\.table, src\.primary, limits\.pinyinValues\)/)
   assert.match(src, /const pm = terms\.some\(t => \/\^\[a-z\]\+\$\/i\.test\(t\.text\)\)/, '多词也要启用拼音匹配器')
   assert.match(src, /function pinyinAlternatives\(/)
   assert.match(src, /pm && \/\^\[a-z\]\+\$\/i\.test\(q\)/, 'nameHit 必须按词判断，中文词不该进拼音匹配器')
+
+  // M12-B5：路由只剩 HTTP 形状，查询实现下沉到 service（SQL 不许回到路由层）
+  const routeSrc = read('student-backend/routes/search.js')
+  assert.match(routeSrc, /runSearch\(req\.query\)/)
+  assert.ok(!/db\.prepare\(/.test(routeSrc), 'search 路由不许再有裸 SQL')
 })
 
 test('接线：前端按页追加，不再放大上限重查', () => {

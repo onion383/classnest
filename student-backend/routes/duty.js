@@ -29,7 +29,7 @@ const dutyCycle = require('../services/dutyCycle');
 // 读写一律走 services/dutyConfig.js（唯一入口），别处不要直接 SELECT days。
 router.get('/settings', (req, res) => {
     const mode = normalizeMode(req.query.mode);
-    const row = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
+    const row = store.getDoc('duty_settings');
     if (!row) return res.json({ days: dutyConfig.readDays(mode), items: [] });
     res.json({
       days: dutyConfig.readDays(mode),
@@ -45,7 +45,7 @@ router.put('/settings', (req, res) => {
     if (!Array.isArray(items) || (mode === 'daily' && !Array.isArray(days))) {
         return res.status(400).json({ error: '参数格式错误' });
     }
-    const row = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
+    const row = store.getDoc('duty_settings');
     const mergedItems = packMode(row ? row.items : null, mode, items);
     // 列名与项目必须同事务写入：只写一半会出现「列头是组名、项目还是旧列表」的错位状态
     db.transaction(() => {
@@ -60,14 +60,14 @@ router.put('/settings', (req, res) => {
 // 读取当前值日表（含「空则回退模板」「补回设置里的 items」两步），共用于 GET / 与 /api/dashboard。
 function readDuty(modeRaw) {
   const mode = normalizeMode(modeRaw);
-  const row = db.prepare('SELECT cells, settings FROM duty_layout WHERE id = 1').get();
+  const row = store.getDoc('duty_layout');
   let cells = row ? unpackMode(row.cells, mode) : {};
   let settings = row ? unpackMode(row.settings, mode) : {};
   // 当前值日表为空时，回退到值日模板，保证首页/桌面小组件能看到已配置的值日
   const hasLayout = (cells && Object.keys(cells).length > 0)
     || (settings && Array.isArray(settings.items) && settings.items.length > 0);
   if (!hasLayout) {
-    const tpl = db.prepare('SELECT cells, settings FROM duty_template WHERE id = 1').get();
+    const tpl = store.getDoc('duty_template');
     if (tpl) {
       const tCells = unpackMode(tpl.cells, mode);
       const tSettings = unpackMode(tpl.settings, mode);
@@ -79,7 +79,7 @@ function readDuty(modeRaw) {
   }
   // layout/template 未携带 items（项目存于独立的 duty_settings 表）时补回，保证首页能列出值日项目
   if (!Array.isArray(settings.items) || settings.items.length === 0) {
-    const g = db.prepare(`SELECT items FROM duty_settings WHERE id = 1`).get();
+    const g = store.getDoc('duty_settings');
     if (g && g.items) {
       try {
         const gItems = unpackMode(g.items, mode, []);
@@ -112,7 +112,7 @@ router.put('/', (req, res) => {
   // 外层失败时一并回滚 → 建档与写值日表同生共死。
   db.transaction(() => {
     validateRow('duty_layout', { cells });
-    const row = db.prepare('SELECT cells, settings FROM duty_layout WHERE id = 1').get();
+    const row = store.getDoc('duty_layout');
     const mergedCells = packMode(row ? row.cells : null, mode, cells);
     const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
     store.setDoc('duty_layout', {
@@ -126,7 +126,7 @@ router.put('/', (req, res) => {
 // ======================== 值日模板 ========================
 router.get('/template', (req, res) => {
     const mode = normalizeMode(req.query.mode);
-  const row = db.prepare('SELECT cells, settings FROM duty_template WHERE id = 1').get();
+  const row = store.getDoc('duty_template');
   if (!row) return res.json({ cells: {}, settings: {} });
   res.json({
     cells: unpackMode(row.cells, mode),
@@ -143,7 +143,7 @@ router.put('/template', (req, res) => {
   // 依赖既有数据的一致性校验（同 PUT / ：校验阶段的建档副作用必须与写入同事务）
   db.transaction(() => {
     validateRow('duty_template', { cells });
-    const row = db.prepare('SELECT cells, settings FROM duty_template WHERE id = 1').get();
+    const row = store.getDoc('duty_template');
     const mergedCells = packMode(row ? row.cells : null, mode, cells);
     const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
     store.setDoc('duty_template', {
@@ -184,7 +184,7 @@ router.put('/save', (req, res) => {
         if (master !== undefined) validateRow('duty_template', { cells: master });
 
         // ① 全局设置（时间 + 劳动项目）
-        const s = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get();
+        const s = store.getDoc('duty_settings');
         const mergedItems = packMode(s ? s.items : null, mode, items);
         dutyConfig.writeDays(mode, days);
         store.setDoc('duty_settings', { items: JSON.stringify(mergedItems) });
@@ -192,7 +192,7 @@ router.put('/save', (req, res) => {
 
     // ② 当前值日表（仅当显式传入 active 时）
     if (active !== undefined) {
-      const row = db.prepare('SELECT cells, settings FROM duty_layout WHERE id = 1').get();
+      const row = store.getDoc('duty_layout');
       const mergedCells = packMode(row ? row.cells : null, mode, active);
       const mergedSettings = packMode(row ? row.settings : null, mode, {});
       store.setDoc('duty_layout', {
@@ -203,7 +203,7 @@ router.put('/save', (req, res) => {
 
     // ③ 值日模板（仅当显式传入 master 时）
     if (master !== undefined) {
-      const row = db.prepare('SELECT cells, settings FROM duty_template WHERE id = 1').get();
+      const row = store.getDoc('duty_template');
       const mergedCells = packMode(row ? row.cells : null, mode, master);
       const mergedSettings = packMode(row ? row.settings : null, mode, {});
       store.setDoc('duty_template', {
@@ -219,9 +219,9 @@ router.put('/save', (req, res) => {
 // ======================== 从模板应用到当前值日表 ========================
 router.post('/apply-master', (req, res) => {
     const mode = normalizeMode(req.query.mode);
-  const template = db.prepare('SELECT cells, settings FROM duty_template WHERE id=1').get();
+  const template = store.getDoc('duty_template');
   if (!template) return res.status(400).json({ error: '模板为空' });
-  const row = db.prepare('SELECT cells, settings FROM duty_layout WHERE id = 1').get();
+  const row = store.getDoc('duty_layout');
   const mergedCells = packMode(row ? row.cells : null, mode, unpackMode(template.cells, mode));
   const mergedSettings = packMode(row ? row.settings : null, mode, unpackMode(template.settings, mode));
   store.setDoc('duty_layout', {
@@ -236,7 +236,7 @@ router.post('/apply-master', (req, res) => {
 // 从未保存过时返回 {}，由前端用 items[].difficulty 铺满作为默认值。
 router.get('/weight', (req, res) => {
     const mode = normalizeMode(req.query.mode);
-  const row = db.prepare('SELECT weights FROM duty_weight WHERE id = 1').get();
+  const row = store.getDoc('duty_weight');
   res.json({ weights: row ? unpackMode(row.weights, mode) : {} });
 });
 
@@ -246,7 +246,7 @@ router.put('/weight', (req, res) => {
   if (!weights || typeof weights !== 'object' || Array.isArray(weights)) {
     return res.status(400).json({ error: '参数格式错误' });
   }
-  const row = db.prepare('SELECT weights FROM duty_weight WHERE id = 1').get();
+  const row = store.getDoc('duty_weight');
   const merged = packMode(row ? row.weights : null, mode, weights);
   store.setDoc('duty_weight', { weights: JSON.stringify(merged) });
   res.json({ message: '权重保存成功' });
@@ -257,7 +257,7 @@ router.put('/weight', (req, res) => {
 // saved_at 为空串即视为没有草稿（不额外存标记位，避免多一个状态字段）。
 router.get('/draft', (req, res) => {
     const mode = normalizeMode(req.query.mode);
-  const row = db.prepare('SELECT cells, settings, conditions, saved_at FROM duty_draft WHERE id = 1').get();
+  const row = store.getDoc('duty_draft');
   if (!row || !row.saved_at) return res.json({ exists: false });
   res.json({
     exists: true,
@@ -279,7 +279,7 @@ router.put('/draft', (req, res) => {
     && Object.values(days).some(list => Array.isArray(list) && list.some(n => n)));
   if (!hasName) return res.status(400).json({ error: '草稿内容为空' });
 
-  const row = db.prepare('SELECT cells, settings FROM duty_draft WHERE id = 1').get();
+  const row = store.getDoc('duty_draft');
   const mergedCells = packMode(row ? row.cells : null, mode, cells);
   const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
   // 本地时间口径（与全库一致）。原来用 toISOString() 是 UTC，

@@ -52,8 +52,9 @@ test('上限是「每 key」，不是整表上限：多个 key 各到 50 条也�
 // 结论的前提：key 必须是固定字面量。万一以后有人把 key 做成「每天一个」，
 // 每 key 上限就形同虚设（每天 50 条、永远不清旧天）。这里扫源码把动态 key 挡住。
 test('前提：撤销记录的 key 不能是动态拼接的（否则每 key 上限失效）', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/undo/undo.records.js'), 'utf8')
-  assert.match(src, /const MAX_PER_KEY = 50/, '上限常量必须还在')
+  // M12-B8：语句与上限常量一起下沉到 services/undoStore（路由只留撤销语义）
+  const src = fs.readFileSync(path.join(ROOT, 'student-backend/services/undoStore.js'), 'utf8')
+  assert.match(src, /const MAX_KEYS = 50/, '上限常量必须还在')
   assert.match(src, /SELECT id FROM undo_history WHERE key = \? ORDER BY id DESC LIMIT -1 OFFSET \?/,
     '清理必须按 key 分组、按 id 倒序保留最新的')
 

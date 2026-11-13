@@ -7,7 +7,7 @@
 
 const express = require('express')
 const { safeJson } = require('../../utils/json');
-const { db } = require('../../db')
+const undoStore = require('../../services/undoStore')
 const { executors } = require('./undo.executors')
 const {
   pushRecord, flip, undoOriginBatch, redoOriginBatch, undoAiChange, undoAiChanges, listAiChanges,
@@ -23,7 +23,7 @@ function batchLabel(b) {
 
 // 按 key 分组返回（含每组计数与记录）
 router.get('/', (req, res) => {
-  const rows = db.prepare('SELECT * FROM undo_history ORDER BY id ASC').all()
+  const rows = undoStore.listAll()
   const groups = []
   const map = new Map()
   for (const r of rows) {
@@ -59,8 +59,8 @@ router.post('/', (req, res) => {
 // 查询某 key 的撤销/重做可用态（供标题栏按钮显示禁用态与提示文案）
 router.get('/table/:key/status', (req, res) => {
   const key = req.params.key
-  const u = db.prepare('SELECT label FROM undo_history WHERE key = ? AND dir = 1 ORDER BY id DESC LIMIT 1').get(key)
-  const r = db.prepare('SELECT label FROM undo_history WHERE key = ? AND dir = 0 ORDER BY id DESC LIMIT 1').get(key)
+  const u = undoStore.latestByKey(key, 1)
+  const r = undoStore.latestByKey(key, 0)
   res.json({ canUndo: !!u, canRedo: !!r, undoLabel: u?.label || '', redoLabel: r?.label || '' })
 })
 
@@ -68,7 +68,7 @@ router.get('/table/:key/status', (req, res) => {
 // 最近一条带 origin 时按「批次」整批回退：一次用户动作（拖一次座位、AI 一次提案）可能登记多条记录，
 // Ctrl+Z 应该退回一步，而不是让用户按 N 次。无 origin 的普通记录仍是单条行为，与旧版一致。
 router.post('/table/:key/undo', async (req, res) => {
-  const rec = db.prepare('SELECT id, origin FROM undo_history WHERE key = ? AND dir = 1 ORDER BY id DESC LIMIT 1').get(req.params.key)
+  const rec = undoStore.latestByKey(req.params.key, 1, true)
   if (!rec) return res.json({ ok: false, error: '当前表没有可撤销的记录' })
   if (rec.origin) {
     const b = await undoOriginBatch(rec.origin)
@@ -83,7 +83,7 @@ router.post('/table/:key/undo', async (req, res) => {
 // 按 key 重做最近一条（dir 0 -> 1），供 Ctrl+Shift+Z / Ctrl+Y 使用
 // 与撤销对称：最近一条在 redo 侧且带 origin 时，整批重做（正序，与撤销的逆序相反）。
 router.post('/table/:key/redo', async (req, res) => {
-  const rec = db.prepare('SELECT id, origin FROM undo_history WHERE key = ? AND dir = 0 ORDER BY id DESC LIMIT 1').get(req.params.key)
+  const rec = undoStore.latestByKey(req.params.key, 0, true)
   if (!rec) return res.json({ ok: false, error: '当前表没有可重做的记录' })
   if (rec.origin) {
     const b = await redoOriginBatch(rec.origin)
@@ -144,15 +144,15 @@ router.post('/:id/redo', async (req, res) => {
 router.delete('/:id', (req, res) => {
   const id = parseUndoId(req.params.id)
   if (id == null) return res.status(400).json({ error: '记录 id 无效' })
-  db.prepare('DELETE FROM undo_history WHERE id = ?').run(id)
+  undoStore.deleteById(id)
   res.json({ ok: true })
 })
 
 // 清空某 key（?key=all 则清空全部）
 router.delete('/', (req, res) => {
   const { key } = req.query
-  if (key === 'all') db.prepare('DELETE FROM undo_history').run()
-  else if (key) db.prepare('DELETE FROM undo_history WHERE key = ?').run(key)
+  if (key === 'all') undoStore.clear(null)
+  else if (key) undoStore.clear(key)
   else return res.status(400).json({ error: '缺少 key' })
   res.json({ ok: true })
 })

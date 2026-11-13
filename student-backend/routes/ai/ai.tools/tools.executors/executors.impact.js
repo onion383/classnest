@@ -1,6 +1,8 @@
 // ===== AI 工具执行逻辑·delete_impact（删除前引用影响预估）=====
 // 纯代码搬运自 ../executors.js，行为不变。
-const { db } = require('../../../../db');
+const {
+  findRow, countReferences, sampleReferences, readSeatDoc, readDutyDoc,
+} = require('../../../../services/aiStore');
 const { READ_TABLES } = require('../../ai.constants');
 // JSON 列解析复用单源实现（此前本文件自抄了一份 parseJsonOr，与 executors.common.js 的 aiParseJson 逐字相同）
 const { safeJson } = require('../../../../utils/json');
@@ -36,26 +38,26 @@ function rowDisplayName(row, id) {
 }
 
 function impactOfRow(table, id) {
-  const row = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
+  const row = findRow(table, id);
   if (!row) return { table, id, error: `记录不存在（${table} id=${id}）` };
   const refs = [];
   const rules = REFERENCE_RULES[table] || [];
   for (const r of rules) {
     const val = r.via === '姓名' ? String(row['姓名'] || '') : id;
     if (val === '') continue;
-    const cnt = db.prepare(`SELECT COUNT(*) AS n FROM "${r.table}" WHERE "${r.field}" = ?`).get(val).n;
+    const cnt = countReferences(r.table, r.field, val);
     if (!cnt) continue;
-    const samples = db.prepare(`SELECT * FROM "${r.table}" WHERE "${r.field}" = ? LIMIT 3`).all(val).map((x) => rowDisplayName(x, x.id));
+    const samples = sampleReferences(r.table, r.field, val).map((x) => rowDisplayName(x, x.id));
     refs.push({ label: r.label, table: r.table, count: cnt, samples });
   }
   // 座位表 / 值日表：学生以 id（座位）或姓名（值日）散落在整块 JSON 里
   if (table === 'students') {
-    const seatRow = db.prepare('SELECT seats FROM seat_layout WHERE id = 1').get();
+    const seatRow = readSeatDoc();
     const seatHits = countInJson(safeJson(seatRow && seatRow.seats, []), (v) => v === id);
     if (seatHits) refs.push({ label: '当前座位表', table: 'seat_layout', count: seatHits, samples: [] });
     const name = String(row['姓名'] || '');
     if (name) {
-      const dutyRow = db.prepare('SELECT cells FROM duty_layout WHERE id = 1').get();
+      const dutyRow = readDutyDoc();
       const dutyHits = countInJson(safeJson(dutyRow && dutyRow.cells, {}), (v) => v === name);
       if (dutyHits) refs.push({ label: '当前值日表', table: 'duty_layout', count: dutyHits, samples: [] });
     }

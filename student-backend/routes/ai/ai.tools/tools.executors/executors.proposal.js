@@ -1,6 +1,7 @@
 // ===== AI 工具执行：写入提案（propose_* / 批量操作）=====
 // 纯代码搬运自 ../executors.js，行为不变。门面装配见 tools.js。
-const { db, getFields } = require('../../../../db');
+const { getFields } = require('../../../../db');
+const aiStore = require('../../../../services/aiStore');
 const { tableColumns, normColVal } = require('../../ai.helpers');
 const { WRITE_TABLES, JSON_WRITE_TABLES } = require('../../ai.constants');
 const { FRONT_SETTINGS, BATCH_ROW_TABLES, MAX_BATCH_OPS } = require('../tools.schema');
@@ -71,10 +72,7 @@ function normalizeBatchDelete({ table, ids, label }) {
   if (uniq.length > MAX_DELETE_BATCH) {
     return { error: `一次最多删除 ${MAX_DELETE_BATCH} 条（当前 ${uniq.length} 条），请分批处理` };
   }
-  const existing = db
-    .prepare(`SELECT id FROM "${table}" WHERE id IN (${uniq.map(() => '?').join(',')})`)
-    .all(...uniq)
-    .map((r) => r.id);
+  const existing = aiStore.existingIds(table, uniq);
   if (!existing.length) return { error: '要删除的记录都不存在，请先用 query 核对 id' };
   const missing = uniq.filter((id) => !existing.includes(id));
   const lbl = String(label || '').trim().slice(0, 60) || `批量删除${WRITE_TABLES[table]}（${existing.length} 条）`;
@@ -94,12 +92,12 @@ function normalizeJsonProposal({ table, id, values, label }) {
   // 不能再把缺失/非法 id 静默兜底成 1，否则模型少传一个字段就会覆盖第一行。
   let rid = Number.isInteger(id) && id > 0 ? id : null;
   if (rid == null) {
-    const rows = db.prepare(`SELECT id FROM "${table}" ORDER BY id LIMIT 2`).all();
+    const rows = aiStore.listIds(table, 2);
     if (rows.length !== 1) return { error: '缺少有效的记录 id，请先 query 确认要写入哪一行' };
     rid = rows[0].id;
   }
   const cols = tableColumns(table);
-  const row = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(rid);
+  const row = aiStore.findRow(table, rid);
   if (!row) return { error: `表中没有 id=${rid} 的行，请先用 query 读取现有数据` };
   // 仅保留该表真实列（剔除 id 与不存在的键），避免写入非法字段
   const keys = Object.keys(values).filter((k) => k !== 'id' && cols.includes(k) && values[k] !== undefined);
@@ -159,7 +157,7 @@ function buildUpdateDiff(table, id, changes) {
   if (unknown.length) {
     return { error: `要修改的字段不存在：${unknown.join('、')}。该表可用字段：${cols.filter((c) => c !== 'id').join('、')}` };
   }
-  const row = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
+  const row = aiStore.findRow(table, id);
   if (!row) return { error: `要修改的记录不存在（id=${id}），请先用 query 核对` };
   const diff = [];
   for (const k of Object.keys(changes).filter((key) => key !== 'id')) {
@@ -229,7 +227,7 @@ function normalizeBatchOps({ ops, label }) {
     if (action === 'delete') {
       const id = Number(data.id);
       if (!Number.isInteger(id) || id <= 0) return { error: `${at}：删除必须提供有效的 id` };
-      const row = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
+      const row = aiStore.findRow(table, id);
       if (!row) return { error: `${at}：要删除的记录不存在（${table} id=${id}）` };
       normalized.push({ action: 'delete', table, id });
       continue;
@@ -241,7 +239,7 @@ function normalizeBatchOps({ ops, label }) {
       if (!changes || !Object.keys(changes).length) return { error: `${at}：缺少要修改的字段（changes）` };
       const unknown = Object.keys(changes).filter((k) => k !== 'id' && !cols.includes(k));
       if (unknown.length) return { error: `${at}：要修改的字段不存在：${unknown.join('、')}` };
-      const row = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
+      const row = aiStore.findRow(table, id);
       if (!row) return { error: `${at}：要修改的记录不存在（${table} id=${id}）` };
       // 单条修改（normalizeProposal）已经清洗过，批量这里原来漏了：
       // 不清洗会让确认页展示 LLM 原值、落库时再被改写，两边不一致。
@@ -313,7 +311,7 @@ function normalizeProposal({ operation, table, data }) {
     const ava = cols.filter((c) => c !== 'id').join('、');
     const unknown = Object.keys(changes).filter((k) => k !== 'id' && !cols.includes(k));
     if (unknown.length) return { ok: false, error: `要修改的字段不存在：${unknown.join('、')}。该表可用字段：${ava}` };
-    const row = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
+    const row = aiStore.findRow(table, id);
     if (!row) return { ok: false, error: `要修改的记录不存在（id=${id}），请先用 query 核对` };
     diff = [];
     for (const k of Object.keys(changes).filter((key) => key !== 'id')) {

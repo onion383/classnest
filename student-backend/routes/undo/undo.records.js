@@ -4,15 +4,13 @@
 //   撤销记录的入库/读取、单条 undo/redo（flip）、AI 批次回退
 // =========================================================================
 
-const { db } = require('../../db')
+const undoStore = require('../../services/undoStore')
 const { executors } = require('./undo.executors')
 const { safeJson } = require('../../utils/json')
 
-const MAX_PER_KEY = 50
-
 // parse payload 安全包裹
 function getRecord(id) {
-  const rec = db.prepare('SELECT * FROM undo_history WHERE id = ?').get(id)
+  const rec = undoStore.findById(id)
   if (!rec) return null
   // 用 safeJson 而不是裸 JSON.parse：注释写着「安全包裹」但实现是裸解析，
   // 一条畸形 payload 会让整条 getRecord 抛 → 撤销面板 500（列表都打不开，
@@ -24,21 +22,11 @@ function getRecord(id) {
 
 // 新增一条可撤销记录（undo侧）
 // origin：来源标记。空=老师手动编辑；非空=AI 助手一次更改的批次标识（同批次整批回退）
+// 清空全部 redo + 插入 + 每 key 淘汰最旧，三步同事务（undoStore.push）。
+// 只清本 key 会在跨 key 批次里留下「另一半还能重做」的残尾：用户去另一张表按重做，
+// 数据就变成半新半旧 —— 时间线分叉后所有重做都该失效。
 function pushRecord(key, type, label, payload, origin) {
-  const ts = new Date().toISOString()
-  // 新增动作使**全部** redo 侧失效，而不是只清本 key：
-  // 批次可能跨 key（AI 一次改多张表），只清本 key 会留下「另一半还能重做」的残尾 ——
-  // 用户去另一张表按重做，数据就变成半新半旧。时间线分叉后所有重做都该失效。
-  db.prepare('DELETE FROM undo_history WHERE dir = 0').run()
-  const info = db.prepare(
-    'INSERT INTO undo_history (key, type, label, payload, dir, origin, ts) VALUES (?, ?, ?, ?, 1, ?, ?)'
-  ).run(key, type, label, JSON.stringify(payload), origin || '', ts)
-  // 每 key 上限，删最旧
-  const over = db.prepare(
-    'SELECT id FROM undo_history WHERE key = ? ORDER BY id DESC LIMIT -1 OFFSET ?'
-  ).all(key, MAX_PER_KEY)
-  for (const r of over) db.prepare('DELETE FROM undo_history WHERE id = ?').run(r.id)
-  return info.lastInsertRowid
+  return undoStore.push({ key, type, label, payload, origin: origin || '' })
 }
 
 // 执行 undo/redo 并切换 dir（执行器可能含异步文件操作，故为 async）
@@ -52,7 +40,7 @@ async function flip(id, fromDir, toDir, mode) {
   if (validation) return { error: validation }
   // 先 CAS 抢占方向，再执行副作用：原先「执行成功后才切 dir」在 UPDATE 失败时会允许同向重放。
   // 执行失败则把 dir 改回去，记录仍可重试；极端崩溃只会少一次可撤销，不会重复执行。
-  const claim = db.prepare('UPDATE undo_history SET dir = ? WHERE id = ? AND dir = ?').run(toDir, id, fromDir)
+  const claim = undoStore.claimDir(id, toDir, fromDir)
   if (claim.changes !== 1) {
     return { error: mode === 'undo' ? '该条已无可撤销' : '该条已无可重做' }
   }
@@ -60,7 +48,7 @@ async function flip(id, fromDir, toDir, mode) {
     await ex[mode](rec.payload)
   } catch (err) {
     try {
-      db.prepare('UPDATE undo_history SET dir = ? WHERE id = ? AND dir = ?').run(fromDir, id, toDir)
+      undoStore.releaseDir(id, fromDir, toDir)
     } catch (rollbackErr) {
       // 回滚失败只可能是库不可写；保留日志，至少不要掩盖原始执行错误
       console.error('[undo] 执行失败后回滚 dir 失败:', rollbackErr.message)
@@ -81,7 +69,7 @@ async function flip(id, fromDir, toDir, mode) {
 
 // 回退某一批次（origin 相同）的全部记录。origin 为 AI 一次更改的批次标识。
 async function undoOriginBatch(origin) {
-  const rows = db.prepare('SELECT id FROM undo_history WHERE dir = 1 AND origin = ? ORDER BY id DESC').all(origin)
+  const rows = undoStore.idsByOrigin(origin, 1, 'DESC')
   const labels = []
   for (const r of rows) {
     const res = await flip(r.id, 1, 0, 'undo')
@@ -94,7 +82,7 @@ async function undoOriginBatch(origin) {
 // 重做某一批次的全部记录（origin 相同、当前在 redo 侧）。
 // 顺序与 undoOriginBatch 相反：撤销是逆序退（后做的先退），重做必须正序上（先做的先回）。
 async function redoOriginBatch(origin) {
-  const rows = db.prepare('SELECT id FROM undo_history WHERE dir = 0 AND origin = ? ORDER BY id ASC').all(origin)
+  const rows = undoStore.idsByOrigin(origin, 0, 'ASC')
   const labels = []
   for (const r of rows) {
     const res = await flip(r.id, 0, 1, 'redo')
@@ -109,11 +97,7 @@ async function redoOriginBatch(origin) {
 //   只处理 origin 非空的记录，不会误撤销老师手动编辑产生的撤销记录。
 //   返回 { ok, count, labels } 或 { ok:false, error }。供 AI 工具 undo_change 复用。
 async function undoAiChange(key) {
-  let sql = "SELECT origin FROM undo_history WHERE dir = 1 AND origin <> ''"
-  const params = []
-  if (key) { sql += ' AND key = ?'; params.push(String(key)) }
-  sql += ' ORDER BY id DESC LIMIT 1'
-  const last = db.prepare(sql).get(...params)
+  const last = undoStore.latestAiOrigin(key)
   if (!last) {
     return { ok: false, error: key ? `没有可撤销的、你此前对「${key}」做出的更改` : '你此前没有可撤销的更改' }
   }
@@ -124,7 +108,7 @@ async function undoAiChange(key) {
 //   step 从 1 起：1 = 最近一次更改。返回 [{ step, label, count, keys, ts, id, origin }]。
 //   供 AI 工具 list_changes 复用，让模型看到撤销栈（不再是盲退）。
 function listAiChanges(limit) {
-  const rows = db.prepare("SELECT id, key, label, origin, ts FROM undo_history WHERE dir = 1 AND origin <> '' ORDER BY id DESC").all()
+  const rows = undoStore.listAiRows()
   const batches = []
   const map = new Map()
   for (const r of rows) {

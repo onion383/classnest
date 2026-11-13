@@ -1,126 +1,30 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db');
-const { ensureProvisionalStudent } = require('../services/provisionalStudents');
+const groupDim = require('../services/groupDim');
 
 // ============ 上限常量（与前端一致） ============
 const MAX_MEMBERS_PER_GROUP = 99; // 每组最大人数
 const MAX_GROUP_COUNT = 50;       // 单个维度最大小组数
 const clamp = (v, min, max) => Math.min(max, Math.max(min, Number(v) || 0));
 
-// ============ 维度级 ============
-
-// 确保存在内置的「宿舍组」默认维度（不可删除/不可改名，作为首页第一个 tab）
-function ensureDefaultDim() {
-  const existing = db.prepare('SELECT * FROM group_dimensions WHERE is_default = 1').get();
-  if (existing) return;
-  const existsByName = db.prepare('SELECT * FROM group_dimensions WHERE name = ?').get('宿舍组');
-  const tx = db.transaction(() => {
-    // 若已有同名普通维度，直接升级为默认；否则新建
-    if (existsByName) {
-      db.prepare('UPDATE group_dimensions SET is_default = 1, sort_order = 1 WHERE id = ?').run(existsByName.id);
-    } else {
-      db.prepare(
-        `INSERT INTO group_dimensions (name, leader_title, members_per_group, group_count, is_default, sort_order, male_group_count, female_group_count) VALUES (?, '宿舍长', 6, 0, 1, 1, 0, 0)`
-      ).run('宿舍组');
-    }
-  });
-  tx();
-}
-
-// 列出所有分组维度（先确保内置默认维度存在）
-function listDimensions() {
-  ensureDefaultDim();
-  return db.prepare('SELECT * FROM group_dimensions ORDER BY sort_order, id').all();
-}
-
-// 读取某个维度及全部组/成员
-function loadDimension(dimId) {
-  const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(dimId);
-  if (!dim) return null;
-  const groups = db.prepare('SELECT id, name, gender, sort_order FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId);
-  const membersStmt = db.prepare('SELECT id, group_id, member_name, remark FROM group_members WHERE group_id = ? ORDER BY sort_order, id');
-  const data = groups.map(g => ({ ...g, members: membersStmt.all(g.id) }));
-  return { dimension: dim, groups: data };
-}
-
-// 在维度下追加 count 个空小组（组名留空，由用户填写）
-function insertGroups(dimId, baseName = '', count) {
-  const maxSort = db.prepare('SELECT MAX(sort_order) AS max FROM groups WHERE dimension_id = ?').get(dimId).max || 0;
-  const stmt = db.prepare('INSERT INTO groups (dimension_id, name, sort_order) VALUES (?, ?, ?)');
-  for (let i = 0; i < count; i++) {
-    stmt.run(dimId, baseName, maxSort + i + 1);
-  }
-}
-
-// 将维度下的小组数量同步到 newCount：少了补、多了删（连同成员）
-function syncGroups(dimId, newCount) {
-  const existing = db.prepare('SELECT id FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId);
-  if (existing.length < newCount) {
-    insertGroups(dimId, '', newCount - existing.length);
-  } else if (existing.length > newCount) {
-    const removeList = existing.slice(newCount);
-    const delMembers = db.prepare('DELETE FROM group_members WHERE group_id = ?');
-    const delGroup = db.prepare('DELETE FROM groups WHERE id = ?');
-    for (const g of removeList) {
-      delMembers.run(g.id);
-      delGroup.run(g.id);
-    }
-    const rest = db.prepare('SELECT id FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId);
-    const upd = db.prepare('UPDATE groups SET sort_order = ? WHERE id = ?');
-    rest.forEach((r, i) => upd.run(i + 1, r.id));
-  }
-}
-
-// 宿舍（内置）维度：按 男生宿舍数 + 女生宿舍数 同步组，组名带编号并标记性别。
-// 只在数量变化时增删差额，并统一规范组名与排序。
-// 不能像原来那样「全删重建」：老师只是改一下每组人数 / 组长称呼，全班宿舍分配
-//（谁在几号宿舍）就会被一起清空，而这一步没有写撤销记录，等于不可恢复。
-function syncGenderGroups(dimId, maleCount, femaleCount) {
-  const groups = db.prepare('SELECT id, gender FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId);
-  // 老数据的 gender 可能为空：按「男」处理（原实现也是先男后女）
-  const male = groups.filter(g => Number(g.gender) !== 1);
-  const female = groups.filter(g => Number(g.gender) === 1);
-
-  const delMembers = db.prepare('DELETE FROM group_members WHERE group_id = ?');
-  const delGroup = db.prepare('DELETE FROM groups WHERE id = ?');
-  const updGroup = db.prepare('UPDATE groups SET name = ?, gender = ?, sort_order = ? WHERE id = ?');
-  const insGroup = db.prepare('INSERT INTO groups (dimension_id, name, gender, sort_order) VALUES (?, ?, ?, ?)');
-
-  let sort = 1;
-  [
-    { list: male, count: maleCount, prefix: '男生宿舍', gender: 0 },
-    { list: female, count: femaleCount, prefix: '女生宿舍', gender: 1 },
-  ].forEach(({ list, count, prefix, gender }) => {
-    // 多出来的组从尾部删（连同成员）
-    for (let i = count; i < list.length; i++) {
-      delMembers.run(list[i].id);
-      delGroup.run(list[i].id);
-    }
-    for (let i = 0; i < count; i++) {
-      const name = `${prefix}${i + 1}`;
-      // 保留的组只改名/性别/排序，id 不变 → 成员分配原样留着
-      if (i < list.length) updGroup.run(name, gender, sort++, list[i].id);
-      else insGroup.run(dimId, name, gender, sort++);
-    }
-  });
-}
+// 语句与「读多次再写多次」的复合操作都在 services/groupDim.js：
+// 这里只留 HTTP 形状、上限常量与「内置宿舍组 vs 普通维度」的分支。
 
 // GET /api/group-manage/bootstrap —— 维度列表 + 第一个维度详情（供前端初始加载）
 router.get('/bootstrap', (req, res) => {
-    const dimensions = listDimensions();
+    const dimensions = groupDim.listDimensions();
   let active = null;
   if (dimensions.length > 0) {
-    active = loadDimension(dimensions[0].id);
+    active = groupDim.loadDimension(dimensions[0].id);
   }
   res.json({ dimensions, active });
 });
 
 // GET /api/group-manage/:dimId —— 读取指定维度详情
 router.get('/:dimId', (req, res) => {
-    const data = loadDimension(Number(req.params.dimId));
+    const data = groupDim.loadDimension(Number(req.params.dimId));
   if (!data) return res.status(404).json({ error: '维度不存在' });
-  res.json({ dimensions: listDimensions(), ...data });
+  res.json({ dimensions: groupDim.listDimensions(), ...data });
 });
 
 // POST /api/group-manage/dimensions —— 新增维度（按组数自动初始化小组）
@@ -128,20 +32,12 @@ router.post('/dimensions', (req, res) => {
   try {
     const { name, leader_title = '', members_per_group = 0, group_count = 0 } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: '请输入维度名称' });
-    const maxSort = db.prepare('SELECT MAX(sort_order) AS max FROM group_dimensions').get().max || 0;
-    const count = clamp(group_count, 0, MAX_GROUP_COUNT);
-    const mpg = clamp(members_per_group, 0, MAX_MEMBERS_PER_GROUP);
-
-    const tx = db.transaction(() => {
-      const result = db.prepare(
-        `INSERT INTO group_dimensions (name, leader_title, members_per_group, group_count, sort_order) VALUES (?, ?, ?, ?, ?)`
-      ).run(String(name).trim(), String(leader_title).trim(), mpg, count, maxSort + 1);
-      const dimId = result.lastInsertRowid;
-      insertGroups(dimId, '', count);
-      return dimId;
+    const dimId = groupDim.createDimension({
+      name,
+      leaderTitle: leader_title,
+      membersPerGroup: clamp(members_per_group, 0, MAX_MEMBERS_PER_GROUP),
+      groupCount: clamp(group_count, 0, MAX_GROUP_COUNT),
     });
-
-    const dimId = tx();
     res.json({ id: dimId, message: '添加成功' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -153,7 +49,7 @@ router.put('/dimensions/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
     const { name, leader_title, members_per_group, group_count } = req.body;
-    const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(id);
+    const dim = groupDim.dimensionById(id);
     if (!dim) return res.status(404).json({ error: '维度不存在' });
 
     // ===== 内置宿舍组（特殊表单）：组名不可改，用 男/女生宿舍数 管理组 =====
@@ -161,38 +57,24 @@ router.put('/dimensions/:id', (req, res) => {
       const male = req.body.male_group_count !== undefined ? clamp(req.body.male_group_count, 0, MAX_GROUP_COUNT) : dim.male_group_count;
       const female = req.body.female_group_count !== undefined ? clamp(req.body.female_group_count, 0, MAX_GROUP_COUNT) : dim.female_group_count;
       const mpg = members_per_group !== undefined ? clamp(members_per_group, 0, MAX_MEMBERS_PER_GROUP) : dim.members_per_group;
-      const tx = db.transaction(() => {
-        db.prepare(
-          `UPDATE group_dimensions SET leader_title = ?, members_per_group = ?, male_group_count = ?, female_group_count = ? WHERE id = ?`
-        ).run(
-          leader_title !== undefined ? String(leader_title).trim() : dim.leader_title,
-          mpg,
-          male,
-          female,
-          id
-        );
-        syncGenderGroups(id, male, female);
+      groupDim.updateDefaultDimension(id, {
+        leaderTitle: leader_title !== undefined ? String(leader_title).trim() : dim.leader_title,
+        membersPerGroup: mpg,
+        maleCount: male,
+        femaleCount: female,
       });
-      tx();
       return res.json({ message: '保存成功' });
     }
 
     // ===== 普通维度 =====
     const newCount = group_count !== undefined ? clamp(group_count, 0, MAX_GROUP_COUNT) : dim.group_count;
     const newMpg = members_per_group !== undefined ? clamp(members_per_group, 0, MAX_MEMBERS_PER_GROUP) : dim.members_per_group;
-    const tx = db.transaction(() => {
-      db.prepare(
-        `UPDATE group_dimensions SET name = ?, leader_title = ?, members_per_group = ?, group_count = ? WHERE id = ?`
-      ).run(
-        name !== undefined ? String(name).trim() : dim.name,
-        leader_title !== undefined ? String(leader_title).trim() : dim.leader_title,
-        newMpg,
-        newCount,
-        id
-      );
-      syncGroups(id, newCount);
+    groupDim.updateDimension(id, {
+      name: name !== undefined ? String(name).trim() : dim.name,
+      leaderTitle: leader_title !== undefined ? String(leader_title).trim() : dim.leader_title,
+      membersPerGroup: newMpg,
+      groupCount: newCount,
     });
-    tx();
     res.json({ message: '保存成功' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -202,61 +84,23 @@ router.put('/dimensions/:id', (req, res) => {
 // DELETE /api/group-manage/dimensions/:id —— 删除维度（级联删除组与成员；内置宿舍组不可删除）
 router.delete('/dimensions/:id', (req, res) => {
     const id = Number(req.params.id);
-  const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(id);
+  const dim = groupDim.dimensionById(id);
   if (!dim) return res.status(404).json({ error: '维度不存在' });
   if (dim.is_default) return res.status(400).json({ error: '内置宿舍组不可删除' });
-  const groups = db.prepare('SELECT * FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(id);
-  const groupIds = groups.map((g) => g.id);
-  // 成员按组一次性取回（含 id / sort_order），撤销时可直接重建
-  const members = groupIds.length
-    ? db.prepare(`SELECT * FROM group_members WHERE group_id IN (${groupIds.map(() => '?').join(',')}) ORDER BY group_id, sort_order, id`).all(...groupIds)
-    : [];
-  // 排序快照必须取**删除前**的值：删除后会把剩余维度重排成 1..n，
-  // 撤销时若只重插维度行，其余维度的 sort_order 已被改过，顺序回不到原样。
-  const sortOrders = db.prepare('SELECT id, sort_order FROM group_dimensions ORDER BY sort_order, id').all();
-  const delMembers = db.prepare('DELETE FROM group_members WHERE group_id = ?');
-  const tx = db.transaction(() => {
-    for (const g of groups) delMembers.run(g.id);
-    db.prepare('DELETE FROM groups WHERE dimension_id = ?').run(id);
-    db.prepare('DELETE FROM group_dimensions WHERE id = ?').run(id);
-    // 维度内部排序重排
-    const rest = db.prepare('SELECT id FROM group_dimensions ORDER BY sort_order, id').all();
-    const upd = db.prepare('UPDATE group_dimensions SET sort_order = ? WHERE id = ?');
-    rest.forEach((r, i) => upd.run(i + 1, r.id));
-  });
-  tx();
-  // 带回完整快照：维度删除原先不可撤销，删掉后所有小组/成员只能手工重建。
-  res.json({ message: '删除成功', removed: { dimension: dim, groups, members, sortOrders } });
+  // removed 带回完整快照：维度删除原先不可撤销，删掉后所有小组/成员只能手工重建。
+  const removed = groupDim.deleteDimension(id);
+  res.json({ message: '删除成功', removed });
 });
 
 // 移动维度
 router.post('/dimensions/move', (req, res) => {
   try {
     const { id, direction } = req.body;
-    // 「确保内置默认维度存在」是一个**写**（listDimensions → ensureDefaultDim），
-    // 它原先藏在读函数里，且发生在排序更新之前、又不在同一个事务里 ——
-    // 排序中途失败时，这条默认维度已经落库：用户只是「移动了一下排序」，
-    // 库里却凭空多出一个维度。
-    //
-    // 现在把它和排序更新放进同一个事务：要么都成、要么都不成。
-    // ensureDefaultDim 自带事务（嵌套时 better-sqlite3 走 SAVEPOINT，行为一致）。
-    //
-    // 边界判断也放进事务内（它依赖事务内的读），但结果用变量带出来，
-    // 响应仍在事务外发 —— 事务里不做 IO。
-    let atBoundary = false;
-    const tx = db.transaction(() => {
-      ensureDefaultDim();
-      const dims = db.prepare('SELECT * FROM group_dimensions ORDER BY sort_order, id').all();
-      const idx = dims.findIndex(d => d.id === id);
-      const target = direction === 'up' ? idx - 1 : idx + 1;
-      if (idx < 0 || target < 0 || target >= dims.length) { atBoundary = true; return; }
-      const tmp = dims[idx]; dims[idx] = dims[target]; dims[target] = tmp;
-      const upd = db.prepare('UPDATE group_dimensions SET sort_order = ? WHERE id = ?');
-      // 逐条 UPDATE 也放进同一个事务：中途失败时排序不会只改一半
-      dims.forEach((d, i) => upd.run(i + 1, d.id));
-    });
-    tx();
-    if (atBoundary) return res.status(400).json({ error: '已到边界' });
+    // 「确保内置默认维度存在」是写操作，已与排序更新一起收进 groupDim.moveDimension 的同一事务：
+    // 排序中途失败时不会凭空多出一个默认维度（原先它藏在读函数里、且独立提交）。
+    if (!groupDim.moveDimension(Number(id), direction)) {
+      return res.status(400).json({ error: '已到边界' });
+    }
     res.json({ message: '排序已更新' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -269,17 +113,14 @@ router.post('/dimensions/move', (req, res) => {
 router.post('/dimensions/:dimId/groups', (req, res) => {
   try {
     const dimId = Number(req.params.dimId);
-    const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(dimId);
+    const dim = groupDim.dimensionById(dimId);
     if (!dim) return res.status(404).json({ error: '维度不存在' });
     const { name } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: '请输入小组名字' });
-    const total = db.prepare('SELECT COUNT(*) AS c FROM groups WHERE dimension_id = ?').get(dimId).c;
-    if (total >= MAX_GROUP_COUNT) return res.status(400).json({ error: `小组数量不能超过 ${MAX_GROUP_COUNT} 个` });
-    const maxSort = db.prepare('SELECT MAX(sort_order) AS max FROM groups WHERE dimension_id = ?').get(dimId).max || 0;
-    const result = db.prepare(
-      `INSERT INTO groups (dimension_id, name, sort_order) VALUES (?, ?, ?)`
-    ).run(dimId, String(name).trim(), maxSort + 1);
-    res.json({ id: result.lastInsertRowid, message: '添加成功' });
+    if (groupDim.groupCount(dimId) >= MAX_GROUP_COUNT) {
+      return res.status(400).json({ error: `小组数量不能超过 ${MAX_GROUP_COUNT} 个` });
+    }
+    res.json({ id: groupDim.addGroup(dimId, name), message: '添加成功' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -290,25 +131,18 @@ router.put('/groups/:id', (req, res) => {
     const id = Number(req.params.id);
   const { name } = req.body;
   if (!name || !String(name).trim()) return res.status(400).json({ error: '请输入小组名字' });
-  const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(id);
+  const g = groupDim.groupById(id);
   if (!g) return res.status(404).json({ error: '小组不存在' });
-  db.prepare('UPDATE groups SET name = ? WHERE id = ?').run(String(name).trim(), id);
+  groupDim.renameGroup(id, name);
   res.json({ message: '保存成功' });
 });
 
 // DELETE /api/group-manage/groups/:id —— 删除组（级联删除成员）
 router.delete('/groups/:id', (req, res) => {
     const id = Number(req.params.id);
-  const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(id);
+  const g = groupDim.groupById(id);
   if (!g) return res.status(404).json({ error: '小组不存在' });
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM group_members WHERE group_id = ?').run(id);
-    db.prepare('DELETE FROM groups WHERE id = ?').run(id);
-    const rest = db.prepare('SELECT id FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(g.dimension_id);
-    const upd = db.prepare('UPDATE groups SET sort_order = ? WHERE id = ?');
-    rest.forEach((r, i) => upd.run(i + 1, r.id));
-  });
-  tx();
+  groupDim.deleteGroup(id, g.dimension_id);
   res.json({ message: '删除成功' });
 });
 
@@ -318,29 +152,20 @@ router.delete('/groups/:id', (req, res) => {
 router.post('/groups/:groupId/members', (req, res) => {
   try {
     const groupId = Number(req.params.groupId);
-    const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
+    const g = groupDim.groupById(groupId);
     if (!g) return res.status(404).json({ error: '小组不存在' });
     const { member_name = '', remark = '' } = req.body;
     const name = String(member_name).trim();
     if (!name) return res.status(400).json({ error: '成员姓名不能为空' });
-    const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(g.dimension_id);
-    const count = db.prepare('SELECT COUNT(*) AS c FROM group_members WHERE group_id = ?').get(groupId).c;
+    const dim = groupDim.dimensionById(g.dimension_id);
     const perGroupLimit = dim && dim.members_per_group > 0 ? dim.members_per_group : MAX_MEMBERS_PER_GROUP;
     const effectiveLimit = Math.min(perGroupLimit, MAX_MEMBERS_PER_GROUP);
-    if (count >= effectiveLimit) return res.status(400).json({ error: `该组人数已达上限 ${effectiveLimit} 人` });
-    const maxSort = db.prepare('SELECT MAX(sort_order) AS max FROM group_members WHERE group_id = ?').get(groupId).max || 0;
-    // 直接输入的新名字也要有稳定身份：解析/建档与写成员放在同一事务里，
-    // 避免「建了临时学生但成员没插进去」的半截状态。
-    let result;
-    let student = null;
-    db.transaction(() => {
-      student = ensureProvisionalStudent(name);
-      result = db.prepare(
-        `INSERT INTO group_members (group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?)`
-      ).run(groupId, name, String(remark).trim(), maxSort + 1);
-    })();
+    if (groupDim.memberCount(groupId) >= effectiveLimit) {
+      return res.status(400).json({ error: `该组人数已达上限 ${effectiveLimit} 人` });
+    }
+    const { id, student } = groupDim.addMember(groupId, name, remark);
     res.json({
-      id: result.lastInsertRowid,
+      id,
       // 回传解析结果，供前端以后把成员绑定到 student_id；现在先只用于提示/调试
       student: student && student.id ? { id: student.id, 姓名: name, is_provisional: !!student.is_provisional } : null,
       message: '添加成功',
@@ -354,33 +179,15 @@ router.post('/groups/:groupId/members', (req, res) => {
 router.put('/group-members/:id', (req, res) => {
     const id = Number(req.params.id);
   const { member_name, remark } = req.body;
-  const m = db.prepare('SELECT * FROM group_members WHERE id = ?').get(id);
-  if (!m) return res.status(404).json({ error: '成员不存在' });
-  const nextName = member_name !== undefined ? String(member_name).trim() : m.member_name;
-  db.transaction(() => {
-    // 改成新名字时同样解析/建档：成员名与名册保持一致，下次候选框就能直接选到
-    if (member_name !== undefined && nextName) ensureProvisionalStudent(nextName);
-    db.prepare('UPDATE group_members SET member_name = ?, remark = ? WHERE id = ?').run(
-      nextName,
-      remark !== undefined ? String(remark).trim() : m.remark,
-      id
-    );
-  })();
+  if (!groupDim.memberById(id)) return res.status(404).json({ error: '成员不存在' });
+  groupDim.updateMember(id, { memberName: member_name, remark });
   res.json({ message: '保存成功' });
 });
 
 // DELETE /api/group-manage/group-members/:id —— 删除成员
 router.delete('/group-members/:id', (req, res) => {
     const id = Number(req.params.id);
-  const m = db.prepare('SELECT * FROM group_members WHERE id = ?').get(id);
-  if (!m) return res.status(404).json({ error: '成员不存在' });
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM group_members WHERE id = ?').run(id);
-    const rest = db.prepare('SELECT id FROM group_members WHERE group_id = ? ORDER BY sort_order, id').all(m.group_id);
-    const upd = db.prepare('UPDATE group_members SET sort_order = ? WHERE id = ?');
-    rest.forEach((r, i) => upd.run(i + 1, r.id));
-  });
-  tx();
+  if (!groupDim.deleteMember(id)) return res.status(404).json({ error: '成员不存在' });
   res.json({ message: '删除成功' });
 });
 
@@ -391,48 +198,26 @@ router.post('/group-members/move', (req, res) => {
     const memberId = Number(req.body.memberId);
     const targetGroupId = Number(req.body.targetGroupId);
     const targetIndex = Math.max(0, Number(req.body.targetIndex) || 0);
-    const m = db.prepare('SELECT * FROM group_members WHERE id = ?').get(memberId);
+    const m = groupDim.memberById(memberId);
     if (!m) return res.status(404).json({ error: '成员不存在' });
-    const tgt = db.prepare('SELECT * FROM groups WHERE id = ?').get(targetGroupId);
+    const tgt = groupDim.groupById(targetGroupId);
     if (!tgt) return res.status(404).json({ error: '目标小组不存在' });
-
-    const getIds = (gid) => db.prepare('SELECT id FROM group_members WHERE group_id = ? ORDER BY sort_order, id').all(gid).map(r => r.id);
-    const upd = db.prepare('UPDATE group_members SET sort_order = ? WHERE id = ?');
 
     const sourceGroupId = m.group_id;
     // 跨组移入：目标组满员则拒绝，避免超出人数上限
     if (sourceGroupId !== targetGroupId) {
-      const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(tgt.dimension_id);
-      const targetCount = db.prepare('SELECT COUNT(*) AS c FROM group_members WHERE group_id = ?').get(targetGroupId).c;
+      const dim = groupDim.dimensionById(tgt.dimension_id);
       const perGroupLimit = dim && dim.members_per_group > 0 ? dim.members_per_group : MAX_MEMBERS_PER_GROUP;
-      if (targetCount >= Math.min(perGroupLimit, MAX_MEMBERS_PER_GROUP)) {
-        return res.status(400).json({ error: `该组人数已达上限 ${Math.min(perGroupLimit, MAX_MEMBERS_PER_GROUP)} 人，无法移入` });
+      const limit = Math.min(perGroupLimit, MAX_MEMBERS_PER_GROUP);
+      if (groupDim.memberCount(targetGroupId) >= limit) {
+        return res.status(400).json({ error: `该组人数已达上限 ${limit} 人，无法移入` });
       }
     }
-    const tx = db.transaction(() => {
-      if (sourceGroupId === targetGroupId) {
-        const ids = getIds(sourceGroupId).filter(id => id !== memberId);
-        const idx = Math.min(targetIndex, ids.length);
-        ids.splice(idx, 0, memberId);
-        ids.forEach((id, i) => upd.run(i + 1, id));
-      } else {
-        // 从源组移除并重排
-        const srcIds = getIds(sourceGroupId).filter(id => id !== memberId);
-        srcIds.forEach((id, i) => upd.run(i + 1, id));
-        // 改到目标组
-        db.prepare('UPDATE group_members SET group_id = ? WHERE id = ?').run(targetGroupId, memberId);
-        // 插入目标组并重排
-        const ids = getIds(targetGroupId).filter(id => id !== memberId);
-        const idx = Math.min(targetIndex, ids.length);
-        ids.splice(idx, 0, memberId);
-        ids.forEach((id, i) => upd.run(i + 1, id));
-      }
-    });
-    tx();
+    groupDim.moveMember(memberId, sourceGroupId, targetGroupId, targetIndex);
 
-    const dimData = loadDimension(tgt.dimension_id);
+    const dimData = groupDim.loadDimension(tgt.dimension_id);
     if (!dimData) return res.status(404).json({ error: '维度不存在' });
-    res.json({ dimensions: listDimensions(), ...dimData });
+    res.json({ dimensions: groupDim.listDimensions(), ...dimData });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -444,13 +229,13 @@ router.post('/group-members/move', (req, res) => {
 router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
   try {
     const dimId = Number(req.params.dimId);
-    const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(dimId);
+    const dim = groupDim.dimensionById(dimId);
     if (!dim) return res.status(404).json({ error: '维度不存在' });
     const rawGroups = req.body?.groups;
     if (!Array.isArray(rawGroups)) return res.status(400).json({ error: '分组数据格式不正确' });
-    const groups = db.prepare('SELECT id FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId);
-    if (rawGroups.length > groups.length) {
-      return res.status(400).json({ error: `分组数量不能超过该维度的 ${groups.length} 个小组` });
+    const groupTotal = groupDim.groupCount(dimId);
+    if (rawGroups.length > groupTotal) {
+      return res.status(400).json({ error: `分组数量不能超过该维度的 ${groupTotal} 个小组` });
     }
     // 与单条添加/移动保持同一上限：每组人数不得超过维度设置（且不超过硬上限）
     const perGroupLimit = dim.members_per_group > 0
@@ -464,25 +249,11 @@ router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
         return res.status(400).json({ error: `第 ${gi + 1} 组有 ${count} 人，超过上限 ${perGroupLimit} 人` });
       }
     }
-    const input = rawGroups;
 
-    const tx = db.transaction(() => {
-      const delMembers = db.prepare('DELETE FROM group_members WHERE group_id = ?');
-      const insert = db.prepare('INSERT INTO group_members (group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?)');
-      groups.forEach((g, gi) => {
-        delMembers.run(g.id);
-        const names = input[gi] || [];
-        names.forEach((name, i) => {
-          const n = String(name || '').trim();
-          if (!n) return;
-          insert.run(g.id, n, '', i + 1);
-        });
-      });
-    });
-    tx();
+    groupDim.replaceGroupMembers(dimId, rawGroups);
 
-    const data = loadDimension(dimId);
-    res.json({ dimensions: listDimensions(), ...data });
+    const data = groupDim.loadDimension(dimId);
+    res.json({ dimensions: groupDim.listDimensions(), ...data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -499,7 +270,7 @@ router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
 router.post('/dimensions/:dimId/import', (req, res) => {
   try {
     const dimId = Number(req.params.dimId);
-    const dim = db.prepare('SELECT * FROM group_dimensions WHERE id = ?').get(dimId);
+    const dim = groupDim.dimensionById(dimId);
     if (!dim) return res.status(404).json({ error: '维度不存在' });
     const { fields, rows } = req.body || {};
     if (!Array.isArray(fields) || !Array.isArray(rows)) {
@@ -517,67 +288,33 @@ router.post('/dimensions/:dimId/import', (req, res) => {
       return '';
     };
 
+    // 先整体解析成条目（缺列直接报错，不带行号之外的副作用），再交给 service 落库
+    const entries = rows.map((row, idx) => {
+      const rowNo = idx + 1;
+      const groupName = cell(row, ['小组', '小组名', '组名']);
+      const memberName = cell(row, ['姓名', '成员姓名', '成员']);
+      if (!groupName) throw new Error(`第 ${rowNo} 行缺少「小组」`);
+      if (!memberName) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
+      return { groupName, memberName, remark: cell(row, ['备注']), rowNo };
+    });
+
     const perGroupLimit = dim.members_per_group > 0
       ? Math.min(dim.members_per_group, MAX_MEMBERS_PER_GROUP)
       : MAX_MEMBERS_PER_GROUP;
 
-    let createdGroups = 0;
-    let addedMembers = 0;
-    let skippedMembers = 0;
-
-    const tx = db.transaction(() => {
-      const findGroup = db.prepare('SELECT id, name FROM groups WHERE dimension_id = ? AND name = ? ORDER BY sort_order, id LIMIT 1');
-      const insertGroup = db.prepare('INSERT INTO groups (dimension_id, name, sort_order) VALUES (?, ?, ?)');
-      const findMember = db.prepare('SELECT id FROM group_members WHERE group_id = ? AND member_name = ?');
-      const insertMember = db.prepare('INSERT INTO group_members (group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?)');
-      const countMembers = db.prepare('SELECT COUNT(*) AS n FROM group_members WHERE group_id = ?');
-      const maxGroupSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM groups WHERE dimension_id = ?');
-      const maxMemberSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM group_members WHERE group_id = ?');
-      const countGroups = db.prepare('SELECT COUNT(*) AS n FROM groups WHERE dimension_id = ?');
-
-      rows.forEach((row, idx) => {
-        const rowNo = idx + 1;
-        const groupName = cell(row, ['小组', '小组名', '组名']);
-        const memberName = cell(row, ['姓名', '成员姓名', '成员']);
-        const remark = cell(row, ['备注']);
-        if (!groupName) throw new Error(`第 ${rowNo} 行缺少「小组」`);
-        if (!memberName) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
-
-        let group = findGroup.get(dimId, groupName);
-        if (!group) {
-          if (dim.is_default) {
-            throw new Error(`第 ${rowNo} 行：内置宿舍组不能新建小组「${groupName}」，请先在「设置」里调整男/女生宿舍数`);
-          }
-          if (countGroups.get(dimId).n >= MAX_GROUP_COUNT) {
-            throw new Error(`第 ${rowNo} 行：小组数量不能超过 ${MAX_GROUP_COUNT} 个`);
-          }
-          const sort = (maxGroupSort.get(dimId).m || 0) + 1;
-          const info = insertGroup.run(dimId, groupName, sort);
-          group = { id: info.lastInsertRowid, name: groupName };
-          createdGroups += 1;
-        }
-
-        if (findMember.get(group.id, memberName)) {
-          skippedMembers += 1;
-          return;
-        }
-        const cur = countMembers.get(group.id).n;
-        if (cur >= perGroupLimit) {
-          throw new Error(`第 ${rowNo} 行：「${group.name}」人数已达上限 ${perGroupLimit} 人`);
-        }
-        const sort = (maxMemberSort.get(group.id).m || 0) + 1;
-        ensureProvisionalStudent(memberName);
-        insertMember.run(group.id, memberName, remark, sort);
-        addedMembers += 1;
-      });
+    const { createdGroups, addedMembers, skippedMembers } = groupDim.importMembers({
+      dimId,
+      entries,
+      allowCreateGroups: !dim.is_default,
+      perGroupLimit,
+      maxGroupCount: MAX_GROUP_COUNT,
     });
-    tx();
 
-    const data = loadDimension(dimId);
+    const data = groupDim.loadDimension(dimId);
     res.json({
       message: `成功导入 ${addedMembers} 名成员${createdGroups ? `，新建 ${createdGroups} 个小组` : ''}`,
       skipped: skippedMembers,
-      dimensions: listDimensions(),
+      dimensions: groupDim.listDimensions(),
       ...data,
     });
   } catch (err) {

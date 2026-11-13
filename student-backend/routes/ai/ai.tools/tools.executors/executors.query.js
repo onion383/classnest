@@ -1,6 +1,6 @@
 // ===== AI 工具执行：查询 / 聚合 / 找人 / 跨表检索 =====
 // 纯代码搬运自 ../executors.js，行为不变。门面装配见 tools.js。
-const { db } = require('../../../../db');
+const aiStore = require('../../../../services/aiStore');
 const { READ_TABLES } = require('../../ai.constants');
 const { tableColumns } = require('../../ai.helpers');
 const { AGG_FNS } = require('../tools.schema');
@@ -53,7 +53,7 @@ function runQuery({ table, where, order_by, order_dir, limit }) {
     lim = Math.min(n, 500);
   }
   sql += ` LIMIT ${lim}`;
-  const rows = db.prepare(sql).all(...params);
+  const rows = aiStore.queryAll(sql, params);
   return { count: rows.length, rows };
 }
 
@@ -148,7 +148,7 @@ function runAggregate({ table, metrics, group_by, where, where_range, where_rang
   if (groups.length) sql += ' GROUP BY ' + groups.map((g) => `"${g}"`).join(', ');
   sql += orderSql;
   sql += ` LIMIT ${lim}`;
-  const rows = db.prepare(sql).all(...params);
+  const rows = aiStore.queryAll(sql, params);
   return {
     count: rows.length,
     rows,
@@ -166,7 +166,7 @@ function runResolveStudent({ query, limit }) {
   if (!q) return { error: '缺少要匹配的内容（query），请给出学生姓名、拼音或学号片段' };
   const cols = tableColumns('students');
   const pick = ['id', '学号', '姓名', '年级', '班级'].filter((c) => cols.includes(c));
-  const rows = db.prepare(`SELECT ${pick.map((c) => `"${c}"`).join(', ')} FROM students`).all();
+  const rows = aiStore.queryAll(`SELECT ${pick.map((c) => `"${c}"`).join(', ')} FROM students`);
   const lq = q.toLowerCase();
   // 匹配优先级：学号/姓名精确 > 姓名包含 > 学号包含 > 姓名拼音
   const rank = (r) => {
@@ -231,14 +231,14 @@ const SEARCH_TABLE_LABELS = {
 };
 const SEARCH_TABLE_SEARCHERS = {
   students: (ctx) => ctx.matched.map((s) => ({ id: s.id, 学号: s['学号'], 姓名: s['姓名'], 年级: s['年级'], 班级: s['班级'] })),
-  score_records: (ctx) => db.prepare('SELECT id, 姓名, 学号, 类型, 项目, 分值, 原因, 加分时间 FROM score_records').all().filter((r) => ctx.hit(r['姓名'], r.student_id)),
-  leave_records: (ctx) => db.prepare('SELECT id, 姓名, 类型, 开始时间, 结束时间, 状态 FROM leave_records').all().filter((r) => ctx.hit(r['姓名'], r.student_id)),
-  cadre_members: (ctx) => db.prepare('SELECT id, student_id, student_name FROM cadre_members').all().filter((r) => ctx.hit(r.student_name, r.student_id)),
-  group_members: (ctx) => db.prepare('SELECT id, group_id, member_name, remark FROM group_members').all().filter((r) => ctx.hit(r.member_name, null)),
+  score_records: (ctx) => aiStore.listScoresForSearch().filter((r) => ctx.hit(r['姓名'], r.student_id)),
+  leave_records: (ctx) => aiStore.listLeaveRecordsForSearch().filter((r) => ctx.hit(r['姓名'], r.student_id)),
+  cadre_members: (ctx) => aiStore.listCadreMembersForSearch().filter((r) => ctx.hit(r.student_name, r.student_id)),
+  group_members: (ctx) => aiStore.listGroupMembersForSearch().filter((r) => ctx.hit(r.member_name, null)),
   // 座位表：一格一人；值是数字(id)或姓名。
   // 位置按**座位列序号**报（列号不含走廊），与页面表头一致
   seat_layout: (ctx) => {
-    const row = db.prepare('SELECT seats, cols, types FROM seat_layout WHERE id = 1').get();
+    const row = aiStore.readSeatDoc();
     if (!row) return [];
     const seats = aiParseJson(row.seats, []) || [];
     const types = aiParseJson(row.types, []) || [];
@@ -258,7 +258,7 @@ const SEARCH_TABLE_SEARCHERS = {
   },
   // 值日表：{项目:{星期:[姓名]}}，按模式解包
   duty_layout: (ctx) => {
-    const row = db.prepare('SELECT cells FROM duty_layout WHERE id = 1').get();
+    const row = aiStore.readDutyDoc();
     if (!row) return [];
     const out = [];
     for (const mode of ['daily', 'big']) {
@@ -280,7 +280,7 @@ function runSearchAll({ query, limit, tables } = {}) {
   const q = String(query == null ? '' : query).trim();
   if (!q) return { error: '缺少要搜索的内容（query），请给出学生姓名、拼音或学号片段' };
   const lq = q.toLowerCase();
-  const students = db.prepare('SELECT id, 学号, 姓名, 年级, 班级 FROM students').all();
+  const students = aiStore.listStudentCandidates();
   const matched = students.filter((s) => {
     const name = String(s['姓名'] || '');
     const sno = String(s['学号'] || '').toLowerCase();

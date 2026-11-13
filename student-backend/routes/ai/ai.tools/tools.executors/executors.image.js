@@ -1,6 +1,8 @@
 // ===== AI 工具执行：export_image（课表/座位表/值日表 → 排布图规格）=====
 // 纯代码搬运自 ../executors.js，行为不变。门面装配见 tools.js。
-const { db } = require('../../../../db');
+const {
+  readScheduleDoc, readSeatDoc, readDutyDoc,
+} = require('../../../../services/aiStore');
 const {
   aiParseJson, unpackDutyModeCol, studentIdNameMap,
 } = require('./executors.common');
@@ -31,7 +33,7 @@ function buildScheduleRowLabels(settings, cells) {
   return out;
 }
 function buildScheduleImage() {
-  const row = db.prepare('SELECT cells, settings FROM schedule WHERE id = 1').get();
+  const row = readScheduleDoc();
   if (!row) return null;
   const cells = aiParseJson(row.cells, []) || [];
   const settings = aiParseJson(row.settings, {}) || {};
@@ -54,7 +56,7 @@ function buildScheduleImage() {
   return { target: 'schedule', title: '课程表', columns: ['节次', ...days], rows };
 }
 function buildSeatImage() {
-  const row = db.prepare('SELECT seats, cols, types FROM seat_layout WHERE id = 1').get();
+  const row = readSeatDoc();
   if (!row) return null;
   const seats = aiParseJson(row.seats, []) || [];
   if (!seats.length) return null;
@@ -87,7 +89,7 @@ function buildSeatImage() {
   return { target: 'seat', title: '座位表', headnote: '讲台', columns, rows };
 }
 function buildDutyImage(mode) {
-  const row = db.prepare('SELECT cells, settings FROM duty_layout WHERE id = 1').get();
+  const row = readDutyDoc();
   if (!row) return null;
   const cells = unpackDutyModeCol(row.cells, mode);
   const ms = unpackDutyModeCol(row.settings, mode);

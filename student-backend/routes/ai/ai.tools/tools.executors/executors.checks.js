@@ -1,7 +1,7 @@
 // ===== AI 工具执行：数据体检 / 冲突检测 / 权重评分 =====
 // 纯代码搬运自 ../executors.js，行为不变。门面装配见 tools.js。
-const { db } = require('../../../../db');
 const store = require('../../../../services/slotStore');
+const aiStore = require('../../../../services/aiStore');
 const { gridToDenseCols } = require('../../../../services/seatGrid');
 const {
   aiParseDate, aiParseJson, aiTodayStr, studentIdNameMap,
@@ -19,18 +19,18 @@ const CHECK_LABELS = {
 };
 const CHECK_RULES = {
   // 班干部任职指向不存在的学生
-  cadre_dangling: (ctx) => db.prepare('SELECT id, cadre_id, student_id, student_name FROM cadre_members').all().filter((r) => {
+  cadre_dangling: (ctx) => aiStore.listCadreMembers().filter((r) => {
     if (r.student_id != null && Number(r.student_id) > 0) return !ctx.idSet.has(Number(r.student_id));
     return !ctx.nameSet.has(String(r.student_name || ''));
   }).map((r) => ({ id: r.id, cadre_id: r.cadre_id, student_id: r.student_id, student_name: r.student_name })),
   // 分组名册成员不在学生名单里
-  group_dangling: (ctx) => db.prepare('SELECT id, group_id, member_name FROM group_members').all()
+  group_dangling: (ctx) => aiStore.listGroupMembers()
     .filter((r) => String(r.member_name || '').trim() && !ctx.nameSet.has(String(r.member_name)))
     .map((r) => ({ id: r.id, group_id: r.group_id, member_name: r.member_name })),
   // 请假结束时间早于开始时间
   leave_reversed: () => {
     const out = [];
-    for (const r of db.prepare('SELECT id, 姓名, 开始时间, 结束时间 FROM leave_records').all()) {
+    for (const r of aiStore.listLeaveRecordsForChecks()) {
       const a = aiParseDate(r['开始时间']);
       const b = aiParseDate(r['结束时间']);
       if (a && b && b < a) out.push({ id: r.id, 姓名: r['姓名'], 开始时间: r['开始时间'], 结束时间: r['结束时间'] });
@@ -38,7 +38,7 @@ const CHECK_RULES = {
     return out;
   },
   // 班费金额为负
-  fee_negative: () => db.prepare('SELECT id, 收支类型, 收支金额, 收支时间, 备注 FROM fee_records').all()
+  fee_negative: () => aiStore.listFeeRecords()
     .filter((r) => Number(r['收支金额']) < 0)
     .map((r) => ({ id: r.id, 收支类型: r['收支类型'], 收支金额: r['收支金额'], 收支时间: r['收支时间'] })),
   // 学号重复
@@ -60,7 +60,7 @@ function runChecks({ checks } = {}) {
     want = arr.map((c) => String(c).trim()).filter((c) => CHECK_RULES[c]);
     if (!want.length) return { error: `checks 只能是 ${Object.keys(CHECK_RULES).join('/')} 中的若干项` };
   }
-  const students = db.prepare('SELECT id, 学号, 姓名 FROM students').all();
+  const students = aiStore.listStudentsForChecks();
   const ctx = {
     students,
     nameSet: new Set(students.map((s) => String(s['姓名'] || '')).filter(Boolean)),
@@ -89,7 +89,7 @@ const CONFLICT_LABELS = {
 const CONFLICT_RULES = {
   // 座位表：同一人坐多个位置
   seat_duplicate: () => {
-    const row = db.prepare('SELECT seats, cols, types FROM seat_layout WHERE id = 1').get();
+    const row = aiStore.readSeatDoc();
     if (!row) return [];
     const seats = aiParseJson(row.seats, []) || [];
     const types = aiParseJson(row.types, []) || [];
@@ -113,7 +113,7 @@ const CONFLICT_RULES = {
   },
   // 值日表：同一人同一天被排在多个劳动项目
   duty_duplicate: (ctx) => {
-    const row = db.prepare('SELECT cells FROM duty_layout WHERE id = 1').get();
+    const row = aiStore.readDutyDoc();
     if (!row) return [];
     const modes = ctx.mode === 'big' ? ['big'] : ['daily'];
     const out = [];
@@ -143,13 +143,13 @@ const CONFLICT_RULES = {
   // 倒计时：截止日已过
   countdown_passed: () => {
     const today = aiTodayStr();
-    return db.prepare('SELECT id, 名称, 截止日 FROM countdowns').all()
+    return aiStore.listCountdownsForChecks()
       .filter((r) => { const d = aiParseDate(r['截止日']); return d && d < today; })
       .map((r) => ({ id: r.id, 名称: r['名称'], 截止日: r['截止日'] }));
   },
   // 课表：格内多课 / 结构异常
   schedule_conflict: () => {
-    const row = db.prepare('SELECT cells, settings FROM schedule WHERE id = 1').get();
+    const row = aiStore.readScheduleDoc();
     if (!row) return [];
     const cells = aiParseJson(row.cells, []) || [];
     const settings = aiParseJson(row.settings, {}) || {};
@@ -189,13 +189,10 @@ function runConflictChecks({ checks, mode } = {}) {
 // ===== score_weights 工具：复用「座位指数/值日指数」口径给排布评分 =====
 // 座位：对学期内每日快照的每个座位，取其位置权重 weights[r][c] 累加到该学生名下（同 SeatView seatIndexRows）
 function scoreSeatIndex(fromD, toD, lim) {
-  const w = db.prepare('SELECT weights FROM seat_weight WHERE id = 1').get();
+  const w = aiStore.readSeatWeight();
   const weights = w ? (aiParseJson(w.weights, []) || []) : [];
   const idName = studentIdNameMap();
-  const sql = fromD
-    ? 'SELECT seats FROM seat_history WHERE snap_date >= ? AND snap_date <= ? ORDER BY snap_date'
-    : 'SELECT seats FROM seat_history WHERE snap_date <= ? ORDER BY snap_date';
-  const rows = fromD ? db.prepare(sql).all(fromD, toD) : db.prepare(sql).all(toD);
+  const rows = aiStore.readSeatHistory(fromD, toD);
   const acc = {};
   for (const row of rows) {
     const seats = aiParseJson(row.seats, []) || [];
@@ -219,14 +216,9 @@ function scoreSeatIndex(fromD, toD, lim) {
 // 值日：对学期内每日快照的每个槽位，取其项目权重 weights[项目][星期] 累加到姓名（同 DutyView dutyIndexRows）
 function scoreDutyIndex(fromD, toD, lim, mode) {
   const m = mode === 'big' ? 'big' : 'daily';
-  const wr = db.prepare('SELECT weights FROM duty_weight WHERE id = 1').get();
+  const wr = aiStore.readDutyWeight();
   const weights = wr ? unpackDutyModeCol(wr.weights, m) : {};
-  const params = [m];
-  let sql = 'SELECT cells FROM duty_history WHERE mode = ?';
-  if (fromD) { sql += ' AND snap_date >= ?'; params.push(fromD); }
-  sql += ' AND snap_date <= ?'; params.push(toD);
-  sql += ' ORDER BY snap_date';
-  const rows = db.prepare(sql).all(...params);
+  const rows = aiStore.readDutyHistory(fromD, toD, m);
   const acc = {};
   for (const row of rows) {
     const cells = aiParseJson(row.cells, {}) || {};

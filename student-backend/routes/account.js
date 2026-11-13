@@ -6,6 +6,7 @@ const router = express.Router();
 let _jwt = null;
 const useJwt = () => (_jwt || (_jwt = require('jsonwebtoken')));
 const { db } = require('../db');
+const userStore = require('../services/userStore');
 const dbManager = require('../dbManager/dbManager');
 const { resolveSecurityLevel } = require('../utils/securityLevel');
 // bcryptjs 只在改用户名/改密码/删除账号等「用户操作」里用到，不需要在后端就绪前加载：
@@ -44,7 +45,7 @@ function backupUploadMw() {
 router.get('/recovery-key', auth(), (req, res) => {
     const phrase = pickPhrase();
   const hash = deriveRestoreHash(phrase);
-  db.prepare('UPDATE users SET recovery_hash = ? WHERE id = ?').run(hash, req.user.userId);
+  userStore.updateRecoveryHash(req.user.userId, hash);
   res.json({ phrase: formatPhrase(phrase), recoveryKey: phrase });
 });
 
@@ -100,7 +101,7 @@ async function resolveExportKeying({ slug, user, password, encrypt, dbPassword }
 router.post('/export-zip', auth(), async (req, res) => {
   const slug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
   const { password, encrypt = '1', dbPassword } = req.body || {};
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.userId);
+  const user = userStore.findById(req.user.userId);
   if (!user) return res.status(401).json({ error: '账号不存在' });
 
   const keying = await resolveExportKeying({ slug, user, password, encrypt, dbPassword });
@@ -315,7 +316,7 @@ router.put('/username', auth(), async (req, res) => {
     return res.status(400).json({ error: nameErr });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.userId);
+  const user = userStore.findById(req.user.userId);
   if (!user) return res.status(401).json({ error: '账号不存在' });
   // 免密账号（user.password 为空）没有密码可比对：与 PUT /password 保持同一短路语义，
   // 否则 nopass 用户改名时 bcryptCompare('', null) 恒为 false，永远卡在「密码错误」。
@@ -333,7 +334,7 @@ router.put('/username', auth(), async (req, res) => {
     return res.status(400).json({ error: '该用户名已被占用' });
   }
   // 同库内另有同名用户（registry 与业务库不同步的兜底）
-  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(newName);
+  const existing = userStore.findIdByUsername(newName);
   if (existing && existing.id !== req.user.userId) {
     return res.status(400).json({ error: '该用户名已被占用' });
   }
@@ -356,7 +357,7 @@ router.put('/username', auth(), async (req, res) => {
     slug: req.user.dbSlug,
     newName,
     fallbackOldName: user.username,
-    applyUsersUpdate: () => db.prepare('UPDATE users SET username = ? WHERE id = ?').run(newName, req.user.userId),
+    applyUsersUpdate: () => userStore.updateUsername(req.user.userId, newName),
   });
   if (!renameResult.ok) {
     if (renameResult.reason === 'registry-update-failed') {
@@ -420,7 +421,7 @@ router.put('/password', auth(), async (req, res) => {
       return res.status(400).json({ error: '新密码长度至少 6 位' });
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.userId);
+    const user = userStore.findById(req.user.userId);
     if (!user) return res.status(401).json({ error: '账号不存在' });
 
     // 本次是用恢复词登录的隐私库：旧密码已忘记，内存里的库钥匙就是所有者证明，免输旧密码
@@ -451,7 +452,7 @@ router.put('/password', auth(), async (req, res) => {
     }
 
     const hashed = await bcryptHash(newPassword, 10);
-    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashed, req.user.userId);
+    userStore.updatePassword(req.user.userId, hashed);
     // 密码已变 → 该账号在**所有窗口**签发的旧 token 立即失效（含本机恢复 token）。
     // 以前只有「本机恢复」分支 revoke 当前 sid + create 新 sid：普通改密不吊销任何会话，
     // 兄弟窗口的 token 还能用满 30 天；而只吊销兄弟会话、放过当前 token 也不行 ——
@@ -509,7 +510,7 @@ router.post('/security-level', auth(), async (req, res) => {
 
     const { password = '', newPassword = '' } = req.body || {};
     const username = req.user.username;
-    const user = db.prepare('SELECT id, password FROM users WHERE id = ?').get(req.user.userId);
+    const user = userStore.findCredentials(req.user.userId);
     if (!user) return res.status(401).json({ error: '账号不存在' });
 
     // 当前有登录密码（含隐私模式）时，任何变更都要先验证当前密码
@@ -526,10 +527,10 @@ router.post('/security-level', auth(), async (req, res) => {
       effectivePwd = String(newPassword);
       // 先算出哈希再写库：哈希是异步的，必须 await 拿到结果才能入库
       const newHash = await bcryptHash(effectivePwd, 10);
-      db.prepare('UPDATE users SET password = ? WHERE id = ?').run(newHash, user.id);
+      userStore.updatePassword(user.id, newHash);
     } else if (target === 'plain' || target === 'nopass') {
       // 明文库与免密登录都不能保留密码
-      db.prepare('UPDATE users SET password = ? WHERE id = ?').run('', user.id);
+      userStore.updatePassword(user.id, '');
     }
 
     // 退出隐私：先把库钥匙改回主密钥包裹，再处理免密/明文
@@ -576,7 +577,7 @@ router.get('/privacy', auth(), (req, res) => {
 // 开启后库钥匙只由「登录密码 / 恢复词」包裹，主密钥再也解不开；忘记两者即不可恢复。
 router.post('/privacy/enable', auth(), async (req, res) => {
     const { password } = req.body || {};
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.userId);
+  const user = userStore.findById(req.user.userId);
   if (!user) return res.status(401).json({ error: '账号不存在' });
   if (!user.password) return res.status(400).json({ error: '当前账号未设置登录密码，请先设置密码' });
   if (!password || !await bcryptCompare(password, user.password)) {

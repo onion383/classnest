@@ -1,5 +1,5 @@
-const { db, getFields } = require('../../db');
-const dbManager = require('../../dbManager/dbManager');
+const { getFields } = require('../../db');
+const aiStore = require('../../services/aiStore');
 
 // 列值归一化：对象/数组按 JSON 文本、布尔按 1/0、其余按字符串，用于「是否与当前内容相同」的比较。
 // 布尔归一为 1/0 是为了与 sqlite 里 INTEGER 列（如 toolbox_enabled / auto_apply）存的数值一致。
@@ -23,25 +23,9 @@ function serializeColVal(v) {
   return v;
 }
 
-// 表列名缓存（PRAGMA 一次后复用，避免每个请求都读 schema）。
-// 键里带数据库 slug：不同学生库同名表结构可能不同，不能跨库复用。
-const colCache = {};
-function tableColumns(table) {
-  let slug = 'default';
-  try { slug = dbManager.currentSlug() || 'default'; } catch (_) { /* 非请求上下文时退回 default */ }
-  const key = `${slug}:${table}`;
-  if (colCache[key]) return colCache[key];
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name);
-  colCache[key] = cols;
-  return cols;
-}
-
-// 表结构变更（加/删/改名列）后必须主动失效，否则 PRAGMA 结果会一直停留在旧结构
-function clearTableColumnsCache(table) {
-  Object.keys(colCache).forEach((key) => {
-    if (!table || key.endsWith(`:${table}`)) delete colCache[key];
-  });
-}
+// 表列名缓存与其失效逻辑已下沉到 services/aiStore.js（M12-B7）；
+// 对外仍从本模块导出，调用方 import 路径不变。
+const { tableColumns, clearTableColumnsCache } = aiStore;
 
 // 回灌给模型的工具结果上限：查询/导出类工具可能返回整张大表，
 // 全量塞进 history 会撑爆上下文并让后续请求变慢甚至失败。

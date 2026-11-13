@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db');
 const store = require('../services/slotStore');
+const semesterStore = require('../services/semesterStore');
 const { readDocJson } = require('../utils/json');
 const { registerHistoryRoutes } = require('./historyRoutes');
 const { isDateStr } = require('../utils/sql');
@@ -11,11 +11,11 @@ const { isDateStr } = require('../utils/sql');
 // JSON 列统一走 readDocJson：cells/settings 任一列畸形时降级为空值，
 // 不因为一条坏数据让整个首页（dashboard 也调这里）500。
 function readSchedule() {
-  const row = db.prepare('SELECT cells, settings FROM schedule WHERE id = 1').get();
+  const row = store.getDoc('schedule');
   let { cells, settings } = readDocJson(row, { cells: [], settings: {} });
   // 活动课表为空时，回退到主课表，保证首页/桌面小组件也能显示已排课程
   if (!Array.isArray(cells) || cells.length === 0) {
-    const master = db.prepare('SELECT cells, settings FROM master_schedule WHERE id = 1').get();
+    const master = store.getDoc('master_schedule');
     if (master) {
       const m = readDocJson(master, { cells: [], settings: {} });
       if (Array.isArray(m.cells) && m.cells.length > 0) {
@@ -49,7 +49,7 @@ router.put('/', (req, res) => {
 
 // ======================== 一般课表（模板） ========================
 router.get('/master', (req, res) => {
-    const row = db.prepare('SELECT cells, settings FROM master_schedule WHERE id = 1').get();
+    const row = store.getDoc('master_schedule');
   res.json(readDocJson(row, { cells: [], settings: {} }));
 });
 
@@ -78,9 +78,9 @@ router.post('/apply-master', (req, res) => {
 // 推荐日期算法在 utils/semester.js：引导页也要用同一份（那时还没有库，进不来这个路由）。
 const { autoSemester } = require('../utils/semester');
 
+// 当前学期（判定在 services/semesterStore：没有标记为当前的记录时回退最新一条）
 function currentSemester() {
-  return db.prepare('SELECT id, name, start_date, end_date FROM semesters WHERE is_current = 1 ORDER BY id DESC LIMIT 1').get()
-    || db.prepare('SELECT id, name, start_date, end_date FROM semesters ORDER BY id DESC LIMIT 1').get();
+  return semesterStore.findCurrent();
 }
 
 // 校验学期起止日期：结束不能早于开始。
@@ -105,10 +105,7 @@ function validateSemesterRange(start_date, end_date) {
 // 学期列表（按开始日期倒序，未填日期的排最后）+ 当前学期
 router.get('/semesters', (req, res) => {
   try {
-    const list = db.prepare(`
-      SELECT id, name, start_date, end_date, is_current FROM semesters
-      ORDER BY (start_date = '') ASC, start_date DESC, id DESC
-    `).all();
+    const list = semesterStore.list();
     res.json({ semesters: list, current: list.find(s => s.is_current) || list[0] || null });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -124,11 +121,7 @@ router.post('/semesters', (req, res) => {
   const end_date = body.end_date || def.end_date;
   const rangeErr = validateSemesterRange(start_date, end_date);
   if (rangeErr) return res.status(400).json({ error: rangeErr });
-  const info = db.transaction(() => {
-    db.prepare('UPDATE semesters SET is_current = 0').run();
-    return db.prepare('INSERT INTO semesters (name, start_date, end_date, is_current) VALUES (?,?,?,1)')
-      .run(name, start_date, end_date);
-  })();
+  const info = semesterStore.create(name, start_date, end_date);
   res.json({ message: '学期已增加', id: info.lastInsertRowid, name, start_date, end_date });
 });
 
@@ -153,19 +146,16 @@ router.get('/semesters/prefill', (req, res) => {
 router.put('/semesters/current', (req, res) => {
     const id = Number((req.body || {}).id);
   if (!id) return res.status(400).json({ error: '缺少学期' });
-  const exists = db.prepare('SELECT id FROM semesters WHERE id = ?').get(id);
+  const exists = semesterStore.exists(id);
   if (!exists) return res.status(404).json({ error: '学期不存在' });
-  db.transaction(() => {
-    db.prepare('UPDATE semesters SET is_current = 0').run();
-    db.prepare('UPDATE semesters SET is_current = 1 WHERE id = ?').run(id);
-  })();
+  semesterStore.setCurrent(id);
   res.json({ message: '已切换当前学期' });
 });
 
 // 修改学期：只传需要改的字段（学期名 / 开始日期 / 结束日期）
 router.put('/semesters/:id', (req, res) => {
     const id = Number(req.params.id);
-  const row = db.prepare('SELECT id, name, start_date, end_date, is_current FROM semesters WHERE id = ?').get(id);
+  const row = semesterStore.findById(id);
   if (!row) return res.status(404).json({ error: '学期不存在' });
   const body = req.body || {};
   const name = body.name != null ? (String(body.name).trim() || row.name) : row.name;
@@ -173,23 +163,16 @@ router.put('/semesters/:id', (req, res) => {
   const end_date = body.end_date != null ? body.end_date : row.end_date;
   const rangeErr = validateSemesterRange(start_date, end_date);
   if (rangeErr) return res.status(400).json({ error: rangeErr });
-  db.prepare('UPDATE semesters SET name = ?, start_date = ?, end_date = ? WHERE id = ?')
-    .run(name, start_date, end_date, id);
+  semesterStore.update(id, name, start_date, end_date);
   res.json({ message: '学期已保存' });
 });
 
 // 删除学期：删的若是当前学期，自动把剩下的最新一条设为当前；一条不剩则清空镜像
 router.delete('/semesters/:id', (req, res) => {
     const id = Number(req.params.id);
-  const row = db.prepare('SELECT id, is_current FROM semesters WHERE id = ?').get(id);
-  if (!row) return res.status(404).json({ error: '学期不存在' });
-  db.transaction(() => {
-    db.prepare('DELETE FROM semesters WHERE id = ?').run(id);
-    if (row.is_current) {
-      const next = db.prepare('SELECT id FROM semesters ORDER BY start_date DESC, id DESC LIMIT 1').get();
-      if (next) db.prepare('UPDATE semesters SET is_current = 1 WHERE id = ?').run(next.id);
-    }
-  })();
+  // 存在性判断与「删完补选当前学期」都在 store 的同一个事务里
+  const removed = semesterStore.remove(id);
+  if (!removed) return res.status(404).json({ error: '学期不存在' });
   res.json({ message: '学期已删除' });
 });
 
@@ -211,13 +194,11 @@ router.put('/settings', (req, res) => {
   const rangeErr = validateSemesterRange(start_date, end_date);
   if (rangeErr) return res.status(400).json({ error: rangeErr });
   if (cur) {
-    db.prepare('UPDATE semesters SET start_date = ?, end_date = ? WHERE id = ?')
-      .run(start_date, end_date, cur.id);
+    semesterStore.updateRange(cur.id, start_date, end_date);
   } else {
     // 没有任何学期时直接建一条当前学期，避免设置无处可存
     const def = autoSemester();
-    db.prepare('INSERT INTO semesters (name, start_date, end_date, is_current) VALUES (?,?,?,1)')
-      .run(def.name, start_date, end_date);
+    semesterStore.create(def.name, start_date, end_date);
   }
   res.json({ message: '设置已保存' });
 });

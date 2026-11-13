@@ -128,6 +128,37 @@ classnest/
         ├── widget-capture.test.js  # 浮窗截屏必须「自己先藏好」。工具箱浮窗是 transparent: true，Windows…
         ├── widget-data-changed.test.js  # 挂件不再只靠 5 分钟轮询（A5-02）：写请求成功后按域广播，基础设施写（聊天/相册/账户…
         ├── zip-bundle.test.js  # 备份包两块地基（A1-03 / N3-03）：sanitizeEntryName 拦 Zip…
+        ├── ai-subagent-live.test.js  # 子助手轨迹实时下发、done 覆盖实时结构、缩进与聊天气泡复制豁免
+        ├── ai-tool-evidence.test.js  # AI 工具调用证据跨轮可见 + 收尾对账（process_json 必须被读回）
+        ├── album-grid-rows.test.js  # 组内按行虚拟裁剪的算术与接线
+        ├── album-paging.test.js  # 日期索引 + 日期游标分页，与全量路径同源
+        ├── album-photo-focus.test.js  # 首页配图点进相册定位到这一张
+        ├── album-photo-pages.test.js  # 日期分页纯逻辑（日期步进 / 锚点 / 合并已加载组）
+        ├── album-random-thumb.test.js  # 首页随机配图接口（exclude 退回、X-Photo-Id）
+        ├── album-resize-throttle.test.js  # 改窗口时别打断正在生成的缩略图
+        ├── album-scan-incremental-thumb.test.js  # 增量跳过已有 vs 全量无条件重建
+        ├── album-scan-two-phase.test.js  # 全量扫描先建索引再补缩略图
+        ├── album-thumb-priority.test.js  # 缩略图插队的粒度与中断
+        ├── album-thumb-retry.test.js  # 缩略图 404 之后的自愈重试
+        ├── album-virtual-all.test.js  # 虚拟相册整册全选（all_from 由后端展开）
+        ├── deferred-ipc-startup.test.js  # 延迟 IPC 注册全局化、低配模式已删除
+        ├── disk-usage.test.js  # 性能面板「空间管理」的磁盘归账
+        ├── fast-startup.test.js  # 「性能 → 快速启动」开关的两处同时生效
+        ├── group-manage.test.js  # 分组管理的读写路径（档 C · M12-B1）
+        ├── leaves-paging.test.js  # 请假列表分页与「今日到班」范围
+        ├── live-blocks.test.js  # AI 流式渲染按块缓存（切块不改变渲染结果）
+        ├── packaged-csp.test.js  # 打包版 CSP 与构建产物内联脚本的对账
+        ├── score-paging.test.js  # 成绩列表分页与统计页签全量
+        ├── score-provisional.test.js  # 加分记录里的名册外姓名
+        ├── semester-crud.test.js  # 学期 CRUD 与「当前学期」镜像（档 C · M12-B4）
+        ├── settings-view-ctx-binding.test.js  # 设置页模板绑定必须来自解构出的名字
+        ├── text-head.test.js  # AI 附件只读头部（不为截断整份读入）
+        ├── thumb-purge.test.js  # 「清理图片微缩图」只删文件
+        ├── thumb-sweep.test.js  # 「回收孤儿微缩图」的对账与删除
+        ├── undo-retention.test.js  # 撤销记录每 key 50 条上限
+        ├── viewer-pan.test.js  # 查看器放大后拖动平移
+        ├── vite-outdir-empty.test.js  # 构建输出目录的小批量清空
+        ├── undo-sql-outlet.test.js  # 撤销域 4 个文件不许有裸 SQL（M12-B8）
         └── zip-peek.test.js  # 「这个备份包要不要口令」的判断必须与真包一致：误判「不用口令」会让用户卡在解不出钥匙，误判「…
 ```
 <!-- doc-tree:end -->
@@ -138,7 +169,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），148 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），152 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
 - **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
@@ -271,6 +302,37 @@ classnest/
 | [`startup-io.test.js`](../../../testjs/units/startup-io.test.js) | 启动期同步 IO 打点（v6 · 1-10）：`PERF_STARTUP` 未开时一个 fs 方法都不替换；开启后按方法计数且返回值/异常原样透传（计时不能改语义）；重复 `install` 不叠加；`summarize` 打印合计并把 mark 写进启动时间线；未安装时空转；接线判据锁 `main.js` 的安装早于首个同步 IO、`summarize` 早于 `report` | 注入假 fs；5 条用例 |
 | [`dashboard-summary.test.js`](../../../testjs/units/dashboard-summary.test.js) | 首屏 dashboard 摘要化（v6 · 2-1）：内存库 + 真 router 造 45 人 / 1000 条加减分 / 7 条班费 —— 响应里不再有全量 `scores`/`fees`、`students` 只剩 `id+姓名`；`summary` 的 Top4（含扣分转负、小组名）与班费三口径与改造前 `DashboardView` 的 computed 逐项一致；同数据量下整包 < 30KB（改造前 358.8KB）；并锁前端不再读 `d.scores`/`d.fees`、造数工具改读 `summary` | 内存库 + `require.cache` 替换 `../db` + 真 HTTP；4 条用例 |
 | [`main-env.test.js`](../../../testjs/units/main-env.test.js) | 开发/打包模式判定唯一口径（v6 · 2-20）：Electron 45 下 `app.isPackaged` 在源码模式误报 true，用 `process.defaultApp` 纠正；三种组合（打包 / Electron45 源码 / 常规源码）逐一断言；`electron/main/*.js`（除 `main.env.js`）不得再出现 `app.isPackaged`；`main.*.js` 都从 `main.env` 取值、更新入口用 `isPackaged` 挡住开发环境 | 注入假 electron + 改写 `process.defaultApp`；5 条用例 |
+| [`undo-sql-outlet.test.js`](../../../testjs/units/undo-sql-outlet.test.js) | 撤销域的 SQL 出口（档 C · M12-B8）：`undo.*` 的 4 个文件都不许有 `db.prepare(`、不许持有 db；`undoStore` 必须承担记录表的插入与方向 CAS、每 key 淘汰；执行器的 8 个复合动作必须真的经 store。**这条判据锁的是双份口径**：同一条 `undo_history` 查询原先抄在入口与记录两处，一处改了另一处没改，表现是「面板里有记录、Ctrl+Z 说没有」 | 源码判据 |
+| [`ai-subagent-live.test.js`](../../../testjs/units/ai-subagent-live.test.js) | 子助手轨迹**实时下发**：一份轨迹源同时供增量事件与最终全量步骤使用，`done` 事件整体覆盖实时结构（不重复、不跳变）；缩进与聊天气泡的复制豁免不外溢。修的是「子助手做完才冒出来」 | 桩 `fetch` 跑真实 `consumeStream` + 前端 ESM |
+| [`ai-tool-evidence.test.js`](../../../testjs/units/ai-tool-evidence.test.js) | **AI 工具调用证据跨轮可见**：工具调用与 tool 角色结果原先只活在单次请求里，`loadConversationContext` 连 `process_json` 都没 `SELECT` → 下一轮模型不知道自己调过哪些工具。判据锁读回与收尾对账，并锁写入侧仍走 `aiConversationStore` | 内存库 + 真 router |
+| [`album-grid-rows.test.js`](../../../testjs/units/album-grid-rows.test.js) | 相册「组内按行虚拟滚动」：A 行裁剪的算术（位置、切片、高度预留、边界）；B 接线（`AlbumView` 只渲染可见行、几何常量取自同一处，不再整组 `v-for`） | 纯函数 + 源码判据 |
+| [`album-paging.test.js`](../../../testjs/units/album-paging.test.js) | 相册照片分页（v6 性能专题 · 2-23）：日期索引 `/:id/dates` 与「日期游标」分页；**全量与分页必须同源**（列与排序只有一份）；分页只对列表 opt-in（导出、删前快照、首页随机图仍要全量）；末尾一条 SQL 出口判据锁 `albumStore` | 内存库 + 真 router |
+| [`album-photo-focus.test.js`](../../../testjs/units/album-photo-focus.test.js) | 首页配图点进相册的定位链路：`GET /random-photo/thumb` 的 `X-Photo-Id` → `/album?photo=<id>` → `GET /photo/:id/locate` 查到相册与日期 → 滚到那一天并打开查看器。锁「定位只读索引一行」，不 stat 源文件、不拉整册分页 | 内存库 + 真 router + 前端源码判据 |
+| [`album-photo-pages.test.js`](../../../testjs/units/album-photo-pages.test.js) | 日期分页的纯逻辑：日期步进差一天会让同一页反复请求；锚点落在已加载组上会白拿整页；合并时连已加载组一起覆盖会让对象 URL 失效、画面闪白。另锁「组头张数取后端日期计数」与未知时间组永远在最后 | 纯函数 |
+| [`album-random-thumb.test.js`](../../../testjs/units/album-random-thumb.test.js) | 首页随机配图接口：`exclude` 排掉当前张、排除后查不到要**退回不排除**（不能回 404，否则首页会清掉现有配图）；`X-Photo-Id` 随图带回；不再让前端遍历各相册拉全量列表 | 内存库 + 真 router |
+| [`album-resize-throttle.test.js`](../../../testjs/units/album-resize-throttle.test.js) | 改窗口时不要反复掐断在途缩略图：`resizing` 安静窗口只冻结**视口重测**，布局本身照常跟随；否则每帧 abort 一次生成请求，越拖越卡 | 纯函数 + 源码判据 |
+| [`album-scan-incremental-thumb.test.js`](../../../testjs/units/album-scan-incremental-thumb.test.js) | 两套刻意相反的语义（别合并）：增量「已有就跳过、只补丢的」按文件存在判定、不读内容；全量「无条件重建」是修坏图与刷缓存的唯一入口 | 内存库 + 临时目录 |
+| [`album-scan-two-phase.test.js`](../../../testjs/units/album-scan-two-phase.test.js) | 全量扫描的**两阶段**：先建索引（stat + EXIF），再逐张生成缩略图；阶段名 `phase`（`index` / `thumb`），续扫分支不许覆盖 phase；直接调 `fullScan` 前必须先 `claimScanTask` | 内存库 |
+| [`album-thumb-priority.test.js`](../../../testjs/units/album-thumb-priority.test.js) | 缩略图「插队」的粒度与中断：粒度是**行**（用户看到的这几行）而不是整天；新请求到达时旧请求 abort；重复 id 去重；断开立刻归还尚未开工的额度 | 纯函数 + 源码判据 |
+| [`album-thumb-retry.test.js`](../../../testjs/units/album-thumb-retry.test.js) | 缩略图 404 **不等于**没图：前端按 `THUMB_RETRY_MAX` 退避重试并在 URL 上带 `&r=N`，否则 Vapor 下不碰 DOM，空白永不恢复；失败立刻盖占位层但**不用 `v-if` 移除** `img` | 纯函数 + 前端源码判据 |
+| [`album-virtual-all.test.js`](../../../testjs/units/album-virtual-all.test.js) | 虚拟相册「整册全选」：前端只交 `all_from` + 排除集，由后端展开；锁排除生效、源相册不存在 404、虚拟相册取索引而不重复行、只从虚拟源移除索引 | 内存库 + 真 router |
+| [`deferred-ipc-startup.test.js`](../../../testjs/units/deferred-ipc-startup.test.js) | 延迟 IPC 注册全局化，以及「低配模式」已删除的回归：真机 2 核 4GB 的 21 段 startup.log 证明按核数错峰无可测收益（开/关中位差 11ms，落在噪声内），模式连同开关与通道一起删掉，不许长回来 | 源码判据 + 启动时间线解析 |
+| [`disk-usage.test.js`](../../../testjs/units/disk-usage.test.js) | 性能面板「空间管理」的磁盘归账：A `classifyEntry` 纯函数（库 / 缩略图 / 上传 / 日志 / 其他）；B `scanDiskUsage` 真扫临时目录，七类字节数与合计；缩略图与日志目录在数据目录之外时补扫且不重复计 | 纯函数 + 临时目录 |
+| [`fast-startup.test.js`](../../../testjs/units/fast-startup.test.js) | 「性能 → 快速启动」开关：`main.js` 必须在启动关键路径上**同步**读 localStorage（走接口会变成「先等一个接口才知道要不要等接口」），设置页负责写，默认开启；两处共用 `utils/fastStartup.js` 的 key | 源码判据 + 桩 localStorage |
+| [`group-manage.test.js`](../../../testjs/units/group-manage.test.js) | 分组管理读写路径（档 C · M12-B1）：默认维度自动建且不重复、组数增减连带成员、**宿舍改组保留组 id 与成员**（全删重建会清空全班分配）、维度排序边界、成员增删改移与满员拒绝、智能分组写回、导入合并追加/跳过重名；末尾一条 SQL 出口判据 | 内存库 + 真 router |
+| [`leaves-paging.test.js`](../../../testjs/units/leaves-paging.test.js) | 请假列表分页与「今日到班」范围：全量语义保留（挂件、导出、AI 工具依赖）；`hasMore` 用「多取一条」不跑 COUNT；`scope=today` 单独取「请假中 + 今天已返校」两类；末尾一条 SQL 出口判据锁 `leaveStore` | 内存库 + 真 router |
+| [`live-blocks.test.js`](../../../testjs/units/live-blocks.test.js) | AI 流式渲染分块（v6 性能专题 · 2-4）：原实现每跨一行就重跑整段 `marked.parse` + `DOMPurify.sanitize`（O(n²)，500 行时单次 47.9ms）。按块缓存后每块只算一次，判据锁「切块不改变渲染结果」 | 前端 ESM |
+| [`packaged-csp.test.js`](../../../testjs/units/packaged-csp.test.js) | 打包版 CSP 与构建产物内联脚本的对账：入口 CSS 的 `onload`、启动页脚本、PDF 字体子集化的 `wasm-unsafe-eval` 三类 hash 必须同时留在 `script-src`，且 style 标签要的 `unsafe-hashes` 不能删；改 CSP 就要重算 hash | 真实构建产物 + 源码对账 |
+| [`score-paging.test.js`](../../../testjs/units/score-paging.test.js) | 成绩列表分页与首页聚合：列表按页取、统计页签仍走全量（它要汇总而不是逐条）；首页摘要与旧 `computed` 逐项一致；分页只对列表 opt-in | 内存库 + 真 router |
+| [`score-provisional.test.js`](../../../testjs/units/score-provisional.test.js) | 加分记录里的名册外姓名：允许直接写名字，由后端走与值日/座位/分组同一套 `provisionalStudents`（建 `is_provisional=1` 并回填 `student_id`）；转正只改状态位，引用不断 | 内存库 + 真 router |
+| [`semester-crud.test.js`](../../../testjs/units/semester-crud.test.js) | 学期 CRUD 与「当前学期」镜像（档 C · M12-B4）：新增即当前且当前唯一、列表把空日期排最后、切换互斥、删当前自动补选、**只传 `semester_start` 不能清空 `end_date`**（结束日期是快照补存的上界）、老库无 `is_current` 时回退最新；另含两条 SQL 出口判据 | 内存库 + 真 router |
+| [`settings-view-ctx-binding.test.js`](../../../testjs/units/settings-view-ctx-binding.test.js) | 设置页「模板绑定必须真的可见」：`SettingsView.vue` 把状态与方法拆在三个逻辑模块里经 `ctx` 袋互调，模板只认 `<script setup>` 的顶层绑定 —— **漏解构在 Vapor 下静默无反应**，判据逐个比对模板用到的名字与解构清单 | 源码判据 |
+| [`text-head.test.js`](../../../testjs/units/text-head.test.js) | AI 附件只读头部（v6 性能专题 · 2-12）：大文件只读 `maxChars*4` 字节（`bytesRead` 可证）、末尾不完整多字节序列被裁掉不产生 U+FFFD、空文件与纯 ASCII 边界、接线锁上传解析走 `readTextHead` | 临时文件 |
+| [`thumb-purge.test.js`](../../../testjs/units/thumb-purge.test.js) | 「清理图片微缩图」：只删缩略图文件，索引（`album_photos` 行、`thumb_path`、`thumb_v`）一概不动；按库目录与旧扁平结构都要清；不存在的文件跳过不报错 | 临时目录 |
+| [`thumb-sweep.test.js`](../../../testjs/units/thumb-sweep.test.js) | 「回收孤儿微缩图」：默认只读（只报数一个不删），`apply=true` 只删「确定没人引用」的 jpg —— 库能打开时按 `album_photos.id` 集合比对，无主账号目录与旧扁平残留单独判定，库打不开的 slug 整目录跳过 | 临时目录 |
+| [`undo-retention.test.js`](../../../testjs/units/undo-retention.test.js) | 撤销记录「每 key 50 条」上限：`pushRecord` 的 `MAX_PER_KEY` 一旦被改掉或加进动态 key，`undo_history` 就会无限增长，而「撤销不需要分页」的结论完全建立在这个上限上 | 内存库 |
+| [`viewer-pan.test.js`](../../../testjs/units/viewer-pan.test.js) | 查看器「放大之后能拖动平移」：`translate` 必须在 `rotate` / `scale` 之前（写在后面位移会被倍率再乘一遍）；平移量夹在可露出余量内，缩小/转正/改窗口都要重新夹；旋转 90/270 时宽高互换 | 纯函数 + 前端 ESM |
+| [`vite-outdir-empty.test.js`](../../../testjs/units/vite-outdir-empty.test.js) | 构建输出目录的「小批量清空」：Vite 自带的 `emptyOutDir` 是一次递归删除，`dist/assets` 上百文件时会撞上宿主环境的删目录失败；改为分批删并保留非构建产物 | 临时目录 |
 
 新增：在 `units/` 建 `*.test.js`，用 `node:test` 的 `test()` 编写，无需改配置。
 

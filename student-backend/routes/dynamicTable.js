@@ -1,9 +1,8 @@
 const express = require('express');
-const { db } = require('../db');
-const { renameStudentRefs } = require('../services/studentRename');
 const {
-  queryAll, insertRow, updateRow, deleteRow, deleteRows, moveRow,
-  addColumn, deleteColumn, reorderRows, moveColumn, importRows, renameColumn
+  queryAll, insertRow, deleteRow, deleteRows, moveRow,
+  addColumn, deleteColumn, reorderRows, moveColumn, importRows, renameColumn,
+  updateRowWithRename
 } = require('../services/tableService');
 const { clearTableColumnsCache } = require('./ai/ai.helpers');
 
@@ -45,25 +44,9 @@ function createDynamicTableRouter(tableName, options = {}) {
   router.put('/:id', (req, res) => {
     try {
       // 学生改名要顺手把「只存姓名」的关联一起改掉（值日/座位/成绩/请假/小组/班干部），
-      // 否则值日指数会按旧名归集、新名字从 0 开始。其余表没有这层关联。
-      //
-      // students 行与本层级联必须是**同一个事务**：拆开提交时，级联失败会留下
-      // 「students 已是新名、关联表还是旧名」的半改状态 —— 而 renameStudentRefs
-      // 是靠「旧名在 students 里已不存在」来判断要不要级联的，这种半改状态
-      // 让它之后再也不会重跑，数据永久错位且不报错。
-      let renamed = null;
-      db.transaction(() => {
-        const before = tableName === 'students'
-          ? db.prepare('SELECT 姓名 FROM students WHERE id = ?').get(Number(req.params.id))
-          : null;
-        updateRow(tableName, req.params.id, req.body);
-        if (before && req.body && req.body['姓名'] != null) {
-          const after = db.prepare('SELECT 姓名 FROM students WHERE id = ?').get(Number(req.params.id));
-          if (after && before['姓名'] !== after['姓名']) {
-            renamed = renameStudentRefs(before['姓名'], after['姓名']);
-          }
-        }
-      })();
+      // 否则值日指数会按旧名归集、新名字从 0 开始。事务边界与级联规则都在
+      // tableService.updateRowWithRename 里，路由不再直接持有 db。
+      const renamed = updateRowWithRename(tableName, req.params.id, req.body);
       res.json({ message: '修改成功', renamed });
     } catch (err) {
       res.status(400).json({ error: err.message });

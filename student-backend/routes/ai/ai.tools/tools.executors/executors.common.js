@@ -1,6 +1,6 @@
 // ===== AI 工具执行：通用小工具（日期 / JSON / 姓名 / 拼音 / 值日解包）=====
 // 从 ../executors.js 纯代码搬运而来，逐个模块共享，行为不变。
-const db = require('../../../../db').db;
+const { studentIdNameMap } = require('../../../../services/aiStore');
 
 let PM_MOD;
 // 拼音匹配复用前端同款依赖 pinyin-match（懒加载，加载失败时退化为文本/学号匹配）
@@ -31,11 +31,6 @@ const DUTY_MODE_LABELS = { daily: '日常值日', big: '大扫除' };
 function dutyModeLabel(m) { return DUTY_MODE_LABELS[m] || m; }
 // 解包「按模式分键」的值日数据（判定规则见 services/dutyMode.js）
 function unpackDutyModeCol(field, mode) { return unpackMode(field, mode); }
-function studentIdNameMap() {
-  const map = {};
-  for (const s of db.prepare('SELECT id, 姓名 FROM students').all()) map[Number(s.id)] = String(s['姓名'] || '');
-  return map;
-}
 // 课表格内是否含多门课（用顿号/斜杠/加号/逗号/与号等分隔出 ≥2 段非空文本）
 function aiLooksMultiCourse(text) {
   const t = String(text == null ? '' : text).trim();

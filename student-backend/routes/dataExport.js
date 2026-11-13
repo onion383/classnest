@@ -15,6 +15,7 @@
 const express = require('express');
 const router = express.Router();
 const { db } = require('../db');
+const { all, get, countOf } = require('../services/exportQuery');
 const { safeJson } = require('../utils/json');
 const { writeZip } = require('../services/zipStream');
 const { memSnapshot, logExportMemory } = require('../services/perfMem');
@@ -26,23 +27,6 @@ const fs = require('fs');
 const path = require('path');
 
 const WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-
-// 单表读取失败不应该让整份导出挂掉（旧库缺表 / 列被删过）：
-// 该表返回空表，其余表照常导出，前端会看到「N 行」为 0 而不是整个按钮报错。
-function all(sql, params = []) {
-  try { return db.prepare(sql).all(...params); } catch (_) { return []; }
-}
-function get(sql, params = []) {
-  try { return db.prepare(sql).get(...params); } catch (_) { return null; }
-}
-
-// 1-3：只取行数，不物化整表。
-// `/tables` 以前为了一个数字调用 build() —— 那会把整张表建成行对象再丢掉。
-// 这里直接 COUNT(*)，代价与表大小无关；表不存在时 `get` 已吞掉异常返回 null。
-function countOf(tableName) {
-  const row = get(`SELECT COUNT(*) AS n FROM ${tableName}`);
-  return Number(row && row.n) || 0;
-}
 
 // { fields, rows } —— rows 为对象数组，字段顺序由 fields 决定
 function table(headers, rows) {

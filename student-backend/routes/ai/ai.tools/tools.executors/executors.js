@@ -8,7 +8,8 @@
 //   ./executors.impact.js    删除影响预估
 //   ./executors.common.js    通用小工具（日期 / JSON / 拼音 / 值日解包）
 // 本文件只保留「展示类工具 + 过程块文案」并统一再导出，对外接口与拆分前一致。
-const { db, getFields } = require('../../../../db');
+const { getFields } = require('../../../../db');
+const { listCountdowns } = require('../../../../services/aiStore');
 const store = require('../../../../services/slotStore');
 const { COLUMN_RULES } = require('../../../../services/sanitize');
 const dbManager = require('../../../../dbManager/dbManager');
@@ -451,7 +452,7 @@ function runTeachingWeek({ date } = {}) {
 
   let exam = null;
   let examName = '';
-  const cds = db.prepare('SELECT 名称, 截止日 FROM countdowns').all();
+  const cds = listCountdowns();
   for (const c of cds) {
     const nm = String(c.名称 || '');
     if (!/期末|考试/.test(nm)) continue;

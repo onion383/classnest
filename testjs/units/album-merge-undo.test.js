@@ -106,7 +106,10 @@ test('接线：路由在删除前取证并返回三段快照，执行器已注�
   assert.match(route, /removed:\s*\{\s*newAlbum,\s*newPhotos,\s*sources\s*\}/)
   const ex = read('student-backend/routes/undo/undo.executors.js')
   assert.match(ex, /album_merge:/)
-  assert.match(ex, /insertRow\('album_photos', \{ \.\.\.p, thumb_path: '' \}\)/)
+  // M12-B8：语句搬进 undoStore.restoreMergedAlbum，判据跟着语句走
+  assert.match(ex, /undoStore\.restoreMergedAlbum\(payload\)/)
+  const st = read('student-backend/services/undoStore.js')
+  assert.match(st, /insertRow\('album_photos', \{ \.\.\.p, thumb_path: '' \}\)/)
 })
 
 test('接线：前端把合并登记成一条 album_merge 命令', () => {

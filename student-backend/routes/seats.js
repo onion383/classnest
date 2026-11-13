@@ -94,7 +94,8 @@ function parseDeskPattern(v) {
 // 要改尺寸必须同时提交新 types（PUT 带上 types 即可，会走严格尺寸校验）。
 function gridShapeMismatch(view, rows, cols, typesSupplied) {
   if (typesSupplied) return null;
-  const rec = db.prepare(`SELECT rows AS r, cols AS c, types FROM ${view} WHERE id = 1`).get();
+  // 单例槽位表的读取统一走 slotStore（列清单在它的 SPEC 里，路由不再抄一份）
+  const rec = store.getDoc(view);
   if (!rec || !rec.types) return null;
   let stored;
   try { stored = JSON.parse(rec.types); } catch (_) { return null; }
@@ -109,7 +110,7 @@ function gridShapeMismatch(view, rows, cols, typesSupplied) {
 
 // ======================== 当前座位 ========================
 router.get('/', (req, res) => {
-    const row = db.prepare('SELECT mode, rows, cols, seats, types, desk_pattern, aisle_cols, groups_config, settings FROM seat_layout WHERE id = 1').get();
+    const row = store.getDoc('seat_layout');
   if (!row) return res.json({ mode: 'single', rows: 6, cols: 7, seats: [], types: [], aisleCols: [], groupsConfig: [], settings: {} });
   // seats 单独走 readSeats（还要规范化结构），其余三列统一走 readDocJson：
   // 四条 JSON 列只要有一条畸形，裸解析就会让整个响应 500、页面白板。
@@ -207,7 +208,7 @@ router.patch('/master/cell', cellPatchHandler('seat_template'));
 
 // ======================== 座位模板 ========================
 router.get('/master', (req, res) => {
-    const row = db.prepare('SELECT mode, rows, cols, seats, types, desk_pattern, aisle_cols, groups_config, settings FROM seat_template WHERE id = 1').get();
+    const row = store.getDoc('seat_template');
   if (!row) return res.json({ mode: 'single', rows: 6, cols: 7, seats: [], types: [], aisleCols: [], groupsConfig: [], settings: {} });
   const extra = readDocJson(row, {
     aisleCols: ['aisle_cols', []],
@@ -280,7 +281,7 @@ router.put('/master', (req, res) => {
 
 // ======================== 从模板应用到当前座位 ========================
 router.post('/apply-master', (req, res) => {
-    const template = db.prepare('SELECT mode, rows, cols, seats, types, desk_pattern, aisle_cols, groups_config, settings FROM seat_template WHERE id=1').get();
+    const template = store.getDoc('seat_template');
   if (!template) return res.status(400).json({ error: '模板为空' });
   store.setDoc('seat_layout', {
     mode: template.mode,
@@ -301,7 +302,7 @@ router.post('/apply-master', (req, res) => {
 // 走廊格的权重恒为 null。types 也一并存取 —— 它是这份权重矩阵的几何依据，
 // 权重写入一旦与它脱节，座位指数就会按错的列取权重（界面上看不出来，只觉得排得不公平）。
 router.get('/weight', (req, res) => {
-    const row = db.prepare('SELECT mode, rows, cols, weights, types, settings FROM seat_weight WHERE id = 1').get();
+    const row = store.getDoc('seat_weight');
   if (!row) return res.json({ mode: 'single', rows: 6, cols: 13, weights: [], types: [], settings: {} });
   const extra = readDocJson(row, { weights: [], settings: {} });
   res.json({
@@ -348,7 +349,7 @@ router.put('/weight', (req, res) => {
 // 草稿只在「智能排表」弹窗里恢复：保存本次排表的预览结果与条件。
 // saved_at 为空串即视为没有草稿（不额外存标记位，避免多一个状态字段）。
 router.get('/draft', (req, res) => {
-    const row = db.prepare('SELECT mode, rows, cols, seats, types, desk_pattern, aisle_cols, settings, conditions, saved_at FROM seat_draft WHERE id = 1').get();
+    const row = store.getDoc('seat_draft');
   if (!row || !row.saved_at) return res.json({ exists: false });
   // 草稿的 seats 同样要按矩阵规范化：AI / 历史写入的草稿可能是扁平对象数组，
   // 原样回传会让前端按 seats[行][列] 读到 undefined。

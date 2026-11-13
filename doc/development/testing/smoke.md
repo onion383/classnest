@@ -27,6 +27,15 @@ classnest/
         ├── theme-setting-probe.mjs  # 无
         ├── thumbs-cache-test.cjs  # 无
         ├── undo-batch-test.cjs  # 临时 DATA_DIR + 真实撤销路由，不需要完整后端
+        ├── album-scan-incremental-thumb-test.cjs  # 增量跳过已有、全量无条件重建（真实扫描比对文件集合）
+        ├── album-scan-two-phase-test.cjs  # 全量扫描两阶段：索引全部完成才出现缩略图
+        ├── album-thumbs-abort-queue-test.cjs  # 滑走后「还没开工」的排队项要退队
+        ├── album-thumbs-abort-test.cjs  # 滑走即中断：后端自己要检查连接断开
+        ├── album-thumbs-preview-quota-test.cjs  # 预览额度与生成额度分离、中断即释放
+        ├── album-thumbs-purge-test.cjs  # 清理微缩图接口：三种承诺
+        ├── album-thumbs-rebuild-batch-test.cjs  # 清理后一屏 12~40 张要能立刻长回来
+        ├── album-thumbs-sweep-test.cjs  # 孤儿微缩图回收的精准性
+        ├── _thumb-frames.cjs  # 批量缩略图流式响应的帧解析（共用脚手架）
         └── unzip-safe-test.cjs  # 无
 ```
 <!-- doc-tree:end -->
@@ -85,6 +94,15 @@ classnest/
 | [`font-subset-verify.mjs`](../../../testjs/smoke/font-subset-verify.mjs) | 需 `pdf-subset-verify` 产物 | 子集 cmap 覆盖实际绘制的全部字符（纯 Node 解析 TTF） |
 | [`_isolated-backend.cjs`](../../../testjs/smoke/_isolated-backend.cjs) | 共用脚手架 | 起隔离后端（独立端口/数据目录），供需要后端的脚本复用 |
 | [`_tmpdir.cjs`](../../../testjs/smoke/_tmpdir.cjs) | 共用脚手架 | `makeTempDir` / `removeDirWithRetry` / `tempRoot`：临时目录统一挂在父进程建的 `SMOKE_TMP_ROOT` 下，跑完由父进程整体删。Windows 上 sqlite 的 `index.db` 句柄在进程内一直开着 → 子进程内 `rmSync` 必失败 → 旧写法 `try { rmSync } catch {}` 把失败静默吞掉，实测在系统 temp 积压 94 个残留目录 |
+| [`album-scan-incremental-thumb-test.cjs`](../../../testjs/smoke/album-scan-incremental-thumb-test.cjs) | 临时 DATA_DIR + 真实扫描引擎 | 增量与全量的**两套相反语义**：增量只补丢的（按文件存在判定，不读内容）、全量无条件重建（修坏图/刷缓存的唯一入口）。脚本真跑扫描后比对缩略图文件集合，而不是查源码字符串 |
+| [`album-scan-two-phase-test.cjs`](../../../testjs/smoke/album-scan-two-phase-test.cjs) | 临时 DATA_DIR + 真实扫描引擎 | 全量扫描的**时间线**：索引阶段全部完成后才出现第一批缩略图。断言的是顺序与阶段名（`phase` = `index` / `thumb`），不是源码结构 —— 改回交替写法会直接红 |
+| [`album-thumbs-abort-queue-test.cjs`](../../../testjs/smoke/album-thumbs-abort-queue-test.cjs) | 临时 DATA_DIR + 真实路由 | 「还没进去的队列可以退出吗」：已开工的照常收尾（40 张是 CPU 硬下限），**尚未开工的**必须随请求断开退回队列；两段要分开断言，只测「断了」会把两种行为混为一谈 |
+| [`album-thumbs-abort-test.cjs`](../../../testjs/smoke/album-thumbs-abort-test.cjs) | 临时 DATA_DIR + 真实路由 | 滑走即中断：Node 不会因为 HTTP 断开就停掉 handler，后端必须显式检查 `res` 的关闭事件并 `shouldAbort`；不检查则 CPU 照跑完、配额一直占着，新的一屏排不进队 |
+| [`album-thumbs-preview-quota-test.cjs`](../../../testjs/smoke/album-thumbs-preview-quota-test.cjs) | 临时 DATA_DIR + 真实路由 | 预览额度回归：预览与扫描生成**分开计数**（`PREVIEW_LIMIT=48` 只管排队深度、`MAX_CONCURRENT_THUMBS=4` 才是 CPU 并发）；断开后立刻归还 `claimed - started`，预览请求可插队批量生成 |
+| [`album-thumbs-purge-test.cjs`](../../../testjs/smoke/album-thumbs-purge-test.cjs) | 临时 DATA_DIR + 真实路由 | 清理接口的三个承诺：①删得干净（当前账号 + 其他未打开账号的目录）；②索引一行不动（`album_photos`、`thumb_path`、`thumb_v`）；③之后按需重建，不靠缓存文件 |
+| [`album-thumbs-rebuild-batch-test.cjs`](../../../testjs/smoke/album-thumbs-rebuild-batch-test.cjs) | 临时 DATA_DIR + 真实路由 | 清理后「一屏图立刻长回来」：只造 2 张测不出真实坑，这里造一屏 12~40 张 —— 全部无缓存时会同时撞上现场生成配额闸，判据锁「整批都能出图」而不是部分成功 |
+| [`album-thumbs-sweep-test.cjs`](../../../testjs/smoke/album-thumbs-sweep-test.cjs) | 临时 DATA_DIR + 真实路由 | 孤儿回收的**精准**：默认只读只报数、一个文件不删；`apply=true` 只删没有索引引用的 jpg（含删账号残留目录与旧扁平结构），正在用的图不动 |
+| [`_thumb-frames.cjs`](../../../testjs/smoke/_thumb-frames.cjs) | 共用脚手架 | 批量缩略图**流式**响应的帧解析：`[id: uint32 LE][len: uint32 LE][JPEG]` 逐帧拼接。帧自带 id 是流式的前提 —— 服务端写第一帧时还不知道最终会发出哪些 id，没法再用响应头与段序对位 |
 
 ### 示范：`auth-smoke.js` 的原理与局限
 

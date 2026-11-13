@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { db, renumber } = require('../db');
+const { renumber } = require('../db');
 const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../utils/sql');
 const { sanitizeField } = require('../services/sanitize');
 const { validateRow } = require('../services/businessRules');
 const { reorderRows } = require('../services/tableService');
 const { readRowsByIds } = require('../services/createdRows');
+const leaveStore = require('../services/leaveStore');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['姓名', '类型', '开始时间', '结束时间', '家长联系电话', '学生联系电话', '状态', '返校时间', '备注'];
@@ -18,13 +19,13 @@ const TODAY_COLUMN_TABLES = {
 };
 
 function listOrders() {
-  return db.prepare('SELECT * FROM leave_records ORDER BY position, id').all();
+  return leaveStore.readAll();
 }
 
 // ---------- 分页与范围过滤（v6 · 2-23）----------
 // 请假记录会随学期线性增长，列表改成滚动加载后每次只要一屏；
 // 但「今日到班」要的是另一批数据（请假中 + 今天已返校），得单独按范围取。
-// hasMore 用「多取一条」判定，不跑 COUNT —— 与 services/searchLimits 同一口径。
+// 范围判定与 hasMore 口径都收在 services/leaveStore（多取一条，不跑 COUNT）。
 const PAGE_MAX = 200;
 
 function pageOf(query) {
@@ -36,34 +37,14 @@ function pageOf(query) {
   return { limit, offset };
 }
 
-// scope=today → 今日到班需要的两类记录：
-//   · 状态「请假中」（还没回来的人）
-//   · 状态「已返校」且返校时间是今天（今天回来的人）
-// 这两类散布在整张表里，不能靠列表第一页顺带，所以单独取。
-function scopeClause(scope, date) {
-  if (scope !== 'today') return null;
-  const d = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
-  if (!d) return { sql: "状态 = '请假中'", params: [] };
-  return { sql: "(状态 = '请假中' OR (状态 = '已返校' AND 返校时间 LIKE ?))", params: [`${d}%`] };
-}
-
 // GET /api/leaves            → 全量 { data }（挂件、导出、AI 工具都依赖这个语义）
 // GET /api/leaves?limit=50&offset=0[&scope=today&date=YYYY-MM-DD] → 分页 { data, hasMore }
 router.get('/', (req, res) => {
   const q = req.query || {};
   const { limit, offset } = pageOf(q);
-  const sc = scopeClause(q.scope, q.date);
-  const where = sc ? ` WHERE ${sc.sql}` : '';
-  const params = sc ? sc.params : [];
-  const tail = ' ORDER BY position, id';
-  if (!limit) {
-    return res.json({ data: db.prepare(`SELECT * FROM leave_records${where}${tail}`).all(...params) });
-  }
-  const rows = db.prepare(
-    `SELECT * FROM leave_records${where}${tail} LIMIT ? OFFSET ?`
-  ).all(...params, limit + 1, offset);
-  const hasMore = rows.length > limit;
-  res.json({ data: hasMore ? rows.slice(0, limit) : rows, hasMore });
+  const { rows, hasMore } = leaveStore.readList({ scope: q.scope, date: q.date, limit, offset });
+  if (!limit) return res.json({ data: rows });
+  res.json({ data: rows, hasMore });
 });
 
 // POST /api/leaves 添加请假（学生联系方式从学生表自动带出）
@@ -73,7 +54,7 @@ router.post('/', (req, res) => {
 
   // 首选通过 studentId 从学生表带出姓名与联系方式
   if (body.studentId) {
-    const stu = db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE id = ?').get(body.studentId);
+    const stu = leaveStore.findStudentById(body.studentId);
     if (!stu) return res.status(404).json({ error: '学生不存在' });
     data.student_id = stu.id;
     // 文本列统一走 sanitizeField：裸赋值会把零宽字符/控制字符/超长串原样落库，
@@ -113,7 +94,7 @@ router.put('/:id', (req, res) => {
   // assertLeaveWindow 在任一时间为空时直接放行 → 结束时间可以被改到开始之前。
   // 这里用库里的旧行补齐后再校验一次（新增接口本来就有这条校验，行为要对齐）。
   if (row.开始时间 !== undefined || row.结束时间 !== undefined) {
-    const old = db.prepare('SELECT 开始时间, 结束时间 FROM leave_records WHERE id = ?').get(Number(req.params.id));
+    const old = leaveStore.findWindow(Number(req.params.id));
     if (!old) return res.status(404).json({ error: '记录不存在' });
     const start = row.开始时间 !== undefined ? row.开始时间 : old.开始时间;
     const end = row.结束时间 !== undefined ? row.结束时间 : old.结束时间;
@@ -137,9 +118,9 @@ router.post('/reorder', (req, res) => {
 
 // GET /api/leaves/today-columns 读取今日到班两张表的列顺序
 router.get('/today-columns', (req, res) => {
-    const rows = db.prepare(
-    'SELECT table_name, column_name FROM table_meta WHERE table_name IN (?, ?, ?) ORDER BY sort_order'
-  ).all(TODAY_COLUMN_TABLES.active, TODAY_COLUMN_TABLES.returned, TODAY_COLUMN_TABLES.records);
+    const rows = leaveStore.listTodayColumns([
+    TODAY_COLUMN_TABLES.active, TODAY_COLUMN_TABLES.returned, TODAY_COLUMN_TABLES.records,
+  ]);
   const out = { active: [], returned: [], records: [] };
   rows.forEach(r => {
     if (r.table_name === TODAY_COLUMN_TABLES.active) out.active.push(r.column_name);
@@ -156,12 +137,7 @@ router.post('/today-columns', (req, res) => {
   if (!tableName || !Array.isArray(order) || order.length === 0) {
     return res.status(400).json({ error: '参数不合法' });
   }
-  const del = db.prepare('DELETE FROM table_meta WHERE table_name = ?');
-  const ins = db.prepare('INSERT INTO table_meta (table_name, column_name, data_type, sort_order) VALUES (?, ?, ?, ?)');
-  db.transaction(() => {
-    del.run(tableName);
-    order.forEach((name, i) => ins.run(tableName, String(name), '文字', i + 1));
-  })();
+  leaveStore.replaceTodayColumns(tableName, order);
   res.json({ message: '列顺序已保存' });
 });
 
@@ -185,11 +161,6 @@ router.post('/import', (req, res) => {
       return '';
     };
 
-    const insert = db.prepare(
-      `INSERT INTO leave_records
-        (position, student_id, 姓名, 类型, 开始时间, 结束时间, 家长联系电话, 学生联系电话, 状态, 返校时间, 备注, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
     const startPos = maxPosition('leave_records');
 
     const list = rows.map((row, idx) => {
@@ -197,9 +168,9 @@ router.post('/import', (req, res) => {
       const name = cell(row, ['姓名']);
       const xuehao = cell(row, ['学号']);
       let student = null;
-      if (xuehao) student = db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE 学号 = ?').get(xuehao) || null;
+      if (xuehao) student = leaveStore.findStudentByXuehao(xuehao) || null;
       if (!student && name) {
-        const sameName = db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2').all(name);
+        const sameName = leaveStore.findStudentsByName(name);
         if (sameName.length === 1) student = sameName[0];
       }
 
@@ -227,17 +198,7 @@ router.post('/import', (req, res) => {
       };
     });
 
-    const insertMany = db.transaction((items) => {
-      const ids = [];
-      for (const item of items) {
-        ids.push(Number(insert.run(
-          item.position, item.student_id, item.姓名, item.类型, item.开始时间, item.结束时间,
-          item.家长联系电话, item.学生联系电话, item.状态, item.返校时间, item.备注, item.created_at
-        ).lastInsertRowid));
-      }
-      return ids;
-    });
-    const ids = insertMany(list);
+    const ids = leaveStore.insertMany(list);
     renumber('leave_records');
     // created = 本次真正新建的行（撤销导入的唯一 inverse 来源，见 services/createdRows）
     res.json({ message: `成功导入 ${list.length} 条请假记录`, created: readRowsByIds('leave_records', ids) });
@@ -248,28 +209,28 @@ router.post('/import', (req, res) => {
 
 // DELETE /api/leaves/:id 删除
 router.delete('/:id', (req, res) => {
-    db.prepare('DELETE FROM leave_records WHERE id = ?').run(Number(req.params.id));
+    leaveStore.removeById(Number(req.params.id));
   renumber('leave_records');
   res.json({ message: '删除成功' });
 });
 
 // POST /api/leaves/:id/return 销假（标记已返校）
 router.post('/:id/return', (req, res) => {
-    const result = db.prepare("UPDATE leave_records SET 状态='已返校', 返校时间=? WHERE id = ?").run(now(), Number(req.params.id));
+    const result = leaveStore.markReturned(Number(req.params.id), now());
   if (result.changes === 0) return res.status(404).json({ error: '记录不存在' });
   res.json({ message: '已销假' });
 });
 
 // POST /api/leaves/:id/unreturn 撤销销假（恢复为请假中）
 router.post('/:id/unreturn', (req, res) => {
-    const result = db.prepare("UPDATE leave_records SET 状态='请假中', 返校时间=NULL WHERE id = ?").run(Number(req.params.id));
+    const result = leaveStore.markUnreturned(Number(req.params.id));
   if (result.changes === 0) return res.status(404).json({ error: '记录不存在' });
   res.json({ message: '已撤销销假' });
 });
 
 // POST /api/leaves/:id/cancel 取消请假
 router.post('/:id/cancel', (req, res) => {
-    const result = db.prepare("UPDATE leave_records SET 状态='已取消' WHERE id = ?").run(Number(req.params.id));
+    const result = leaveStore.markCanceled(Number(req.params.id));
   if (result.changes === 0) return res.status(404).json({ error: '记录不存在' });
   res.json({ message: '已取消请假' });
 });

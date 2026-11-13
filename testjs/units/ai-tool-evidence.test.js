@@ -115,9 +115,12 @@ test('本轮只要有过工具步骤（含失败），「调用过工具」就�
 
 test('上下文重建确实读 process_json，且 toolTrace 被拼进系统提示', () => {
   const mem = read('student-backend/routes/ai/ai.memory.js')
+  const store = read('student-backend/services/aiConversationStore.js')
   const conv = read('student-backend/routes/ai/ai.conversations.js')
-  assert.ok(/SELECT id, role, content, process_json, attachments_json FROM ai_messages/.test(mem),
+  // SQL 已下沉到 services/aiConversationStore.js（M12-B7）：判据跟着语句走，同时要求路由确实调用它。
+  assert.ok(/SELECT id, role, content, process_json, attachments_json FROM ai_messages/.test(store),
     'loadConversationContext 必须 SELECT process_json')
+  assert.ok(/listMessages\(conversationId\)/.test(mem), 'ai.memory.js 必须通过 aiConversationStore 读消息')
   assert.ok(/toolTrace: buildToolTrace\(effectiveRows\)/.test(mem), '返回体必须带 toolTrace')
   assert.ok(/\+ \(convCtx \? convCtx\.toolTrace : ''\)/.test(conv), '系统提示必须拼接 toolTrace')
   assert.ok(/module\.exports\.buildToolTrace/.test(mem), 'buildToolTrace 必须导出')
@@ -181,13 +184,15 @@ test('全链路判据：产生 → 下发 → 落库 → 重建上下文 → 发
   const chat = read('student-frontend/src/composables/ai/aiChat.js')
   const msgs = read('student-frontend/src/composables/ai/aiMessages.js')
   const mem = read('student-backend/routes/ai/ai.memory.js')
+  const store = read('student-backend/services/aiConversationStore.js')
   assert.ok(/tool: tc\.name/.test(conv), '① 工具步骤必须带真实工具名')
   assert.ok(/type: 'done', \.\.\.donePayload\(\)/.test(conv), '② done 事件必须携带 steps')
   assert.ok(/last\.steps = /.test(chat), '③ 前端必须接收 done 里的 steps')
   assert.ok(/steps: m\.steps \|\| \[\]/.test(msgs), '④ buildProc 必须把 steps 原样写进过程块')
   assert.ok(/persistMessage\('assistant', last\.content/.test(chat), '⑤ 助手消息必须落库')
-  assert.ok(/SELECT id, role, content, process_json, attachments_json FROM ai_messages/.test(mem),
+  assert.ok(/SELECT id, role, content, process_json, attachments_json FROM ai_messages/.test(store),
     '⑥ 重建上下文必须把 process_json 读回来')
+  assert.ok(/listMessages\(conversationId\)/.test(mem), '⑥ 路由必须通过 aiConversationStore 读消息')
   assert.ok(/toolTrace: buildToolTrace\(effectiveRows\)/.test(mem)
     && /convCtx\.toolTrace/.test(conv), '⑦ 还原成记录并拼进系统提示发给模型')
 })

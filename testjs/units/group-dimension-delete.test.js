@@ -117,14 +117,25 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
 test('接线：路由返回四段快照，执行器已注册', () => {
   const route = read('student-backend/routes/groupManage.js')
-  assert.match(route, /removed:\s*\{\s*dimension: dim,\s*groups,\s*members,\s*sortOrders\s*\}/)
-  assert.match(route, /SELECT id, sort_order FROM group_dimensions/, '排序快照必须在删除前取')
+  assert.match(route, /res\.json\(\{ message: '删除成功', removed \}\)/, '路由把 service 带回的快照原样返回')
+  // M12-B1：四段快照与「删除前取排序」已下沉到 services/groupDim.js 的 deleteDimension
+  const svc = read('student-backend/services/groupDim.js')
+  assert.match(svc, /return \{ dimension: dim, groups, members, sortOrders \}/)
+  const fnAt = svc.indexOf('function deleteDimension')
+  const sortAt = svc.indexOf('dimensionSortSnapshot()', fnAt)
+  const txAt = svc.indexOf('db.transaction(', fnAt)
+  assert.ok(sortAt > fnAt, '排序快照必须真的被取')
+  assert.ok(txAt > sortAt, '排序快照必须在删除（事务）前取')
 
   const ex = read('student-backend/routes/undo/undo.executors.js')
   assert.match(ex, /group_dimension_delete:/)
-  assert.match(ex, /insertRow\('group_dimensions', dimension\)/)
-  assert.match(ex, /insertRow\('groups', g\)/)
-  assert.match(ex, /insertRow\('group_members', m\)/)
+  // M12-B8：语句搬进 undoStore.restoreDimension，判据跟着语句走
+  assert.match(ex, /undoStore\.restoreDimension\(payload\)/)
+  const st = read('student-backend/services/undoStore.js')
+  assert.match(st, /insertRow\('group_dimensions', dimension\)/)
+  assert.match(st, /UPDATE group_dimensions SET sort_order = \? WHERE id = \?/)
+  assert.match(st, /insertRow\('groups', g\)/)
+  assert.match(st, /insertRow\('group_members', m\)/)
 })
 
 test('接线：前端登记成一条命令，并处理「当前维度已被删掉」', () => {

@@ -13,6 +13,7 @@
 // =========================================================================
 
 const { db } = require('../db');
+const semesterStore = require('./semesterStore');
 
 // 逻辑表名 → { 物理表, kind, 该 kind 允许读写的列 }
 const SPEC = {
@@ -72,9 +73,10 @@ function setDoc(name, patch) {
 
 // ======================== 学期范围 ========================
 // 当前学期起止日期（无当前学期时退回最新一条），供值日/座位补存与指数结算使用。
+// 「当前学期」的判定只有一处：services/semesterStore.findCurrent()（课表路由也读它）。
+// 这里曾经自己抄了一份同样的两条 SELECT，两处口径分头演进就会一边改一边漏。
 function semesterRange() {
-  const row = db.prepare('SELECT start_date, end_date FROM semesters WHERE is_current = 1 ORDER BY id DESC LIMIT 1').get()
-    || db.prepare('SELECT start_date, end_date FROM semesters ORDER BY id DESC LIMIT 1').get();
+  const row = semesterStore.findCurrent()
   return { start: (row && row.start_date) || '', end: (row && row.end_date) || '' };
 }
 

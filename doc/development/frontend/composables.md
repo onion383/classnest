@@ -18,6 +18,7 @@ classnest/
         │   │   ├── aiFiles.js  # 附件上传与文件列表管理
         │   │   ├── aiMarkdown.js  # Markdown 渲染：懒加载 marked + dompurify，模块级单例
         │   │   └── aiMessages.js  # 消息解析与展示辅助：parseMessages、lastAssistant、buildPro…
+        │   ├── albumPhotoPages.js  # 相册日期分页纯逻辑（按天整组进出、合并已加载组）
         │   ├── exportFormats.js  # 导出格式实现
         │   ├── secureAxios.js  # axios 加解密装配
         │   ├── secureChannel.js  # 加密原语
@@ -39,6 +40,7 @@ classnest/
         │   ├── useTableCRUD.js  # 动态列 CRUD（增删改查）
         │   ├── useThumbBatch.js  # 缩略图批量预取
         │   ├── useUndo.js  # 撤销/重做
+        │   ├── useViewerPan.js  # 查看器缩放后拖动平移
         │   └── useWeekDates.js  # 今天的响应式日期
         └── utils/
             ├── httpClient.js
@@ -46,7 +48,7 @@ classnest/
 ```
 <!-- doc-tree:end -->
 
-31 个文件：根目录 22 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
+31 个文件：根目录 24 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
 
 ---
 
@@ -143,6 +145,18 @@ classnest/
 - **签名**：`useAlbumTaskResume()` → `{ schedule, cancel, checkAndResume, resumed, hasPending, pendingCount }`。
 - 时序：占位页移除 → 小组件就绪 → **延迟 4 秒** → `GET /tasks/pending` → 通知条 → `POST /tasks/resume`；未登录不做任何事；查询失败静默。
 - **调用方**：`App.vue`（`reportWidgetsOnce` 内 `schedule()`）。
+
+#### [`albumPhotoPages.js`](../../../student-frontend/src/composables/albumPhotoPages.js) · 相册日期分页纯逻辑
+- **签名**：`UNKNOWN_DATE`（未知时间的分组键）、`nextDayOf`、`pageBefore`、`groupCountOf`、`firstUnloadedIndex`、`mergePhotoGroups`、`buildGroupPlaceholders`、`selectionCount`。
+- 内部：按「天」整组进出 —— `mergePhotoGroups` 合并新到的一页时只补未加载的组，**已加载的组不覆盖**（覆盖会让已生成的对象 URL 全丢、整组重排）；`firstUnloadedIndex` 找下一个要拉的日期；`buildGroupPlaceholders` 让组头张数取自后端的日期计数，而不是已加载条数（否则滚到一半显示「0 张」）。
+- **调用方**：`AlbumView`、`AlbumPhotoPickerDialog`、`NewAlbumDialog`、`utils/albumGridRows.js`。
+- **注意事项**：`UNKNOWN_DATE` 必须与后端空 `photo_date` 的兜底键一致；这里是纯函数，不碰 DOM 与请求，单测在 `album-photo-pages.test.js`。
+
+#### [`useViewerPan.js`](../../../student-frontend/src/composables/useViewerPan.js) · 查看器缩放后拖动平移
+- **签名**：`useViewerPan({ zoom, rotation, stageRef, mediaRef })` → `{ panX, panY, panning, canPan, style, stageClass, mediaClass, clamp, reset, onPointerDown, onPointerMove, onPointerUp, onPointerCancel }`。
+- 内部：`transform` 顺序固定为 `translate(...) rotate(...) scale(...)` —— CSS 从右往左应用，`translate` 放在最外层才落在屏幕坐标系里（写在 `scale` 之后位移会被倍率再乘一遍）；平移量夹在 `panBounds` 算出的余量内，`zoom` / `rotation` / 窗口 `resize` 三处都要重新 clamp；拖动用 `setPointerCapture`，指针甩出舞台仍能继续拖，且捕获挂在元素上、元素移除时浏览器自行回收。
+- **调用方**：`AlbumView` 的查看器、`MediaViewer`（收据弹窗）。
+- **注意事项**：纯计算在 `utils/viewerPan.js`（可单测），本文件只做响应式装配与指针事件；两份查看器必须共用这一份，交互才不会一边能拖一边不能。
 
 ### 数据与网络
 

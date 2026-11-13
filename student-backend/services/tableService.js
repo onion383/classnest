@@ -1,6 +1,7 @@
 const { db, getFields, renumber } = require('../db');
 const { sanitizeField } = require('./sanitize');
 const { studentRelations } = require('./studentRelations');
+const { renameStudentRefs } = require('./studentRename');
 const { readRowsByIds } = require('./createdRows');
 const { GENERIC_CRUD_TABLES } = require('../schema/tableRegistry');
 
@@ -108,6 +109,30 @@ function updateRow(tableName, id, data) {
   values.push(id);
 
   db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE id = ?`).run(...values);
+}
+
+// 学生改名级联要读「改前 / 改后」的姓名；语句收在服务层，路由不直接拿 db。
+function studentNameById(id) {
+  return db.prepare('SELECT 姓名 FROM students WHERE id = ?').get(Number(id));
+}
+
+// 学生改名 + 关联表级联必须在同一事务里：拆开提交时级联失败会留下
+// 「students 已是新名、关联表还是旧名」的半改状态，而 renameStudentRefs 靠
+// 「旧名在 students 里已不存在」判断要不要级联，半改状态会让它之后再也不重跑。
+// 返回级联结果（null 表示没改名 / 不是学生表）。
+function updateRowWithRename(tableName, id, data) {
+  let renamed = null;
+  db.transaction(() => {
+    const before = tableName === 'students' ? studentNameById(id) : null;
+    updateRow(tableName, id, data);
+    if (before && data && data['姓名'] != null) {
+      const after = studentNameById(id);
+      if (after && before['姓名'] !== after['姓名']) {
+        renamed = renameStudentRefs(before['姓名'], after['姓名']);
+      }
+    }
+  })();
+  return renamed;
 }
 
 // —— 删学生的「关联不变量」——
@@ -402,5 +427,6 @@ function renameColumn(tableName, oldName, newName) {
 
 module.exports = {
   queryAll, insertRow, updateRow, deleteRow, deleteRows, moveRow,
-  addColumn, deleteColumn, reorderRows, moveColumn, importRows, renameColumn
+  addColumn, deleteColumn, reorderRows, moveColumn, importRows, renameColumn,
+  studentNameById, updateRowWithRename
 };

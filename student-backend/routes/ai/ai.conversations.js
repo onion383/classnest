@@ -1,5 +1,5 @@
 const express = require('express');
-const { db } = require('../../db');
+const aiConversationStore = require('../../services/aiConversationStore');
 const dbManager = require('../../dbManager/dbManager');
 const { currentSettings } = require('./ai.config');
 const { buildSystemPrompt, consumeStream, getMainTools } = require('./ai.llm');
@@ -17,7 +17,7 @@ const router = express.Router();
 // 不做这一步时，向不存在的会话追加消息会留下孤儿行（SQLite 未开外键约束），
 // 读消息则返回空列表，前端无法区分「新会话」与「会话已被删除」。
 function conversationExists(id) {
-  return !!db.prepare('SELECT 1 FROM ai_conversations WHERE id = ?').get(id);
+  return aiConversationStore.exists(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -27,19 +27,14 @@ function conversationExists(id) {
 // POST /api/ai/conversations —— 新建会话，body: { title? }
 router.post('/conversations', (req, res) => {
     const title = (req.body && req.body.title) || '新对话';
-  const info = db.prepare('INSERT INTO ai_conversations (title) VALUES (?)').run(title);
+  const info = aiConversationStore.createConversation(title);
   res.json({ success: true, id: info.lastInsertRowid, title });
 });
 
 // GET /api/ai/conversations —— 会话列表（按最近更新排序）
 router.get('/conversations', (req, res) => {
   try {
-    const rows = db.prepare(`
-      SELECT c.id, c.title, c.updated_at,
-             (SELECT COUNT(*) FROM ai_messages m WHERE m.conversation_id = c.id) AS msg_count
-      FROM ai_conversations c
-      ORDER BY c.updated_at DESC, c.id DESC
-    `).all();
+    const rows = aiConversationStore.listConversations();
     res.json({ success: true, data: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -49,8 +44,7 @@ router.get('/conversations', (req, res) => {
 // DELETE /api/ai/conversations/:id —— 删除会话（含其消息）
 router.delete('/conversations/:id', (req, res) => {
     if (!conversationExists(req.params.id)) return res.status(404).json({ error: '会话不存在' });
-  db.prepare('DELETE FROM ai_messages WHERE conversation_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM ai_conversations WHERE id = ?').run(req.params.id);
+  aiConversationStore.deleteConversation(req.params.id);
   res.json({ success: true });
 });
 
@@ -78,23 +72,12 @@ router.get('/conversations/:id/messages', (req, res) => {
     const limit = Number(req.query.limit);
     const beforeId = Number(req.query.before_id);
     const hasLimit = Number.isInteger(limit) && limit > 0;
-    const hasBefore = Number.isInteger(beforeId) && beforeId > 0;
     if (!hasLimit) {
-      const all = db.prepare(`
-        SELECT id, role, content, process_json, attachments_json, created_at FROM ai_messages
-        WHERE conversation_id = ? ORDER BY id
-      `).all(req.params.id);
+      const all = aiConversationStore.listMessagesForUi(req.params.id);
       return res.json({ success: true, data: parseMessageRows(all), hasMore: false });
     }
     // 多取 1 条探测是否还有更早的：倒序里的第 limit+1 条即该批最早一条，升序后落在首位
-    const where = hasBefore ? 'conversation_id = ? AND id < ?' : 'conversation_id = ?';
-    const params = hasBefore ? [req.params.id, beforeId, limit + 1] : [req.params.id, limit + 1];
-    const rows = db.prepare(`
-      SELECT id, role, content, process_json, attachments_json, created_at FROM (
-        SELECT id, role, content, process_json, attachments_json, created_at FROM ai_messages
-        WHERE ${where} ORDER BY id DESC LIMIT ?
-      ) ORDER BY id
-    `).all(...params);
+    const rows = aiConversationStore.listMessagesPage(req.params.id, { beforeId, limit });
     const hasMore = rows.length > limit;
     const kept = hasMore ? rows.slice(1) : rows; // 丢弃多取的探测条（升序首位＝最早者）
     res.json({ success: true, data: parseMessageRows(kept), hasMore });
@@ -117,12 +100,11 @@ router.post('/conversations/:id/messages', (req, res) => {
     if (Array.isArray(attachments) && attachments.length) {
       try { attachmentsJson = JSON.stringify(attachments.filter((a) => a && a.name && a.text)); } catch (_) { attachmentsJson = ''; }
     }
-    const info = db.prepare('INSERT INTO ai_messages (conversation_id, role, content, process_json, attachments_json) VALUES (?,?,?,?,?)').run(req.params.id, role, content, processJson, attachmentsJson);
-    db.prepare('UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+    const info = aiConversationStore.insertMessage(req.params.id, role, content, processJson, attachmentsJson);
+    aiConversationStore.touch(req.params.id);
     if (role === 'user') {
       // 用第一条用户消息作标题
-      db.prepare("UPDATE ai_conversations SET title = ? WHERE id = ? AND title = '新对话'")
-        .run((content || '新对话').slice(0, 30), req.params.id);
+      aiConversationStore.autoTitle(req.params.id, content);
     }
     res.json({ success: true, id: info.lastInsertRowid });
   } catch (err) {
@@ -139,9 +121,8 @@ router.put('/conversations/:id/messages/:mid', (req, res) => {
     if (typeof content !== 'string') return res.status(400).json({ error: '缺少消息内容' });
     let processJson = '';
     if (process) { try { processJson = JSON.stringify(process); } catch (_) { processJson = ''; } }
-    db.prepare('UPDATE ai_messages SET content = ?, process_json = ? WHERE id = ? AND conversation_id = ?')
-      .run(content, processJson, req.params.mid, req.params.id);
-    db.prepare('UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+    aiConversationStore.updateMessage(req.params.id, req.params.mid, content, processJson);
+    aiConversationStore.touch(req.params.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -150,8 +131,8 @@ router.put('/conversations/:id/messages/:mid', (req, res) => {
 
 // DELETE /api/ai/conversations/:id/messages/last-assistant —— 重试前移除最近一条助手回复
 router.delete('/conversations/:id/messages/last-assistant', (req, res) => {
-    const row = db.prepare("SELECT id FROM ai_messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1").get(req.params.id);
-  if (row) db.prepare('DELETE FROM ai_messages WHERE id = ?').run(row.id);
+    const row = aiConversationStore.lastAssistantId(req.params.id);
+  if (row) aiConversationStore.deleteMessage(row.id);
   res.json({ success: true, removed: !!row });
 });
 
@@ -162,10 +143,8 @@ router.post('/conversations/:id/messages/delete', (req, res) => {
       ? req.body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
       : [];
     if (!ids.length) return res.json({ success: true, removed: 0 });
-    const info = db.prepare(
-      `DELETE FROM ai_messages WHERE conversation_id = ? AND id IN (${ids.map(() => '?').join(',')})`
-    ).run(req.params.id, ...ids);
-    db.prepare('UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+    const info = aiConversationStore.deleteMessages(req.params.id, ids);
+    aiConversationStore.touch(req.params.id);
     res.json({ success: true, removed: info.changes });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -296,7 +275,7 @@ router.post('/chat/stream', async (req, res) => {
   // 每轮结束时：记录本轮实际用量；若已达上下文阈值，后台摘要较早消息并持久化（不阻塞本次响应）
   function afterRound() {
     if (!conversationId || maxPromptTokens <= 0) return;
-    try { db.prepare('UPDATE ai_conversations SET last_prompt_tokens = ? WHERE id = ?').run(maxPromptTokens, conversationId); } catch (_) {}
+    try { aiConversationStore.setLastPromptTokens(conversationId, maxPromptTokens); } catch (_) {}
     if (!convCtx || maxPromptTokens <= CONTEXT_COMPRESS_AT || compressingConvs.has(conversationId)) return;
     compressingConvs.add(conversationId);
     const rows = convCtx.effectiveRows;

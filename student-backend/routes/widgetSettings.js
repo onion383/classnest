@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db');
 const { cleanPath } = require('../services/sanitize');
+const widgetSettingsStore = require('../services/widgetSettingsStore');
 
 // 桌面小组件「常用软件」最多 8 个（4 列 × 2 行）。
 // 渲染层会隐藏多余的添加入口，这里再兜一层：即使直接调接口也写不进第 9 个。
@@ -52,7 +52,7 @@ function normalizeApps(list) {
 
 // 获取小组件设置
 router.get('/', (req, res) => {
-    const settings = db.prepare('SELECT * FROM widget_settings WHERE id = 1').get();
+    const settings = widgetSettingsStore.readSettings();
   const desktopApps = parseStoredApps(settings.desktop_apps);
   res.json({
     success: true,
@@ -106,7 +106,7 @@ router.put('/', (req, res) => {
 
     if (sets.length === 0) return res.json({ success: true, message: '没有需要保存的设置' });
 
-    db.prepare(`UPDATE widget_settings SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
+    widgetSettingsStore.updateSettings(sets, vals);
     res.json({ success: true, message: '小组件设置已保存' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -115,21 +115,21 @@ router.put('/', (req, res) => {
 
 // 常用软件列表（独立读写，不触碰其他小组件设置）
 router.get('/apps', (req, res) => {
-    const settings = db.prepare('SELECT desktop_apps FROM widget_settings WHERE id = 1').get();
+    const settings = widgetSettingsStore.readDesktopApps();
   res.json({ success: true, data: parseStoredApps(settings.desktop_apps) });
 });
 
 router.put('/apps', (req, res) => {
     // 超出 8 个的部分直接丢弃：前端已阻止继续添加，这里保证接口层同样不可突破
   const clean = normalizeApps(req.body?.desktopApps) || [];
-  db.prepare('UPDATE widget_settings SET desktop_apps = ? WHERE id = 1').run(JSON.stringify(clean));
+  widgetSettingsStore.writeDesktopApps(JSON.stringify(clean));
   res.json({ success: true, data: clean });
 });
 
 // 首页班级信息（班名/口号/班风/学风）
 router.get('/class-info', (req, res) => {
   try {
-    const row = db.prepare('SELECT class_info FROM widget_settings WHERE id = 1').get();
+    const row = widgetSettingsStore.readClassInfo();
     let ci = {};
     try { ci = JSON.parse(row.class_info || '{}'); } catch (_) { ci = {}; }
     res.json({ success: true, data: {
@@ -151,7 +151,7 @@ router.put('/class-info', (req, res) => {
     mottoStyle: String(mottoStyle ?? '').trim().slice(0, 500),
     xuefeng: String(xuefeng ?? '').trim().slice(0, 500),
   };
-  db.prepare('UPDATE widget_settings SET class_info = ? WHERE id = 1').run(JSON.stringify(clean));
+  widgetSettingsStore.writeClassInfo(JSON.stringify(clean));
   res.json({ success: true, data: clean });
 });
 

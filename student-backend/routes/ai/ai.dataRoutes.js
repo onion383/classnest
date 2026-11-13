@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const { db, getFields } = require('../../db');
+const aiStore = require('../../services/aiStore');
 const store = require('../../services/slotStore');
 const { sanitizeField } = require('../../services/sanitize');
 const { validateRow } = require('../../services/businessRules');
@@ -30,7 +31,7 @@ router.get('/records/:table', (req, res) => {
       // 上限 50：与批量删除（propose_delete_many）的条数上限对齐，保证删除预览能完整列出全部记录
       .slice(0, 50);
     if (!ids.length) return res.status(400).json({ error: '缺少记录 id' });
-    const rows = db.prepare(`SELECT * FROM "${table}" WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+    const rows = aiStore.rowsByIds(table, ids);
     const byId = new Map(rows.map((r) => [r.id, r]));
     // 只返回列表页展示的列（过滤 position / 外键 / created_at 等内部列），整行不再全部露出
     res.json({ success: true, data: { columns: displayColumns(table), rows: ids.map((id) => byId.get(id)).filter(Boolean) } });
@@ -107,7 +108,7 @@ function applyDocWrite(table, id, values) {
   const rid = Number(id);
   if (!Number.isInteger(rid) || rid <= 0) return { error: `记录 id 无效（收到：${id == null ? '' : id}）` };
   const cols = tableColumns(table);
-  const row = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(rid);
+  const row = aiStore.findRow(table, rid);
   if (!row) return { error: `表中没有 id=${rid} 的行` };
   // ① 先按列级业务规则清洗（JSON 形状 / 枚举 / 数值 / 日期 / 路径），不合法直接拒绝、不落库
   const cleaned = {};
@@ -145,8 +146,7 @@ function applyDocWrite(table, id, values) {
         // 单例文档表已合并为槽位表，写入统一走 slotStore
         store.setDoc(table, cleaned);
       } else {
-        const setSql = keys.map((k) => `"${k}" = ?`).join(', ');
-        db.prepare(`UPDATE "${table}" SET ${setSql} WHERE id = ?`).run(...keys.map((k) => serializeColVal(cleaned[k])), rid);
+        aiStore.updateColumns(table, rid, keys, keys.map((k) => serializeColVal(cleaned[k])));
       }
       return { ok: true, table, id: rid, before, after };
     })();
@@ -206,19 +206,17 @@ router.post('/apply-batch', (req, res) => {
           if (!keys.length) throw new Error(`${at}：新增缺少字段数据`);
           // 行式表若有 position 列且未提供，补为当前最大值 +1（与各业务路由的排序接续一致）
           if (cols.includes('position') && row.position === undefined) {
-            const mx = db.prepare(`SELECT MAX(position) AS m FROM "${table}"`).get();
-            row.position = (Number(mx && mx.m) || 0) + 1;
+            row.position = aiStore.maxPosition(table) + 1;
           }
           validateRow(table, row);
-          const sql = `INSERT INTO "${table}" (${keys.map((k) => `"${k}"`).join(',')}) VALUES (${keys.map(() => '?').join(',')})`;
-          const info = db.prepare(sql).run(...keys.map((k) => serializeColVal(row[k])));
-          const full = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(info.lastInsertRowid);
+          const info = aiStore.insertRow(table, keys, keys.map((k) => serializeColVal(row[k])));
+          const full = aiStore.findRow(table, info.lastInsertRowid);
           results.push({ action: 'add', table, id: info.lastInsertRowid, row: full });
         } else if (action === 'update') {
           const id = Number(op.id);
           if (!Number.isInteger(id) || id <= 0) throw new Error(`${at}：缺少有效的记录 id`);
           const changes = op.changes && typeof op.changes === 'object' && !Array.isArray(op.changes) ? op.changes : {};
-          const old = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
+          const old = aiStore.findRow(table, id);
           if (!old) throw new Error(`${at}：要修改的记录不存在（${table} id=${id}）`);
           const row = {};
           for (const k of Object.keys(changes)) {
@@ -228,14 +226,13 @@ router.post('/apply-batch', (req, res) => {
           const keys = Object.keys(row);
           if (!keys.length) throw new Error(`${at}：没有可修改的字段`);
           validateRow(table, row, old);
-          const setSql = keys.map((k) => `"${k}" = ?`).join(', ');
-          db.prepare(`UPDATE "${table}" SET ${setSql} WHERE id = ?`).run(...keys.map((k) => serializeColVal(row[k])), id);
-          const after = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
+          aiStore.updateColumns(table, id, keys, keys.map((k) => serializeColVal(row[k])));
+          const after = aiStore.findRow(table, id);
           results.push({ action: 'update', table, id, before: old, after });
         } else if (action === 'delete') {
           const id = Number(op.id);
           if (!Number.isInteger(id) || id <= 0) throw new Error(`${at}：缺少有效的记录 id`);
-          const old = db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id);
+          const old = aiStore.findRow(table, id);
           if (!old) throw new Error(`${at}：要删除的记录不存在（${table} id=${id}）`);
           // 删学生必须连带清理松耦合关联（请假/加分/座位/值日/小组/班干部）：
           // 界面上删学生走的是 purgeStudentRelations，AI 这条路径原先只删主表，
@@ -244,7 +241,7 @@ router.post('/apply-batch', (req, res) => {
           if (table === 'students') {
             purgeStudentRelations(old, { leave: true, score: true, seat: true, duty: true, group: true, cadre: true });
           }
-          db.prepare(`DELETE FROM "${table}" WHERE id = ?`).run(id);
+          aiStore.deleteRow(table, id);
           results.push({ action: 'delete', table, id, row: old });
         } else {
           throw new Error(`${at}：未知操作类型「${action}」`);

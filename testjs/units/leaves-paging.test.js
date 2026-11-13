@@ -11,8 +11,10 @@
 // =========================================================================
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const path = require('node:path')
+const fs = require('node:fs')
 const { localDateStr } = require('../../student-backend/utils/date')
-const { createBackendDb } = require('./_db-express-fixture.cjs')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
 // 公共夹具：内存库 + db.js Proxy / dbManager.current 的进程级 stub
 const fx = createBackendDb({ label: 'leaves-paging' })
@@ -85,4 +87,12 @@ test('scope=today 不带 date：退化为只看请假中，不猜日期', async 
 test('非法 date 不生效（不抛错、不返回空）', async () => {
   const j = await get('?scope=today&date=not-a-date')
   assert.equal(j.data.length, 3, '与不带 date 一致')
+})
+
+// M12-B6：提交的语句已收进 services/leaveStore，SQL 不许再长回路由层。
+test('SQL 出口：leaves 路由只经 leaveStore，不留裸 SQL', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/leaves.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+  assert.ok(!/db\.prepare\(/.test(src), 'leaves 路由不许再有裸 SQL（应走 services/leaveStore）')
+  assert.ok(/leaveStore\.readList\(/.test(src), '列表必须真的走 leaveStore.readList')
 })

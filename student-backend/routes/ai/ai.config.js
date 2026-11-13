@@ -1,14 +1,14 @@
 const express = require('express');
 const crypto = require('crypto');
-const { db } = require('../../db');
+const aiConfigStore = require('../../services/aiConfigStore');
 
 const router = express.Router();
 
 // ---------------- 配置 ----------------
 function currentSettings() {
   // 启用状态来自 ai_settings；模型参数来自当前选中的模型
-  const en = db.prepare('SELECT enabled, floating_enabled FROM ai_settings WHERE id = 1').get() || {};
-  const m = db.prepare('SELECT * FROM ai_models WHERE is_active = 1').get() || {};
+  const en = aiConfigStore.readFlags();
+  const m = aiConfigStore.readActiveModel();
   return {
     enabled: !!en.enabled,
     floatingEnabled: en.floating_enabled == null ? true : !!en.floating_enabled,
@@ -128,17 +128,17 @@ router.get('/config', (req, res) => {
 router.put('/config', (req, res) => {
     const body = req.body || {};
   if (body.enabled !== undefined) {
-    db.prepare('UPDATE ai_settings SET enabled = ? WHERE id = 1').run(body.enabled ? 1 : 0);
+    aiConfigStore.setEnabled(body.enabled)
   }
   if (body.floatingEnabled !== undefined) {
-    db.prepare('UPDATE ai_settings SET floating_enabled = ? WHERE id = 1').run(body.floatingEnabled ? 1 : 0);
+    aiConfigStore.setFloatingEnabled(body.floatingEnabled)
   }
   res.json({ success: true, message: '已保存' });
 });
 
 // GET /api/ai/models —— 模型列表（密钥仅标记是否已填，不下发明文）
 router.get('/models', (req, res) => {
-    const rows = db.prepare('SELECT id, name, provider, base_url, model, is_active, api_key, reasoning FROM ai_models ORDER BY id').all();
+    const rows = aiConfigStore.listModels();
   res.json({
     success: true,
     data: rows.map((r) => ({
@@ -160,18 +160,20 @@ router.post('/models', async (req, res) => {
   if (!model) return res.status(400).json({ error: '请填写模型名' });
   // 同一服务商已配置过密钥时可留空自动复用；否则必须填写
   let key = api_key || '';
-  if (!key) {
-    const reuse = db.prepare("SELECT api_key FROM ai_models WHERE provider = ? AND api_key != '' ORDER BY id LIMIT 1").get(provider || 'deepseek');
-    key = (reuse && reuse.api_key) || '';
-  }
+  if (!key) key = aiConfigStore.findReusableApiKey(provider || 'deepseek');
   if (!key) return res.status(400).json({ error: '请填写 API Key' });
   const t = await testConnection({ provider, base_url, model, api_key: key });
   if (!t.ok) return res.status(400).json({ error: t.message });
-  const cnt = db.prepare('SELECT COUNT(*) AS c FROM ai_models').get().c;
+  const cnt = aiConfigStore.countModels();
   const isActive = cnt === 0 ? 1 : 0; // 首个添加的模型自动设为选中
-  const info = db.prepare(
-    'INSERT INTO ai_models (name, provider, base_url, model, api_key, is_active) VALUES (?,?,?,?,?,?)'
-  ).run(name || model, provider || 'deepseek', base_url || '', model, key, isActive);
+  const info = aiConfigStore.insertModel({
+    name: name || model,
+    provider: provider || 'deepseek',
+    base_url: base_url || '',
+    model,
+    api_key: key,
+    is_active: isActive,
+  });
   res.json({ success: true, message: t.message + '，已添加', id: info.lastInsertRowid });
 });
 
@@ -182,26 +184,23 @@ router.put('/models/:id/active', (req, res) => {
   // 一旦 id 是 NaN / 不存在的值，第二步绑 0 行 —— 结果所有模型都没有 is_active，
   // AI 直接不可用，而且接口还返回 success。
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '模型 id 无效' });
-  const exists = db.prepare('SELECT id FROM ai_models WHERE id = ?').get(id);
+  const exists = aiConfigStore.findModelId(id);
   if (!exists) return res.status(404).json({ error: '模型不存在' });
-  // 同一事务内「先置目标激活、再清其余」：任一语句失败都不会留下「全空」的中间态
-  db.transaction(() => {
-    db.prepare('UPDATE ai_models SET is_active = 0 WHERE id != ?').run(id);
-    db.prepare('UPDATE ai_models SET is_active = 1 WHERE id = ?').run(id);
-  })();
+  // 同一事务内「先清其余、再置目标」：任一语句失败都不会留下「全空」的中间态
+  aiConfigStore.activateModel(id);
   res.json({ success: true, message: '已选中该模型' });
 });
 
 // DELETE /api/ai/models/:id —— 删除模型；删除当前选中时将下一项设为选中
 router.delete('/models/:id', (req, res) => {
     const id = Number(req.params.id);
-  const m = db.prepare('SELECT is_active FROM ai_models WHERE id = ?').get(id);
+  const m = aiConfigStore.findModelActive(id);
   if (!m) return res.status(404).json({ error: '模型不存在' });
   const active = !!m.is_active;
-  db.prepare('DELETE FROM ai_models WHERE id = ?').run(id);
+  aiConfigStore.deleteModel(id);
   if (active) {
-    const other = db.prepare('SELECT id FROM ai_models WHERE id != ? ORDER BY id LIMIT 1').get(id);
-    if (other) db.prepare('UPDATE ai_models SET is_active = 1 WHERE id = ?').run(other.id);
+    const other = aiConfigStore.findOtherModelId(id);
+    if (other) aiConfigStore.setModelActive(other.id);
   }
   res.json({ success: true, message: '已删除' });
 });
@@ -211,10 +210,7 @@ router.post('/models/discover', async (req, res) => {
   try {
     const { provider, base_url, api_key } = req.body;
     let key = api_key || '';
-    if (!key) {
-      const reuse = db.prepare("SELECT api_key FROM ai_models WHERE provider = ? AND api_key != '' ORDER BY id LIMIT 1").get(provider || 'deepseek');
-      key = (reuse && reuse.api_key) || '';
-    }
+    if (!key) key = aiConfigStore.findReusableApiKey(provider || 'deepseek');
     const models = await discoverModels({ provider, base_url, api_key: key });
     if (!models.length) throw new Error('该服务商未返回可用模型');
     res.json({ success: true, models });
@@ -227,7 +223,7 @@ router.post('/models/discover', async (req, res) => {
 router.get('/models/:id/models', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const m = db.prepare('SELECT provider, base_url, api_key FROM ai_models WHERE id = ?').get(id);
+    const m = aiConfigStore.findModelConnection(id);
     if (!m) return res.status(404).json({ error: '模型不存在' });
     const models = await discoverModels({ provider: m.provider, base_url: m.base_url, api_key: m.api_key });
     res.json({ success: true, models });
@@ -240,7 +236,7 @@ router.get('/models/:id/models', async (req, res) => {
 //   仅传 model（卡片内下拉切换）时，其余字段沿用原值。API Key 留空表示不改动（优先沿用本条已有密钥）。
 router.put('/models/:id', async (req, res) => {
     const id = Number(req.params.id);
-  const existing = db.prepare('SELECT * FROM ai_models WHERE id = ?').get(id);
+  const existing = aiConfigStore.findModel(id);
   if (!existing) return res.status(404).json({ error: '模型不存在' });
   const { provider, name, base_url, model, api_key } = req.body;
   if (!model) return res.status(400).json({ error: '请选择模型' });
@@ -249,14 +245,18 @@ router.put('/models/:id', async (req, res) => {
   // 密钥：填了用新的；服务商未变且留空时沿用本条已有密钥（或同服务商其它条目的密钥）
   let key = api_key || '';
   if (!key && nextProvider === existing.provider) {
-    const reuse = db.prepare("SELECT api_key FROM ai_models WHERE provider = ? AND api_key != '' ORDER BY id LIMIT 1").get(nextProvider);
-    key = (reuse && reuse.api_key) || existing.api_key || '';
+    key = aiConfigStore.findReusableApiKey(nextProvider) || existing.api_key || '';
   }
   if (!key) return res.status(400).json({ error: '请填写 API Key' });
   const t = await testConnection({ provider: nextProvider, base_url: nextBaseUrl, model, api_key: key });
   if (!t.ok) return res.status(400).json({ error: t.message });
-  db.prepare('UPDATE ai_models SET name = ?, provider = ?, base_url = ?, model = ?, api_key = ? WHERE id = ?')
-    .run(typeof name === 'string' && name.length ? name : existing.name, nextProvider, nextBaseUrl, model, key, id);
+  aiConfigStore.updateModel(id, {
+    name: typeof name === 'string' && name.length ? name : existing.name,
+    provider: nextProvider,
+    base_url: nextBaseUrl,
+    model,
+    api_key: key,
+  });
   res.json({ success: true, message: t.message + '，已保存' });
 });
 
@@ -264,7 +264,7 @@ router.put('/models/:id', async (req, res) => {
 router.put('/models/:id/reasoning', (req, res) => {
     const id = Number(req.params.id);
   const on = req.body && req.body.reasoning ? 1 : 0;
-  const info = db.prepare('UPDATE ai_models SET reasoning = ? WHERE id = ?').run(on, id);
+  const info = aiConfigStore.setReasoning(id, on);
   if (!info.changes) return res.status(404).json({ error: '模型不存在' });
   res.json({ success: true, message: '已保存' });
 });

@@ -68,3 +68,11 @@ test('接线：applyDocWrite 的校验在事务内', () => {
   assert.ok(txAt > fnAt, 'applyDocWrite 必须开事务')
   assert.ok(vAt > txAt, 'validateRow 必须在事务内（它会建档）')
 })
+
+// M12-B7-4：本文件的语句已收进 services/aiStore.js，SQL 不许再长回路由层。
+test('SQL 出口：ai.dataRoutes 只经 aiStore，不留裸 SQL', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/ai/ai.dataRoutes.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+  assert.ok(!/db\.prepare\(/.test(src), 'ai.dataRoutes 不许再有裸 SQL（应走 services/aiStore）')
+  assert.ok(/aiStore\.(findRow|rowsByIds|updateColumns|insertRow|deleteRow)\(/.test(src), '必须真的调用 aiStore')
+})

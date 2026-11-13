@@ -3,6 +3,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const { db } = require('../db');
+const albumStore = require('../services/albumStore');
 const dbManager = require('../dbManager/dbManager');
 const { moveToTrash, deleteThumb } = require('../albumOps');
 const albumThumbs = require('../albumThumbs');
@@ -208,32 +209,14 @@ function sweepPendingInChild() {
 
 // ---------- 相册 CRUD ----------
 
-// 相册列表（含照片数、路径），按 sort_order 排序；共用于 GET /api/album 与 /api/dashboard
-// cover_photo_id：相册卡片的封面取「最新一张图片」的 id（按 mtime 倒序，排除视频），
-// 直接在 SQL 里筛出，避免把整个相册的上万行照片取回前端再过滤。
-// 视频扩展名需与 mediaTypeOf 的判断保持一致，新增格式这里也要加。
-const NOT_VIDEO_SQL = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv']
-  .map(ext => `LOWER(p.file_name) NOT LIKE '%.${ext}'`)
-  .join(' AND ');
-
+// 相册列表（含照片数、封面）与全局统计的 SQL 在 services/albumStore（M12-B2）。
+// NOT_VIDEO_SQL（封面筛掉视频）也随语句搬过去了：新增视频格式时改那一处。
 function readAlbums() {
-  return db.prepare(`
-    SELECT a.*,
-      (SELECT COUNT(*) FROM album_photos p WHERE p.album_id = a.id) AS photo_count,
-      (SELECT p.id FROM album_photos p
-        WHERE p.album_id = a.id AND ${NOT_VIDEO_SQL}
-        ORDER BY p.mtime DESC, p.id DESC LIMIT 1) AS cover_photo_id
-    FROM albums a ORDER BY a.sort_order ASC, a.id ASC
-  `).all();
+  return albumStore.listAlbums();
 }
 
-// 全局相册统计：按 file_path 去重，避免虚拟相册复制同一份索引时把照片数与体积算重
 function readAlbumStats() {
-  const row = db.prepare(`
-    SELECT COUNT(*) AS photo_count, COALESCE(SUM(file_size), 0) AS total_size
-    FROM (SELECT file_path, MAX(file_size) AS file_size FROM album_photos GROUP BY file_path)
-  `).get() || {}
-  return { photo_count: row.photo_count || 0, total_size: row.total_size || 0 }
+  return albumStore.stats();
 }
 
 router.get('/', (req, res) => {
@@ -260,12 +243,12 @@ router.post('/', async (req, res) => {
       // 而且前端得先把整册照片拉下来才知道有哪些 id —— 那又回到全量了。
       const allFrom = Number(req.body && req.body.all_from) || 0;
       if (allFrom) {
-        const src = db.prepare('SELECT id, kind FROM albums WHERE id = ?').get(allFrom);
+        const src = albumStore.albumKind(allFrom);
         if (!src) return res.status(404).json({ error: '源相册不存在' });
         const exclude = Array.isArray(req.body.exclude)
           ? [...new Set(req.body.exclude.map(Number).filter(Boolean))]
           : [];
-        const total = db.prepare('SELECT COUNT(*) AS c FROM album_photos WHERE album_id = ?').get(allFrom).c;
+        const total = albumStore.photoCount(allFrom);
         if (total - exclude.length <= 0) return res.status(400).json({ error: '请先选择照片' });
         const albumId = createVirtualAlbum(name, [], { allFrom, exclude });
         return res.json({ id: albumId, message: '虚拟相册已创建' });
@@ -288,11 +271,10 @@ router.post('/', async (req, res) => {
     }
     if (!stat.isDirectory()) return res.status(400).json({ error: '路径不是文件夹' });
 
-    const result = db.prepare("INSERT INTO albums (name, folder_path, kind, created_at, updated_at) VALUES (?, ?, 'folder', ?, ?)")
-      .run(name, folder, now(), now());
+    const result = albumStore.insertFolderAlbum(name, folder, now());
     const albumId = result.lastInsertRowid;
     // 新相册默认排到最后
-    db.prepare('UPDATE albums SET sort_order = ? WHERE id = ?').run(albumId, albumId);
+    albumStore.setAlbumSort(albumId, albumId);
     // 浮动 promise 必须接 catch（扫描体内部已有 try/finally 兜底清理 task）
     dispatchFull(albumId, '');
     res.json({ id: albumId, message: '相册已添加，正在扫描索引…' });
@@ -310,49 +292,40 @@ router.post('/merge', (req, res) => {
       : [];
     if (ids.length < 2) return res.status(400).json({ error: '请至少选择两个相册' });
 
-    const getAlbum = db.prepare('SELECT id, name, kind FROM albums WHERE id = ?');
     const sourceAlbums = [];
     for (const id of ids) {
-      const album = getAlbum.get(id);
+      const album = albumStore.albumBrief(id);
       if (!album) return res.status(404).json({ error: '相册不存在或已被删除' });
       if (album.kind !== 'virtual') return res.status(400).json({ error: `文件夹相册「${album.name}」不能参与合并` });
       sourceAlbums.push(album);
     }
 
     const name = sourceAlbums.map(a => a.name).join(' + ');
-    const getPhotos = db.prepare('SELECT * FROM album_photos WHERE album_id = ?');
-    const insertPhoto = db.prepare(`
-      INSERT OR IGNORE INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
-    `);
-    const deletePhotos = db.prepare('DELETE FROM album_photos WHERE album_id = ?');
-    const deleteAlbum = db.prepare('DELETE FROM albums WHERE id = ?');
 
     // 事务内一次性完成：建新相册 → 复制照片索引（按 file_path 去重）→ 删源相册及其索引
     const run = db.transaction(() => {
-      const r = db.prepare("INSERT INTO albums (name, folder_path, kind, created_at, updated_at) VALUES (?, '', 'virtual', ?, ?)")
-        .run(name, now(), now());
+      const r = albumStore.insertVirtualAlbum(name, now());
       const newId = r.lastInsertRowid;
-      db.prepare('UPDATE albums SET sort_order = ? WHERE id = ?').run(newId, newId);
+      albumStore.setAlbumSort(newId, newId);
 
       const thumbs = [];
       for (const album of sourceAlbums) {
-        for (const p of getPhotos.all(album.id)) {
-          insertPhoto.run(newId, p.file_path, p.file_name, p.file_size || 0, p.mtime || '', p.photo_date || '', p.exif_date || '', p.date_src || '');
+        for (const p of albumStore.photosOfAlbum(album.id)) {
+          albumStore.copyPhotoRow(newId, p);
           if (p.thumb_path) thumbs.push(p.thumb_path);
         }
       }
       // 快照必须在删除之前取：合并后的新相册（含复制出的照片索引）与每个源相册
       // （整行 + 照片整行）一起带回，撤销时才能把源相册原样重建、把新相册删掉。
-      const newAlbum = db.prepare('SELECT * FROM albums WHERE id = ?').get(newId);
-      const newPhotos = db.prepare('SELECT * FROM album_photos WHERE album_id = ?').all(newId);
+      const newAlbum = albumStore.albumById(newId);
+      const newPhotos = albumStore.photosOfAlbum(newId);
       const sources = sourceAlbums.map((album) => ({
-        album: db.prepare('SELECT * FROM albums WHERE id = ?').get(album.id),
-        photos: getPhotos.all(album.id),
+        album: albumStore.albumById(album.id),
+        photos: albumStore.photosOfAlbum(album.id),
       }));
       for (const album of sourceAlbums) {
-        deletePhotos.run(album.id);
-        deleteAlbum.run(album.id);
+        albumStore.deletePhotosOfAlbum(album.id);
+        albumStore.deleteAlbumRow(album.id);
       }
       return { newId, thumbs, removed: { newAlbum, newPhotos, sources } };
     });
@@ -373,37 +346,28 @@ function createVirtualAlbum(name, photoIds, opts = {}) {
   // 一万张照片传一万个 id 是没必要的传输，真正的展开动作交给这里一次查完。
   const allFrom = Number(opts.allFrom) || 0;
   const exclude = Array.isArray(opts.exclude) ? opts.exclude.map(Number).filter(Boolean) : [];
-  const getPhoto = db.prepare('SELECT * FROM album_photos WHERE id = ?');
-  const getAlbum = db.prepare('SELECT id, kind FROM albums WHERE id = ?');
-  const listSource = db.prepare('SELECT * FROM album_photos WHERE album_id = ?');
-  const insertPhoto = db.prepare(`
-    INSERT OR IGNORE INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
-  `);
-  const deletePhoto = db.prepare('DELETE FROM album_photos WHERE id = ?');
   const movedThumbs = [];   // 源行被移走后没人引用的缩略图（按 photoId 记）
 
   const run = db.transaction(() => {
-    const r = db.prepare('INSERT INTO albums (name, folder_path, kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-      .run(name, '', 'virtual', now(), now());
+    const r = albumStore.insertVirtualAlbum(name, now());
     const albumId = r.lastInsertRowid;
-    db.prepare('UPDATE albums SET sort_order = ? WHERE id = ?').run(albumId, albumId);
+    albumStore.setAlbumSort(albumId, albumId);
 
     // 行必须在事务内一次性取出来：整册模式的源行会边拷边删（源是虚拟相册时），
     // 逐条 getPhoto 会读到已经删掉的行。
     const excludeSet = new Set(exclude);
     const rows = allFrom
-      ? listSource.all(allFrom).filter((p) => !excludeSet.has(p.id))
-      : photoIds.map(pid => getPhoto.get(pid)).filter(Boolean);
+      ? albumStore.photosOfAlbum(allFrom).filter((p) => !excludeSet.has(p.id))
+      : photoIds.map(pid => albumStore.photoById(pid)).filter(Boolean);
 
     for (const photo of rows) {
-      const src = getAlbum.get(photo.album_id);
+      const src = albumStore.albumKind(photo.album_id);
       // thumb_path 置空：新行有自己的 id，缩略图由 /thumb 按需生成（{新id}.jpg），
       // 不与源相册共用同一个缩略图文件，避免源侧删照片时把这张也一起删掉。
-      insertPhoto.run(albumId, photo.file_path, photo.file_name, photo.file_size || 0, photo.mtime || '', photo.photo_date || '', photo.exif_date || '', photo.date_src || '');
+      albumStore.copyPhotoRow(albumId, photo);
       // 只有「源相册是虚拟相册」才移走索引；文件夹相册的索引保持不动
       if (src && src.kind === 'virtual') {
-        deletePhoto.run(photo.id);
+        albumStore.deletePhotoRow(photo.id);
         movedThumbs.push(photo.id);
       }
     }
@@ -424,7 +388,7 @@ function createVirtualAlbum(name, photoIds, opts = {}) {
 // 请求体 mode: 'incremental'（默认）/ 'full' / 'virtual'
 router.post('/:id/rescan', (req, res) => {
     const albumId = Number(req.params.id);
-  const album = db.prepare('SELECT * FROM albums WHERE id = ?').get(albumId);
+  const album = albumStore.albumById(albumId);
   if (!album) return res.status(404).json({ error: '相册不存在' });
   const mode = req.body && req.body.mode === 'full' ? 'full' : 'incremental';
   // 虚拟相册没有绑定文件夹，不能走「遍历目录」那两条路；
@@ -483,19 +447,15 @@ router.get('/random-photo/thumb', async (req, res) => {
     // 点了按钮画面没变。排除后查不到（库里只剩这一张）要退回不排除，
     // 绝不能回 404 —— 那会让首页把现有配图清掉。
     const exclude = Number(req.query && req.query.exclude) || 0;
-    const pick = (sql, args) => db.prepare(sql).get(...args);
-    let row = exclude
-      ? pick('SELECT id FROM album_photos WHERE id <> ? ORDER BY RANDOM() LIMIT 1', [exclude])
-      : pick('SELECT id FROM album_photos ORDER BY RANDOM() LIMIT 1', []);
-    if (!row) row = pick('SELECT id FROM album_photos ORDER BY RANDOM() LIMIT 1', []);
-    if (!row) return res.status(404).json({ error: '还没有照片' });
+    const pickedId = albumStore.randomPhotoId(exclude);
+    if (!pickedId) return res.status(404).json({ error: '还没有照片' });
     // 首页配图点进去要能定位到「这一张」，所以把抽中的 id 随图一起带回去。
     // 只带 id 不带元数据：首页不需要知道它属于哪本相册，点击时交给 /locate 现查，
     // 免得响应头里塞文件名/路径（会进浏览器日志），也避免两处数据口径分叉。
     // 二进制响应不走安全信道的 JSON 加密，CORS 已把该头列入 exposedHeaders。
-    res.setHeader('X-Photo-Id', String(row.id));
+    res.setHeader('X-Photo-Id', String(pickedId));
     // maxAge: 0 → no-store。URL 是固定的，让浏览器缓存 24h 的话首页永远是同一张。
-    await sendThumb(res, row.id, { maxAge: 0 });
+    await sendThumb(res, pickedId, { maxAge: 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -537,7 +497,7 @@ router.get('/:id/status', (req, res) => {
 // 只要还在跑就一定能在这里看到。
 router.get('/tasks', (req, res) => {
   try {
-    const names = new Map(db.prepare('SELECT id, name FROM albums').all().map(a => [a.id, a.name]));
+    const names = new Map(albumStore.albumNameRows().map(a => [a.id, a.name]));
     const list = [];
     for (const task of scanWorker.listActive()) {
       list.push({
@@ -609,7 +569,7 @@ router.post('/tasks/resume', (req, res) => {
       // 已经在跑的不重复启动
       if (scanWorker.isDispatched(albumId)) continue;
       // 相册已不存在（被删了）→ 清掉断点，不再续
-      const album = db.prepare('SELECT id, kind FROM albums WHERE id = ?').get(albumId);
+      const album = albumStore.albumKind(albumId);
       if (!album) {
         try { persistScanClear(db, albumId); } catch (_) {}
         continue;
@@ -643,7 +603,7 @@ router.post('/tasks/resume', (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const albumId = Number(req.params.id);
-    const album = db.prepare('SELECT * FROM albums WHERE id = ?').get(albumId);
+    const album = albumStore.albumById(albumId);
     if (!album) return res.status(404).json({ error: '相册不存在' });
     const name = (req.body && req.body.name) || album.name;
     const folder = (req.body && req.body.folder_path) || album.folder_path;
@@ -656,7 +616,7 @@ router.patch('/:id', async (req, res) => {
     // 只有文件夹相册才要求路径非空：虚拟相册的 folder_path 按设计就是空串
     // （创建时写 ''，见下方 createVirtualAlbum / merge），无条件校验会让它的重命名 100% 400。
     if (album.kind === 'folder' && !cleanFolder) return res.status(400).json({ error: '文件夹路径不能为空' });
-    db.prepare('UPDATE albums SET name = ?, folder_path = ?, updated_at = ? WHERE id = ?').run(cleanName, cleanFolder, now(), albumId);
+    albumStore.updateAlbumFields(albumId, cleanName, cleanFolder, now());
     res.json({ message: '相册已更新' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -667,8 +627,7 @@ router.patch('/:id', async (req, res) => {
 router.put('/reorder', (req, res) => {
     const ids = req.body && req.body.ids;
   if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids 必须为数组' });
-  const update = db.prepare('UPDATE albums SET sort_order = ? WHERE id = ?');
-  ids.forEach((id, i) => update.run(i, id));
+  ids.forEach((id, i) => albumStore.setAlbumSort(id, i));
   res.json({ message: '排序已更新' });
 });
 
@@ -680,7 +639,7 @@ router.delete('/:id', async (req, res) => {
     // 删除相册时清理其所有照片的缩略图缓存
     // 路径按库隔离推导（{THUMB_DIR}/{slug}/{photoId}.jpg）；
     // 库里的 thumb_path 也一并清掉，避免索引删了但文件还在。
-    const thumbs = db.prepare('SELECT id, thumb_path FROM album_photos WHERE album_id = ?').all(albumId);
+    const thumbs = albumStore.thumbRefsOfAlbum(albumId);
     await Promise.all(thumbs.map(r => {
       albumThumbs.forgetPhoto(slug, r.id);
       const p = albumThumbs.thumbPathFor(slug, r.id);
@@ -690,8 +649,8 @@ router.delete('/:id', async (req, res) => {
     // 的半截状态 —— 界面上还看得到这个相册，点进去照片却全没了，且再删一次
     // 也删不掉那批已失效的索引行。better-sqlite3 事务是同步的。
     db.transaction(() => {
-      db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(albumId);
-      db.prepare('DELETE FROM albums WHERE id = ?').run(albumId);
+      albumStore.deletePhotosOfAlbum(albumId);
+      albumStore.deleteAlbumRow(albumId);
     })();
     // 相册没了，正在跑的扫描也要停（子进程会在检查点发现相册已不存在而收工）
     scanWorker.requestStop(slug, albumId);
@@ -706,10 +665,8 @@ router.delete('/:id', async (req, res) => {
 
 // ======================== 照片浏览 ========================
 
-// 照片行的公共列与排序 —— 全量路径与分页路径必须完全同源。
-// 两条路径各写一份 SQL 的话，字段或顺序迟早会分叉，表现是「刷新后照片换了位置」。
-const PHOTO_COLS = 'id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src';
-const PHOTO_ORDER = 'ORDER BY photo_date DESC, mtime DESC, id DESC';
+// 照片行的公共列与排序（PHOTO_COLS / PHOTO_ORDER）已随语句搬进 services/albumStore：
+// 全量路径与分页路径必须完全同源，两份 SQL 各写一遍的话，字段或顺序迟早会分叉。
 // 读不到 EXIF 的照片 photo_date 是空串，归到这一组（与前端沿用同一串文案）
 const UNKNOWN_DATE_LABEL = '未知时间';
 
@@ -753,12 +710,7 @@ function markMediaType(photos) {
 router.get('/:id/dates', (req, res) => {
   try {
     const albumId = Number(req.params.id);
-    const rows = db.prepare(`
-      SELECT photo_date AS date, COUNT(*) AS count
-      FROM album_photos WHERE album_id = ?
-      GROUP BY photo_date
-      ORDER BY photo_date DESC
-    `).all(albumId);
+    const rows = albumStore.photoDateCounts(albumId);
     // photo_date 为空串的那一组（读不到 EXIF）顺序天然在最后。
     // 这里原样返回空串，由前端按同一规则显示成「未知时间」（与 /photos 的分组键一致）。
     res.json({ data: rows });
@@ -785,10 +737,7 @@ router.get('/:id/photos', (req, res) => {
 
     // ---- 全量：保持原有行为，一个字节都不改 ----
     if (!days) {
-      const photos = db.prepare(
-        `SELECT ${PHOTO_COLS} FROM album_photos WHERE album_id = ? ${PHOTO_ORDER}`
-      ).all(albumId);
-      return res.json({ data: groupByDate(markMediaType(photos)) });
+      return res.json({ data: groupByDate(markMediaType(albumStore.listPhotos(albumId))) });
     }
 
     // ---- 日期游标分页 ----
@@ -798,18 +747,9 @@ router.get('/:id/photos', (req, res) => {
     }
     const before = rawBefore ? String(rawBefore) : '';
 
-    // 第一步：取候选日期 + 每天张数。走 idx_album_photos_album_date 的 COVERING INDEX，
-    // 不需要临时表，也不会读照片行 —— 只数行数，代价与天数成正比。
-    const dateSql = before
-      ? `SELECT photo_date AS d, COUNT(*) AS n FROM album_photos
-         WHERE album_id = ? AND photo_date <> '' AND photo_date < ?
-         GROUP BY photo_date ORDER BY photo_date DESC LIMIT ?`
-      : `SELECT photo_date AS d, COUNT(*) AS n FROM album_photos
-         WHERE album_id = ? AND photo_date <> ''
-         GROUP BY photo_date ORDER BY photo_date DESC LIMIT ?`;
-    const dateRows = before
-      ? db.prepare(dateSql).all(albumId, before, days + 1)
-      : db.prepare(dateSql).all(albumId, days + 1);
+    // 第一步：取候选日期 + 每天张数（多取一条用于判「还有更多日期」）。
+    // 走 idx_album_photos_album_date 的 COVERING INDEX，不读照片行，代价与天数成正比。
+    const dateRows = albumStore.photoDateCountsPage(albumId, days, before);
 
     // 按天累加挑出整数天。至少拿一天 —— 某一天自己就超上限时不能空手而归，
     // 否则游标不前进，前端会一直请求同一页（死循环）。
@@ -827,13 +767,7 @@ router.get('/:id/photos', (req, res) => {
 
     // 第二步：只取这些日期的照片行（占位符个数 = 天数，用绑定值而不是拼字符串）
     let photos = [];
-    if (picked.length) {
-      const marks = picked.map(() => '?').join(',');
-      photos = db.prepare(
-        `SELECT ${PHOTO_COLS} FROM album_photos
-         WHERE album_id = ? AND photo_date IN (${marks}) ${PHOTO_ORDER}`
-      ).all(albumId, ...picked);
-    }
+    if (picked.length) photos = albumStore.listPhotosInDates(albumId, picked);
 
     let cursor = null;
     if (hasMoreDates) {
@@ -841,9 +775,7 @@ router.get('/:id/photos', (req, res) => {
       cursor = picked[picked.length - 1];
     } else {
       // 日期取完了 → 把「未知时间」组接在最后（它天然是最后一组）
-      photos = photos.concat(db.prepare(
-        `SELECT ${PHOTO_COLS} FROM album_photos WHERE album_id = ? AND photo_date = '' ${PHOTO_ORDER}`
-      ).all(albumId));
+      photos = photos.concat(albumStore.listUnknownDatePhotos(albumId));
     }
 
     res.json({
@@ -871,20 +803,12 @@ router.post('/photos/move', (req, res) => {
     if (!ids.length) return res.status(400).json({ error: '请先选择要移动的照片' });
     const targetId = Number(req.body && req.body.target_album_id);
     if (!Number.isInteger(targetId) || targetId <= 0) return res.status(400).json({ error: '请选择要移动到的相册' });
-    const target = db.prepare('SELECT id, name, kind FROM albums WHERE id = ?').get(targetId);
+    const target = albumStore.albumBrief(targetId);
     if (!target) return res.status(404).json({ error: '目标相册不存在' });
     if (target.kind !== 'virtual') return res.status(400).json({ error: '文件夹相册不支持移入照片，请选择虚拟相册' });
 
-    const getPhoto = db.prepare('SELECT * FROM album_photos WHERE id = ?');
-    const getAlbum = db.prepare('SELECT id, kind FROM albums WHERE id = ?');
-    // thumb_path 置空：新行有自己的 id，缩略图由 /thumb 按需生成（{新id}.jpg），
-    // 不与源行共用缓存文件，避免源侧以后删照片时把目标相册的缩略图一起删掉。
-    const insertPhoto = db.prepare(`
-      INSERT OR IGNORE INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
-    `);
-    const deletePhoto = db.prepare('DELETE FROM album_photos WHERE id = ?');
-    const touchAlbum = db.prepare('UPDATE albums SET updated_at = ? WHERE id = ?');
+    // 复制/删除/改时间都走 services/albumStore（copyPhotoRow 会置空 thumb_path：
+    // 新行有自己的 id，缩略图按新 id 另生成，避免源侧删照片时连目标的一起删掉）。
 
     let moved = 0;
     let skipped = 0;
@@ -893,17 +817,17 @@ router.post('/photos/move', (req, res) => {
 
     const run = db.transaction(() => {
       for (const pid of ids) {
-        const photo = getPhoto.get(pid);
+        const photo = albumStore.photoById(pid);
         if (!photo || photo.album_id === targetId) { skipped++; continue; }
-        const src = getAlbum.get(photo.album_id);
+        const src = albumStore.albumKind(photo.album_id);
         if (!src) { skipped++; continue; }
-        const info = insertPhoto.run(targetId, photo.file_path, photo.file_name, photo.file_size || 0, photo.mtime || '', photo.photo_date || '', photo.exif_date || '', photo.date_src || '');
+        const info = albumStore.copyPhotoRow(targetId, photo);
         const inserted = info.changes > 0;
         if (inserted) moved++; else skipped++;
         // 只有虚拟相册的来源才把索引“搬走”；文件夹相册的索引保持不动
         const sourceRemoved = src.kind === 'virtual';
         if (sourceRemoved) {
-          deletePhoto.run(photo.id);
+          albumStore.deletePhotoRow(photo.id);
           // 源行的缩略图缓存已无人引用（目标行是新 id，会按新 id 重新生成）→ 记下来删
           movedThumbs.push(photo.id);
         }
@@ -926,7 +850,7 @@ router.post('/photos/move', (req, res) => {
       }
       const touched = new Set(records.map(r => r.source_album_id));
       touched.add(targetId);
-      for (const aid of touched) touchAlbum.run(now(), aid);
+      for (const aid of touched) albumStore.touchAlbum(aid, now());
     });
     run();
 
@@ -955,7 +879,7 @@ router.post('/photos/move', (req, res) => {
 // 支持 Range 请求：视频进度条拖动、快进、放大查看都需要它
 router.get('/photo/:photoId/file', async (req, res) => {
   try {
-    const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(req.params.photoId));
+    const photo = albumStore.photoById(Number(req.params.photoId));
     if (!photo) return res.status(404).json({ error: '照片不存在' });
     let stat;
     try {
@@ -1072,7 +996,7 @@ async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
   let claimed = 0;
   try {
     const slug = dbManager.currentSlug();
-    const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(photoId));
+    const photo = albumStore.photoById(Number(photoId));
     if (!photo) return res.status(404).json({ error: '照片不存在' });
     let tp = thumbOf(photo, slug);
     const stale = (photo.thumb_v || 0) < THUMB_VERSION;
@@ -1087,7 +1011,7 @@ async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
       const regenerated = await genThumb(photo.id, photo.file_path, isVideo, slug, { shouldAbort: () => res.destroyed });
       if (regenerated) {
         tp = regenerated;
-        db.prepare('UPDATE album_photos SET thumb_path = ?, thumb_v = ? WHERE id = ?').run(tp, THUMB_VERSION, photo.id);
+        albumStore.updateThumbPath(photo.id, tp, THUMB_VERSION);
       }
     }
     if (!tp) return res.status(404).json({ error: '缩略图生成失败' });
@@ -1103,7 +1027,7 @@ async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
       const isVideo = mediaTypeOf(photo.file_name) === 'video';
       const regenerated = await genThumb(photo.id, photo.file_path, isVideo, slug, { shouldAbort: () => res.destroyed });
       if (!regenerated) return res.status(404).json({ error: '缩略图生成失败' });
-      db.prepare('UPDATE album_photos SET thumb_path = ?, thumb_v = ? WHERE id = ?').run(regenerated, THUMB_VERSION, photo.id);
+      albumStore.updateThumbPath(photo.id, regenerated, THUMB_VERSION);
       buf = await albumThumbs.readThumb(regenerated);
       if (!buf) return res.status(404).json({ error: '缩略图生成失败' });
     }
@@ -1154,9 +1078,7 @@ router.get('/photo/:photoId/locate', (req, res) => {
   try {
     // 网格用的 PHOTO_COLS 不含 album_id（同一册里每行都一样，纯属冗余），
     // 但定位恰恰要靠它切到对应相册，所以这里单独补一列。
-    const photo = db.prepare(
-      `SELECT ${PHOTO_COLS}, album_id FROM album_photos WHERE id = ?`
-    ).get(Number(req.params.photoId));
+    const photo = albumStore.photoForLocate(Number(req.params.photoId));
     if (!photo) return res.status(404).json({ error: '照片不存在' });
     // 其余列与网格照片对象同源，查看器 / 左右翻页可直接把这一行当一张照片用
     res.json({ success: true, data: photo });
@@ -1175,7 +1097,7 @@ router.get('/photo/:photoId/locate', (req, res) => {
 // 这种照片在查看器里本来就显示不出来，信息面板给「未知」比整个面板报错更合理。
 router.get('/photo/:photoId/info', async (req, res) => {
   try {
-    const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(req.params.photoId));
+    const photo = albumStore.photoById(Number(req.params.photoId));
     if (!photo) return res.status(404).json({ error: '照片不存在' });
 
     let stat = null;
@@ -1277,10 +1199,9 @@ router.post('/photo/thumbs', async (req, res) => {
     };
 
     if (!ids.length) return res.end();
-    // 先从库里取索引行（要 file_name 判断是否视频、file_path 用于现场生成）
-    // better-sqlite3 不支持 IN (?) 的展开参数，必须用问号占位逐个绑定
-    const placeholders = ids.map(() => '?').join(',');
-    const rows = db.prepare(`SELECT id, file_path, file_name, thumb_path, thumb_v FROM album_photos WHERE id IN (${placeholders})`).all(...ids);
+    // 先从库里取索引行（要 file_name 判断是否视频、file_path 用于现场生成）；
+    // IN (...) 的占位符数量由 services/albumStore.thumbRowsByIds 按 id 个数现算。
+    const rows = albumStore.thumbRowsByIds(ids);
     const byId = new Map(rows.map(r => [r.id, r]));
 
     // 先把「已有缓存的」和「缺图的」分开：配额闸只看缺图数，
@@ -1327,7 +1248,7 @@ router.post('/photo/thumbs', async (req, res) => {
             // 能立刻开工，另外 4 张在排队 —— 用户滑走时那 4 张还没开始，不该再白解码一次。
             const p = await genThumb(r.id, r.file_path, isVideo, slug, { shouldAbort: () => clientGone });
             if (!p || clientGone) return;
-            db.prepare('UPDATE album_photos SET thumb_path = ?, thumb_v = ? WHERE id = ?').run(p, THUMB_VERSION, r.id);
+            albumStore.updateThumbPath(r.id, p, THUMB_VERSION);
             albumThumbs.rememberThumb(slug, r.id, p, THUMB_VERSION, null);
             const buf = await albumThumbs.readThumb(p);
             if (!buf) return;
@@ -1426,7 +1347,7 @@ router.post('/thumbs/sweep', async (req, res) => {
 // DELETE /api/album/photo/:photoId 删除照片（移入应用内可还原回收站）+ 删除索引
 router.delete('/photo/:photoId', async (req, res) => {
   try {
-    const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(req.params.photoId));
+    const photo = albumStore.photoById(Number(req.params.photoId));
     if (!photo) return res.status(404).json({ error: '照片不存在' });
     // 移入应用内回收站（dataDir/album-trash），可撤销还原，不再直接丢系统回收站/永久删除
     try {
@@ -1436,7 +1357,7 @@ router.delete('/photo/:photoId', async (req, res) => {
     }
     // 清理已生成的缩略图缓存（按库隔离路径）
     await deleteThumb(photo, dbManager.currentSlug()).catch(() => {});
-    db.prepare('DELETE FROM album_photos WHERE id = ?').run(photo.id);
+    albumStore.deletePhotoRow(photo.id);
     res.json({ message: '已移入回收站' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1446,7 +1367,7 @@ router.delete('/photo/:photoId', async (req, res) => {
 // POST /api/album/photo/:photoId/save-as 另存（下载到浏览器默认下载目录）
 router.get('/photo/:photoId/save-as', async (req, res) => {
   try {
-    const photo = db.prepare('SELECT * FROM album_photos WHERE id = ?').get(Number(req.params.photoId));
+    const photo = albumStore.photoById(Number(req.params.photoId));
     if (!photo) return res.status(404).json({ error: '照片不存在' });
     let stat;
     try {

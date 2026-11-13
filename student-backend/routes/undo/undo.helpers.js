@@ -1,18 +1,16 @@
 // =========================================================================
 // undo.helpers.js —— 撤销系统·辅助函数
-// （原 routes/undo.js 按职责拆分而来，纯代码搬运，行为不变）
+// （原 routes/undo.js 按职责拆分而来，行为不变）
 //   网格 JSON 读写、动态表行级操作、整块写入、相册排序、分组快照
+//   档 C · M12-B8：语句收进 services/undoStore，本文件只留语义层
+//   （几何从快照推导、座位整块写、展示文案），不再持有 db。
 // =========================================================================
 
-const { db } = require('../../db')
-const store = require('../../services/slotStore')
-const { SEAT_CURRENT_SLOTS } = require('../../schema/tableRegistry')
+const undoStore = require('../../services/undoStore')
 
-// 读取网格某列的完整 JSON（单例文档表经 slotStore 读取，其余仍走物理表）
+// 读取网格某列的完整 JSON（单例文档表经 slotStore 读取，其余读物理表，分支在 store 内）
 function readGridArray(table, column) {
-  const row = store.isDoc(table)
-    ? store.getDoc(table)
-    : db.prepare(`SELECT "${column}" FROM "${table}" WHERE id = 1`).get()
+  const row = undoStore.readDocColumn(table, column)
   if (!row) return []
   try { return JSON.parse(row[column]) } catch { return [] }
 }
@@ -22,40 +20,21 @@ function writeGridArray(table, column, value) {
   // 座位整块快照可以带几何：{ seats, types }。
   // 只写 seats 的话，撤销「设置空位」只会把人搬回去、洞还留着 —— 人和洞的位置当场错位。
   // 老记录（直接存数组）继续走下面的原样写入，不必迁移历史撤销记录。
-  if (column === 'seats' && value && typeof value === 'object' && !Array.isArray(value)) {
-    const patch = { seats: JSON.stringify(Array.isArray(value.seats) ? value.seats : []) }
-    if (Array.isArray(value.types)) patch.types = JSON.stringify(value.types)
-    if (store.isDoc(table)) {
-      store.setDoc(table, patch)
-      return
-    }
-    const keys = Object.keys(patch)
-    db.prepare(`UPDATE "${table}" SET ${keys.map((k) => `"${k}" = ?`).join(', ')} WHERE id = 1`)
-      .run(...keys.map((k) => patch[k]))
-    return
-  }
-  if (store.isDoc(table)) {
-    store.setDoc(table, { [column]: JSON.stringify(value) })
-    return
-  }
-  db.prepare(`UPDATE "${table}" SET "${column}" = ? WHERE id = 1`).run(JSON.stringify(value))
+  // 两列同笔写的实现在 undoStore.writeDocColumn（`seats` 分支）。
+  undoStore.writeDocColumn(table, column, value)
 }
 // 座位表的**行数/列数**随整块快照一起回写（插入/删除走廊行、走廊列都会改变 rows/cols）。
 // 为什么必须成对写：types 的行数/列数就是几何，读库按 rows/cols 去裁它 ——
 // 只回写 types（少一行/一列）而 rows/cols 还是多的，会走到 routes/seats.js 的
 // gridShapeMismatch 分支：越界那行被补成「座位」或整块降级成 []，
 // 走廊位置对不上，下次启动的一次性迁移还会把矩阵再展开一遍。
-// 表名走白名单，不接收调用方的任意字符串；列名是写死的两条语句（不拼 SQL）。
-// 名单在 schema/tableRegistry.js（与 seatWrite 的「当前座位」白名单同源）。
-const GEOMETRY_COUNT_TABLES = new Set(SEAT_CURRENT_SLOTS)
+// 表名走白名单，不接收调用方的任意字符串；名单在 schema/tableRegistry.js
+// （与 seatWrite 的「当前座位」白名单同源），读取在 undoStore.readSeatGeometry。
 
 // 座位表的**当前** rows/cols（非座位表返回 null）。
 // 撤销一条单格记录前用它判断「布局是否已经变小」—— 见 undo.executors 的 grid_cell.validate。
 function currentSeatGeometry(table) {
-  if (!GEOMETRY_COUNT_TABLES.has(table)) return null
-  const rec = store.isDoc(table)
-    ? store.getDoc(table)
-    : db.prepare(`SELECT rows, cols FROM "${table}" WHERE id = 1`).get()
+  const rec = undoStore.readSeatGeometry(table)
   if (!rec) return null
   const rows = Number(rec.rows)
   const cols = Number(rec.cols)
@@ -92,17 +71,7 @@ function warnGeometryDrift(table, tag, geom, explicitRows, explicitCols) {
 }
 
 function writeGeometryCounts(table, rows, cols) {
-  if (!GEOMETRY_COUNT_TABLES.has(table)) return
-  const patch = {}
-  if (Number.isInteger(rows)) patch.rows = rows
-  if (Number.isInteger(cols)) patch.cols = cols
-  if (!Object.keys(patch).length) return
-  if (store.isDoc(table)) {
-    store.setDoc(table, patch)
-    return
-  }
-  if (Number.isInteger(rows)) db.prepare(`UPDATE "${table}" SET rows = ? WHERE id = 1`).run(rows)
-  if (Number.isInteger(cols)) db.prepare(`UPDATE "${table}" SET cols = ? WHERE id = 1`).run(cols)
+  undoStore.writeGeometryCounts(table, rows, cols)
 }
 // 单元格展示文案：value 可能是纯值（座位 id/姓名、人名），也可能是课表 {course} 对象，
 // 统一取可读文本；null/undefined 视为「空」。
@@ -112,81 +81,21 @@ function cellText(v) {
   return String(v)
 }
 // ===== 动态表行级操作辅助（表名受 ALLOWED_TABLES 白名单约束，杜绝注入）=====
-function tableCols(table) {
-  return db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name)
-}
-function rowKeys(table, row) {
-  const cols = new Set(tableCols(table))
-  return Object.keys(row || {}).filter(k => cols.has(k))
-}
-// 插入一条完整记录（显式带 id，便于删除后再恢复保留引用关系）
-function insertRow(table, row) {
-  const keys = rowKeys(table, row)
-  if (!keys.length) return
-  const cols = keys.map(k => `"${k}"`).join(',')
-  const ph = keys.map(() => '?').join(',')
-  db.prepare(`INSERT INTO ${table} (${cols}) VALUES (${ph})`).run(...keys.map(k => row[k]))
-}
-function deleteRowById(table, id) {
-  db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id)
-}
-function updateRowById(table, id, row) {
-  const keys = rowKeys(table, row).filter(k => k !== 'id')
-  if (!keys.length) return
-  const set = keys.map(k => `"${k}" = ?`).join(', ')
-  db.prepare(`UPDATE ${table} SET ${set} WHERE id = ?`).run(...keys.map(k => row[k]), id)
-}
-// 整块写入「非行式」表：按给定列整体覆盖某行（对象/数组列按 JSON 文本落库）。
-// obj 为「列名 → 列值」，仅写入该表真实列（不含 id）。
-function writeDocCols(table, id, obj) {
-  // 单例文档表（课表/值日/座位）写入统一走 slotStore
-  if (store.isDoc(table)) {
-    store.setDoc(table, obj)
-    return
-  }
-  const keys = rowKeys(table, obj).filter(k => k !== 'id')
-  if (!keys.length) return
-  const set = keys.map(k => `"${k}" = ?`).join(', ')
-  const params = keys.map(k => {
-    const v = obj[k]
-    if (v != null && typeof v === 'object') return JSON.stringify(v)
-    // 布尔按 1/0 落库，避免 INTEGER 列（如 toolbox_enabled / auto_apply）被写入文本
-    if (typeof v === 'boolean') return v ? 1 : 0
-    return v
-  })
-  db.prepare(`UPDATE ${table} SET ${set} WHERE id = ?`).run(...params, id)
-}
+// 语句与列筛选都在 undoStore；这里保留同名导出，执行器与外部调用方不必改 import。
+const { tableCols, rowKeys, insertRow, deleteRowById, updateRowById, writeDocCols } = undoStore
+
 // 记录显示名：取姓名/小组名/活动主题/倒计时名称，否则回退 #id
 function rowName(row, id) {
   return row ? (row.姓名 || row.group_name || row.主题 || row.名称 || `#${row.id ?? id}`) : `#${id}`
 }
 
-// 相册排序：按给定 id 顺序整块重写 sort_order（1 起）。相册删除后 id 可能不再存在，跳过即可。
-// 整块重排必须原子：中途失败会留下「一半新序、一半旧序」的错乱排序。
+// 相册排序：整块重排必须原子（store 内一个事务），已删的 id 影响 0 行直接跳过。
 function applyAlbumOrder(ids) {
-  const tx = db.transaction(() => {
-    const upd = db.prepare('UPDATE albums SET sort_order = ? WHERE id = ?')
-    ;(ids || []).forEach((id, i) => upd.run(i + 1, Number(id)))
-  })
-  tx()
+  undoStore.applyAlbumOrder(ids)
 }
-// 分组结构：整块重建某维度下的组与成员。
-// snapshot = [{ id, name, gender, sort_order, members: [{ id, member_name, remark, sort_order }] }]
-// 先按维度清理现有组与成员，再按快照显式 id 重建（保留引用关系与内部排序）。
+// 分组结构：整块重建某维度下的组与成员（先清理后按快照显式 id 重建，store 内一个事务）。
 function applyGroupSnapshot(dimId, groups) {
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE dimension_id = ?)').run(dimId)
-    db.prepare('DELETE FROM groups WHERE dimension_id = ?').run(dimId)
-    const insG = db.prepare('INSERT INTO groups (id, dimension_id, name, gender, sort_order) VALUES (?, ?, ?, ?, ?)')
-    const insM = db.prepare('INSERT INTO group_members (id, group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?, ?)')
-    for (const g of groups || []) {
-      insG.run(g.id, dimId, g.name ?? '', g.gender ?? null, g.sort_order)
-      for (const m of g.members || []) {
-        insM.run(m.id, g.id, m.member_name ?? '', m.remark ?? '', m.sort_order)
-      }
-    }
-  })
-  tx()
+  undoStore.applyGroupSnapshot(dimId, groups)
 }
 
 module.exports = {

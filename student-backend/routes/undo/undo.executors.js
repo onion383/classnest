@@ -4,7 +4,7 @@
 //   指令描述存库，执行逻辑在此注册。重启后读记录仍可执行。
 // =========================================================================
 
-const { db } = require('../../db')
+const undoStore = require('../../services/undoStore')
 const dbManager = require('../../dbManager/dbManager')
 const { moveToTrash, restoreToOriginal, deleteThumb } = require('../../albumOps')
 const { SEAT_MAX_ROWS, SEAT_MAX_GRID_COLS } = require('../../services/sanitize')
@@ -13,7 +13,7 @@ const {
   restoreSeatCells, clearSeatCells, restoreDutySlots, clearDutySlots,
 } = require('../../services/studentRelations')
 const {
-  readGridArray, writeGridArray, writeGeometryCounts, currentSeatGeometry, geometryOfSnapshot, warnGeometryDrift, cellText,
+  readGridArray, writeGridArray, currentSeatGeometry, geometryOfSnapshot, warnGeometryDrift, cellText,
   insertRow, deleteRowById, updateRowById, writeDocCols, rowName,
   applyAlbumOrder, applyGroupSnapshot,
 } = require('./undo.helpers')
@@ -35,35 +35,9 @@ function renameRefsIfStudent(table, fromRow, toRow) {
   renameStudentRefs(a, b)
 }
 
-// 按前后态回写职务/成员的归属与排序：只更新已存在的行，不插入、不删除。
-// 某个 id 后来被删掉时 UPDATE 影响 0 行，直接跳过，不会把无关数据写回来。
-function applyCadreState(state) {
-  const tx = db.transaction(() => {
-    const updCadre = db.prepare('UPDATE cadres SET parent_id = ?, sort_order = ? WHERE id = ?')
-    for (const r of (state && state.cadres) || []) {
-      updCadre.run(r.parent_id == null ? 0 : r.parent_id, r.sort_order == null ? 0 : r.sort_order, r.id)
-    }
-    const updMember = db.prepare('UPDATE cadre_members SET cadre_id = ?, sort_order = ? WHERE id = ?')
-    for (const r of (state && state.members) || []) {
-      updMember.run(r.cadre_id, r.sort_order == null ? 0 : r.sort_order, r.id)
-    }
-  })
-  tx()
-}
-
-// 按 [{ id, position }] 回写行的槽位：只更新已存在的行，不插入、不删除。
-// 某行后来被删掉时 UPDATE 影响 0 行，直接跳过；position 为 null 的（异常行）也跳过，
-// 避免把 NULL 写进去后整表排序漂到表头。
-function applyRowPositions(table, list) {
-  if (!ALLOWED_TABLES.includes(table)) return
-  const upd = db.prepare(`UPDATE "${table}" SET position = ? WHERE id = ?`)
-  db.transaction(() => {
-    for (const r of list || []) {
-      if (!r || !Number.isInteger(r.id) || !Number.isInteger(r.position)) continue
-      upd.run(r.position, r.id)
-    }
-  })()
-}
+// 职务/成员的前后态回写与行槽位回写都在 undoStore：
+// 只更新已存在的行，不插入不删除；id 已消失时 UPDATE 影响 0 行直接跳过，
+// position 为 null 的异常行也跳过（否则整表排序会漂到表头）。
 
 // 「整块 JSON 列」表：数据以整块 JSON 存于单列（座位 seats / 权重 weights / 课表 cells…），
 // 撤销时按「整块列值」整体还原。表名固定，杜绝注入；名单在 registry 统一维护。
@@ -89,16 +63,12 @@ const executors = {
   cell_update: {
     validate({ table, rowId, field }) {
       if (!ALLOWED_TABLES.includes(table) || !Number.isInteger(rowId)) return '参数不完整'
-      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name)
+      const cols = undoStore.tableCols(table)
       if (!cols.includes(field)) return '字段无效'
       return null
     },
-    undo({ table, rowId, field, oldValue }) {
-      db.prepare(`UPDATE "${table}" SET "${field}" = ? WHERE id = ?`).run(oldValue, rowId)
-    },
-    redo({ table, rowId, field, newValue }) {
-      db.prepare(`UPDATE "${table}" SET "${field}" = ? WHERE id = ?`).run(newValue, rowId)
-    },
+    undo({ table, rowId, field, oldValue }) { undoStore.setCellValue(table, field, oldValue, rowId) },
+    redo({ table, rowId, field, newValue }) { undoStore.setCellValue(table, field, newValue, rowId) },
     // 生成展示文案：撤销时反向（new→old），重做时正向（old→new）
     describe({ field, oldValue, newValue }, mode) {
       const old = oldValue == null ? '' : oldValue
@@ -186,8 +156,8 @@ const executors = {
       if (bad) return '参数不完整'
       return null
     },
-    undo({ table, before }) { applyRowPositions(table, before) },
-    redo({ table, after }) { applyRowPositions(table, after) },
+    undo({ table, before }) { undoStore.applyRowPositions(table, before) },
+    redo({ table, after }) { undoStore.applyRowPositions(table, after) },
     describe(p, mode) {
       return mode === 'undo' ? '恢复行顺序' : '重做行顺序调整'
     },
@@ -204,17 +174,9 @@ const executors = {
       if (!rows.every((r) => r && Number.isInteger(r.id))) return '参数不完整'
       return null
     },
-    undo({ table, rows }) {
-      db.transaction(() => {
-        // 逆序删：自引用/父先行的情况下也不会在事务中途留下悬空引用
-        for (const r of [...rows].reverse()) deleteRowById(table, r.id)
-      })()
-    },
-    redo({ table, rows }) {
-      db.transaction(() => {
-        for (const r of rows) insertRow(table, r)
-      })()
-    },
+    // 逆序删：自引用/父先行的情况下也不会在事务中途留下悬空引用
+    undo({ table, rows }) { undoStore.batchDelete(table, rows, { reverse: true }) },
+    redo({ table, rows }) { undoStore.batchInsert(table, rows) },
     describe(p, mode) {
       return mode === 'undo' ? `撤销导入：${p.rows.length} 条记录` : `重新导入：${p.rows.length} 条记录`
     },
@@ -230,16 +192,8 @@ const executors = {
       if (!rows.every((r) => r && Number.isInteger(r.id))) return '参数不完整'
       return null
     },
-    undo({ table, rows }) {
-      db.transaction(() => {
-        for (const r of rows) insertRow(table, r)
-      })()
-    },
-    redo({ table, rows }) {
-      db.transaction(() => {
-        for (const r of [...rows].reverse()) deleteRowById(table, r.id)
-      })()
-    },
+    undo({ table, rows }) { undoStore.batchInsert(table, rows) },
+    redo({ table, rows }) { undoStore.batchDelete(table, rows, { reverse: true }) },
     describe(p, mode) {
       return mode === 'undo' ? `恢复记录：${p.rows.length} 条` : `删除记录：${p.rows.length} 条`
     },
@@ -322,18 +276,13 @@ const executors = {
     undo({ table, oldValue, oldRows, oldCols }) {
       const geom = geometryOfSnapshot(oldValue)
       if (geom) warnGeometryDrift(table, 'undo', geom, oldRows, oldCols)
-      db.transaction(() => {
-        writeGridArray(table, GRID_SOURCES[table], oldValue)
-        if (geom) writeGeometryCounts(table, geom.rows, geom.cols)
-      })()
+      // 列与几何同一笔（store 内一个事务）：只写 seats 不写 rows/cols，读库会按旧几何裁矩阵
+      undoStore.writeGridSnapshot(table, GRID_SOURCES[table], oldValue, geom)
     },
     redo({ table, newValue, newRows, newCols }) {
       const geom = geometryOfSnapshot(newValue)
       if (geom) warnGeometryDrift(table, 'redo', geom, newRows, newCols)
-      db.transaction(() => {
-        writeGridArray(table, GRID_SOURCES[table], newValue)
-        if (geom) writeGeometryCounts(table, geom.rows, geom.cols)
-      })()
+      undoStore.writeGridSnapshot(table, GRID_SOURCES[table], newValue, geom)
     },
     describe(p, mode) {
       if (p.label) return p.label
@@ -356,8 +305,7 @@ const executors = {
     redo({ newOrder }) { applyAlbumOrder(newOrder) },
     describe(p, mode) {
       const order = (mode === 'undo' ? p.oldOrder : p.newOrder) || []
-      const nameStmt = db.prepare('SELECT name FROM albums WHERE id = ?')
-      const names = order.map(id => { const r = nameStmt.get(id); return r ? r.name : `#${id}` })
+      const names = order.map((id) => undoStore.albumName(id))
       return mode === 'undo' ? `相册排序恢复：${names.join('、')}` : `相册排序：${names.join('、')}`
     },
     change(p, mode) {
@@ -396,28 +344,9 @@ const executors = {
       if (!dimension || !Number.isInteger(dimension.id)) return '参数不完整'
       return null
     },
-    undo({ dimension, groups, members, sortOrders }) {
-      db.transaction(() => {
-        // 外键顺序：维度 → 小组 → 成员
-        insertRow('group_dimensions', dimension)
-        for (const g of groups || []) insertRow('groups', g)
-        for (const m of members || []) insertRow('group_members', m)
-        const upd = db.prepare('UPDATE group_dimensions SET sort_order = ? WHERE id = ?')
-        for (const s of sortOrders || []) upd.run(s.sort_order, s.id)
-      })()
-    },
-    redo({ dimension, groups }) {
-      db.transaction(() => {
-        for (const g of groups || []) {
-          db.prepare('DELETE FROM group_members WHERE group_id = ?').run(g.id)
-        }
-        db.prepare('DELETE FROM groups WHERE dimension_id = ?').run(dimension.id)
-        db.prepare('DELETE FROM group_dimensions WHERE id = ?').run(dimension.id)
-        const rest = db.prepare('SELECT id FROM group_dimensions ORDER BY sort_order, id').all()
-        const upd = db.prepare('UPDATE group_dimensions SET sort_order = ? WHERE id = ?')
-        rest.forEach((r, i) => upd.run(i + 1, r.id))
-      })()
-    },
+    // 外键顺序（维度 → 小组 → 成员）与「剩余维度重排 1..n」都在 store 内同一事务
+    undo(payload) { undoStore.restoreDimension(payload) },
+    redo(payload) { undoStore.removeDimension(payload) },
     describe(p, mode) {
       const name = (p.dimension && p.dimension.name) || `#${p.dimension && p.dimension.id}`
       const g = (p.groups || []).length
@@ -439,26 +368,8 @@ const executors = {
       if (!newAlbum || !Number.isInteger(newAlbum.id)) return '参数不完整'
       return null
     },
-    undo({ newAlbum, sources }) {
-      db.transaction(() => {
-        db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(newAlbum.id)
-        db.prepare('DELETE FROM albums WHERE id = ?').run(newAlbum.id)
-        for (const s of sources || []) {
-          insertRow('albums', s.album)
-          for (const p of s.photos || []) insertRow('album_photos', { ...p, thumb_path: '' })
-        }
-      })()
-    },
-    redo({ newAlbum, newPhotos, sources }) {
-      db.transaction(() => {
-        for (const s of sources || []) {
-          db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(s.album.id)
-          db.prepare('DELETE FROM albums WHERE id = ?').run(s.album.id)
-        }
-        insertRow('albums', newAlbum)
-        for (const p of newPhotos || []) insertRow('album_photos', p)
-      })()
-    },
+    undo(payload) { undoStore.restoreMergedAlbum(payload) },
+    redo(payload) { undoStore.reapplyMergedAlbum(payload) },
     describe(p, mode) {
       const name = (p.newAlbum && p.newAlbum.name) || ''
       return mode === 'undo' ? `恢复相册：${name}` : `合并相册：${name}`
@@ -478,22 +389,8 @@ const executors = {
       if (!Array.isArray(members)) return '参数不完整'
       return null
     },
-    undo({ node, members, children }) {
-      db.transaction(() => {
-        insertRow('cadres', node)
-        for (const m of members || []) insertRow('cadre_members', m)
-        const restoreParent = db.prepare('UPDATE cadres SET parent_id = ? WHERE id = ?')
-        for (const c of children || []) restoreParent.run(node.id, c.id)
-      })()
-    },
-    redo({ node, children }) {
-      db.transaction(() => {
-        db.prepare('DELETE FROM cadre_members WHERE cadre_id = ?').run(node.id)
-        const moveUp = db.prepare('UPDATE cadres SET parent_id = ? WHERE id = ?')
-        for (const c of children || []) moveUp.run(node.parent_id || 0, c.id)
-        db.prepare('DELETE FROM cadres WHERE id = ?').run(node.id)
-      })()
-    },
+    undo(payload) { undoStore.restoreCadreDelete(payload) },
+    redo(payload) { undoStore.reapplyCadreDelete(payload) },
     describe(p, mode) {
       const name = (p.node && p.node.name) || `#${p.node && p.node.id}`
       const n = (p.members || []).length
@@ -513,8 +410,8 @@ const executors = {
       if (!Array.isArray(after.cadres) || !Array.isArray(after.members)) return '参数不完整'
       return null
     },
-    undo({ before }) { applyCadreState(before) },
-    redo({ after }) { applyCadreState(after) },
+    undo({ before }) { undoStore.applyCadreState(before) },
+    redo({ after }) { undoStore.applyCadreState(after) },
     describe(p, mode) {
       if (p.label) return p.label
       return mode === 'undo' ? '恢复职务排序' : '调整职务排序'
@@ -530,22 +427,8 @@ const executors = {
       if (!Array.isArray(cadres) || !Array.isArray(members)) return '参数不完整'
       return null
     },
-    undo({ cadres, members }) {
-      db.transaction(() => {
-        const delMember = db.prepare('DELETE FROM cadre_members WHERE id = ?')
-        for (const m of members || []) delMember.run(m.id)
-        // 反向删：下级先删，避免父行先消失后下级短暂悬空
-        const delCadre = db.prepare('DELETE FROM cadres WHERE id = ?')
-        for (const c of [...(cadres || [])].reverse()) delCadre.run(c.id)
-      })()
-    },
-    redo({ cadres, members }) {
-      db.transaction(() => {
-        // 正向重建：父职务先插，成员后插
-        for (const c of cadres || []) insertRow('cadres', c)
-        for (const m of members || []) insertRow('cadre_members', m)
-      })()
-    },
+    undo(payload) { undoStore.restoreCadreImport(payload) },
+    redo(payload) { undoStore.reapplyCadreImport(payload) },
     describe(p, mode) {
       const c = (p.cadres || []).length
       const m = (p.members || []).length
@@ -564,29 +447,25 @@ const executors = {
       if (!student || !Number.isInteger(student.id)) return '参数不完整';
       return null;
     },
-    undo({ student, leaveRows, scoreRows, groupRows, cadreRows, seatCells, dutySlots }) {
-      db.transaction(() => {
-        // 主表先插：其余记录靠 id/姓名指向它（新库有外键，顺序反了会被直接拒写）
-        insertRow('students', student);
-        for (const r of leaveRows || []) insertRow('leave_records', r);
-        for (const r of scoreRows || []) insertRow('score_records', r);
-        for (const r of groupRows || []) insertRow('group_members', r);
-        for (const r of cadreRows || []) insertRow('cadre_members', r);
+    undo(payload) {
+      const { seatCells, dutySlots } = payload;
+      // 主表与四类关联由 restoreStudentCascade 插（外键顺序在 store 内）；
+      // 座位/值日走 studentRelations 的 JSON 网格，必须与行插入同一事务 → 事务留在执行器。
+      undoStore.runInTransaction(() => {
+        undoStore.restoreStudentCascade(payload);
         restoreSeatCells(seatCells);
         restoreDutySlots(dutySlots);
-      })();
+      });
     },
-    redo({ student, leaveRows, scoreRows, groupRows, cadreRows, seatCells, dutySlots }) {
-      db.transaction(() => {
-        const delById = (table, id) => db.prepare(`DELETE FROM "${table}" WHERE id = ?`).run(id);
-        for (const r of leaveRows || []) delById('leave_records', r.id);
-        for (const r of scoreRows || []) delById('score_records', r.id);
-        for (const r of groupRows || []) delById('group_members', r.id);
-        for (const r of cadreRows || []) delById('cadre_members', r.id);
+    redo(payload) {
+      const { student, seatCells } = payload;
+      // 与 undo 对称：先删四类关联、清座位/值日，最后删主表（顺序与原实现一致）
+      undoStore.runInTransaction(() => {
+        undoStore.deleteStudentLinks(payload);
         clearSeatCells(seatCells);
         clearDutySlots(student);
-        delById('students', student.id);
-      })();
+        undoStore.deleteStudentRow(student.id);
+      });
     },
     describe(p, mode) {
       const name = rowName(p.student);
@@ -623,8 +502,7 @@ const executors = {
         throw new Error('照片文件不在回收站，无法恢复');
       }
       try {
-        db.prepare('INSERT INTO album_photos (id, album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-          .run(photo.id, photo.album_id || 0, photo.file_path, photo.file_name || '', photo.file_size || 0, photo.mtime || '', photo.photo_date || '', photo.exif_date || '', photo.date_src || '', '')
+        undoStore.insertPhotoIndex(photo)
       } catch (err) {
         // 索引没插进去 → 把已归位的文件搬回收站，退回「文件在回收站、索引没有」的原状态
         if (restored) {
@@ -638,14 +516,12 @@ const executors = {
     async redo({ photo }) {
       // 同理：先删索引（DB），再搬文件；搬文件失败时把索引插回去。
       // 顺序与 undo 相反但同样要求「要么都做、要么都不做」。
-      const del = db.prepare('DELETE FROM album_photos WHERE id = ?');
-      db.transaction(() => { del.run(photo.id); })();
+      undoStore.deletePhotoIndex(photo.id);
       try {
         await moveToTrash(photo);
       } catch (err) {
         try {
-          db.prepare('INSERT INTO album_photos (id, album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-            .run(photo.id, photo.album_id || 0, photo.file_path, photo.file_name || '', photo.file_size || 0, photo.mtime || '', photo.photo_date || '', photo.exif_date || '', photo.date_src || '', '')
+          undoStore.insertPhotoIndex(photo)
         } catch (rollbackErr) {
           console.error('[undo] 照片移入回收站失败后回退索引失败:', rollbackErr.message);
         }
@@ -668,24 +544,14 @@ const executors = {
       return null
     },
     async undo({ album, photos }) {
-      // 相册 + 全部照片索引必须一起恢复：中途失败时不能留下「相册已回、照片只回一半」的半状态。
-      const ins = db.prepare('INSERT INTO album_photos (id, album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      db.transaction(() => {
-        db.prepare('INSERT INTO albums (id, name, folder_path, kind, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(album.id, album.name || '', album.folder_path || '', album.kind === 'virtual' ? 'virtual' : 'folder', album.sort_order || 0, album.created_at || '', album.updated_at || '')
-        for (const ph of photos || []) {
-          ins.run(ph.id, album.id, ph.file_path || '', ph.file_name || '', ph.file_size || 0, ph.mtime || '', ph.photo_date || '', ph.exif_date || '', ph.date_src || '', '')
-        }
-      })()
+      // 相册 + 全部照片索引一起恢复（store 内一个事务，不留「相册已回、照片只回一半」）
+      undoStore.insertAlbumWithPhotos(album, photos)
     },
     async redo({ album, photos }) {
       const slug = dbManager.currentSlug();
+      // 缩略图先删（FS 副作用留在这里）；索引与相册行一起删（store 内一个事务）
       for (const ph of photos || []) await deleteThumb(ph, slug).catch(() => {})
-      // 照片索引与相册行必须一起删：中途失败不能留下「相册已删、照片还挂着一个不存在的 album_id」。
-      db.transaction(() => {
-        db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(album.id)
-        db.prepare('DELETE FROM albums WHERE id = ?').run(album.id)
-      })()
+      undoStore.deleteAlbumWithPhotos(album.id)
     },
     describe(p, mode) {
       const name = p.album ? (p.album.name || `#${p.album.id}`) : ''
@@ -703,22 +569,17 @@ const executors = {
       return null
     },
     async undo({ album }) {
-      const photos = db.prepare('SELECT id, file_name FROM album_photos WHERE album_id = ?').all(album.id)
+      const photos = undoStore.albumPhotosBrief(album.id)
       const slug = dbManager.currentSlug();
       for (const ph of photos) await deleteThumb(ph, slug).catch(() => {})
       // 撤销「添加相册」：照片索引与相册行一起删，避免只删了一半导致孤儿索引。
-      db.transaction(() => {
-        db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(album.id)
-        db.prepare('DELETE FROM albums WHERE id = ?').run(album.id)
-      })()
+      undoStore.deleteAlbumWithPhotos(album.id)
       const albumRouter = require('../album')
       if (albumRouter && albumRouter.cancelScan) albumRouter.cancelScan(album.id)
     },
     redo({ album }) {
       // kind 必须一起还原：虚拟相册没有文件夹，重做时不能去扫路径（会白跑一轮扫描）
-      const kind = album.kind === 'virtual' ? 'virtual' : 'folder'
-      db.prepare('INSERT INTO albums (id, name, folder_path, kind, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(album.id, album.name || '', album.folder_path || '', kind, album.sort_order || 0, album.created_at || '', album.updated_at || '')
+      const kind = undoStore.insertAlbumRow(album)
       if (kind === 'virtual') return
       // 重做=重新加入文件夹，触发该相册的增量扫描（由前端轮询逐步显示）
       const albumRouter = require('../album')
@@ -739,36 +600,10 @@ const executors = {
       if (!Number.isInteger(target_album_id) || !Array.isArray(records)) return '参数不完整'
       return null
     },
-    async undo({ target_album_id, records }) {
-      // 目标侧删除与来源侧还原必须同一事务：半途失败会让照片索引「两边都没有」。
-      db.transaction(() => {
-        const delTarget = db.prepare('DELETE FROM album_photos WHERE album_id = ? AND file_path = ?')
-        const ins = db.prepare('INSERT OR IGNORE INTO album_photos (id, album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        for (const r of records || []) {
-          if (!r || !r.file_path) continue
-          // 只删本次真正插入的行；移动前目标相册里就有的同一文件不能删
-          if (r.inserted) delTarget.run(target_album_id, r.file_path)
-          // 来源行被搬走的，按原 id 还原（缩略图交给 /thumb 按需重建）
-          if (r.source_removed && Number.isInteger(r.source_photo_id)) {
-            ins.run(r.source_photo_id, r.source_album_id, r.file_path, r.file_name || '', r.file_size || 0, r.mtime || '', r.photo_date || '', r.exif_date || '', r.date_src || '', '')
-          }
-        }
-      })()
-    },
-    async redo({ target_album_id, records }) {
-      // thumb_path 置空：redo 插回目标侧的是新行（无 id / 无缩略图缓存），
-      // 缩略图由 /thumb 按需生成。末尾那个 '' 就是 thumb_path 的实参 ——
-      // 少传一个会直接抛「Too few parameter values were provided」。
-      db.transaction(() => {
-        const ins = db.prepare('INSERT OR IGNORE INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        const del = db.prepare('DELETE FROM album_photos WHERE id = ?')
-        for (const r of records || []) {
-          if (!r || !r.file_path) continue
-          if (r.inserted) ins.run(target_album_id, r.file_path, r.file_name || '', r.file_size || 0, r.mtime || '', r.photo_date || '', r.exif_date || '', r.date_src || '', '')
-          if (r.source_removed && Number.isInteger(r.source_photo_id)) del.run(r.source_photo_id)
-        }
-      })()
-    },
+    // 目标侧删除与来源侧还原同一事务（store 内），半途失败不会出现「两边都没有」。
+    // redo 的 thumb_path 恒为空：插回目标侧的是新行，缩略图由 /thumb 按需生成。
+    async undo({ target_album_id, records }) { undoStore.restoreAlbumPhotoMove(target_album_id, records) },
+    async redo({ target_album_id, records }) { undoStore.reapplyAlbumPhotoMove(target_album_id, records) },
     describe(p, mode) {
       const name = p.target_album_name ? `「${p.target_album_name}」` : ''
       const count = (p.records || []).length

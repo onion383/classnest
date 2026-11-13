@@ -1,6 +1,6 @@
 const express = require('express');
-const { db } = require('../../db');
 const dbManager = require('../../dbManager/dbManager');
+const aiConversationStore = require('../../services/aiConversationStore');
 const { resolveEndpoint } = require('./ai.config');
 
 const router = express.Router();
@@ -60,11 +60,10 @@ async function compressConversation(cfg, conversationId, effectiveRows, upto) {
   if (!cutoff || cutoff.id <= (upto || 0)) return false;
   const chunk = effectiveRows.filter((r) => r.id <= cutoff.id);
   if (!chunk.length) return false;
-  const conv = db.prepare('SELECT summary FROM ai_conversations WHERE id = ?').get(conversationId);
+  const conv = aiConversationStore.getSummary(conversationId);
   const summary = await summarizeConversation(cfg, (conv && conv.summary) || '', chunk);
   if (!summary) return false;
-  db.prepare('UPDATE ai_conversations SET summary = ?, summary_upto = ? WHERE id = ?')
-    .run(summary, cutoff.id, conversationId);
+  aiConversationStore.updateSummary(conversationId, summary, cutoff.id);
   return true;
 }
 
@@ -111,10 +110,10 @@ function buildToolTrace(rows) {
 // 依据会话 id 从数据库重建「完整上下文」：全量历史消息 + 历史附件 + 工具调用记录，并按已有摘要裁剪较早部分
 //   返回 { summary, upto, lastPromptTokens, messages, attachments, effectiveRows, toolTrace }；会话不存在返回 null
 function loadConversationContext(conversationId) {
-  const conv = db.prepare('SELECT summary, summary_upto, last_prompt_tokens FROM ai_conversations WHERE id = ?').get(conversationId);
+  const conv = aiConversationStore.getMeta(conversationId);
   if (!conv) return null;
   const upto = conv.summary_upto || 0;
-  const all = db.prepare('SELECT id, role, content, process_json, attachments_json FROM ai_messages WHERE conversation_id = ? ORDER BY id').all(conversationId);
+  const all = aiConversationStore.listMessages(conversationId);
   const effectiveRows = [];
   for (const r of all) {
     if (r.role !== 'user' && r.role !== 'assistant') continue;

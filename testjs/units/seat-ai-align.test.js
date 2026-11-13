@@ -15,37 +15,10 @@
 const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(require('node:os').tmpdir(), 'seat-ai-align-unit-' + process.pid)
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-// ---------- 用内存库替换 db.js 的 db 导出（必须在 require 被测模块之前）----------
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-  // getFields 是 db.js 里唯一绕开 db 代理、自己调 dbManager.current() 的 helper：
-  // 不覆盖它，AI 写入链路（colType → getFields）会抛「未绑定数据库连接」。
-  getFields: (tableName) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(tableName),
-}
+const fx = createBackendDb({ label: 'seat-ai-align' })
 
 const {
   SEAT_CELL, columnKinds, seatColumnIndices, gridToDenseCols, columnLabels, rowIsAisle,
@@ -55,12 +28,15 @@ const { assertSeatRefs, validateRow } = require('../../student-backend/services/
 const { buildExportImage } = require('../../student-backend/routes/ai/ai.tools/tools.executors/executors.image')
 const { runConflictChecks } = require('../../student-backend/routes/ai/ai.tools/tools.executors/executors.checks')
 const { runSearchAll } = require('../../student-backend/routes/ai/ai.tools/tools.executors/executors.query')
-const aiRouter = require('../../student-backend/routes/ai/ai.dataRoutes')
+
+test.before(async () => {
+  await fx.mount('/api/seats', 'student-backend/routes/seats.js')
+  await fx.mount('/api/ai', 'student-backend/routes/ai/ai.dataRoutes.js')
+})
+test.after(() => fx.close())
 
 function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   return conn
 }
 
@@ -75,13 +51,13 @@ const ROWS = 3
 
 function seedLayout({ seats, types = TYPES, rows = ROWS, cols = COLS }) {
   // schema 已种好 current/template/draft/weight 四行（kind 是主键），这里只改 current
-  active.conn.prepare(
+  fx.conn.prepare(
     `UPDATE seat_slots SET mode = 'single', rows = ?, cols = ?, seats = ?, types = ? WHERE kind = 'current'`
   ).run(rows, cols, JSON.stringify(seats), JSON.stringify(types))
 }
 
 function seedStudent(id, name) {
-  active.conn.prepare('INSERT INTO students (id, 姓名) VALUES (?, ?)').run(id, name)
+  fx.conn.prepare('INSERT INTO students (id, 姓名) VALUES (?, ?)').run(id, name)
 }
 
 // ---------------------------------------------------------------------------
@@ -245,30 +221,15 @@ test('AI 整块写座位表前的自动快照必须带 types（POST /doc 真实�
   ]
   seedLayout({ seats: seatsBefore })
 
-  const app = express()
-  app.use(express.json())
-  app.use('/api/ai', aiRouter)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  const port = server.address().port
-  let res
-  try {
-    // 只写 seats（AI 的整块写入不会带 types）
-    res = await fetch(`http://127.0.0.1:${port}/api/ai/doc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        table: 'seat_layout',
-        id: 1,
-        values: { seats: [[null, null, null, null, null, null, 11], [null, null, null, null, null, null, null], [null, null, null, null, null, null, null]] },
-      }),
-    })
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
-  }
-  assert.equal(res.status, 200, '写入应成功：' + (await res.text()).slice(0, 200))
+  // 只写 seats（AI 的整块写入不会带 types）
+  const res = await fx.call('POST', '/api/ai/doc', {
+    table: 'seat_layout',
+    id: 1,
+    values: { seats: [[null, null, null, null, null, null, 11], [null, null, null, null, null, null, null], [null, null, null, null, null, null, null]] },
+  })
+  assert.equal(res.status, 200, '写入应成功：' + res.text.slice(0, 200))
 
-  const rec = active.conn.prepare("SELECT payload FROM domain_history WHERE domain = 'seat' ORDER BY id DESC LIMIT 1").get()
+  const rec = fx.conn.prepare("SELECT payload FROM domain_history WHERE domain = 'seat' ORDER BY id DESC LIMIT 1").get()
   assert.ok(rec, '写入前应落一条座位快照')
   const payload = JSON.parse(rec.payload)
   assert.deepEqual(payload.types, TYPES, '快照缺 types 会让回看历史时走廊列变成空座位')

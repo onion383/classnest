@@ -11,94 +11,31 @@
 //     严格 `===`。同一批「只存姓名」的表，匹配口径不一致 → 改完名后有些表改了、
 //     有些没改，同一个学生在不同表里名字对不上。
 //
-// 手法：沿用批 14 的脚手架 —— 把 student-backend/db.js 的 db 导出换成「代理到真内存库」，
-//      在同进程起 Express 挂真实 router，用 fetch 打真实 HTTP。
+// 手法：用公共夹具（_db-express-fixture.cjs）—— 把 student-backend/db.js 的 db 导出换成
+//      「代理到真内存库」，在同进程起 Express 挂真实 router，用 fetch 打真实 HTTP。
 //      路由、slotStore、SQLite 全是真的。
 //
 // 运行：npm run test:units
 // =========================================================================
-const os = require('node:os')
-const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(os.tmpdir(), 'boundary-unit-' + process.pid)
+const fx = createBackendDb({ label: 'boundary', extraDbExports: { renumber: () => {} } })
 
-const { initSchema } = require('../../student-backend/schema/schema')
-
-// ---------- 代理到真连接（批 14 的 makeFaultyDb 去掉故障注入部分） ----------
-function makeDb(conn) {
-  return new Proxy({}, {
-    get(_target, prop) {
-      const value = conn[prop]
-      if (typeof value !== 'function') return value
-      return value.bind(conn)
-    },
-  })
-}
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      return makeDb(active.conn)[prop]
-    },
-  }),
-  // db.js 的 getFields / renumber 不走 db 导出，而是直接调内部 currentDb()，
-  // 内部读 dbManager 的 ALS 上下文 —— 单测里没走 auth 中间件，没有绑定库。
-  // 这里也一并换成当前内存连接，否则 dynamicTable 的列元数据查询会抛「未绑定数据库连接」。
-  getFields: (tableName) => active.conn.prepare(
-    `SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order`
-  ).all(tableName),
-  renumber: () => {},
-}
-
-const seatsRouter = require('../../student-backend/routes/seats')
+// 路由必须在夹具装好 stub 之后 require（它们连带 require slotStore → ../db）
 const { createDynamicTableRouter } = require('../../student-backend/routes/dynamicTable')
 const { renameStudentRefs } = require('../../student-backend/services/studentRename')
 
 // students 的动态表路由是工厂函数（每个逻辑表一个实例），这里建一个专用的
 const studentsRouter = createDynamicTableRouter('students')
 
-// ---------- 起一个同进程的 Express，真打 HTTP ----------
-async function callApi(routes, method, urlPath, body) {
-  const app = express()
-  app.use(express.json())
-  for (const [prefix, router] of routes) app.use(prefix, router)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch (_) { /* 非 JSON 也是信息 */ }
-    return { status: res.status, text, json }
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
-  }
-}
-
-function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  return conn
-}
+test.before(async () => {
+  await fx.mount('/api/seats', 'student-backend/routes/seats.js')
+  await fx.mount('/api/students', studentsRouter)
+})
+test.after(() => fx.close())
 
 // seat_slots 的 kind='current' 播种行：mode/rows/cols/seats/...
 function setSeatLayout(conn, rows, cols, seats) {
@@ -116,17 +53,13 @@ function readSeatLayout(conn) {
 // ---------------------------------------------------------------------------
 
 test('seats 的 PATCH /cell：坐标超出当前布局行列时必须被拒（不能撑出空行）', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   // 当前布局只有 3 行 2 列
   const grid = [['甲', '乙'], ['丙', '丁'], ['戊', '己']]
   setSeatLayout(conn, 3, 2, grid)
-  active.conn = conn
 
   // 写 row=10 —— 远超当前 3 行。全局上限是 50，所以旧实现会放行
-  const r = await callApi(
-    [['/api/seats', seatsRouter]],
-    'PATCH', '/api/seats/cell', { row: 10, col: 0, value: '越界' }
-  )
+  const r = await fx.call('PATCH', '/api/seats/cell', { row: 10, col: 0, value: '越界' })
   assert.equal(r.status, 400, '越界坐标应被拒（实际 ' + r.status + '：' + r.text.slice(0, 160) + '）')
 
   const after = readSeatLayout(conn)
@@ -141,14 +74,10 @@ test('seats 的 PATCH /cell：坐标超出当前布局行列时必须被拒（�
 })
 
 test('seats 的 PATCH /cell：列坐标超出当前布局列数时同样必须被拒', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   setSeatLayout(conn, 3, 2, [['甲', '乙'], ['丙', '丁'], ['戊', '己']])
-  active.conn = conn
 
-  const r = await callApi(
-    [['/api/seats', seatsRouter]],
-    'PATCH', '/api/seats/cell', { row: 0, col: 9, value: '越界' }
-  )
+  const r = await fx.call('PATCH', '/api/seats/cell', { row: 0, col: 9, value: '越界' })
   assert.equal(r.status, 400, '越界列坐标应被拒（实际 ' + r.status + '：' + r.text.slice(0, 160) + '）')
 
   const after = readSeatLayout(conn)
@@ -160,16 +89,12 @@ test('seats 的 PATCH /cell：列坐标超出当前布局列数时同样必须�
 })
 
 test('seats 的 PATCH /master/cell：模板的坐标也必须校当前布局（不能只修当前座位表）', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   // 模板的布局与当前座位表是**两套独立记录**（seat_slots 的 kind='template'）
   conn.prepare("UPDATE seat_slots SET rows = ?, cols = ?, seats = ? WHERE kind = 'template'")
     .run(3, 2, JSON.stringify([['甲', '乙'], ['丙', '丁'], ['戊', '己']]))
-  active.conn = conn
 
-  const r = await callApi(
-    [['/api/seats', seatsRouter]],
-    'PATCH', '/api/seats/master/cell', { row: 10, col: 0, value: '越界' }
-  )
+  const r = await fx.call('PATCH', '/api/seats/master/cell', { row: 10, col: 0, value: '越界' })
   assert.equal(r.status, 400, '模板的越界坐标也应被拒（实际 ' + r.status + '：' + r.text.slice(0, 160) + '）')
 
   const after = JSON.parse(
@@ -179,14 +104,10 @@ test('seats 的 PATCH /master/cell：模板的坐标也必须校当前布局（�
 })
 
 test('seats 的 PATCH /cell：布局内的合法坐标必须照常写入（不能误伤）', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   setSeatLayout(conn, 3, 2, [['甲', '乙'], ['丙', '丁'], ['戊', '己']])
-  active.conn = conn
 
-  const r = await callApi(
-    [['/api/seats', seatsRouter]],
-    'PATCH', '/api/seats/cell', { row: 2, col: 1, value: '新值' }
-  )
+  const r = await fx.call('PATCH', '/api/seats/cell', { row: 2, col: 1, value: '新值' })
   assert.equal(r.status, 200, '布局内的坐标应写入成功（实际 ' + r.status + '：' + r.text.slice(0, 160) + '）')
 
   const after = readSeatLayout(conn)
@@ -200,8 +121,7 @@ test('seats 的 PATCH /cell：布局内的合法坐标必须照常写入（不�
 // ---------------------------------------------------------------------------
 
 test('studentRename：改名级联必须六处同一口径 —— 带空格的旧名变体也要一起改', () => {
-  const conn = freshDb()
-  active.conn = conn
+  const conn = fx.reset()
   //
   // 根因不在「座位表丢空格」，而在**匹配口径不一致**：
   //   · 座位表 renameSeatCells 用 `cell.trim() === oldName`（宽松）
@@ -246,8 +166,7 @@ test('studentRename：改名级联必须六处同一口径 —— 带空格的�
 })
 
 test('studentRename：值日表与座位表的姓名匹配口径必须一致（同一份数据只改一处不行）', () => {
-  const conn = freshDb()
-  active.conn = conn
+  const conn = fx.reset()
 
   // 值日表 cells：{ daily: { 扫地: { 1: ['张三'] } } }
   conn.prepare("UPDATE duty_slots SET cells = ? WHERE kind = 'current'")
@@ -274,8 +193,7 @@ test('studentRename：值日表与座位表的姓名匹配口径必须一致（�
 // ---------------------------------------------------------------------------
 
 test('studentRelations：删除学生时，值日表里的带空格旧名也必须被统计与清理', () => {
-  const conn = freshDb()
-  active.conn = conn
+  const conn = fx.reset()
   const { studentRelations, purgeStudentRelations } = require('../../student-backend/services/studentRelations')
 
   const ins = conn.prepare('INSERT INTO students (姓名, 学号) VALUES (?, ?)')
@@ -310,8 +228,7 @@ test('studentRelations：删除学生时，值日表里的带空格旧名也必�
 })
 
 test('studentRename：座位格的对象形态（{name} / {姓名}）也必须按同一口径改名', () => {
-  const conn = freshDb()
-  active.conn = conn
+  const conn = fx.reset()
   // 座位格里存的是对象形态，且带空格：{ name: ' 张三 ' } / { 姓名: ' 张三 ' }
   conn.prepare("UPDATE seat_slots SET seats = ? WHERE kind = 'current'")
     .run(JSON.stringify([[{ name: ' 张三 ' }, { 姓名: ' 张三 ' }]]))
@@ -331,18 +248,14 @@ test('studentRename：座位格的对象形态（{name} / {姓名}）也必须�
 // ---------------------------------------------------------------------------
 
 test('dynamicTable 的 PUT：同名歧义跳过级联时，响应里必须带得出来的冲突信号', async () => {
-  const conn = freshDb()
-  active.conn = conn
+  const conn = fx.reset()
 
   // 两个学生同名「张三」：改名其中一个时，级联必须跳过（否则会改到另一个人的数据）
   const ins = conn.prepare('INSERT INTO students (姓名, 学号) VALUES (?, ?)')
   ins.run('张三', 'A001')
   ins.run('张三', 'A002')
 
-  const r = await callApi(
-    [['/api/students', studentsRouter]],
-    'PUT', '/api/students/1', { 姓名: '李四' }
-  )
+  const r = await fx.call('PUT', '/api/students/1', { 姓名: '李四' })
   assert.equal(r.status, 200, '改名本身应成功（实际 ' + r.status + '：' + r.text.slice(0, 200) + '）')
 
   // 前端要能据此提示用户「关联记录未同步」—— 后端必须把这个事实说出来
@@ -360,8 +273,7 @@ test('dynamicTable 的 PUT：同名歧义跳过级联时，响应里必须带得
 })
 
 test('dynamicTable 的 PUT：改名无歧义时不得报 skipped（别误报）', async () => {
-  const conn = freshDb()
-  active.conn = conn
+  const conn = fx.reset()
   const ins = conn.prepare('INSERT INTO students (姓名, 学号) VALUES (?, ?)')
   ins.run('张三', 'A001')
   ins.run('李四', 'A002')
@@ -369,10 +281,7 @@ test('dynamicTable 的 PUT：改名无歧义时不得报 skipped（别误报）'
   conn.prepare("UPDATE seat_slots SET seats = ? WHERE kind = 'current'")
     .run(JSON.stringify([['张三']]))
 
-  const r = await callApi(
-    [['/api/students', studentsRouter]],
-    'PUT', '/api/students/1', { 姓名: '王五' }
-  )
+  const r = await fx.call('PUT', '/api/students/1', { 姓名: '王五' })
   assert.equal(r.status, 200, '改名应成功（实际 ' + r.status + '：' + r.text.slice(0, 200) + '）')
   const renamed = (r.json || {}).renamed || {}
   assert.equal(

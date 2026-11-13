@@ -8,117 +8,31 @@
 //   · B04-05 photo_trash 的 undo：先把文件从回收站搬回原位，再 INSERT 索引。
 //     两步非原子 → 中间态「文件在、索引不在」，用户看不到这张照片，但文件已归位。
 //
-// 手法：沿用批 14/15 的脚手架 —— require.cache 换掉 db.js 的 db 导出（代理到真内存库
-//      + 第 K 次写抛错），同进程起 Express 挂真实 router，fetch 打真实 HTTP。
+// 手法：用公共夹具（_db-express-fixture.cjs，faults:true）—— require.cache 换掉 db.js 的
+//      db 导出（代理到真内存库 + 第 K 次写抛错），同进程起 Express 挂真实 router，
+//      fetch 打真实 HTTP。
 //
 // 运行：npm run test:units
 // =========================================================================
 const os = require('node:os')
 const path = require('node:path')
+const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
+// albumOps 的回收站路径由 DATA_DIR 派生，这里必须和造文件用的目录是同一个
 const TMP = path.join(os.tmpdir(), 'sideeffect-unit-' + process.pid)
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = TMP
+const fx = createBackendDb({
+  label: 'sideeffect',
+  dataDir: TMP,
+  faults: true,
+  extraDbExports: { renumber: () => {} },
+})
 
-const { initSchema } = require('../../student-backend/schema/schema')
-
-// ---------- 故障注入：代理到真连接，第 K 次「写」抛错 ----------
-function makeFaultyDb(conn, state) {
-  return new Proxy({}, {
-    get(_target, prop) {
-      const value = conn[prop]
-      if (typeof value !== 'function') return value
-      if (prop === 'prepare') {
-        return (sql) => {
-          const stmt = conn.prepare(sql)
-          return new Proxy(stmt, {
-            get(s, p) {
-              const v = s[p]
-              if (p === 'run') {
-                return (...args) => {
-                  state.writes += 1
-                  // 按 SQL 匹配注入：用例关心的是「哪张表的写入失败」，不是「第几次写」。
-                  // 后者会在业务新增一次写操作时整体偏移，把故障注入到错误的步骤上，
-                  // 让一个仍然存在的 bug 变成假绿（审查 v5 · V5-034）。
-                  if (state.failMatch && state.failMatch.test(sql)) {
-                    state.matchWrites = (state.matchWrites || 0) + 1
-                    if (state.failAtMatch > 0 && state.matchWrites === state.failAtMatch) {
-                      throw new Error('注入故障：匹配 ' + state.failMatch + ' 的第 ' + state.matchWrites + ' 次写入失败')
-                    }
-                  }
-                  // 兼容旧写法：绝对写入序号的注入（仅保留给未改造的用例）
-                  if (state.failAt > 0 && state.writes === state.failAt) {
-                    throw new Error('注入故障：第 ' + state.writes + ' 次写入失败')
-                  }
-                  return v.apply(s, args)
-                }
-              }
-              if (typeof v === 'function') return v.bind(s)
-              return v
-            }
-          })
-        }
-      }
-      return value.bind(conn)
-    },
-  })
-}
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null, state: { writes: 0, failAt: 0 } }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      return makeFaultyDb(active.conn, active.state)[prop]
-    },
-  }),
-  getFields: (tableName) => active.conn.prepare(
-    `SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order`
-  ).all(tableName),
-  renumber: () => {},
-}
-
-const dutyRouter = require('../../student-backend/routes/duty')
-
-async function callApi(routes, method, urlPath, body) {
-  const app = express()
-  app.use(express.json())
-  for (const [prefix, router] of routes) app.use(prefix, router)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch (_) { /* 非 JSON 也是信息 */ }
-    return { status: res.status, text, json }
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
-  }
-}
-
-function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  return conn
-}
+test.before(() => fx.mount('/api/duty', 'student-backend/routes/duty.js'))
+test.after(() => fx.close())
 
 // 配置值日项目（assertDutyRefs 会读 duty_settings 校验项目/星期是否已配置）
 function seedDutySettings(conn, items, days) {
@@ -131,21 +45,17 @@ function seedDutySettings(conn, items, days) {
 // ---------------------------------------------------------------------------
 
 test('值日保存失败时不能留下孤儿临时学生（校验阶段建档的副作用必须与写库同生共死）', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   // 值日设置：新结构 —— days 按模式分键的星期数组，items 按模式分键的项目数组
   seedDutySettings(conn, { daily: [{ name: '扫地', count: 1 }] }, { daily: ['周一'] })
-  active.conn = conn
   // 建临时学生（students 表）成功后，让「值日表落库」这一步失败 —— 按 SQL 锁定注入点，
   // 不依赖「第 2 次写」这种会被新增写操作改掉的序号
-  active.state = { writes: 0, failMatch: /duty_slots/i, failAtMatch: 1 }
+  fx.inject({ failMatch: /duty_slots/i, failAtMatch: 1 })
 
-  const r = await callApi(
-    [['/api/duty', dutyRouter]],
-    'PUT', '/api/duty', {
-      mode: 'daily',
-      cells: { 扫地: { 周一: ['新来的同学'] } },
-    }
-  )
+  const r = await fx.call('PUT', '/api/duty', {
+    mode: 'daily',
+    cells: { 扫地: { 周一: ['新来的同学'] } },
+  })
   assert.ok(r.status >= 400, '值日表写失败应报错（实际 ' + r.status + '：' + r.text.slice(0, 200) + '）')
 
   const students = conn.prepare("SELECT 姓名 FROM students WHERE 姓名 = '新来的同学'").all()
@@ -156,19 +66,14 @@ test('值日保存失败时不能留下孤儿临时学生（校验阶段建档�
 })
 
 test('值日保存成功时，名册外的姓名必须照常建档（不能为了修副作用把功能改没了）', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   // 值日设置：新结构 —— days 按模式分键的星期数组，items 按模式分键的项目数组
   seedDutySettings(conn, { daily: [{ name: '扫地', count: 1 }] }, { daily: ['周一'] })
-  active.conn = conn
-  active.state = { writes: 0, failAt: 0 }
 
-  const r = await callApi(
-    [['/api/duty', dutyRouter]],
-    'PUT', '/api/duty', {
-      mode: 'daily',
-      cells: { 扫地: { 周一: ['新来的同学'] } },
-    }
-  )
+  const r = await fx.call('PUT', '/api/duty', {
+    mode: 'daily',
+    cells: { 扫地: { 周一: ['新来的同学'] } },
+  })
   assert.equal(r.status, 200, '保存应成功（实际 ' + r.status + '：' + r.text.slice(0, 200) + '）')
 
   const students = conn.prepare("SELECT 姓名 FROM students WHERE 姓名 = '新来的同学'").all()
@@ -180,9 +85,7 @@ test('值日保存成功时，名册外的姓名必须照常建档（不能为�
 // ---------------------------------------------------------------------------
 
 test('photo_trash 的 undo：文件搬回与索引插入必须同生共死（不能留「文件在、索引不在」）', async () => {
-  const conn = freshDb()
-  active.conn = conn
-  active.state = { writes: 0, failAt: 0 }
+  const conn = fx.reset()
 
   // 直接调执行器：把「文件搬回成功、索引插入失败」这个中间态造出来
   const { executors } = require('../../student-backend/routes/undo/undo.executors')
@@ -208,7 +111,7 @@ test('photo_trash 的 undo：文件搬回与索引插入必须同生共死（不
   fs.unlinkSync(originalPath)
 
   // 让「索引插入」这一步失败：按 SQL 锁定 album_photos 的写入（不依赖绝对序号）
-  active.state = { writes: 0, failMatch: /album_photos/i, failAtMatch: 1 }
+  fx.inject({ failMatch: /album_photos/i, failAtMatch: 1 })
   await assert.rejects(
     () => ex.undo({ photo }),
     '索引插入失败时应抛错'

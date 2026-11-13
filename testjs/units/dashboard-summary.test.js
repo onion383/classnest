@@ -13,27 +13,18 @@ const fs = require('node:fs')
 const os = require('node:os')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-summary-'))
-process.env.DATA_DIR = tmp
+const fx = createBackendDb({
+  label: 'dashboard-summary',
+  dataDir: tmp,
+  extraDbExports: { renumber: () => {} },
+})
+const conn = fx.conn
 
-const { initSchema } = require('../../student-backend/schema/schema')
 const { localDateStr } = require('../../student-backend/utils/date')
-const conn = new Database(':memory:')
-initSchema(conn)
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [], renumber: () => {} }
-
-const router = require('../../student-backend/routes/dashboard')
 
 const TODAY = localDateStr()
 const MONTH = TODAY.slice(0, 7)
@@ -43,8 +34,6 @@ const LAST_MONTH = (() => {
   return localDateStr(d).slice(0, 7)
 })()
 
-let server
-let base
 const rnd = (i, n) => i % n
 const NAMES = ['张', '李', '王', '赵', '钱', '孙', '周', '吴', '郑', '冯']
 const GIVEN = ['子涵', '雨桐', '浩然', '思远', '梓轩', '欣怡', '宇辰', '若曦']
@@ -86,22 +75,18 @@ test.before(async () => {
   insFee.run('F006', '收入', 999, `${LAST_MONTH}-20`, '上月收入')
   insFee.run('F007', '支出', 88, `${LAST_MONTH}-21`, '上月支出')
 
-  const app = express()
-  app.use('/api/dashboard', router)
-  await new Promise((resolve) => { server = app.listen(0, resolve) })
-  base = `http://127.0.0.1:${server.address().port}`
+  await fx.mount('/api/dashboard', 'student-backend/routes/dashboard.js')
 })
 
 test.after(() => {
-  server?.close()
-  try { conn.close() } catch (_) { /* 忽略 */ }
+  fx.close()
   try { fs.rmSync(tmp, { recursive: true, force: true }) } catch (_) { /* 忽略 */ }
 })
 
 async function getPayload() {
-  const res = await fetch(`${base}/api/dashboard`)
+  const res = await fx.call('GET', '/api/dashboard')
   assert.equal(res.status, 200)
-  return res.json()
+  return res.json
 }
 
 test('不再下发全量 scores / fees，students 只剩 id+姓名', async () => {

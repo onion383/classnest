@@ -14,30 +14,12 @@
 const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 const fs = require('node:fs')
-const os = require('node:os')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'album-random-thumb-test-key'
-process.env.DATA_DIR = process.env.DATA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'album-random-thumb-'))
-
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const conn = new Database(':memory:')
-initSchema(conn)
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [] }
-const dbmPath = require.resolve(path.join(ROOT, 'student-backend/dbManager/dbManager.js'))
-require(dbmPath).current = () => conn
-
-const album = require('../../student-backend/routes/album')
+// 公共夹具：内存库 + db.js Proxy / dbManager.current 的进程级 stub
+const fx = createBackendDb({ label: 'album-random-thumb' })
+const conn = fx.conn
 
 const TMP = process.env.DATA_DIR
 const ALBUM_ID = 1
@@ -60,17 +42,12 @@ thumbs.forEach((buf, i) => {
     `2026-05-0${i + 1}`, `2026-05-0${i + 1} 10:00:00`, 'exif', p, 999)
 })
 
-let server
 let base
 test.before(async () => {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/album', album)
-  await new Promise((r) => { server = app.listen(0, r) })
-  base = `http://127.0.0.1:${server.address().port}/api/album`
+  base = await fx.mount('/api/album', 'student-backend/routes/album.js')
 })
 test.after(() => {
-  try { server.close() } catch (_) { /* 已关闭 */ }
+  fx.close()
   for (const [i] of thumbs.entries()) { try { fs.rmSync(path.join(TMP, `thumb-${i}.jpg`)) } catch (_) { /* 已删 */ } }
 })
 

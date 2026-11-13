@@ -13,102 +13,23 @@
 //
 // 运行：npm run test:units
 // =========================================================================
-const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 const { pathToFileURL } = require('node:url')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(os.tmpdir(), 'consistency-unit-' + process.pid)
+const fx = createBackendDb({
+  label: 'consistency',
+  faults: true,
+  extraDbExports: { renumber: () => {} },
+})
 
-const { initSchema } = require('../../student-backend/schema/schema')
 const { renameUsernameWithCompensation } = require('../../student-backend/services/accountRename')
 
-// ---------- 故障注入：代理到真连接，第 K 次「写」抛错 ----------
-function makeFaultyDb(conn, state) {
-  return new Proxy({}, {
-    get(_target, prop) {
-      const value = conn[prop]
-      if (typeof value !== 'function') return value
-      if (prop === 'prepare') {
-        return (sql) => {
-          const stmt = conn.prepare(sql)
-          return new Proxy(stmt, {
-            get(s, p) {
-              const v = s[p]
-              if (p === 'run') {
-                return (...args) => {
-                  state.writes += 1
-                  if (state.failAt > 0 && state.writes === state.failAt) {
-                    throw new Error('注入故障：第 ' + state.writes + ' 次写入失败')
-                  }
-                  return v.apply(s, args)
-                }
-              }
-              if (typeof v === 'function') return v.bind(s)
-              return v
-            }
-          })
-        }
-      }
-      return value.bind(conn)
-    },
-  })
-}
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null, state: { writes: 0, failAt: 0 } }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      return makeFaultyDb(active.conn, active.state)[prop]
-    },
-  }),
-  getFields: (tableName) => active.conn.prepare(
-    `SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order`
-  ).all(tableName),
-  renumber: () => {},
-}
-
-const albumRouter = require('../../student-backend/routes/album')
-
-async function callApi(routes, method, urlPath, body) {
-  const app = express()
-  app.use(express.json())
-  for (const [prefix, router] of routes) app.use(prefix, router)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch (_) { /* 非 JSON 也是信息 */ }
-    return { status: res.status, text, json }
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
-  }
-}
-
-function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  return conn
-}
+test.before(() => fx.mount('/api/album', 'student-backend/routes/album.js'))
+test.after(() => fx.close())
 
 // ---------------------------------------------------------------------------
 // B02-05：跨库两写的补偿
@@ -252,15 +173,13 @@ test('renameOutcome：响应里没有 renamed 字段时不得报错（其他表�
 })
 
 test('album 的 PATCH /:id：相册名与路径必须清洗（零宽字符/控制字符不能原样落库）', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   conn.prepare(
     "INSERT INTO albums (id, name, folder_path, kind, sort_order, created_at, updated_at) VALUES (1, '相册甲', 'C:/x', 'folder', 0, '', '')"
   ).run()
-  active.conn = conn
-  active.state = { writes: 0, failAt: 0 }
 
   // 名字里塞零宽字符（U+200B）与控制字符，路径里塞首尾空格
-  const r = await callApi([['/api/album', albumRouter]], 'PATCH', '/api/album/1', {
+  const r = await fx.call('PATCH', '/api/album/1', {
     name: '相\u200b册\u0007甲',
     folder_path: '  C:/x  ',
   })
@@ -276,14 +195,12 @@ test('album 的 PATCH /:id：相册名与路径必须清洗（零宽字符/控�
 })
 
 test('album 的 PATCH /:id：清洗后为空的名字必须被拒（不能写进空名相册）', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   conn.prepare(
     "INSERT INTO albums (id, name, folder_path, kind, sort_order, created_at, updated_at) VALUES (1, '相册甲', 'C:/x', 'folder', 0, '', '')"
   ).run()
-  active.conn = conn
-  active.state = { writes: 0, failAt: 0 }
 
-  const r = await callApi([['/api/album', albumRouter]], 'PATCH', '/api/album/1', { name: '   ' })
+  const r = await fx.call('PATCH', '/api/album/1', { name: '   ' })
   assert.equal(r.status, 400, '空名应被拒（实际 ' + r.status + '：' + r.text.slice(0, 160) + '）')
   const row = conn.prepare('SELECT name FROM albums WHERE id = 1').get()
   assert.equal(row.name, '相册甲', '原名不该被覆盖（实际 ' + JSON.stringify(row.name) + '）')
@@ -294,7 +211,7 @@ test('album 的 PATCH /:id：清洗后为空的名字必须被拒（不能写进
 // ---------------------------------------------------------------------------
 
 test('album 的 DELETE /:id：两条 DELETE 中途失败不能留下「照片没了相册还在」的半截状态', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   const ins = conn.prepare(
     "INSERT INTO albums (id, name, folder_path, kind, sort_order, created_at, updated_at) VALUES (?, '相册甲', 'C:/x', 'folder', 0, '', '')"
   )
@@ -303,11 +220,10 @@ test('album 的 DELETE /:id：两条 DELETE 中途失败不能留下「照片没
     "INSERT INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (1, 'C:/x/a.jpg', 'a.jpg', 1, 0, '', '', '', '')"
   )
   insP.run()
-  active.conn = conn
   // 第 1 次写 = 删 album_photos；第 2 次写 = 删 albums → 在这里失败
-  active.state = { writes: 0, failAt: 2 }
+  fx.inject({ failAt: 2 })
 
-  const r = await callApi([['/api/album', albumRouter]], 'DELETE', '/api/album/1')
+  const r = await fx.call('DELETE', '/api/album/1')
   assert.ok(r.status >= 400, '删除中途失败应报错（实际 ' + r.status + '：' + r.text.slice(0, 160) + '）')
 
   const albums = conn.prepare('SELECT COUNT(*) AS c FROM albums').get().c

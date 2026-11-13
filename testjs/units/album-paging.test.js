@@ -13,34 +13,13 @@
 //   ⑤ 单日张数超过行数上限时整日返回，不拆也不死循环；
 //   ⑥ /dates 的日期与张数必须与 /photos 的分组逐项对上（前端靠它算总高度）。
 // =========================================================================
-const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
-const fs = require('node:fs')
-const os = require('node:os')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'album-paging-test-key'
-process.env.DATA_DIR = process.env.DATA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'album-paging-'))
-
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const conn = new Database(':memory:')
-initSchema(conn)
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [] }
-// db.js 的 db 是 Proxy，转发到 dbManager.current()；原地改属性才能被它看到
-const dbmPath = require.resolve(path.join(ROOT, 'student-backend/dbManager/dbManager.js'))
-require(dbmPath).current = () => conn
-
-const album = require('../../student-backend/routes/album')
+// 公共夹具：内存库 + db.js Proxy / dbManager.current 的进程级 stub（见 _db-express-fixture.cjs）
+const fx = createBackendDb({ label: 'album-paging' })
+const conn = fx.conn
 
 const ALBUM_ID = 1
 const ins = conn.prepare(
@@ -92,16 +71,11 @@ conn.transaction(() => {
   }
 })()
 
-let server
 let base
 test.before(async () => {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/album', album)
-  await new Promise((r) => { server = app.listen(0, r) })
-  base = `http://127.0.0.1:${server.address().port}/api/album`
+  base = await fx.mount('/api/album', 'student-backend/routes/album.js')
 })
-test.after(() => { try { server.close() } catch (_) { /* 已关闭 */ } })
+test.after(() => fx.close())
 
 const get = async (p) => (await fetch(base + p)).json()
 const flatten = (groups) => {

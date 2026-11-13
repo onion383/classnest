@@ -8,29 +8,26 @@
 //     中途失败会让排序乱掉；而且「确保内置默认维度存在」这个写发生在排序之前，
 //     它与排序不在同一个事务里 → 排序失败时默认维度已经落库。
 //
-// 手法：把 student-backend/db.js 的 db 导出换成「代理到真内存库 + 第 K 次写抛错」的代理，
-//      再在同进程起 Express 挂真实 router，用 fetch 打真实 HTTP。
-//      路由、slotStore、SQLite、事务全是真的 —— 只有「写」这一下是注入的故障。
+// 手法：用公共夹具（_db-express-fixture.cjs，faults:true）—— db.js 的 db 导出换成
+//      「代理到真内存库 + 第 K 次写抛错」的代理，再在同进程起 Express 挂真实 router，
+//      用 fetch 打真实 HTTP。路由、slotStore、SQLite、事务全是真的 —— 只有「写」是注入的。
 //      （隔离后端是独立子进程，注入不进；所以这层只能在同进程做。）
 //
 // 运行：npm run test:units
 // =========================================================================
-const os = require('node:os')
-const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-// db.js 会连带 require dbManager（需要主密钥），先给环境变量
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(os.tmpdir(), 'multiwrite-unit-' + process.pid)
+const fx = createBackendDb({ label: 'multiwrite', faults: true })
 
-const { initSchema } = require('../../student-backend/schema/schema')
+test.before(async () => {
+  await fx.mount('/api/duty', 'student-backend/routes/duty.js')
+  await fx.mount('/api/seats', 'student-backend/routes/seats.js')
+  await fx.mount('/api/group-manage', 'student-backend/routes/groupManage.js')
+})
+test.after(() => fx.close())
 
 // ---------- 日期工具（路由内部各有一份，这里自己算一份用于造数据） ----------
 const pad = (n) => String(n).padStart(2, '0')
@@ -42,88 +39,6 @@ function shiftDate(s, n) {
   return dateStr(dt)
 }
 
-// ---------- 故障注入：代理到真连接，第 K 次「写」抛错 ----------
-// 只包 run（写）；get / all 不算写 —— 这样「第 K 次写失败」才对应业务上的第 K 次落库。
-function makeFaultyDb(conn, state) {
-  return new Proxy({}, {
-    get(_target, prop) {
-      const value = conn[prop]
-      if (typeof value !== 'function') return value
-      if (prop === 'prepare') {
-        return (sql) => {
-          const stmt = conn.prepare(sql)
-          return new Proxy(stmt, {
-            get(s, p) {
-              const v = s[p]
-              if (p === 'run') {
-                return (...args) => {
-                  state.writes += 1
-                  if (state.failAt > 0 && state.writes === state.failAt) {
-                    throw new Error('注入故障：第 ' + state.writes + ' 次写入失败')
-                  }
-                  return v.apply(s, args)
-                }
-              }
-              if (typeof v === 'function') return v.bind(s)
-              return v
-            }
-          })
-        }
-      }
-      return value.bind(conn)
-    }
-  })
-}
-
-// ---------- 把 db.js 的 db 导出换成故障代理（必须在 require 路由/slotStore 之前） ----------
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-// 活动连接与故障状态做成可变引用：多个用例共用一份已注入的模块，靠切换 active 来换库
-const active = { conn: null, state: { writes: 0, failAt: 0 } }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      return makeFaultyDb(active.conn, active.state)[prop]
-    }
-  }),
-}
-
-// 路由必须在上面对 db.js 做替换之后才 require（它们连带 require slotStore → ../db）
-const dutyRouter = require('../../student-backend/routes/duty')
-const seatsRouter = require('../../student-backend/routes/seats')
-const groupManageRouter = require('../../student-backend/routes/groupManage')
-
-// ---------- 起一个同进程的 Express，真打 HTTP ----------
-async function callApi(routes, method, urlPath, body) {
-  const app = express()
-  app.use(express.json())
-  for (const [prefix, router] of routes) app.use(prefix, router)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch (_) { /* Express 默认错误页不是 JSON，也是信息 */ }
-    return { status: res.status, text, json }
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
-  }
-}
-
-function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  return conn
-}
-
 function insertSemester(conn, start, end) {
   conn.prepare('INSERT INTO semesters (name, start_date, end_date, is_current) VALUES (?,?,?,1)')
     .run('测试学期', start, end)
@@ -132,16 +47,12 @@ function insertSemester(conn, start, end) {
 // ---------------------------------------------------------------------------
 
 test('duty 的 snapshot/backfill：写循环中途失败不能留下半截快照', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   const today = dateStr(new Date())
   insertSemester(conn, shiftDate(today, -5), today)
-  active.conn = conn
-  active.state = { writes: 0, failAt: 3 }
+  fx.inject({ failAt: 3 })
 
-  const r = await callApi(
-    [['/api/duty', dutyRouter]],
-    'POST', '/api/duty/snapshot/backfill', { mode: 'daily', includeToday: true }
-  )
+  const r = await fx.call('POST', '/api/duty/snapshot/backfill', { mode: 'daily', includeToday: true })
   assert.equal(r.status, 500, '补存中途失败应回 500（实际 ' + r.status + '：' + r.text.slice(0, 200) + '）')
 
   const left = conn.prepare("SELECT COUNT(*) AS c FROM domain_history WHERE domain = 'duty'").get().c
@@ -149,16 +60,12 @@ test('duty 的 snapshot/backfill：写循环中途失败不能留下半截快照
 })
 
 test('seats 的 snapshot/backfill：写循环中途失败不能留下半截快照（同款拷贝）', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   const today = dateStr(new Date())
   insertSemester(conn, shiftDate(today, -5), today)
-  active.conn = conn
-  active.state = { writes: 0, failAt: 3 }
+  fx.inject({ failAt: 3 })
 
-  const r = await callApi(
-    [['/api/seats', seatsRouter]],
-    'POST', '/api/seats/snapshot/backfill', { includeToday: true }
-  )
+  const r = await fx.call('POST', '/api/seats/snapshot/backfill', { includeToday: true })
   assert.equal(r.status, 500, '补存中途失败应回 500（实际 ' + r.status + '：' + r.text.slice(0, 200) + '）')
 
   const left = conn.prepare("SELECT COUNT(*) AS c FROM domain_history WHERE domain = 'seat'").get().c
@@ -166,7 +73,7 @@ test('seats 的 snapshot/backfill：写循环中途失败不能留下半截快�
 })
 
 test('groupManage 的 dimensions/move：排序更新中途失败不能改坏已有排序', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   // 预置 3 个维度（第一个是内置默认维度）—— ensureDefaultDim 因此不会写。
   //
   // ⚠️ sort_order 故意用 5 / 7 / 9（不从 1 开始）：move 是「交换相邻两个」，
@@ -181,13 +88,9 @@ test('groupManage 的 dimensions/move：排序更新中途失败不能改坏已�
   ins.run('默认维度', 1, 5)
   ins.run('维度甲', 0, 7)
   ins.run('维度乙', 0, 9)
-  active.conn = conn
-  active.state = { writes: 0, failAt: 2 }
+  fx.inject({ failAt: 2 })
 
-  const r = await callApi(
-    [['/api/group-manage', groupManageRouter]],
-    'POST', '/api/group-manage/dimensions/move', { id: 3, direction: 'up' }
-  )
+  const r = await fx.call('POST', '/api/group-manage/dimensions/move', { id: 3, direction: 'up' })
   assert.ok(r.status >= 400, '排序更新中途失败应报错（实际 ' + r.status + '）')
 
   const rows = conn.prepare('SELECT name, sort_order FROM group_dimensions ORDER BY id').all()
@@ -198,7 +101,7 @@ test('groupManage 的 dimensions/move：排序更新中途失败不能改坏已�
 })
 
 test('groupManage 的 dimensions/move：排序失败时不能把「新建默认维度」留在库里', async () => {
-  const conn = freshDb()
+  const conn = fx.reset()
   // 只预置 2 个普通维度，**故意不留内置默认维度**：
   // ensureDefaultDim 会先写一条默认维度（排序之前）。它与排序不在同一事务时，
   // 排序失败后这条默认维度会留在库里 —— 一个「移动排序」的动作凭空多出一个维度。
@@ -208,16 +111,34 @@ test('groupManage 的 dimensions/move：排序失败时不能把「新建默认�
   )
   ins.run('维度甲', 1)
   ins.run('维度乙', 2)
-  active.conn = conn
   // 第 1 次写 = ensureDefaultDim 建默认维度；第 2 次写 = 排序 UPDATE → 在这里失败
-  active.state = { writes: 0, failAt: 2 }
+  fx.inject({ failAt: 2 })
 
-  const r = await callApi(
-    [['/api/group-manage', groupManageRouter]],
-    'POST', '/api/group-manage/dimensions/move', { id: 1, direction: 'down' }
-  )
+  const r = await fx.call('POST', '/api/group-manage/dimensions/move', { id: 1, direction: 'down' })
   assert.ok(r.status >= 400, '排序更新中途失败应报错（实际 ' + r.status + '）')
 
   const count = conn.prepare('SELECT COUNT(*) AS c FROM group_dimensions').get().c
   assert.equal(count, 2, '排序失败后不能凭空多出「内置默认维度」（实际 ' + count + ' 个维度）')
+})
+
+// ---------------------------------------------------------------------------
+// 夹具契约：注入的故障不能漏到下一个用例
+// ---------------------------------------------------------------------------
+
+// 这条测的不是业务，是夹具本身：reset() 必须把写入计数与注入规则一起清掉。
+// 不清的话，下一个用例「明明没注入」却会在第 N 次写时莫名抛错 —— 排查成本极高
+// （症状是「业务代码偶发 500」，而实际来源是上一个用例留下的状态）。
+test('夹具契约：reset() 必须清掉上一次注入的故障', () => {
+  const { db } = require('../../student-backend/db')
+  const bump = (n) => db.prepare('UPDATE semesters SET name = ? WHERE id = 999').run(n)
+
+  fx.reset()
+  fx.inject({ failAt: 3 })
+  bump('a') // 第 1 次写，未到期
+  bump('b') // 第 2 次写，未到期
+  fx.reset() // 换库，同时必须把计数清零
+  assert.doesNotThrow(
+    () => bump('c'),
+    'reset() 之后不应再带着上一个用例的故障（第 3 次写被注入的 failAt 命中）'
+  )
 })

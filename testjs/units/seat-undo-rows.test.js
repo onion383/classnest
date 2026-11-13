@@ -12,44 +12,19 @@
 // 手法与 seat-types.test.js 一致：真内存库 + 真 schema + 真 store.setDoc。
 // run-units 每个测试文件独立子进程，替换 db.js 导出不会污染别人。
 // =========================================================================
-const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-// db.js 会连带 require dbManager（需要主密钥与数据目录）
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(require('node:os').tmpdir(), 'seat-undo-rows-' + process.pid)
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-// ---------- 把 db.js 的 db 导出换成「当前用例的内存库」（必须在 require 执行器之前）----------
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-}
+// 夹具已装好 db.js / dbManager 的 stub，执行器与 slotStore 必须在它之后 require
+const fx = createBackendDb({ label: 'seat-undo-rows' })
 
 const { executors } = require('../../student-backend/routes/undo/undo.executors')
 const store = require('../../student-backend/services/slotStore')
 
 function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
-  return conn
+  return fx.reset()
 }
 
 // 座位表现在是「逻辑表 → slotStore」，直接走 store 写入，与路由同一入口

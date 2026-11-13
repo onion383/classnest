@@ -17,47 +17,22 @@ const path = require('node:path')
 const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(require('node:os').tmpdir(), 'seat-undo-unit-' + process.pid)
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-  getFields: (tableName) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(tableName),
-}
+const fx = createBackendDb({ label: 'seat-undo-geometry' })
 
 const { executors } = require('../../student-backend/routes/undo/undo.executors')
 
 function freshDb({ rows = 2, cols = 2, seats, types } = {}) {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   const zeros = Array.from({ length: rows }, () => Array(cols).fill(null))
   conn.prepare("UPDATE seat_slots SET rows = ?, cols = ?, seats = ?, types = ? WHERE kind = 'current'")
     .run(rows, cols, JSON.stringify(seats ?? zeros), JSON.stringify(types ?? Array.from({ length: rows }, () => Array(cols).fill(0))))
   return conn
 }
 function current() {
-  const row = active.conn.prepare("SELECT rows, cols, seats, types FROM seat_slots WHERE kind = 'current'").get()
+  const row = fx.conn.prepare("SELECT rows, cols, seats, types FROM seat_slots WHERE kind = 'current'").get()
   return { rows: row.rows, cols: row.cols, seats: JSON.parse(row.seats), types: JSON.parse(row.types) }
 }
 // 核心不变量：矩阵形状必须与几何计数一致（三者对齐才算撤对了）
@@ -81,7 +56,7 @@ test('P0-3 复现：只带 rows、漏了 cols 时，几何仍按 types 推回（
     oldValue: { seats: [[null, null], [null, null]], types: [[0, 0], [0, 0]] },
     oldRows: 2,
   })
-  const c = assertGeometryAligned(active.conn)
+  const c = assertGeometryAligned(fx.conn)
   assert.equal(c.rows, 2)
   assert.equal(c.cols, 2, 'cols 必须跟着 types 回到 2；跟着 undefined 跳过就是这个 P0')
 })
@@ -94,7 +69,7 @@ test('显式四元组与 types 冲突时，以 types 为准', () => {
     oldRows: 2,
     oldCols: 9, // 前端抄错的旧值，不该被采信
   })
-  assert.equal(assertGeometryAligned(active.conn).cols, 2)
+  assert.equal(assertGeometryAligned(fx.conn).cols, 2)
 })
 
 test('重做同样按 types 推回几何（redo 走的是 newValue/newCols）', () => {
@@ -105,7 +80,7 @@ test('重做同样按 types 推回几何（redo 走的是 newValue/newCols）', 
     newRows: 2,
     // 同样漏 newCols
   })
-  const c = assertGeometryAligned(active.conn)
+  const c = assertGeometryAligned(fx.conn)
   assert.equal(c.cols, 3)
 })
 
@@ -163,7 +138,7 @@ test('非座位表（课程表/值日表）不做布局卡控 —— 不误伤',
 
 test('座位模板也按自己的布局卡（不共用当前表的 rows/cols）', () => {
   freshDb({ rows: 2, cols: 2 })
-  active.conn.prepare("UPDATE seat_slots SET rows = 5, cols = 5, types = ? WHERE kind = 'template'")
+  fx.conn.prepare("UPDATE seat_slots SET rows = 5, cols = 5, types = ? WHERE kind = 'template'")
     .run(JSON.stringify(Array.from({ length: 5 }, () => Array(5).fill(0))))
   assert.equal(executors.grid_cell.validate({ table: 'seat_template', row: 4, col: 4 }), null, '模板 5×5 里第 5 行第 5 列是合法坐标')
   assert.match(executors.grid_cell.validate({ table: 'seat_layout', row: 4, col: 0 }), /布局已变更/, '当前表还是 2 行，不能跟着模板放宽')

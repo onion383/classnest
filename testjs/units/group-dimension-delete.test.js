@@ -14,62 +14,18 @@ const path = require('node:path')
 const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(require('node:os').tmpdir(), 'group-dim-unit-' + process.pid)
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-// db.js 的 db 换成「当前用例的内存库」（必须在 require 路由之前）
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-  getFields: (tableName) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(tableName),
-}
-
-const groupRouter = require('../../student-backend/routes/groupManage')
+const fx = createBackendDb({ label: 'group-dim' })
 const { executors } = require('../../student-backend/routes/undo/undo.executors')
 
-async function callApi(method, urlPath) {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/group-manage', groupRouter)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, { method })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch (_) { /* 非 JSON 也是信息 */ }
-    return { status: res.status, text, json }
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
-  }
-}
+test.before(() => fx.mount('/api/group-manage', 'student-backend/routes/groupManage.js'))
+test.after(() => fx.close())
 
 // 三个维度：1 默认、2 待删、3 最后一个。排序 1/2/3。
 function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   conn.exec(`
     INSERT INTO group_dimensions (id, name, is_default, sort_order) VALUES (1, '宿舍组', 1, 1);
     INSERT INTO group_dimensions (id, name, is_default, sort_order) VALUES (2, '学习小组', 0, 2);
@@ -93,7 +49,7 @@ const sortMap = (conn) => Object.fromEntries(
 // ---------------------------------------------------------------------------
 test('Q2-08 复现：删维度会连带小组/成员并重排剩余维度，快照必须四段齐全', async () => {
   const conn = freshDb()
-  const res = await callApi('DELETE', '/api/group-manage/dimensions/2')
+  const res = await fx.call('DELETE', '/api/group-manage/dimensions/2')
 
   assert.equal(res.status, 200)
   assert.equal(count(conn, 'group_dimensions', 'WHERE id = 2'), 0)
@@ -113,7 +69,7 @@ test('Q2-08 复现：删维度会连带小组/成员并重排剩余维度，快�
 
 test('撤销：一个 group_dimension_delete 命令恢复维度/小组/成员/排序', async () => {
   const conn = freshDb()
-  const { json } = await callApi('DELETE', '/api/group-manage/dimensions/2')
+  const { json } = await fx.call('DELETE', '/api/group-manage/dimensions/2')
 
   executors.group_dimension_delete.undo(json.removed)
 
@@ -126,7 +82,7 @@ test('撤销：一个 group_dimension_delete 命令恢复维度/小组/成员/�
 
 test('重做：同一条命令再次删除并重排剩余维度', async () => {
   const conn = freshDb()
-  const { json } = await callApi('DELETE', '/api/group-manage/dimensions/2')
+  const { json } = await fx.call('DELETE', '/api/group-manage/dimensions/2')
   executors.group_dimension_delete.undo(json.removed)
 
   executors.group_dimension_delete.redo(json.removed)
@@ -139,7 +95,7 @@ test('重做：同一条命令再次删除并重排剩余维度', async () => {
 
 test('删除中间维度后撤销：其余维度顺序不被永久改变（排序快照生效）', async () => {
   const conn = freshDb()
-  const { json } = await callApi('DELETE', '/api/group-manage/dimensions/2')
+  const { json } = await fx.call('DELETE', '/api/group-manage/dimensions/2')
   // 删除后如果用户又移动过排序，撤销仍按删除前的快照还原三分项
   assert.deepEqual(sortMap(conn), { 1: 1, 3: 2 })
 

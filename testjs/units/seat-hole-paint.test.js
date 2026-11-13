@@ -15,73 +15,25 @@ const path = require('node:path')
 const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 const { pathToFileURL } = require('node:url')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(require('node:os').tmpdir(), 'seat-hole-unit-' + process.pid)
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-// ---------- db.js 的 db 换成「当前用例的内存库」（必须在 require 路由之前）----------
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-  getFields: (tableName) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(tableName),
-}
-
-const seatsRouter = require('../../student-backend/routes/seats')
+const fx = createBackendDb({ label: 'seat-hole' })
 const { executors } = require('../../student-backend/routes/undo/undo.executors')
 
 const GEOM = pathToFileURL(path.join(ROOT, 'student-frontend/src/composables/useSeatGrid.geometry.js')).href
 const geom = () => import(GEOM)
 
-async function callApi(method, urlPath, body) {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/seats', seatsRouter)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch (_) { /* Express 错误页不是 JSON，也是信息 */ }
-    return { status: res.status, text, json }
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
-  }
-}
+test.before(() => fx.mount('/api/seats', 'student-backend/routes/seats.js'))
+test.after(() => fx.close())
 
 function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   return conn
 }
 function seedStudents(n) {
-  const stmt = active.conn.prepare(
+  const stmt = fx.conn.prepare(
     "INSERT INTO students (position, 学号, 年级, 班级, 姓名, 年龄, 家长联系电话, 备注) VALUES (?,?,?,?,?,?,?,?)"
   )
   for (let i = 1; i <= n; i++) stmt.run(i, String(i).padStart(3, '0'), '初二', '3班', `学生${i}`, 14, '1', '')
@@ -148,26 +100,26 @@ const EMPTY = Array.from({ length: ROWS }, () => Array(COLS).fill(null))
 
 test('PUT 能存下空位（types=2），GET 原样回来', async () => {
   freshDb()
-  const put = await callApi('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ONE_HOLE })
+  const put = await fx.call('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ONE_HOLE })
   assert.equal(put.status, 200, put.text.slice(0, 200))
-  const got = await callApi('GET', '/api/seats')
+  const got = await fx.call('GET', '/api/seats')
   assert.deepEqual(got.json.types, ONE_HOLE)
 })
 
 test('把座位改少到坐不下时拒绝（9.1），且文案说清差几个', async () => {
   freshDb()
   seedStudents(4) // 4 个学生、4 个座位
-  const ok = await callApi('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ALL_SEAT })
+  const ok = await fx.call('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ALL_SEAT })
   assert.equal(ok.status, 200, ok.text.slice(0, 200))
 
   // 挖 1 个洞 → 可用 3 个、学生 4 人、比原来更少 → 必须拦
-  const bad = await callApi('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ONE_HOLE })
+  const bad = await fx.call('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ONE_HOLE })
   assert.ok(bad.status >= 400, '应拒绝，实际 ' + bad.status + '：' + bad.text.slice(0, 160))
   assert.match(bad.json.error, /还差 1 个座位/)
 
   // 学生减到 3 人后，同一个布局（可用 3）就合法了 —— 说明拦的是「这次改少了」，不是「有洞」
-  active.conn.prepare('DELETE FROM students WHERE id = 4').run()
-  const again = await callApi('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ONE_HOLE })
+  fx.conn.prepare('DELETE FROM students WHERE id = 4').run()
+  const again = await fx.call('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ONE_HOLE })
   assert.equal(again.status, 200, again.text.slice(0, 200))
 })
 
@@ -175,13 +127,13 @@ test('历史库里本来就坐不下时，不拦「没把座位改少」的保�
   freshDb()
   // 先按 2 个座位建立布局，随后名册涨到 5 人 —— 历史遗留的「坐不下」
   seedStudents(2)
-  await callApi('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ALL_SEAT })
+  await fx.call('PUT', '/api/seats', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ALL_SEAT })
   seedStudents(5)
-  active.conn.prepare('DELETE FROM students WHERE id IN (3,4,5)').run()
+  fx.conn.prepare('DELETE FROM students WHERE id IN (3,4,5)').run()
   seedStudents(5) // 重新种 5 个（id 复用从 1 开始，覆盖成 5 人）
 
   // 改一格座位（可用数没变少）：不能被容量守卫卡住，否则用户连挪个人都存不进去
-  const put = await callApi('PUT', '/api/seats', {
+  const put = await fx.call('PUT', '/api/seats', {
     mode: 'single', rows: ROWS, cols: COLS,
     seats: [[null, null], [null, null]], types: ALL_SEAT,
   })
@@ -191,9 +143,9 @@ test('历史库里本来就坐不下时，不拦「没把座位改少」的保�
 test('座位模板不受人数约束（模板是布局样板，不是本班座位）', async () => {
   freshDb()
   seedStudents(4)
-  const put = await callApi('PUT', '/api/seats/master', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ONE_HOLE })
+  const put = await fx.call('PUT', '/api/seats/master', { mode: 'single', rows: ROWS, cols: COLS, seats: EMPTY, types: ONE_HOLE })
   assert.equal(put.status, 200, put.text.slice(0, 200))
-  const got = await callApi('GET', '/api/seats/master')
+  const got = await fx.call('GET', '/api/seats/master')
   assert.deepEqual(got.json.types, ONE_HOLE)
 })
 
@@ -204,25 +156,25 @@ test('撤销「设置空位」会把洞一起撤掉（grid_snapshot 带 types）
   freshDb()
   const before = { seats: [[null, null], [null, null]], types: ALL_SEAT }
   const after = { seats: [[null, null], [null, null]], types: ONE_HOLE }
-  active.conn.prepare("UPDATE seat_slots SET seats = ?, types = ? WHERE kind = 'current'")
+  fx.conn.prepare("UPDATE seat_slots SET seats = ?, types = ? WHERE kind = 'current'")
     .run(JSON.stringify(after.seats), JSON.stringify(after.types))
 
   executors.grid_snapshot.undo({ table: 'seat_layout', oldValue: before })
-  const row = active.conn.prepare("SELECT seats, types FROM seat_slots WHERE kind = 'current'").get()
+  const row = fx.conn.prepare("SELECT seats, types FROM seat_slots WHERE kind = 'current'").get()
   assert.deepEqual(JSON.parse(row.types), ALL_SEAT, '只写 seats 的话洞会留下 → 人和洞错位')
   assert.deepEqual(JSON.parse(row.seats), before.seats)
 
   executors.grid_snapshot.redo({ table: 'seat_layout', newValue: after })
-  const row2 = active.conn.prepare("SELECT types FROM seat_slots WHERE kind = 'current'").get()
+  const row2 = fx.conn.prepare("SELECT types FROM seat_slots WHERE kind = 'current'").get()
   assert.deepEqual(JSON.parse(row2.types), ONE_HOLE, '重做要能把洞再挖回去')
 })
 
 test('老格式撤销记录（纯数组 seats）仍然可用 —— 历史记录不必迁移', async () => {
   freshDb()
-  active.conn.prepare("UPDATE seat_slots SET seats = ?, types = ? WHERE kind = 'current'")
+  fx.conn.prepare("UPDATE seat_slots SET seats = ?, types = ? WHERE kind = 'current'")
     .run(JSON.stringify([[1, null], [null, null]]), JSON.stringify(ALL_SEAT))
   executors.grid_snapshot.undo({ table: 'seat_layout', oldValue: [[null, null], [null, null]] })
-  const row = active.conn.prepare("SELECT seats, types FROM seat_slots WHERE kind = 'current'").get()
+  const row = fx.conn.prepare("SELECT seats, types FROM seat_slots WHERE kind = 'current'").get()
   assert.deepEqual(JSON.parse(row.seats), [[null, null], [null, null]])
   assert.deepEqual(JSON.parse(row.types), ALL_SEAT, '老格式不带 types，几何应保持原样不被清空')
 })

@@ -9,35 +9,14 @@
 //   ③ scope=today 只返回「请假中」+「今天已返校」，昨天的已返校不能混进来；
 //   ④ 不带 date 时退化为「只看请假中」（不猜日期）。
 // =========================================================================
-const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
-const fs = require('node:fs')
-const os = require('node:os')
-
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'leaves-paging-test-key'
-process.env.DATA_DIR = process.env.DATA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'leaves-paging-'))
-
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
-const { initSchema } = require('../../student-backend/schema/schema')
 const { localDateStr } = require('../../student-backend/utils/date')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-const conn = new Database(':memory:')
-initSchema(conn)
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [] }
-// db.js 的 db 是 Proxy，转发到 dbManager.current()；原地改属性才能被它看到
-const dbmPath = require.resolve(path.join(ROOT, 'student-backend/dbManager/dbManager.js'))
-require(dbmPath).current = () => conn
-
-const leaves = require('../../student-backend/routes/leaves')
+// 公共夹具：内存库 + db.js Proxy / dbManager.current 的进程级 stub
+const fx = createBackendDb({ label: 'leaves-paging' })
+const conn = fx.conn
 
 const TODAY = localDateStr()
 const YESTERDAY = (() => {
@@ -60,16 +39,11 @@ conn.transaction(() => {
   for (let i = 0; i < 2; i++) ins.run(null, `昨天返校${i}`, '事假', `${YESTERDAY} 08:00`, `${YESTERDAY} 12:00`, '已返校', `${YESTERDAY} 11:30`, '', 300 + i)
 })()
 
-let server
 let base
 test.before(async () => {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/leaves', leaves)
-  await new Promise((r) => { server = app.listen(0, r) })
-  base = `http://127.0.0.1:${server.address().port}/api/leaves`
+  base = await fx.mount('/api/leaves', 'student-backend/routes/leaves.js')
 })
-test.after(() => { try { server.close() } catch (_) { /* 已关闭 */ } })
+test.after(() => fx.close())
 
 const get = async (qs = '') => (await fetch(base + qs)).json()
 

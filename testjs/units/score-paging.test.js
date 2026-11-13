@@ -9,32 +9,14 @@
 //   ③ source 过滤与前端旧口径一致：'group' 只看小组，'personal' 含历史 source 为空的行；
 //   ④ dashboard 改 SQL 聚合后，Top4 仍与「全量 + filter/sort/slice」旧逻辑逐项一致。
 // =========================================================================
-const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
-
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-
-// 必须在 require 任何 student-backend 模块之前设好：dbManager 在模块顶层就校验主密钥
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'score-paging-test-key'
-process.env.DATA_DIR = process.env.DATA_DIR || require('node:fs').mkdtempSync(path.join(require('node:os').tmpdir(), 'score-paging-'))
-
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
-const { initSchema } = require('../../student-backend/schema/schema')
 const { localDateStr } = require('../../student-backend/utils/date')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-const conn = new Database(':memory:')
-initSchema(conn)
-
-// 路由文件通过 db.js 取连接：用内存库替换掉真实文件库（与 dashboard-summary.test.js 同一手法）
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn }
-
-const scores = require('../../student-backend/routes/scores')
+// 公共夹具会在 require 任何 student-backend 模块之前设好主密钥与 DATA_DIR
+const fx = createBackendDb({ label: 'score-paging' })
+const conn = fx.conn
 
 const TODAY = localDateStr()
 const ins = conn.prepare(
@@ -60,16 +42,11 @@ const seed = () => {
 }
 seed()
 
-let server
 let base
 test.before(async () => {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/scores', scores)
-  await new Promise((r) => { server = app.listen(0, r) })
-  base = `http://127.0.0.1:${server.address().port}/api/scores`
+  base = await fx.mount('/api/scores', 'student-backend/routes/scores.js')
 })
-test.after(() => { try { server.close() } catch (_) { /* 已关闭 */ } })
+test.after(() => fx.close())
 
 const get = async (qs = '') => (await fetch(base + qs)).json()
 
@@ -164,7 +141,7 @@ test('dashboard 聚合：Top4 与「全量 + filter/sort/slice」旧逻辑逐项
       score: s['类型'] === '扣分' ? -Number(s['分值'] || 0) : Number(s['分值'] || 0),
     }))
 
-  const agg = scores.dashboardSummary(TODAY)
+  const agg = fx.router.dashboardSummary(TODAY)
   const now = agg.top.map((s) => ({
     name: s['姓名'] || s.group_name || '未知',
     score: s['类型'] === '扣分' ? -Number(s['分值'] || 0) : Number(s['分值'] || 0),

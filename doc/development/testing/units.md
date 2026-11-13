@@ -118,7 +118,7 @@ classnest/
         ├── sweep-fixes-b19.test.js  # 批 19 基础组件与前端工具的回归（表驱动 + 真跑源码）：①写请求重发守卫的默认值必须只放…
         ├── sweep-fixes.test.js  # 模式扫描批的行为回归（表驱动，一个文件覆盖一批同款修法）：①日期拼接收口 —— 后端 4 处…
         ├── test-assets.test.js  # 测试资产自身的回归（批 19 B13 5 条 + B14 8 条）：这些修的是测试与工具自己…
-        ├── thumb-batch.test.js  # 缩略图批量：失败与「服务端确实没这张」语义分离（失败不写状态）、网络恢复后自动拿到 blob
+        ├── thumb-cache.test.js  # 缩略图缓存三层（合并自 thumb-batch / thumb-cache-policy / thumb-idle）：A 淘汰策略纯函数、B 批量接口失败与「服务端没这张」语义分离（失败不写状态、网络恢复自动拿到 blob）、C 空闲 2 秒收缩集成
         ├── token-renewal.test.js  # 滑动续期「换代即作废」（X2-08）：响应合法，唯一线索是「发请求时是哪一代」；代次不符一律…
         ├── undo-batch-coverage.test.js  # 一次动作改多行必须整批可撤（Q2-04 / Q2-05 / Q2-06）：row_reord…
         ├── undo-recorder.test.js  # 撤销登记只能有一个入口（Q2-10）：失败必须弱提示、不许 .catch(() => {})…
@@ -138,8 +138,9 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），121 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），148 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
+- **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
 
 ---
@@ -171,7 +172,7 @@ classnest/
 | [`client-cache.test.js`](../../../testjs/units/client-cache.test.js) | 用户作用域缓存：旧令牌必须失效、某个清理函数抛错不能拖垮登出、两个缓存模块确实登记了清理函数 | 纯函数 |
 | [`note-curve.test.js`](../../../testjs/units/note-curve.test.js) | 荧光笔笔锋：按点分组描边后线宽确有变化（旧实现整条路径只描一次，宽度被末端值压平 → 此断言在旧实现上必挂） | 纯函数 |
 | [`slug-scopes.test.js`](../../../testjs/units/slug-scopes.test.js) | 按库隔离状态底座行为契约：两库同号 id 互不覆盖、`totalSize()` 为各桶之和、`peek` 不建空桶、交错 `push` 后 `flush(A)` 只发 A 的条目（旧全局数组实现必挂）、达到 limit 自动发自己库、发送失败不残留、`clearAllForSlug` 只清该库 | 纯函数 |
-| [`thumb-batch.test.js`](../../../testjs/units/thumb-batch.test.js) | 缩略图批量：失败与「服务端确实没这张」语义分离（失败不写状态）、网络恢复后自动拿到 blob | 纯函数 |
+| [`thumb-cache.test.js`](../../../testjs/units/thumb-cache.test.js) | 缩略图缓存三层：淘汰策略按真 blob 数（含「几千个 miss 标记不许误撤 blob」回归）、批量接口失败与「服务端确实没这张」语义分离（失败不写状态）、空闲 2 秒主动收缩集成 | 纯函数 + Vite SSR（集成） |
 | [`refresh-virtual.test.js`](../../../testjs/units/refresh-virtual.test.js) | 虚拟相册刷新：按索引更新、补 EXIF/缩略图、源文件缺失保留行、幂等（9 项） | 需先 `claimScanTask`（否则 `waitWhilePaused` 误判取消） |
 | [`dbConnCache.test.js`](../../../testjs/units/dbConnCache.test.js) | 数据库连接 LRU：驱逐跳过在用连接、全部在用时的软超限/硬顶 | 内存连接桩 |
 | [`pathGuard.test.js`](../../../testjs/units/pathGuard.test.js) | 路径防护：绝对路径校验、系统保护目录/符号链接/junction 拦截、可执行扩展名拒绝、建议文件名压平 | 纯函数 |

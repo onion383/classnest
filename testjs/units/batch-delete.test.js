@@ -16,75 +16,50 @@ const fs = require('node:fs')
 const os = require('node:os')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-delete-'))
-process.env.DATA_DIR = tmp
-
-const { initSchema } = require('../../student-backend/schema/schema')
-const conn = new Database(':memory:')
-initSchema(conn)
 
 // 真实的 renumber（db.js 的实现依赖 currentDb()，这里换成同一语义的内存库版本）
 function renumber(tableName) {
-  const rows = conn.prepare(`SELECT id FROM ${tableName} ORDER BY position, id`).all()
-  const stmt = conn.prepare(`UPDATE ${tableName} SET position = ? WHERE id = ?`)
-  conn.transaction(() => rows.forEach((r, i) => stmt.run(i + 1, r.id)))()
+  const rows = fx.conn.prepare(`SELECT id FROM ${tableName} ORDER BY position, id`).all()
+  const stmt = fx.conn.prepare(`UPDATE ${tableName} SET position = ? WHERE id = ?`)
+  fx.conn.transaction(() => rows.forEach((r, i) => stmt.run(i + 1, r.id)))()
 }
 
-// 把 db.js 的导出换成内存库（与 data-export-tables.test.js 同一套写法），
-// 必须在 require 路由之前完成：路由在模块加载时就拿到了 db 引用。
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [], renumber }
-
+const fx = createBackendDb({ label: 'batch-delete', dataDir: tmp, extraDbExports: { renumber } })
+const conn = fx.conn
 const { createDynamicTableRouter } = require('../../student-backend/routes/dynamicTable')
 
-let server
-let base
 test.before(async () => {
   const names = ['张三', '李四', '王五', '赵六']
   names.forEach((n, i) => {
     conn.prepare('INSERT INTO students (姓名, position) VALUES (?, ?)').run(n, i + 1)
   })
-  const app = express()
-  app.use(express.json())
   // minCount=1：至少保留一条学生
-  app.use('/api/students', createDynamicTableRouter('students', { minCount: 1 }))
-  await new Promise((resolve) => { server = app.listen(0, resolve) })
-  base = `http://127.0.0.1:${server.address().port}`
+  await fx.mount('/api/students', createDynamicTableRouter('students', { minCount: 1 }))
 })
 
 test.after(() => {
-  server?.close()
-  try { conn.close() } catch (_) { /* 忽略 */ }
+  fx.close()
   try { fs.rmSync(tmp, { recursive: true, force: true }) } catch (_) { /* 忽略 */ }
 })
 
 const left = () => conn.prepare('SELECT id, position FROM students ORDER BY position').all()
-const post = (body) => fetch(`${base}/api/students/batch-delete`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
-})
+const post = (body) => fx.call('POST', '/batch-delete', body)
 
 test('一次 POST 删 N 条，position 连续', async () => {
   const res = await post({ ids: [2, 4, 2] }) // 重复 id 去重
   assert.equal(res.status, 200)
-  assert.deepEqual(await res.json(), { message: '删除成功', deleted: 2 })
+  assert.deepEqual(res.json, { message: '删除成功', deleted: 2 })
   assert.deepEqual(left(), [{ id: 1, position: 1 }, { id: 3, position: 2 }])
 })
 
 test('任一 id 不存在 → 整批回滚，合法的那条也不删', async () => {
   const res = await post({ ids: [1, 999] })
   assert.equal(res.status, 400)
-  const body = await res.json()
+  const body = res.json
   assert.match(body.error, /记录不存在/)
   assert.deepEqual(left(), [{ id: 1, position: 1 }, { id: 3, position: 2 }], '不能出现半截删除')
 })
@@ -92,12 +67,12 @@ test('任一 id 不存在 → 整批回滚，合法的那条也不删', async ()
 test('minCount 保护：删完低于下限 → 一行不掉', async () => {
   const res = await post({ ids: [1, 3] })
   assert.equal(res.status, 400)
-  assert.match((await res.json()).error, /至少需要保留一条记录/)
+  assert.match((res.json).error, /至少需要保留一条记录/)
   assert.deepEqual(left(), [{ id: 1, position: 1 }, { id: 3, position: 2 }])
 })
 
 test('单条 DELETE 仍保留给行内删除', async () => {
-  const res = await fetch(`${base}/api/students/1`, { method: 'DELETE' })
+  const res = await fx.call('DELETE', '/1')
   assert.equal(res.status, 200)
   assert.deepEqual(left(), [{ id: 3, position: 1 }], '剩余行位置要重排为 1')
 })
@@ -105,7 +80,7 @@ test('单条 DELETE 仍保留给行内删除', async () => {
 test('缺少 ids 直接拒绝', async () => {
   const res = await post({})
   assert.equal(res.status, 400)
-  assert.match((await res.json()).error, /缺少要删除的记录/)
+  assert.match((res.json).error, /缺少要删除的记录/)
   const res2 = await post({ ids: ['abc', 0, -1] })
   assert.equal(res2.status, 400)
 })

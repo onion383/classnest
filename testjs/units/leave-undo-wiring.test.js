@@ -12,32 +12,10 @@ const path = require('node:path')
 const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-  getFields: (tableName) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(tableName),
-}
+const fx = createBackendDb({ label: 'leave-undo' })
 
 const { executors } = require('../../student-backend/routes/undo/undo.executors')
 
@@ -47,9 +25,7 @@ const LEAVE = {
 }
 
 function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   conn.prepare('INSERT INTO students (id, position, 姓名) VALUES (1, 1, ?)').run('张三')
   conn.prepare('INSERT INTO leave_records (id, student_id, 姓名, 状态, 开始时间, 结束时间) VALUES (1, 1, ?, ?, ?, ?)')
     .run(LEAVE.姓名, LEAVE.状态, LEAVE.开始时间, LEAVE.结束时间)

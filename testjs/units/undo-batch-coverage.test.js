@@ -13,46 +13,27 @@ const path = require('node:path')
 const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
+// renumber 走 dbManager.currentDb()（进程级连接），夹具已把它指到当前内存库；
+// 这里只保留「按 position 重排」这层业务语义，连接从夹具拿（fx 在同一模块内，调用时已赋值）。
+const fx = createBackendDb({
+  label: 'undo-batch',
+  extraDbExports: {
+    renumber: (tableName) => {
+      const conn = fx.conn
+      const rows = conn.prepare(`SELECT id FROM "${tableName}" ORDER BY position, id`).all()
+      const upd = conn.prepare(`UPDATE "${tableName}" SET position = ? WHERE id = ?`)
+      rows.forEach((r, i) => upd.run(i + 1, r.id))
     },
-  }),
-  getFields: (tableName) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(tableName),
-  // db.js 的 renumber 走 dbManager.currentDb()（进程级连接），测试里指向内存库
-  renumber: (tableName) => {
-    const rows = active.conn.prepare(`SELECT id FROM "${tableName}" ORDER BY position, id`).all()
-    const upd = active.conn.prepare(`UPDATE "${tableName}" SET position = ? WHERE id = ?`)
-    rows.forEach((r, i) => upd.run(i + 1, r.id))
   },
-}
+})
 
 const { executors } = require('../../student-backend/routes/undo/undo.executors')
 const tableService = require('../../student-backend/services/tableService')
 
 function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   return conn
 }
 

@@ -15,57 +15,39 @@ const fs = require('node:fs')
 const os = require('node:os')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'data-export-tables-'))
-process.env.DATA_DIR = tmp
-
-const { initSchema } = require('../../student-backend/schema/schema')
-const conn = new Database(':memory:')
-initSchema(conn)
-
-// 把 db.js 的 Proxy 换成内存库（与 undo-batch-coverage.test.js 同一套写法），
-// 必须在 require 路由之前完成：路由在模块加载时就拿到了 db 引用。
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [], renumber: () => {} }
-
-const router = require('../../student-backend/routes/dataExport')
+const fx = createBackendDb({
+  label: 'data-export-tables',
+  dataDir: tmp,
+  currentSlug: '@vacuumprobe',
+  extraDbExports: { renumber: () => {} },
+})
+const conn = fx.conn
 
 // SQL spy：记录路由执行期间真正下发的语句
 const seen = []
 const origPrepare = conn.prepare.bind(conn)
 conn.prepare = (sql) => { seen.push(String(sql)); return origPrepare(sql) }
 
-let server
-let base
 test.before(async () => {
   for (const n of ['张三', '李四', '王五']) conn.prepare('INSERT INTO students (姓名) VALUES (?)').run(n)
   for (const t of ['春游', '运动会']) conn.prepare('INSERT INTO activities (主题) VALUES (?)').run(t)
-  const app = express()
-  app.use(express.json())
-  app.use('/api/data', router)
-  await new Promise((resolve) => { server = app.listen(0, resolve) })
-  base = `http://127.0.0.1:${server.address().port}`
+  await fx.mount('/api/data', 'student-backend/routes/dataExport.js')
 })
 
 test.after(() => {
-  server?.close()
-  try { conn.close() } catch (_) { /* 忽略 */ }
+  fx.close()
   try { fs.rmSync(tmp, { recursive: true, force: true }) } catch (_) { /* 忽略 */ }
 })
 
 async function fetchTables() {
   seen.length = 0
-  const res = await fetch(`${base}/api/data/tables`)
+  const res = await fx.call('GET', '/api/data/tables')
   assert.equal(res.status, 200)
-  const body = await res.json()
+  const body = res.json
   return Object.fromEntries(body.tables.map((t) => [t.key, t.count]))
 }
 
@@ -92,4 +74,32 @@ test('所有「一行对应物理表一行」的表都配了 count', () => {
     .map((m) => m[1])
     .filter((key) => !derived.has(key) && !withCount.has(key))
   assert.deepEqual(missing, [], `以下表有物理表但没配 count：${missing.join(', ')}`)
+})
+
+// 「整理」= VACUUM：删除留下的空闲页必须真的被回收，且数据一条不少。
+// 用独立表造空洞，避免影响上面 students/activities 的计数断言。
+test('POST /vacuum 回收空闲页且数据不丢', async () => {
+  conn.exec('CREATE TABLE vacuum_probe (id INTEGER PRIMARY KEY, v TEXT)')
+  const ins = conn.prepare('INSERT INTO vacuum_probe (v) VALUES (?)')
+  conn.transaction(() => { for (let i = 0; i < 500; i++) ins.run('x'.repeat(300)) })()
+  conn.prepare('DELETE FROM vacuum_probe WHERE id > 10').run()
+
+  const before = Number(conn.pragma('freelist_count', { simple: true }))
+  assert.ok(before > 0, '前置条件：删行后应当留下空闲页')
+
+  const res = await fx.call('POST', '/api/data/vacuum')
+  assert.equal(res.status, 200)
+  const d = res.json.data
+  assert.equal(d.freelistBefore, before, '返回值要如实报告整理前的空闲页')
+  assert.equal(d.freelistAfter, 0, 'VACUUM 后 freelist 必须清零')
+  assert.ok(typeof d.durationMs === 'number' && d.durationMs >= 0)
+  assert.equal(conn.prepare('SELECT COUNT(*) AS n FROM vacuum_probe').get().n, 10, '数据不能丢')
+  assert.ok(Array.isArray(conn.pragma('integrity_check')) && conn.pragma('integrity_check')[0].integrity_check === 'ok')
+
+  // 已经没有空闲页时不能再跑一次全库重写（大库会白等几秒）：直接 noop 返回
+  const again = await fx.call('POST', '/api/data/vacuum')
+  assert.equal(again.status, 200)
+  assert.equal(again.json.data.noop, true, '无空闲页应直接返回 noop，不做 VACUUM')
+  assert.equal(again.json.data.freedBytes, 0)
+  assert.equal(again.json.data.freelistBefore, 0)
 })

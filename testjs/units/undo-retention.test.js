@@ -11,27 +11,13 @@
 const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 const fs = require('node:fs')
-const os = require('node:os')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'undo-retention-test-key'
-process.env.DATA_DIR = process.env.DATA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'undo-retention-'))
-
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const conn = new Database(':memory:')
-initSchema(conn)
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [] }
-const dbmPath = require.resolve(path.join(ROOT, 'student-backend/dbManager/dbManager.js'))
-require(dbmPath).current = () => conn
+// 只需要内存库（这个用例不挂 express），但 stub 必须和路由测试同源
+const fx = createBackendDb({ label: 'undo-retention' })
+const conn = fx.conn
+test.after(() => fx.close())
 
 const { pushRecord } = require('../../student-backend/routes/undo/undo.records')
 

@@ -11,65 +11,25 @@
 const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(require('node:os').tmpdir(), 'duty-save-unit-' + process.pid)
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_t, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-  getFields: (t) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(t),
-  // renumber 是从 db.js 里闭包导出、内部走 dbManager 绑定连接的：
-  // 不覆盖的话，建档时 insertRow 会因「未绑定数据库连接」失败 —— 那样测的就不是事务回滚了。
-  renumber: () => {},
-}
-
+// renumber 是从 db.js 里闭包导出、内部走 dbManager 绑定连接的：
+// 不覆盖的话，建档时 insertRow 会因「未绑定数据库连接」失败 —— 那样测的就不是事务回滚了。
+const fx = createBackendDb({ label: 'duty-save', extraDbExports: { renumber: () => {} } })
 const store = require('../../student-backend/services/slotStore')
-const dutyRouter = require('../../student-backend/routes/duty')
 
-async function callApi(body) {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/duty', dutyRouter)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((r) => server.once('listening', r))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/duty/save`, {
-      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-    })
-    const text = await res.text()
-    return { status: res.status, text }
-  } finally { await new Promise((r) => server.close(r)) }
-}
+test.before(() => fx.mount('/api/duty', 'student-backend/routes/duty.js'))
+test.after(() => fx.close())
+
+const callApi = (body) => fx.call('PUT', '/save', body)
 
 function fresh() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   conn.prepare("INSERT INTO students (position, 学号, 年级, 班级, 姓名, 年龄, 家长联系电话, 备注) VALUES (1,'001','初二','3班','张三',14,'1','')").run()
   return conn
 }
-const hasStudent = (name) => active.conn.prepare('SELECT COUNT(*) c FROM students WHERE 姓名 = ?').get(name).c > 0
+const hasStudent = (name) => fx.conn.prepare('SELECT COUNT(*) c FROM students WHERE 姓名 = ?').get(name).c > 0
 
 // schema 初始化时已种下「扫地 count=2」等项目，人数要跟设置对上，否则校验先拦
 const BODY = {
@@ -101,7 +61,7 @@ test('写入中途失败：值日表回滚，临时学生也不能留下', async
     store.setDoc = orig
   }
   assert.equal(hasStudent('新同学'), false, '名册里多出一个没排进值日的人 —— 就是 N2-06 要修的现象')
-  const cells = active.conn.prepare("SELECT cells FROM duty_slots WHERE kind = 'current'").get().cells
+  const cells = fx.conn.prepare("SELECT cells FROM duty_slots WHERE kind = 'current'").get().cells
   assert.equal(cells, '{}', '值日表本身也要回到原样')
 })
 

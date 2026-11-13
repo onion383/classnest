@@ -11,49 +11,20 @@
 //   ④ 正式名册有多个同名 → 409 + 候选，不替用户挑、也不建临时；
 //   ⑤ 空姓名保持原行为（student_id 留空），不能被解析器拦成 400。
 // =========================================================================
-const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
-const fs = require('node:fs')
-const os = require('node:os')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
+// 公共夹具同时把 db.js（Proxy）和 dbManager.current 指到内存库 ——
+// tableService 经由 provisionalStudents 建档走的正是 Proxy，少改一处就会打到真实库。
+const fx = createBackendDb({ label: 'score-provisional' })
+const conn = fx.conn
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'score-provisional-test-key'
-process.env.DATA_DIR = process.env.DATA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'score-prov-'))
-
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const conn = new Database(':memory:')
-initSchema(conn)
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [] }
-
-// db.js 的 db 是个 Proxy，转发到 dbManager.current()（AsyncLocalStorage 上下文）。
-// 有些服务（tableService 经由 provisionalStudents 建档）会走 Proxy 而不是被替换的 db，
-// 所以把 current 也指到内存库 —— 原地改属性，db.js 持有的引用才会看到。
-const dbmPath = require.resolve(path.join(ROOT, 'student-backend/dbManager/dbManager.js'))
-const dbm = require(dbmPath)
-dbm.current = () => conn
-
-const scores = require('../../student-backend/routes/scores')
-
-let server
 let base
 test.before(async () => {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/scores', scores)
-  await new Promise((r) => { server = app.listen(0, r) })
-  base = `http://127.0.0.1:${server.address().port}/api/scores`
+  base = await fx.mount('/api/scores', 'student-backend/routes/scores.js')
 })
-test.after(() => { try { server.close() } catch (_) { /* 已关闭 */ } })
+test.after(() => fx.close())
 
 const post = async (body) => {
   const res = await fetch(base, {

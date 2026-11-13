@@ -12,36 +12,15 @@
 //   ⑤ 全被排除 / 源相册不存在 → 400 / 404，不是静默建成空相册；
 //   ⑥ 老的 photos 数组路径仍然工作（别把逐张选弄坏了）。
 // =========================================================================
-const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
-const fs = require('node:fs')
-const os = require('node:os')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'album-virtual-all-test-key'
-process.env.DATA_DIR = process.env.DATA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'album-virtual-all-'))
-
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const conn = new Database(':memory:')
-initSchema(conn)
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDb = require(dbPath)
-require.cache[dbPath].exports = { ...realDb, db: conn, getFields: () => [] }
-const dbmPath = require.resolve(path.join(ROOT, 'student-backend/dbManager/dbManager.js'))
-const dbm = require(dbmPath)
-dbm.current = () => conn
-// 虚拟相册复制完会清源行的缩略图缓存（路径按 slug 推导），给个固定 slug 免得算出怪路径
-dbm.currentSlug = () => 'testslug'
-
-const album = require('../../student-backend/routes/album')
+// 公共夹具：内存库 + db.js Proxy / dbManager.current 的进程级 stub。
+// currentSlug 给固定值：虚拟相册复制完会清源行缩略图缓存（路径按 slug 推导），
+// 不给的话会算出怪路径。
+const fx = createBackendDb({ label: 'album-virtual-all', currentSlug: 'testslug' })
+const conn = fx.conn
 
 const FOLDER_ID = 1
 const VIRTUAL_ID = 2
@@ -64,16 +43,11 @@ conn.transaction(() => {
   }
 })()
 
-let server
 let base
 test.before(async () => {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/album', album)
-  await new Promise((r) => { server = app.listen(0, r) })
-  base = `http://127.0.0.1:${server.address().port}/api/album`
+  base = await fx.mount('/api/album', 'student-backend/routes/album.js')
 })
-test.after(() => { try { server.close() } catch (_) { /* 已关闭 */ } })
+test.after(() => fx.close())
 
 const post = async (body) => {
   const r = await fetch(base + '/', {

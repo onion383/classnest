@@ -181,3 +181,33 @@ test('[行为] B13-05 扫描器能抓到多行空 catch，且不把 .catch( 计�
   assert.strictEqual(('try { a() } catch (e) { b() }'.match(catchKeyword) || []).length, 1,
     '真正的 catch 块要计入')
 })
+
+// ---------------------------------------------------------------------------
+// 新增：后端路由测试的样板不许继续扩散
+//
+// 21 个历史测试文件各自抄了一遍「env 兜底 → 内存库 → 替换 db.js 的 Proxy →
+// express.listen(0)」的样板。已抽成 units/_db-express-fixture.cjs：
+//   · 第一批：今天新增的 7 个路由测试
+//   · 第二批：12 个旧文件（含 seat 系列、dashboard、批量删除等）改用夹具的
+//     reset()/call()/多路由挂载
+//   · 第三批：4 个 backend-* 数据层校验，靠新加的 faults:true / fx.inject()
+//     拿到「第 K 次写抛错」「按 SQL 匹配抛错」的注入能力
+//   · 第四批：最后 5 个只 require service 的文件（undo 系列 + 级联删除），
+//     只用夹具的 db 部分（fx.reset() / fx.conn，不 mount）
+// 基线已归零：往后新写的测试必须走公共夹具，自己再抄一份这里就会红。
+// ---------------------------------------------------------------------------
+test('[行为] 新增测试不许再抄一遍内存库 + db.js Proxy 样板', () => {
+  const unitsDir = path.join(ROOT, 'testjs', 'units')
+  const legacy = fs.readdirSync(unitsDir)
+    .filter((f) => f.endsWith('.test.js'))
+    .filter((f) => {
+      const src = fs.readFileSync(path.join(unitsDir, f), 'utf8')
+      return src.includes('require.cache[dbPath].exports') && !src.includes('_db-express-fixture')
+    })
+    .sort()
+  const LEGACY_BASELINE = 0
+  assert.ok(legacy.length <= LEGACY_BASELINE,
+    `重复样板的测试文件增至 ${legacy.length} 个（基线 ${LEGACY_BASELINE}）：${legacy.join(', ')}；新测试请用 _db-express-fixture.cjs`)
+  // 夹具自己也必须在，否则「接了夹具」这句话没有落点
+  assert.ok(fs.existsSync(path.join(unitsDir, '_db-express-fixture.cjs')), '公共夹具文件缺失')
+})

@@ -13,62 +13,20 @@ const path = require('node:path')
 const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(require('node:os').tmpdir(), 'album-merge-unit-' + process.pid)
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_target, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-  getFields: (tableName) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(tableName),
-}
-
-const albumRouter = require('../../student-backend/routes/album')
+const fx = createBackendDb({ label: 'album-merge' })
 const { executors } = require('../../student-backend/routes/undo/undo.executors')
 
-async function postMerge(body) {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/album', albumRouter)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/album/merge`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    return { status: res.status, json: await res.json() }
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
-  }
-}
+test.before(() => fx.mount('/api/album', 'student-backend/routes/album.js'))
+test.after(() => fx.close())
+
+const postMerge = (body) => fx.call('POST', '/merge', body)
 
 // 两个虚拟相册；第二个人里故意放一张与第一人**同一路径**的照片（合并时按 file_path 去重）
 function freshDb() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   conn.exec(`
     INSERT INTO albums (id, name, folder_path, kind, sort_order) VALUES (1, 'A', '', 'virtual', 1);
     INSERT INTO albums (id, name, folder_path, kind, sort_order) VALUES (2, 'B', '', 'virtual', 2);

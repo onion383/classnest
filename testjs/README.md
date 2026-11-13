@@ -55,6 +55,30 @@ npm run test:units        # node testjs/run-units.js（--only= / --skip= / --bai
 `createRequire(path.join(ROOT, 'student-backend/package.json'))` 解析，见 `backend.test.js`。
 前端是 ESM 的模块，用 `pathToFileURL` + 动态 `import()` 加载，见 `frontend.test.js`。
 
+**后端路由测试请用公共夹具 `units/_db-express-fixture.cjs`**，别再自己抄一遍
+「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」：
+
+```js
+const { createBackendDb } = require('./_db-express-fixture.cjs')
+const fx = createBackendDb({ label: 'xxx' })      // extraDbExports / dataDir 可选
+test.before(() => fx.mount('/api/xxx', 'student-backend/routes/xxx.js'))
+test.after(() => fx.close())
+// 每个用例要干净库：fx.reset()（db.js 的导出是转发到当前库的 Proxy，配合模块顶层
+// require 到的引用才不失效）；发请求：fx.call('POST', '/path', body) → { status, text, json }
+```
+
+要测「多步写中途失败」时加故障注入（只包 `run()`，`reset()` 会清掉注入）：
+
+```js
+const fx = createBackendDb({ label: 'xxx', faults: true })
+fx.inject({ failAt: 3 })                                  // 第 3 次写抛错
+fx.inject({ failMatch: /duty_slots/i, failAtMatch: 1 })    // 匹配该 SQL 的第 1 次写抛错
+```
+
+`failAt` 是绝对写入序号，业务多一次写就整体偏移；关心「哪张表写失败」时用 `failMatch`。
+
+`test-assets.test.js` 有一条守卫冻结了仍未迁移的旧样板文件数 —— 新写的测试必须走夹具。
+
 ## 2. 行为测试 `behavior/`
 
 ```bash

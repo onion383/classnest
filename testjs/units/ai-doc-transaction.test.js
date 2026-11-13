@@ -11,65 +11,22 @@ const path = require('node:path')
 const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
-const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
-const Database = backendRequire('better-sqlite3-multiple-ciphers')
-const express = backendRequire('express')
+const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
-process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(require('node:os').tmpdir(), 'ai-doc-unit-' + process.pid)
-
-const { initSchema } = require('../../student-backend/schema/schema')
-
-const dbPath = require.resolve(path.join(ROOT, 'student-backend/db.js'))
-const realDbModule = require(dbPath)
-const active = { conn: null }
-require.cache[dbPath].exports = {
-  ...realDbModule,
-  db: new Proxy({}, {
-    get(_t, prop) {
-      if (!active.conn) return undefined
-      const v = active.conn[prop]
-      return typeof v === 'function' ? v.bind(active.conn) : v
-    },
-  }),
-  getFields: (t) => active.conn.prepare(
-    'SELECT column_name AS name, data_type AS type FROM table_meta WHERE table_name = ? ORDER BY sort_order'
-  ).all(t),
-  renumber: () => {},
-}
-
+// renumber 在 db.js 里是闭包导出、内部走 dbManager 绑定的连接，单测里不需要
+const fx = createBackendDb({ label: 'ai-doc', extraDbExports: { renumber: () => {} } })
 const store = require('../../student-backend/services/slotStore')
-const aiDataRoutes = require('../../student-backend/routes/ai/ai.dataRoutes')
 
-async function callApi(body) {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/ai', aiDataRoutes)
-  const server = app.listen(0, '127.0.0.1')
-  await new Promise((r) => server.once('listening', r))
-  const port = server.address().port
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/ai/doc`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-    })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch (_) { /* 非 JSON 也留着 */ }
-    return { status: res.status, text, json }
-  } finally { await new Promise((r) => server.close(r)) }
-}
+test.before(() => fx.mount('/api/ai', 'student-backend/routes/ai/ai.dataRoutes.js'))
+test.after(() => fx.close())
 
 function fresh() {
-  const conn = new Database(':memory:')
-  initSchema(conn)
-  active.conn = conn
+  const conn = fx.reset()
   conn.prepare("INSERT INTO students (position, 学号, 年级, 班级, 姓名, 年龄, 家长联系电话, 备注) VALUES (1,'001','初二','3班','张三',14,'1','')").run()
   return conn
 }
-const hasStudent = (name) => active.conn.prepare('SELECT COUNT(*) c FROM students WHERE 姓名 = ?').get(name).c > 0
+const hasStudent = (name) => fx.conn.prepare('SELECT COUNT(*) c FROM students WHERE 姓名 = ?').get(name).c > 0
 
 const BODY = {
   table: 'duty_layout',
@@ -80,7 +37,7 @@ const BODY = {
 
 test('成功写入：新姓名被建档', async () => {
   fresh()
-  const r = await callApi(BODY)
+  const r = await fx.call('POST', '/doc', BODY)
   assert.equal(r.status, 200, r.text.slice(0, 300))
   assert.equal(hasStudent('新同学'), true)
 })
@@ -93,7 +50,7 @@ test('写入失败：已发生的建档必须一起回滚', async () => {
     return orig.call(this, name, patch)
   }
   try {
-    const r = await callApi(BODY)
+    const r = await fx.call('POST', '/doc', BODY)
     assert.equal(r.status, 400, `应返回 400，实际 ${r.status}：${r.text.slice(0, 200)}`)
     assert.match(r.text, /模拟写入失败/)
   } finally {

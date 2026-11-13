@@ -172,7 +172,7 @@ preload 层区分不了「谁在调」；主进程只能逐 handler 手写 `even
 
 ### 1. 主进程目录树
 
-`electron/main/` 下共 **30 个 `main.*.js`** 模块 + `main.js` 入口：
+`electron/main/` 下共 **31 个 `main.*.js`** 模块 + `main.js` 入口：
 
 ```
 electron/

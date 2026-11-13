@@ -81,6 +81,8 @@
     "perf-relaunch-app",
     "perf-gc",
     "perf-startup",
+    "perf-disk-usage",
+    "perf-logs-clear",
     "get-app-version",
     "update-check",
     "set-content-protection",

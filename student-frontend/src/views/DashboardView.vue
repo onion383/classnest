@@ -1,21 +1,18 @@
 <template>
   <div class="dashboard-page">
-    <!-- 数据尚未就绪：首页骨架屏（仅首页做骨架，其它页面直接渲染各自内容）。
-         `initialLoading` 只在首次加载期间为真，切回首页的后台刷新不会闪骨架。 -->
-    <template v-if="initialLoading">
-      <div class="skeleton-block sk-welcome"></div>
-      <div class="skeleton-block sk-info"></div>
-      <div class="card-grid">
-        <div v-for="i in 8" :key="i" class="skeleton-block sk-card"></div>
-      </div>
-    </template>
+    <!-- 首屏不用整页骨架屏：组件直接挂载，卡片外壳、标题、时钟常驻，
+         只有依赖 /api/dashboard 的数据区在 `initialLoading` 期间显示加载条。
+         「数据在路上」时占位页是否还挡着，由「性能 → 快速启动」开关决定（utils/fastStartup.js）。 -->
 
     <!-- 顶部信息行：左班级大字，右关键数据 -->
-    <div v-if="!initialLoading" class="welcome-card bg-surface shadow-md rounded-xl mb-6 px-6 py-5 border border-border">
+    <div class="welcome-card bg-surface shadow-md rounded-xl mb-6 px-6 py-5 border border-border">
       <div class="flex items-center justify-between gap-6">
         <div class="flex items-center gap-3 min-w-0">
           <IconGlyph name="home" :size="30" />
-          <h1 class="flex-1 min-w-0 text-2xl font-bold text-text truncate">
+          <!-- 班名来自独立的 /api/widget-settings/class-info，与首页聚合接口并行：
+               它先到就先显示，不必陪着 dashboard 一起等（单独用 classInfoLoading）。 -->
+          <h1 v-if="classInfoLoading" class="flex-1 min-w-0"><span class="skeleton-block sk-title"></span></h1>
+          <h1 v-else class="flex-1 min-w-0 text-2xl font-bold text-text truncate">
             <ClippedText v-if="classInfo.name" :text="classInfo.name" :max="18" title="班级名称" />
             <span v-else class="text-text-muted font-normal">请设置班级名称</span>
           </h1>
@@ -24,27 +21,32 @@
             <span class="gear-text">设置</span>
           </button>
         </div>
+        <!-- 右三个数字随聚合接口更新：未就绪时给等宽灰条，不显示 0（0 会被读成"班里没人"） -->
         <div class="flex items-center gap-4 shrink-0">
           <div class="stat-link flex items-baseline gap-1.5" @click="goTo('/students')" title="跳转：学生管理">
-            <span class="text-lg font-bold text-success leading-none">{{ attendance.present }}</span>
+            <span v-if="initialLoading" class="skeleton-block sk-num"></span>
+            <span v-else class="text-lg font-bold text-success leading-none">{{ attendance.present }}</span>
             <span class="text-xs text-text-muted">在校</span>
           </div>
           <div class="w-px h-6 bg-border"></div>
           <div class="stat-link flex items-baseline gap-1.5" @click="goTo('/leaves')" title="跳转：请假管理">
-            <span class="text-lg font-bold text-warning leading-none">{{ attendance.onLeave }}</span>
+            <span v-if="initialLoading" class="skeleton-block sk-num"></span>
+            <span v-else class="text-lg font-bold text-warning leading-none">{{ attendance.onLeave }}</span>
             <span class="text-xs text-text-muted">请假</span>
           </div>
           <div class="w-px h-6 bg-border"></div>
           <div class="stat-link flex items-baseline gap-1.5" @click="goTo('/schedule')" title="跳转：课程表">
-            <span class="text-lg font-bold text-primary leading-none">{{ todayCourseCount }}</span>
+            <span v-if="initialLoading" class="skeleton-block sk-num"></span>
+            <span v-else class="text-lg font-bold text-primary leading-none">{{ todayCourseCount }}</span>
             <span class="text-xs text-text-muted">课程</span>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- 班级信息大框：时间 / 班级班风 / 倒计时 三部分 -->
-    <div v-if="!initialLoading" class="class-info-card">
+    <!-- 班级信息大框：时间 / 班级班风 / 倒计时 三部分。
+         整块常驻——时钟是纯本地的，挂上就在走，没必要等任何接口。 -->
+    <div class="class-info-card">
       <!-- 第一部分：时钟（汇总小组件逐字符动画） -->
       <div class="info-part clock-part">
         <AnimatedClock
@@ -56,37 +58,60 @@
 
       <!-- 第二部分：班级信息（超长文本可点击查看完整） -->
       <div class="info-part class-part">
-        <div class="class-name"><ClippedText :text="classInfo.name" :max="12" title="班级名称" /></div>
-        <div class="class-lines">
-          <div class="class-line"><span class="line-label">班级口号：</span><ClippedText v-if="classInfo.motto" :text="classInfo.motto" title="班级口号" /><span v-else class="class-placeholder">请设置班级口号</span></div>
-          <div class="class-line"><span class="line-label">班风：</span><ClippedText v-if="classInfo.mottoStyle" :text="classInfo.mottoStyle" title="班风" /><span v-else class="class-placeholder">请设置班风</span></div>
-          <div class="class-line"><span class="line-label">学风：</span><ClippedText v-if="classInfo.xuefeng" :text="classInfo.xuefeng" title="学风" /><span v-else class="class-placeholder">请设置学风</span></div>
+        <div v-if="classInfoLoading" class="sk-lines">
+          <div class="skeleton-block sk-text sk-text-wide"></div>
+          <div class="skeleton-block sk-text"></div>
+          <div class="skeleton-block sk-text"></div>
+          <div class="skeleton-block sk-text"></div>
         </div>
+        <template v-else>
+          <div class="class-name"><ClippedText :text="classInfo.name" :max="12" title="班级名称" /></div>
+          <div class="class-lines">
+            <div class="class-line"><span class="line-label">班级口号：</span><ClippedText v-if="classInfo.motto" :text="classInfo.motto" title="班级口号" /><span v-else class="class-placeholder">请设置班级口号</span></div>
+            <div class="class-line"><span class="line-label">班风：</span><ClippedText v-if="classInfo.mottoStyle" :text="classInfo.mottoStyle" title="班风" /><span v-else class="class-placeholder">请设置班风</span></div>
+            <div class="class-line"><span class="line-label">学风：</span><ClippedText v-if="classInfo.xuefeng" :text="classInfo.xuefeng" title="学风" /><span v-else class="class-placeholder">请设置学风</span></div>
+          </div>
+        </template>
       </div>
       <div class="info-divider"></div>
 
       <!-- 第三部分：倒计时（大字排版，数字放大） -->
       <div class="info-part countdown-part">
-        <template v-if="nearestCountdown">
-          <div class="cd-top">距离 <span class="cd-item-name">{{ nearestCountdown.名称 }}</span></div>
-          <div class="cd-bottom">还有 <span class="cd-num tabular-nums">{{ nearestCountdown.days }}</span> 天</div>
+        <template v-if="initialLoading">
+          <div class="sk-lines">
+            <div class="skeleton-block sk-text"></div>
+            <div class="skeleton-block sk-text"></div>
+          </div>
+          <div class="skeleton-block sk-btn"></div>
         </template>
-        <div v-else class="countdown-empty">暂无倒计时</div>
-        <!-- 与下方 7 张卡片同一套入口：空态「去XX」、有数据「转到XX页面」。
-             倒计时没有独立路由，管理入口在活动页的倒计时页签（?tab=countdown）。 -->
-        <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/activities?tab=countdown')">
-          {{ nearestCountdown ? '转到倒计时页面' : '去添加倒计时' }}
-        </button>
+        <template v-else>
+          <template v-if="nearestCountdown">
+            <div class="cd-top">距离 <span class="cd-item-name">{{ nearestCountdown.名称 }}</span></div>
+            <div class="cd-bottom">还有 <span class="cd-num tabular-nums">{{ nearestCountdown.days }}</span> 天</div>
+          </template>
+          <div v-else class="countdown-empty">暂无倒计时</div>
+          <!-- 与下方 7 张卡片同一套入口：空态「去XX」、有数据「转到XX页面」。
+               倒计时没有独立路由，管理入口在活动页的倒计时页签（?tab=countdown）。 -->
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/activities?tab=countdown')">
+            {{ nearestCountdown ? '转到倒计时页面' : '去添加倒计时' }}
+          </button>
+        </template>
       </div>
     </div>
 
-    <!-- 数据看板：卡片按容器宽度自适应排列（auto-fit），不固定栏数 -->
-    <div v-if="!initialLoading" class="card-grid">
+    <!-- 数据看板：卡片按容器宽度自适应排列（auto-fit），不固定栏数。
+         7 张卡的外壳与标题始终常驻，只有内容区在数据未就绪时换成加载条。 -->
+    <div class="card-grid">
       <!-- 今日值日 -->
         <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/duty')" title="跳转：今日值日">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="duty" :size="20" /> 今日值日
           </h2>
+          <div v-if="initialLoading" class="sk-lines">
+            <div v-for="i in 3" :key="'duty-sk' + i" class="skeleton-block sk-row"></div>
+            <div class="skeleton-block sk-btn"></div>
+          </div>
+          <template v-else>
           <div class="space-y-1.5">
             <div v-for="d in todayDuties" :key="d.task" class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-bg-secondary/60">
               <span class="text-text text-sm shrink-0">{{ d.task }}</span>
@@ -101,6 +126,7 @@
           <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/duty')">
             {{ todayDuties.length ? '转到值日页面' : '去设置值日' }}
           </button>
+          </template>
         </div>
 
         <!-- 班费剩余 -->
@@ -111,6 +137,13 @@
               <IconGlyph :name="showFee ? 'eyeOff' : 'eye'" :size="18" tint="current" />
             </button>
           </h2>
+          <div v-if="initialLoading" class="sk-lines">
+            <div class="skeleton-block sk-hero"></div>
+            <div class="skeleton-block sk-row"></div>
+            <div class="skeleton-block sk-row"></div>
+            <div class="skeleton-block sk-btn"></div>
+          </div>
+          <template v-else>
           <div class="text-3xl font-bold text-text tabular-nums flex items-baseline">
             <span :key="'fee-bal-' + showFee" class="fee-blur-in fee-amount">{{ showFee ? formatMoney(feeBalance) : '••••' }}</span>
             <span class="fee-unit">元</span>
@@ -123,6 +156,7 @@
           <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/fee')">
             {{ summary.feeCount ? '转到班费页面' : '去记一笔班费' }}
           </button>
+          </template>
         </div>
 
         <!-- 今日课程 -->
@@ -130,6 +164,11 @@
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="schedule" :size="20" /> 今日课程
           </h2>
+          <div v-if="initialLoading" class="sk-lines">
+            <div v-for="i in 4" :key="'course-sk' + i" class="skeleton-block sk-row"></div>
+            <div class="skeleton-block sk-btn"></div>
+          </div>
+          <template v-else>
           <div v-if="todayCourseList.length" class="space-y-1.5">
             <div v-for="c in todayCourseList" :key="c.no" class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-bg-secondary/60 transition-theme">
               <span class="w-6 text-center text-text-muted text-xs font-medium shrink-0">{{ c.no }}</span>
@@ -141,12 +180,18 @@
           <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/schedule')">
             {{ todayCourseList.length ? '转到课程表页面' : '去设置课程表' }}
           </button>
+          </template>
         </div>
       <!-- 今日加分 Top4 -->
         <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/scores')" title="跳转：加分管理">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="score" :size="20" /> 今日加分
           </h2>
+          <div v-if="initialLoading" class="sk-lines">
+            <div v-for="i in 4" :key="'score-sk' + i" class="skeleton-block sk-row"></div>
+            <div class="skeleton-block sk-btn"></div>
+          </div>
+          <template v-else>
           <div v-if="topScores.length" class="space-y-1.5">
             <div v-for="(s, i) in topScores" :key="i" class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-bg-secondary/60">
               <span class="text-text text-sm flex-1 truncate">{{ i + 1 }}. {{ s.name }}</span>
@@ -157,6 +202,7 @@
           <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/scores')">
             {{ topScores.length ? '转到加分页面' : '去登记加分' }}
           </button>
+          </template>
         </div>
 
         <!-- 今日活动（时间轴） -->
@@ -164,6 +210,11 @@
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="activity" :size="20" /> 今日活动
           </h2>
+          <div v-if="initialLoading" class="sk-lines">
+            <div v-for="i in 3" :key="'act-sk' + i" class="skeleton-block sk-row"></div>
+            <div class="skeleton-block sk-btn"></div>
+          </div>
+          <template v-else>
           <div v-if="todayActivities.length" class="relative pl-5">
             <div v-for="(a, i) in todayActivities" :key="i" class="relative pb-4 last:pb-0">
               <span class="absolute -left-5 top-1.5 w-2 h-2 rounded-full bg-primary"></span>
@@ -175,14 +226,20 @@
           <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/activities')">
             {{ todayActivities.length ? '转到活动中心' : '去添加活动' }}
           </button>
+          </template>
         </div>
 
         <!-- 今日请假 -->
         <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/leaves')" title="跳转：请假管理">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="leave" :size="20" /> 今日请假
-            <span class="ml-auto text-sm text-text-muted font-normal">{{ currentLeaveList.length }} 人</span>
+            <span v-if="!initialLoading" class="ml-auto text-sm text-text-muted font-normal">{{ currentLeaveList.length }} 人</span>
           </h2>
+          <div v-if="initialLoading" class="sk-lines">
+            <div v-for="i in 2" :key="'leave-sk' + i" class="skeleton-block sk-row"></div>
+            <div class="skeleton-block sk-btn"></div>
+          </div>
+          <template v-else>
           <div v-if="currentLeaveList.length" class="space-y-1.5">
             <div v-for="l in currentLeaveList" :key="l.id" class="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-secondary/60">
               <span class="text-text text-sm flex-1 truncate">{{ l.姓名 }}</span>
@@ -193,20 +250,49 @@
           <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/leaves')">
             {{ currentLeaveList.length ? '转到请假页面' : '去登记请假' }}
           </button>
+          </template>
         </div>
 
         <!-- 班级相册（随机一张） -->
-        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/album')" title="跳转：班级相册">
+        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goToAlbumPhoto()" :title="albumPhotoId ? '点击查看这张照片' : '跳转：班级相册'">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="album" :size="20" /> 班级相册
+            <button
+              type="button"
+              class="photo-cycle-btn bg-bg-secondary/70 text-text-muted hover:text-text rounded-full"
+              :class="{ 'is-spinning': photoSwitching }"
+              :disabled="photoSwitching || initialLoading"
+              :title="photoSwitching ? '正在换一张…' : '换一张'"
+              aria-label="换一张"
+              @click.stop="cycleAlbumPhoto()"
+            >
+              <IconGlyph name="refresh" :size="15" tint="current" />
+            </button>
           </h2>
-          <div v-if="albumPhoto" class="rounded-lg overflow-hidden">
-            <img :src="albumPhoto" alt="随机班级照片" class="w-full h-44 object-cover">
+          <div v-if="initialLoading" class="sk-lines">
+            <div class="skeleton-block sk-photo"></div>
+            <div class="skeleton-block sk-btn"></div>
+          </div>
+          <template v-else>
+          <!-- 磁贴式换图：后层是正在退场的旧图，前层是浮入的新图。
+               两层叠在同一舞台里，各自跑一段关键帧，动画结束才撤掉后层并释放它的 blob URL。
+               :key 只为「连着换图」时重建舞台、让动画从头播；静态时两层都不带动画类。 -->
+          <div v-if="albumPhoto || photoOutUrl" :key="photoStageKey" class="photo-stage">
+            <img v-if="photoOutUrl" :src="photoOutUrl" alt="" aria-hidden="true" class="photo-layer photo-out">
+            <img
+              v-if="albumPhoto"
+              :src="albumPhoto"
+              alt="随机班级照片"
+              class="photo-layer"
+              :class="photoAnimating ? 'photo-in' : ''"
+              @animationend="onPhotoAnimEnd"
+            >
           </div>
           <div v-else class="text-center py-8 text-text-muted text-sm">暂无照片</div>
-          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/album')">
-            {{ albumPhoto ? '转到相册页面' : '去上传照片' }}
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goToAlbumPhoto()">
+            {{ albumPhotoId ? '查看这张照片' : (albumPhoto ? '转到相册页面' : '去上传照片') }}
           </button>
+          </template>
         </div>
     </div>
 
@@ -228,6 +314,7 @@ import { ensureDashboardData } from '../composables/useDashboardData'
 import { mark, perfNow, perfSince } from '../utils/perfMark.js'
 import { reportError } from '../utils/reportError.js'
 import { createLatest } from '../utils/latestOnly.js'
+import { useDisposables } from '../utils/disposables.js'
 import IconGlyph from '../components/base/IconGlyph.vue'
 import AnimatedClock from '../components/AnimatedClock.vue'
 import ClippedText from '../components/ClippedText.vue'
@@ -266,11 +353,22 @@ const summary = ref({
 })
 const activities = ref([])
 const albumPhoto = ref('')
+// 首页配图抽中的照片 id（后端随缩略图一起放在 X-Photo-Id 响应头里）。
+// 有它才能从首页直接「跳到这张图片」；拿不到头（旧后端 / 被代理剥掉）就退化成只跳相册页。
+const albumPhotoId = ref(0)
+// 换一张按钮：请求期间置真，图标旋转 + 禁用，避免连点堆一串随机图请求
+const photoSwitching = ref(false)
+// 首页聚合数据里的相册列表，只用来判断「有没有相册」；换图时不必重新拉一次 dashboard
+const dashboardAlbums = ref([])
 const showFee = ref(localStorage.getItem('dashboard-fee-visible') === '1')
 
-// 首次加载标记：为真时首页显示骨架屏（仅首页做骨架）。
-// 首次数据到位后置 false 并保持，切回首页的后台刷新只在后台进行，不再闪骨架。
+// 首屏数据未就绪：为真时各卡片的数据区显示加载条（卡片外壳与标题常驻）。
+// 首次数据到位后置 false 并保持；切回首页的后台刷新只在后台进行，不再闪加载条。
 const initialLoading = ref(true)
+// 班级信息（班名/口号/班风/学风）走的是另一个接口，单独一个未就绪标记：
+// 它通常比 /api/dashboard 先回来，早到就该早显示，不该被首页数据拖着一起等。
+// 同样只在首次为真，切回首页的重拉不闪。
+const classInfoLoading = ref(true)
 
 // ========== 计算属性 ==========
 
@@ -300,6 +398,10 @@ async function loadClassInfo() {
     // 走 log 档而不是弹提示：这是首页的次要信息，且 /api/dashboard 失败时已有统一提示，
     // 两个都弹只会变成噪音。
     reportError(e, { action: '加载班级信息', level: 'log' })
+  } finally {
+    // 失败也要收掉加载条：宁可显示"请设置"的空态（用户可点设置补），
+    // 也不能让班名区永远停在灰条上。
+    classInfoLoading.value = false
   }
 }
 async function saveClassInfo(data) {
@@ -421,6 +523,12 @@ const monthExpense = computed(() => summary.value.monthExpense || 0)
 function goTo(to) {
   router.push(to)
 }
+// 点「班级相册」卡片/配图：带上当前这张图的 id，相册页会滚到它所在的那一天并打开大图。
+// 没有 id（后端没给头、图还没加载出来）时行为与以前完全一致：只跳到相册页。
+function goToAlbumPhoto() {
+  const id = albumPhotoId.value
+  router.push(id ? { path: '/album', query: { photo: String(id) } } : '/album')
+}
 function toggleFee() {
   showFee.value = !showFee.value
   localStorage.setItem('dashboard-fee-visible', showFee.value ? '1' : '0')
@@ -428,48 +536,156 @@ function toggleFee() {
 function formatMoney(n) {
   return Number(n).toFixed(2)
 }
-// 随机相册照片：找第一个有照片的相册，随机取一张，用 thumb 接口（走鉴权）转 dataURL 展示
-// 释放上一张的 blob URL：每次刷新首页都会换一张，不 revoke 的话旧 blob 会一直被文档持有
-// （首页被 KeepAlive 缓存着，长久使用会累积成内存泄漏）。
-function revokeAlbumPhoto() {
-  const cur = albumPhoto.value
-  if (cur && String(cur).startsWith('blob:')) {
-    try { URL.revokeObjectURL(cur) } catch (_) { /* 忽略 */ }
-  }
-  albumPhoto.value = ''
+// ===== 首页配图：blob URL 生命周期 + 磁贴式换图动画 =====
+// 旧图在退场动画播放期间仍是 <img> 的 src，**不能立刻 revoke**，否则动画里会裂图。
+// 分三层管理：albumPhoto（前层，当前）、photoOutUrl（后层，正在退场）、
+// retiredPhotoUrls（被换掉、等动画结束统一释放）。首页被 KeepAlive 缓存，漏一个就累积一个 blob。
+const d = useDisposables()
+const photoAnimFallback = d.defer()
+const photoOutUrl = ref('')
+const photoAnimating = ref(false)
+const photoStageKey = ref(0)
+const retiredPhotoUrls = new Set()
+// 「按钮转圈要等这一轮换图动画收尾」的登记标志。只有按钮触发、且确实播了动画的那一轮
+// 才置真：首屏/切回自动换图的动画收尾，不该把用户刚点下的旋转提前掐掉。
+let spinPending = false
+
+function revokeBlobUrl(url) {
+  if (!url || !String(url).startsWith('blob:')) return
+  try { URL.revokeObjectURL(url) } catch (_) { /* 忽略 */ }
 }
 
-// 换图：**先**把新 URL 赋上去，**再**释放被它替换掉的那一个。
+// 系统的「减少动效」或设置里的「关闭动画」都可能掐掉关键帧，animationend 就不一定来。
+// 这类情况直接静态换图；真进了动画分支也留一条兜底，别让后层永远挂在 DOM 上。
+function photosShouldAnimate() {
+  try {
+    return !document.documentElement.classList.contains('no-animations')
+      && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch (_) { return false }
+}
+
+// 动画收尾（animationend 或兜底定时器）：撤掉后层、释放所有退场 blob。
+// 这里也是按钮转圈的停止点：转圈覆盖「等图 + 旧退新入」全过程，到动画收尾才停，
+// 不会请求一回来（几十毫秒）就停住、看着像没转。
+function finishPhotoAnim() {
+  photoAnimFallback.cancel()
+  if (spinPending) { spinPending = false; photoSwitching.value = false }
+  if (!photoAnimating.value) return
+  photoAnimating.value = false
+  const old = photoOutUrl.value
+  photoOutUrl.value = ''
+  revokeBlobUrl(old)
+  for (const u of retiredPhotoUrls) revokeBlobUrl(u)
+  retiredPhotoUrls.clear()
+}
+
+function onPhotoAnimEnd(e) {
+  // 绑在前层 <img> 上，只有它自己的浮入动画会在这儿冒出来（后层是兄弟节点）。
+  // 不比对 animationName：scoped 样式会给 @keyframes 名字加 hash 后缀，硬比对必然失配。
+  if (e && e.target !== e.currentTarget) return
+  finishPhotoAnim()
+}
+
+// 换图：**先**把新 URL 赋上去，**再**处理被替换的旧图。
 // 反过来（先 revoke 再赋值）在并发下会出问题：两次 loadRandomPhoto 交错时，
-// 后到的那次会把另一次刚显示的 blob 释放掉，<img> 指向已失效的 URL → 裂图。
-function replaceAlbumPhoto(blob) {
+// 后到的那次会把另一次刚显示的 blob 释放掉 → 裂图。
+function replaceAlbumPhoto(blob, deferSpin = false) {
   const prev = albumPhoto.value
-  albumPhoto.value = URL.createObjectURL(blob)
-  if (prev && String(prev).startsWith('blob:') && prev !== albumPhoto.value) {
-    try { URL.revokeObjectURL(prev) } catch (_) { /* 忽略 */ }
+  const next = URL.createObjectURL(blob)
+  const animated = !!(prev && String(prev).startsWith('blob:') && photosShouldAnimate())
+  if (animated) {
+    // 上一次还在退场的旧图先收进待释放，别让两层动画叠成一团
+    if (photoOutUrl.value) retiredPhotoUrls.add(photoOutUrl.value)
+    photoOutUrl.value = prev
+    photoAnimating.value = true
+    // 重建舞台 → 连着换图时关键帧从头播（只改 class 不会重启 CSS 动画）
+    photoStageKey.value += 1
+    photoAnimFallback(finishPhotoAnim, 700)
+    // 只登记按钮触发的这一轮：动画收尾时由 finishPhotoAnim 停转圈
+    if (deferSpin) spinPending = true
+  } else {
+    if (photoOutUrl.value) { retiredPhotoUrls.add(photoOutUrl.value); photoOutUrl.value = '' }
+    photoAnimating.value = false
+    retiredPhotoUrls.add(prev)
+    for (const u of retiredPhotoUrls) revokeBlobUrl(u)
+    retiredPhotoUrls.clear()
   }
+  albumPhoto.value = next
+  // 调用方据此决定「请求结束就停转圈」还是「等动画收尾再停」
+  return animated
+}
+
+// 清空配图（首屏失败 / 组件卸载）：三层 URL 一个都不能漏。
+function revokeAlbumPhoto() {
+  photoAnimFallback.cancel()
+  // 图都没了（首屏失败 / 切号 / 卸载）：转圈也必须停，否则按钮会一直 disabled
+  spinPending = false
+  photoSwitching.value = false
+  photoAnimating.value = false
+  revokeBlobUrl(albumPhoto.value)
+  revokeBlobUrl(photoOutUrl.value)
+  for (const u of retiredPhotoUrls) revokeBlobUrl(u)
+  retiredPhotoUrls.clear()
+  albumPhoto.value = ''
+  photoOutUrl.value = ''
+  // 图都没了还留着 id，点卡片会拿一个不存在的照片去相册页定位
+  albumPhotoId.value = 0
+}
+
+// 点标题右侧的循环按钮：排除当前这张再抽，失败时**保留**当前图（别把用户的图弄没）。
+function cycleAlbumPhoto() {
+  if (photoSwitching.value || initialLoading.value) return
+  if (!dashboardAlbums.value.length) return
+  // 先清掉上一轮的登记：这次的转圈要等「这次」图回来后播的动画，别被旧动画收尾掐掉
+  spinPending = false
+  photoSwitching.value = true
+  loadRandomPhoto(dashboardAlbums.value, { exclude: albumPhotoId.value, keepOnError: true })
 }
 
 // 随机取一张班级照片当首页配图。
 // 注意：调用方可能并发触发（首屏 onMounted 与切回页面的 onActivated 都会调），
 // 所以这里用请求序号守卫，只让最新一次写状态 —— 否则「慢的那次后到」会把新图换成旧图。
 const albumPhotoSeq = createLatest()
-async function loadRandomPhoto(albums) {
+async function loadRandomPhoto(albums, opts = {}) {
   const my = albumPhotoSeq.begin()
+  const { exclude = 0, keepOnError = false } = opts
   const list = Array.isArray(albums) ? albums : []
-  if (!list.length) { if (albumPhotoSeq.isCurrent(my)) revokeAlbumPhoto(); return }
+  if (!list.length) {
+    if (albumPhotoSeq.isCurrent(my)) revokeAlbumPhoto() // 里面已把转圈停掉
+    return
+  }
+  // 这一轮是否真的播了换图动画：决定转圈「请求结束就停」还是「等动画收尾再停」
+  let animated = false
   /* 只要一张图，就只问后端要一张：后端随机抽一张、直接把缩略图递过来，一次请求。
    * 原实现是遍历每个相册各拉一次全量照片列表、再自己随机挑一张 —— 真实数据
-   * 12,968 行 / 3.44MB，而且每次进首页都会跑（onMounted + onActivated 各一次）。 */
+   * 12,968 行 / 3.44MB，而且每次进首页都会跑（onMounted + onActivated 各一次）。
+   * exclude 只在「换一张」时带：后端把当前这张排掉，避免照片少时点了没变化。 */
   try {
-    const thumbRes = await axios.get('/api/album/random-photo/thumb', { responseType: 'blob' })
+    const thumbRes = await axios.get('/api/album/random-photo/thumb', {
+      responseType: 'blob',
+      params: exclude ? { exclude } : undefined,
+    })
     // 过期响应：不换图、也不释放当前图（那是另一次调用的成果）
     if (!albumPhotoSeq.isCurrent(my)) return
-    replaceAlbumPhoto(thumbRes.data)
+    // 抽中的是哪一张，只能从响应头拿：body 是 JPEG，不带 id。
+    // 二进制响应不进安全信道的 JSON 加解密，头原样透传；CORS 已放行 X-Photo-Id。
+    // axios 的 AxiosHeaders 与 fetch 的 Headers 都有 .get()，裸对象走小写下标。
+    const h = thumbRes.headers
+    const rawId = h && (typeof h.get === 'function' ? h.get('X-Photo-Id') : h['x-photo-id'])
+    const photoId = Number(rawId)
+    albumPhotoId.value = Number.isInteger(photoId) && photoId > 0 ? photoId : 0
+    animated = replaceAlbumPhoto(thumbRes.data, !!exclude)
   } catch (_) {
-    // 没有照片 / 缩略图还在排队生成 / 请求失败：只有仍是最新一次时才清空旧图，
-    // 否则会把另一路调用刚显示出来的图清掉。
-    if (albumPhotoSeq.isCurrent(my)) revokeAlbumPhoto()
+    // 没有照片 / 缩略图还在排队生成 / 请求失败：只有仍是最新一次才动图。
+    // 手动「换一张」失败要保留当前这张（keepOnError），否则点一下按钮图就没了。
+    if (albumPhotoSeq.isCurrent(my) && !keepOnError) revokeAlbumPhoto()
+  } finally {
+    // 只有「按钮触发 + 确实播了动画 + 仍是最新一次请求」才把停转圈交给动画收尾；
+    // 静态替换（关闭动画）/ 请求失败 / 被新请求接管都在这里立刻停，按钮不会转个不停。
+    if (!(albumPhotoSeq.isCurrent(my) && animated && spinPending)) {
+      spinPending = false
+      photoSwitching.value = false
+    }
   }
 }
 function getStudentName(id) {
@@ -499,8 +715,9 @@ async function loadData(force = false) {
     students.value = d.students
     summary.value = d.summary
     activities.value = d.activities
-    // 相册：挑一个含照片的相册，随机取一张
-    loadRandomPhoto(d.album)
+    dashboardAlbums.value = Array.isArray(d.album) ? d.album : []
+    // 相册：后端随机抽一张；这份列表留给「换一张」判断有没有相册，不必重拉 dashboard
+    loadRandomPhoto(dashboardAlbums.value)
     if (firstScreen && !firstRenderMarked) {
       firstRenderMarked = true
       // 不 await：不能因为打点把首屏骨架屏多留一帧；nextTick 回调里再记时刻
@@ -714,6 +931,80 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+/* ===== 班级相册：循环按钮 + 磁贴式换图 =====
+   两层 <img> 叠在同一舞台：旧图沿 z 轴向后退（缩小 + 淡出），新图从前面浮入
+   （放大 + 淡入）落回原位，做出 Win10 开始菜单磁贴那种前后层次。
+   perspective() 写在每层自己的 transform 里，不靠父容器建 3D 上下文 ——
+   舞台必须 overflow:hidden 裁圆角，父级 perspective 在 Chromium 里会被扁平化。 */
+.photo-stage {
+  position: relative;
+  height: 176px;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: var(--color-bg-secondary, transparent);
+}
+.photo-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  backface-visibility: hidden;
+}
+.photo-stage .photo-out {
+  z-index: 1;
+  will-change: transform, opacity;
+  animation: photo-retreat 480ms cubic-bezier(.4, 0, .75, .4) both;
+}
+.photo-stage .photo-in {
+  z-index: 2;
+  will-change: transform, opacity;
+  /* 错峰 80ms：先看见旧图往后退，再看见新图从前面浮上来，不是两张同时半透明叠着 */
+  animation: photo-float-in 480ms cubic-bezier(.16, .84, .3, 1) 80ms both;
+}
+@keyframes photo-retreat {
+  from { transform: perspective(900px) translateZ(0) translateY(0); opacity: 1; }
+  to   { transform: perspective(900px) translateZ(-170px) translateY(-8px); opacity: 0; }
+}
+@keyframes photo-float-in {
+  from { transform: perspective(900px) translateZ(170px) translateY(12px); opacity: 0; }
+  to   { transform: perspective(900px) translateZ(0) translateY(0); opacity: 1; }
+}
+
+/* 标题右侧的循环按钮：纯图标按钮，不要那圈深色描边。
+   毛玻璃主题有 :root:is([data-theme="glass"]) button { border-width:1px; ... }，
+   它没写 border-color → 继承 currentColor，于是在浅色卡片上显出一圈近黑的圆环，
+   外加 box-shadow 细环与 ::before 渐变荧光描边。四套主题统一清掉，只留浅灰圆底 + 图标。
+   !important 不能省：主题规则特异性 (0,2,1) 高过 scoped 的 (0,2,0)；
+   配方与 index.css 的 .dtf-sort-btn 一致。颜色仍交给主题类，不在这儿写死。 */
+.photo-cycle-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent !important;
+  border-radius: 9999px !important;
+  box-shadow: none !important;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color .18s ease, background-color .18s ease, transform .18s ease;
+}
+.photo-cycle-btn::before { display: none !important; }
+/* 键盘焦点也不再画一圈 outline，改成图标变主色，避免又出现「边框」观感 */
+.photo-cycle-btn:focus-visible {
+  outline: none;
+  color: var(--color-info, currentColor);
+}
+.photo-cycle-btn:not(.is-spinning):hover:not(:disabled) { transform: rotate(30deg); }
+.photo-cycle-btn:disabled { opacity: .55; cursor: default; }
+/* 一圈 560ms，与换图动画总时长（480ms + 80ms 错峰）对齐：
+   从点击到动画收尾大致刚好转满一圈，不会停在半圈显得别扭。 */
+.photo-cycle-btn.is-spinning { animation: photo-spin 560ms linear infinite; }
+@keyframes photo-spin { to { transform: rotate(360deg); } }
+
 /* 欢迎条右侧关键数据（在校 / 请假 / 课程）：可点击跳转，悬停给轻微底色反馈。
    内边距配负外边距抵消，静止时文字位置与原来完全一致。 */
 .stat-link {
@@ -753,21 +1044,16 @@ onBeforeUnmount(() => {
   color: #2563eb;
 }
 
-/* ======================== 首页骨架屏（仅首页） ========================
-   与真实首页同构：欢迎条 / 班级信息大框 / 卡片瀑布流，尺寸对齐以减少加载完成后的跳动。
-   底色与流光复用全局 .skeleton-block。 */
-.sk-welcome {
-  height: 92px;
-  margin-bottom: 24px;
-  border-radius: var(--radius-card);
-}
-.sk-info {
-  height: 122px;
-  margin-bottom: 20px;
-  border-radius: var(--radius-surface);
-}
-.sk-card {
-  height: 180px;
-  border-radius: var(--radius-card);
-}
+/* ======================== 首屏组件内加载条 ========================
+   卡片外壳、标题、时钟始终常驻，只有依赖 /api/dashboard 的数据区替换成灰条。
+   高度按各类卡片的常见行数对齐，数据到位后不产生明显跳动。
+   底色与流光复用全局 .skeleton-block —— 它默认 height:320px，这里必须用双类选择器压回实际高度。 */
+.skeleton-block.sk-title { display: block; height: 28px; width: 58%; border-radius: 6px; }
+.skeleton-block.sk-num { display: block; height: 18px; width: 26px; border-radius: 4px; }
+.skeleton-block.sk-text { display: block; height: 16px; width: 78%; border-radius: 4px; margin-bottom: 8px; }
+.skeleton-block.sk-text-wide { width: 45%; }
+.skeleton-block.sk-row { height: 34px; border-radius: 8px; margin-bottom: 6px; }
+.skeleton-block.sk-hero { height: 34px; width: 150px; border-radius: 6px; margin-bottom: 12px; }
+.skeleton-block.sk-photo { height: 176px; border-radius: 8px; margin-bottom: 6px; }
+.skeleton-block.sk-btn { height: 31px; width: 120px; border-radius: 6px; margin: 12px auto 0; }
 </style>

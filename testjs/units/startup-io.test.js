@@ -85,9 +85,10 @@ test('未安装时 summarize 是空操作', () => {
 test('接线判据：安装了 main.js，且顺序正确', () => {
   const src = fs.readFileSync(path.join(ROOT, 'electron/main/main.js'), 'utf8')
   const installAt = src.indexOf('startupIo.install(fs)')
-  const migrationAt = src.indexOf('migrateLegacyUserData()')
+  const firstSyncIoAt = src.indexOf('fs.mkdirSync(_ccDir')
   assert.ok(installAt > 0, 'main.js 必须调用 startupIo.install(fs)')
-  assert.ok(migrationAt > installAt, '安装必须早于首个同步 IO 调用（迁移 userData）')
+  assert.ok(firstSyncIoAt > 0, 'main.js 必须保留启动路径上的首个同步 IO（node-compile-cache 建目录）')
+  assert.ok(firstSyncIoAt > installAt, '安装必须早于首个同步 IO 调用（node-compile-cache 建目录）')
 
   const summarizeAt = src.indexOf('startupIo.summarize()')
   const reportAt = src.indexOf('startupTimer.report()', summarizeAt > 0 ? summarizeAt : 0)

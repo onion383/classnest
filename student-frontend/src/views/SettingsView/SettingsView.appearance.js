@@ -3,6 +3,8 @@
 import axios from 'axios'
 import { useNotification } from '../../composables/useNotification'
 import { SEND, INVOKE } from '../../electronChannels.js'
+import { readFastStartup, writeFastStartup } from '../../utils/fastStartup.js'
+import { getToken } from '../../utils/authStorage.js'
 
 export function useSettingsAppearance(ctx) {
   return {
@@ -338,6 +340,174 @@ export function useSettingsAppearance(ctx) {
       }
     },
     // ==================== 性能面板 ====================
+    // 快速启动开关：只写 localStorage，**下一次启动**才改变占位页的让位时机
+    // （本次启动的占位页早已移除，改它没有即时效果，所以不做任何运行期动作）。
+    // 写失败（存储被禁）时把头值回滚，避免面板显示与真实生效值不一致。
+    onFastStartupChange(value) {
+      const on = !!value
+      ctx.fastStartup.value = on
+      if (!writeFastStartup(on)) {
+        ctx.fastStartup.value = readFastStartup()
+        ctx.notifyError('设置未能保存（本地存储不可用），下次启动仍按原来的方式')
+      }
+    },
+    // 清理图片微缩图：删掉**所有账号**的缩略图缓存文件，相册索引一行不动。
+    // 范围取「所有账号」是为了和统计口径一致 —— 上面那格数字就是整个缩略图目录的合计，
+    // 只清当前账号的话数字只掉一小截，用户会以为没生效（详见 routes/album.js 的注释）。
+    // 清完必须强制重算磁盘占用，否则 20s 节流会让用户盯着旧数字。
+    purgeThumbs() {
+      if (ctx.busyPurgeThumbs.value || ctx.busyDisk.value) return
+      const bytes = (ctx.diskUsage.value && ctx.diskUsage.value.thumbs) || 0
+      if (!bytes) return
+      ctx.showConfirm(
+        `确定清理图片微缩图缓存吗？将删除所有账号的缩略图文件，约释放 ${ctx.fmtBytes(bytes)}。\n`
+        + '照片本身和相册索引都不受影响，下次打开相册时会自动重建（首次进入会略慢）。',
+        async () => {
+          ctx.busyPurgeThumbs.value = true
+          try {
+            const res = await axios.post('/api/album/thumbs/purge', {}, {
+              headers: { Authorization: 'Bearer ' + (getToken() || '') },
+            })
+            const d = (res.data && res.data.data) || {}
+            const skipped = d.failed ? `，${d.failed} 个文件被占用未删除` : ''
+            ctx.notifySuccess(`已清理 ${d.files || 0} 个微缩图文件，释放 ${ctx.fmtBytes(d.bytes || 0)}${skipped}`)
+          } catch (err) {
+            const msg = (err.response && err.response.data && err.response.data.error) || err.message || '未知错误'
+            ctx.notifyError('清理失败：' + msg)
+          } finally {
+            ctx.busyPurgeThumbs.value = false
+            await ctx.loadDiskUsage(true)
+          }
+        },
+        '清理',
+      )
+    },
+    // 「整理」：只删没有索引引用的孤儿微缩图，正在用的图一张不动。
+    // 两步走：先发一次**只读对账**拿数字，确认框里如实告诉用户要删几张、多大；
+    // 用户点确认才带 apply=true 发第二次。后端把 apply 缺省当 false，
+    // 所以哪怕前端漏传也不会误删（删文件这件事不能有「默认就动手」）。
+    async sweepThumbs() {
+      if (ctx.busySweepThumbs.value || ctx.busyPurgeThumbs.value || ctx.busyDisk.value) return
+      const headers = { Authorization: 'Bearer ' + (getToken() || '') }
+      ctx.busySweepThumbs.value = true
+      let d = {}
+      try {
+        const probe = await axios.post('/api/album/thumbs/sweep', {}, { headers })
+        d = (probe.data && probe.data.data) || {}
+      } catch (err) {
+        const msg = (err.response && err.response.data && err.response.data.error) || err.message || '未知错误'
+        ctx.notifyError('孤儿检测失败：' + msg)
+        return
+      } finally {
+        ctx.busySweepThumbs.value = false
+      }
+      const skipped = (d.skipped && d.skipped.length)
+        ? `\n另有 ${d.skipped.length} 个账号的库未解锁或无法对账，它们的缩略图已跳过、不会删除。` : ''
+      if (!d.orphans) {
+        ctx.notifySuccess(`没有发现孤儿微缩图${skipped ? `（${d.skipped.length} 个账号已跳过）` : ''}`)
+        return
+      }
+      ctx.showConfirm(
+        `发现 ${d.orphans} 张没有索引引用的微缩图，约 ${ctx.fmtBytes(d.bytes)}。\n`
+        + '只删除这些孤儿，正在使用的微缩图、照片和相册索引都不受影响。' + skipped,
+        async () => {
+          ctx.busySweepThumbs.value = true
+          try {
+            const res = await axios.post('/api/album/thumbs/sweep', { apply: true }, { headers })
+            const r = (res.data && res.data.data) || {}
+            const busy = r.failed ? `，${r.failed} 个文件被占用未删除` : ''
+            ctx.notifySuccess(`已整理 ${r.deleted || 0} 张孤儿微缩图，释放 ${ctx.fmtBytes(r.freed || 0)}${busy}`)
+          } catch (err) {
+            const msg = (err.response && err.response.data && err.response.data.error) || err.message || '未知错误'
+            ctx.notifyError('整理失败：' + msg)
+          } finally {
+            ctx.busySweepThumbs.value = false
+            await ctx.loadDiskUsage(true)
+          }
+        },
+        '整理',
+      )
+    },
+    // 「整理」：对当前账号库执行 VACUUM，把删除记录后留在 freelist 里的空闲页真正还给磁盘。
+    // 为什么不做自动整理：VACUUM 会独占库文件、重写整份数据，期间后端是同步阻塞的，
+    // 只能由用户显式点一次并接受短暂卡顿（大库可能几秒），不能偷偷在后台做。
+    vacuumDb() {
+      if (ctx.busyVacuum.value || ctx.busyDisk.value) return
+      const bytes = (ctx.diskUsage.value && ctx.diskUsage.value.currentAccount) || 0
+      const sizeText = bytes ? `（当前 ${ctx.fmtBytes(bytes)}）` : ''
+      ctx.showConfirm(
+        `确定整理当前账号的数据库吗？${sizeText}\n`
+        + '会把删除记录后留下的空闲空间真正还给磁盘；耗时与库大小成正比（实测约 3 秒/GB），'
+        + '期间请不要操作，数据、照片和索引都不受影响，完成后不需要重启。',
+        async () => {
+          ctx.busyVacuum.value = true
+          ctx.vacuumDialog.value = true
+          let doneMsg = ''
+          let failed = false
+          try {
+            const res = await axios.post('/api/data/vacuum', {}, {
+              headers: { Authorization: 'Bearer ' + (getToken() || '') },
+              // 兜底：后端若长时间不响应（例如被看门狗重启），别让进度框永远挂着
+              timeout: 180000,
+            })
+            const d = (res.data && res.data.data) || {}
+            const freed = d.noop
+              ? '没有可回收的空间（库文件已经很紧凑）'
+              : `释放 ${ctx.fmtBytes(d.freedBytes || 0)}`
+            doneMsg = `已整理数据库，${freed}（${Math.round(d.durationMs || 0)}ms）`
+          } catch (err) {
+            failed = true
+            const msg = (err.response && err.response.data && err.response.data.error) || err.message || '未知错误'
+            doneMsg = '整理失败：' + msg
+          }
+          ctx.vacuumDialog.value = false
+          ctx.busyVacuum.value = false
+          if (failed) ctx.notifyError(doneMsg)
+          else ctx.notifySuccess(doneMsg)
+          // 强制重算磁盘占用：不走 20s 节流，否则用户会盯着整理前的旧数字
+          await ctx.loadDiskUsage(true)
+        },
+        '整理',
+      )
+    },
+    // 进度框的「取消」：只撤销等待，不中止后端（VACUUM 是同步原语，无法中途叫停）。
+    // busyVacuum 保持 true，避免用户以为取消了就又能点一次，把两次整理排进队列。
+    cancelVacuumWait() {
+      if (!ctx.vacuumDialog.value) return
+      ctx.vacuumDialog.value = false
+      ctx.notifyInfo('已关闭进度提示，整理会在后台继续，完成后提示结果')
+    },
+    // 「清理」日志：把四个日志出口截断为 0。
+    // 日志是主进程写的（backend.log 的写流、inp.log/desktop-layer.log 的追加），
+    // 后端进程够不到 userData 根那份，所以走 IPC 而不是业务路由。
+    // 只截断不删文件：backend.log 的写句柄还开着，删文件在 Windows 上会 EBUSY。
+    clearLogs() {
+      if (ctx.busyLogs.value || ctx.busyDisk.value) return
+      const bytes = (ctx.diskUsage.value && ctx.diskUsage.value.logs) || 0
+      if (!bytes) return
+      ctx.showConfirm(
+        `确定清空日志吗？约释放 ${ctx.fmtBytes(bytes)}。\n`
+        + '只清后端 / 启动 / INP / 桌面挂件四个日志文件，不影响任何数据和照片；'
+        + '运行期的日志会继续照常写入。',
+        async () => {
+          ctx.busyLogs.value = true
+          try {
+            const res = await window.electron?.invoke(INVOKE.PERF_LOGS_CLEAR)
+            // 与其它通道同判据：主进程走 ok()/fail() 契约
+            if (!res || res.outcome !== 'ok') {
+              throw new Error((res && res.error) || '主进程未返回结果')
+            }
+            ctx.notifySuccess(`已清空 ${res.files || 0} 个日志文件，释放 ${ctx.fmtBytes(res.clearedBytes || 0)}`)
+          } catch (err) {
+            ctx.notifyError('清理日志失败：' + (err.message || '未知错误'))
+          } finally {
+            ctx.busyLogs.value = false
+            await ctx.loadDiskUsage(true)
+          }
+        },
+        '清理',
+      )
+    },
     // 轮询开关：进入页面（含从 KeepAlive 恢复）开始，离开即停，避免常驻采样
     _startPerfPolling() {
       if (ctx._perfTimer.value) return
@@ -358,6 +528,9 @@ export function useSettingsAppearance(ctx) {
     },
     notifyError(msg) {
       useNotification().error(msg)
+    },
+    notifyInfo(msg) {
+      useNotification().info(msg)
     },
     // 取一次逐进程内存快照，并更新三个重启目标的存活状态
     async loadPerf() {
@@ -389,6 +562,79 @@ export function useSettingsAppearance(ctx) {
         // 面板按秒原样呈现（如 1.17285693359375 s）。
         ctx.perfStartupTotal.value = t?.total || 0
       } catch (_) {}
+    },
+    // 空间管理：按四类 + 其他兜底统计磁盘占用。
+    // 不进内存轮询链（体积扫描是目录遍历，代价比读计数大得多）：
+    // 设置页进入时触发一次、手动「重新统计」触发一次，20s 内重复进入不重扫。
+    async loadDiskUsage(force = false) {
+      if (ctx.busyDisk.value) return
+      if (!force && ctx.diskUsage.value && Date.now() - ctx._diskAt < 20000) return
+      ctx.busyDisk.value = true
+      ctx._diskAt = Date.now()
+      try {
+        // 当前账号 slug 由登录态给出（auth 接口的 dbSlug），主进程据此把库文件分到「该账号」，
+        // 拿不到就全部归到「其他账号」，不会错记到当前账号头上。
+        const slug = ctx.user.value?.dbSlug || ''
+        const res = await window.electron?.invoke(INVOKE.PERF_DISK_USAGE, { slug })
+        // 判据与其它通道一致：主进程走 ok()/fail() 契约（见 electron/main/main.ipc-contract.js）
+        if (res && res.outcome === 'ok') {
+          ctx.diskUsage.value = res
+          ctx.diskUsageError.value = ''
+          ctx.diskTip.value = null // 数据换了，旧的悬浮详情不能留着
+          ctx.diskTipSuppressed.value = false // 新数据可以正常预览
+        } else if (res && res.outcome === 'fail') {
+          ctx.diskUsageError.value = res.error || '统计失败'
+        }
+      } catch (err) {
+        ctx.diskUsageError.value = String((err && err.message) || err)
+      } finally {
+        ctx.busyDisk.value = false
+      }
+    },
+    // 空间管理：点彩条/图例选中分类；再点同一段或点别处都退出预览
+    selectDiskSegment(key) {
+      const next = ctx.selectedDiskKey.value === key ? null : key
+      if (next) {
+        ctx.selectedDiskKey.value = next
+        ctx.diskTipSuppressed.value = false
+      } else {
+        ctx.clearDiskPreview()
+      }
+    },
+    // 退出预览：清选中 + 关浮窗，并抑制到鼠标离开彩条/图例后才恢复，
+    // 否则鼠标没动、下一次 mousemove 会立刻把浮窗弹回来。
+    clearDiskPreview() {
+      ctx.selectedDiskKey.value = null
+      ctx.diskTip.value = null
+      ctx.diskTipSuppressed.value = true
+    },
+    // document 级点击：落在彩条分段或图例行以外的任何地方都算「点别处」
+    onDiskOutsideClick(ev) {
+      const t = ev.target
+      if (t && typeof t.closest === 'function' && t.closest('.disk-seg, .disk-legend-row')) return
+      if (!ctx.selectedDiskKey.value && !ctx.diskTip.value && !ctx.diskTipSuppressed.value) return
+      ctx.clearDiskPreview()
+    },
+    // 悬浮详情跟随鼠标：浮层宽 216px，靠近视口右/下边缘时翻到左上，避免被裁掉
+    showDiskTip(seg, ev) {
+      if (ctx.diskTipSuppressed.value) return
+      const x = Math.max(8, Math.min(ev.clientX + 16, window.innerWidth - 232))
+      const y = ev.clientY + 16 + 128 > window.innerHeight
+        ? Math.max(8, ev.clientY - 128)
+        : ev.clientY + 16
+      ctx.diskTip.value = { x, y, seg }
+    },
+    // 鼠标移出彩条/图例：浮窗消失，同时解除抑制（下次进入可以正常预览）
+    hideDiskTip() {
+      ctx.diskTip.value = null
+      ctx.diskTipSuppressed.value = false
+    },
+    // 字节 → 磁盘容量文本：1GB 以上用 GB（一位小数），其余四舍五入到整 MB
+    fmtBytes(bytes) {
+      if (typeof bytes !== 'number' || bytes < 0) return '--'
+      const mb = bytes / 1048576
+      if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
+      return `${Math.round(mb)} MB`
     },
     // KB → MB 文本；无数据时占位，保持列宽稳定
     fmtMem(kb) {

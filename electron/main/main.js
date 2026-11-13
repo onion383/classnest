@@ -11,22 +11,6 @@ startupIo.install(fs)
 // 开发/打包模式唯一口径（见 main.env.js：Electron 45 下 app.isPackaged 在源码模式也返回 true）
 const { isDev, isPackaged } = require('./main.env')
 
-// 品牌更名（campus-assistant → classnest）：旧版 userData 目录整体迁移，避免升级后「数据不见了」。
-// - 旧目录存在、新目录不存在：直接重命名（同盘秒完成）。
-// - 重命名失败（旧版仍在运行、文件被占用）：回退为继续使用旧目录，保证数据可用。
-// - 已在新版登录过（新目录已存在）：不再动旧目录，留给用户手动清理。
-function migrateLegacyUserData() {
-  try {
-    const appData = app.getPath('appData')
-    const legacy = path.join(appData, 'campus-assistant')
-    const target = app.getPath('userData')
-    if (legacy === target || !fs.existsSync(legacy)) return
-    if (!fs.existsSync(target)) fs.renameSync(legacy, target)
-  } catch (_) {
-    try { app.setPath('userData', path.join(app.getPath('appData'), 'campus-assistant')) } catch (_) { /* 保持默认路径 */ }
-  }
-}
-migrateLegacyUserData()
 // V8 编译缓存必须在**任何** require 之前启用：它只对「启用之后」的编译生效，
 // 已经 require 过的模块不会再写缓存。此前这段写在 require 16 个 main.* 模块之后，
 // 实测缓存目录始终是空的 —— 启动成本一分没省，只是建了个空目录。
@@ -214,6 +198,11 @@ function registerDeferredIpc() {
     hideWidgetWindow: () => widget.hideWidgetWindow(),
     showWidgetWindow: () => widget.showWidgetWindow(),
     createDesktopWidgetWindow: () => widget.createDesktopWidgetWindow(),
+    // 空间管理：软件本体取 exe 所在目录（打包版即安装目录，含 resources）；
+    // 数据目录 / 缩略图目录跟随设置页的「数据目录」「缩略图目录」配置
+    getInstallDir: () => path.dirname(app.getPath('exe')),
+    getDataDir: () => resolveDataDir(),
+    getThumbsDir: () => resolveThumbsDir(),
   })
 }
 

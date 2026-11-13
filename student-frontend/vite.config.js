@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import fs from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
+import { emptyOutDirBatched } from './build-utils/outdir.js'
 
 // 渲染阻塞 CSS 改非阻塞：首屏占位（index.html / setup.html 里内联的 splash）只用内联样式，
 // 不需要等 tailwind 全量 CSS（约 120KB）下载 + 解析才开始画。给构建产物里的
@@ -235,6 +236,37 @@ function channelStamp() {
   }
 }
 
+// 构建输出目录的小批量清空（替代 Vite 自带的一次性 emptyOutDir）。
+//
+// 为什么不用 Vite 自带的：它是一次 fs.rm(outDir, {recursive:true}) —— **一次操作删掉整棵目录树**。
+// dist/assets 里动辄 100+ 文件（实测一次 168 个），撞上宿主环境的批量删除保护
+// （一次删 >50 个文件）会把构建直接打断。
+// 但这个开关也不能简单关掉：electron-builder 打包的是 student-frontend/dist/**/*，
+// 关掉就会把上一轮的旧 hash chunk 一起打进安装包。
+//
+// 所以：关掉 Vite 的 emptyOutDir（见下方 build 段），改由本插件在 buildStart
+// （写产物之前）分批清空 —— 语义不变，只是不再有「一次删太多」的操作。
+function batchedEmptyOutDir() {
+  let outDir = null
+  let root = null
+  return {
+    name: 'batched-empty-out-dir',
+    apply: 'build',
+    configResolved(cfg) {
+      root = cfg.root
+      outDir = path.resolve(cfg.root, cfg.build.outDir)
+    },
+    buildStart() {
+      const stats = emptyOutDirBatched(outDir, { root })
+      if (stats.files) {
+        console.log(
+          `[outdir] 已清空 ${outDir}（${stats.files} 个文件 / ${stats.dirs} 个目录，单次删除最多 ${stats.maxBatch} 个文件）`
+        )
+      }
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     // 顺序无实质影响（该插件是 enforce:'pre'），放最前只为读起来直观
@@ -258,6 +290,8 @@ export default defineConfig({
     nonBlockingCss(),
     // 构建产物里留通道标记（见上方 channelStamp）
     channelStamp(),
+    // 必须在写产物之前把输出目录清干净（见上方 batchedEmptyOutDir）
+    batchedEmptyOutDir(),
   ].filter(Boolean),
   // 预构建缓存按通道隔离：3.5 与 3.6 共用 node_modules/.vite 会互相污染，
   // 切换通道后必须重新预构建（否则会拿到上一版 vue 的 deps 产物）。
@@ -328,8 +362,11 @@ export default defineConfig({
   },
   base: './',
   build: {
-    // 显式清空输出目录，避免旧 hash 文件残留被打进安装包
-    emptyOutDir: true,
+    // 清空输出目录，避免旧 hash 文件残留被打进安装包。
+    // 这里关掉 Vite 自带的 emptyOutDir，改由插件 batchedEmptyOutDir() 分批清空 ——
+    // Vite 那是一次递归删整棵目录树，dist/assets 上百个文件会撞上环境的批量删除保护；
+    // 清空语义不能丢（electron-builder 打包 dist/**/*），只能把删除拆小。
+    emptyOutDir: false,
     // 运行环境只有 Electron（内嵌新版 Chromium），不存在需要兼容的老浏览器。
     // 指定 esnext 表示不做任何降级转译，避免多余语法转换与解析开销
     // （当前打包 Electron 43，Chromium 140+，新语法原生支持）。

@@ -38,7 +38,10 @@
     "widget"
   ],
   "to-widget": [
-    "main"
+    "desktop-widget",
+    "main",
+    "setup",
+    "widget"
   ],
   "win-minimize": [
     "main"
@@ -255,6 +258,12 @@
     "main"
   ],
   "perf-startup": [
+    "main"
+  ],
+  "perf-disk-usage": [
+    "main"
+  ],
+  "perf-logs-clear": [
     "main"
   ],
   "get-app-version": [

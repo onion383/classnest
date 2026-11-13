@@ -71,4 +71,21 @@ function appendWithRotation(filePath, text, opts = {}) {
   return next
 }
 
-module.exports = { rotateIfNeeded, appendWithRotation, DEFAULT_MAX, DEFAULT_KEEP, NOTICE }
+// 清空单个日志文件：走同一条串行链，避免「刚清完又被排队中的旧行写回」。
+// 只截断不删除 —— 写入句柄（backend.log 的 createWriteStream）可能还开着，
+// 删文件在 Windows 上会 EBUSY，而截断后 append 句柄会从 0 继续写，不需要重开流。
+function clearLogFile(filePath) {
+  const prev = chains.get(filePath) || Promise.resolve()
+  const next = prev.then(async () => {
+    try {
+      await fsp.mkdir(path.dirname(filePath), { recursive: true })
+      await fsp.writeFile(filePath, '')
+    } catch (_) { /* 清日志失败不影响业务，调用方以实际体积差为准 */ }
+  })
+  chains.set(filePath, next)
+  return next
+}
+
+module.exports = {
+  rotateIfNeeded, appendWithRotation, clearLogFile, DEFAULT_MAX, DEFAULT_KEEP, NOTICE,
+}

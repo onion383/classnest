@@ -19,6 +19,7 @@ import { useNotification } from './composables/useNotification'
 import { ensureDashboardData } from './composables/useDashboardData'
 import { installInpProbe } from './utils/inpProbe'
 import { installLongTaskMarks } from './utils/inpLongtask'
+import { readFastStartup } from './utils/fastStartup.js'
 import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
 
 // 401 提示条去重：记录最近一次已处理的 401 时间，避免同一瞬间并发 401 重复弹提示
@@ -394,12 +395,13 @@ if (splashEl) {
     }, BACKEND_POLL_MS)
   }
 
-  // 骨架屏方案开关（可回退）：
-  //   true  = 只在首页(Dashboard)做骨架屏。占位页不再等首页数据，首次导航一就绪即移除，
-  //           「数据还在路上」这段等待改由首页自身的骨架屏承接；其余页面照常直接渲染。
-  //   false = 旧方案：占位页一直等到首页 9 个接口返回后才移除（整窗被多挡一段接口往返）。当前取 false。
-  // 启用新方案：把常量改成 true；要回退则改回 false（两套分支代码原样保留，不用改动别处）。
-  const HOME_SKELETON_ONLY = false
+  // 首屏呈现方式（性能面板 →「快速启动」开关，读写见 utils/fastStartup.js）：
+  //   开启（默认）= 占位页在「路由 + 样式就绪」时即移除，首页数据还在路上这段由 Dashboard
+  //                 各卡片自己显示加载中（组件直接挂载，外壳、时钟、班名立刻可见）。
+  //   关闭        = 旧行为：占位页一直挡到首页聚合接口返回后才移除（整窗被多挡一段接口往返）。
+  // 两者只影响「占位页何时移除」；Dashboard 内部两种模式共用同一套组件内加载态。
+  // 必须同步读 localStorage：这个判断本身就在「要不要等数据」的路径上。
+  const fastStartup = readFastStartup()
 
   // 启动归因打点：占位页依赖的三条路各自何时完成。
   // 只解决「不知道卡在哪一环」——以前时间线上只有「Vue 挂载」和「占位页移除」两个点，
@@ -418,7 +420,7 @@ if (splashEl) {
   const whenSplashReady = router.isReady().catch(() => {}).then(() => {
     splashMark('路由就绪')
     const onHome = router.currentRoute.value.path === '/' && getToken()
-    const waitData = onHome && !HOME_SKELETON_ONLY
+    const waitData = onHome && !fastStartup
     // 打点包在两条路上：成功/失败都记，避免「数据没回来」被误读成「没等数据」
     const dataTask = waitData
       ? ensureDashboardData().then(

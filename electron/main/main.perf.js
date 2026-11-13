@@ -3,6 +3,7 @@
 //
 // 汇总主进程里性能面板用的一组请求-响应通道与后台采样：
 //   perf-snapshot / perf-restart-frontend / perf-restart-widget / perf-relaunch-app / perf-gc / perf-startup
+//   / perf-disk-usage（空间管理：磁盘占用归账）
 //   以及 startMemSampling 后台「总计内存」定时采样。
 //
 // 依赖注入：窗口引用与后端进程句柄由 main.js 通过 registerPerfIpc 注入（均为 getter 闭包，
@@ -14,7 +15,12 @@
 // =========================================================================
 
 const { app, ipcMain } = require('electron')
+const path = require('node:path')
+const fsp = require('node:fs/promises')
 const { getPrivateWorkingSetKB } = require('./main.privateWorkingSet')
+const { scanDiskUsage, logFilePaths } = require('./main.disk-usage')
+const { clearLogFile } = require('./main.logRotator')
+const { ok, fail } = require('./main.ipc-contract')
 const startupTimer = require('./main.startup-timer')
 const { startEventLoopSampling, readEventLoopStats, markEventLoopWindow } = require('./main.eventloop')
 
@@ -31,6 +37,10 @@ let isDesktopEnabled = () => true
 let hideWidgetWindow = () => {}
 let showWidgetWindow = () => {}
 let createDesktopWidgetWindow = () => {}
+// 空间管理（磁盘占用）用的目录来源，同样由 registerPerfIpc 注入
+let getInstallDir = () => ''
+let getDataDir = () => ''
+let getThumbsDir = () => ''
 
 // 性能面板：后端内存自报 / GC 的一次性等待者（各自独立，别复用 probeWaiter）
 let memWaiter = null
@@ -121,6 +131,27 @@ async function collectRendererGarbage(wc) {
   }
 }
 
+// Utility 进程名是 Chromium 给的英文：serviceName 是 non-localized name（可能是
+// network.mojom.NetworkService 这类 Mojo 接口名），name 也只是 Network Service 等英文可读名，
+// Electron 不做本地化。这里只做展示层翻译；两个字段任一命中即可，命中不了保留原名，
+// 免得把冷门服务的身份信息丢掉。只改 name，不动 key / kind / pid / 内存数值。
+const UTILITY_LABELS = [
+  ['network', '网络服务'],
+  ['audio', '音频服务'],
+  ['storage', '存储服务'],
+  ['decryption', '内容解密服务'],
+  ['video', '视频采集服务'],
+  ['proxy', '代理解析服务'],
+  ['printing', '打印服务'],
+]
+
+function utilityLabel(m) {
+  const both = [m.name, m.serviceName].filter(Boolean).join(' ').toLowerCase()
+  const hit = UTILITY_LABELS.find(([kw]) => both.includes(kw))
+  if (hit) return hit[1]
+  return m.name || m.serviceName || '服务进程'
+}
+
 // 收集逐进程内存列表（主进程 / 各渲染窗口 / GPU / 各服务进程 / 后端）。
 // 面板快照与内存历史采样共用，保证两处口径一致。
 async function collectProcList() {
@@ -162,11 +193,11 @@ async function collectProcList() {
     procs.push({ key: `gpu-${m.pid}`, name: 'GPU 进程', kind: 'gpu', ...metricToMem(m) })
   }
 
-  // 各服务进程（网络/存储/音频等，取 Chromium 给的服务名）
+  // 各服务进程（网络/存储/音频等）：Chromium 只给英文名，展示层翻成中文
   for (const m of metrics.filter((x) => x.type === 'Utility')) {
     procs.push({
       key: `util-${m.pid}`,
-      name: m.serviceName || m.name || '服务进程',
+      name: utilityLabel(m),
       kind: 'utility',
       ...metricToMem(m),
     })
@@ -293,6 +324,9 @@ function registerPerfIpc(opts = {}) {
   if (typeof opts.hideWidgetWindow === 'function') hideWidgetWindow = opts.hideWidgetWindow
   if (typeof opts.showWidgetWindow === 'function') showWidgetWindow = opts.showWidgetWindow
   if (typeof opts.createDesktopWidgetWindow === 'function') createDesktopWidgetWindow = opts.createDesktopWidgetWindow
+  if (typeof opts.getInstallDir === 'function') getInstallDir = opts.getInstallDir
+  if (typeof opts.getDataDir === 'function') getDataDir = opts.getDataDir
+  if (typeof opts.getThumbsDir === 'function') getThumbsDir = opts.getThumbsDir
 
   // 内存快照：逐进程列表 + 前端/后端/小组件存活状态 + 总计/平均/最高汇总
   ipcMain.handle('perf-snapshot', async () => {
@@ -379,6 +413,60 @@ function registerPerfIpc(opts = {}) {
 
   // 上次启动耗时与打点时间线
   ipcMain.handle('perf-startup', () => startupTimer.getTimeline())
+
+  // 空间管理：磁盘占用按四类归账（软件本体 / 该账号 / 其他账号 / 微缩图）+ 其他兜底。
+  // 只读扫描、不进 1s 轮询链：由设置页进入时与手动「重新统计」触发。
+  // 返回体走统一契约（ok / fail）：前端据 outcome 区分「扫到 0」与「扫失败」。
+  ipcMain.handle('perf-disk-usage', async (_event, payload) => {
+    const slug = payload && typeof payload.slug === 'string' ? payload.slug : ''
+    try {
+      const usage = await scanDiskUsage({
+        appDir: getInstallDir(),
+        dataDir: getDataDir(),
+        thumbsDir: getThumbsDir(),
+        // 数据目录之外的日志出口：backend.log/startup.log 固定在 userData/data，
+        // desktop-layer.log 在 userData 根；dataDir 与之相同时扫描端会自动去重。
+        logDirs: [path.join(app.getPath('userData'), 'data'), app.getPath('userData')],
+        slug,
+      })
+      return ok({ ...usage, at: Date.now() })
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // 「日志」行的「清理」：把四个日志出口截断为 0。
+  // 日志是主进程写的（backend.log 的写流、inp.log/desktop-layer.log 的追加），
+  // 放后端路由反而够不到 userData 根那份，所以在这里直接动手；
+  // 报数用清理前后的实际体积差 —— 并发写入导致没清干净时不会虚报。
+  ipcMain.handle('perf-logs-clear', async () => {
+    try {
+      const files = logFilePaths(getDataDir(), [
+        path.join(app.getPath('userData'), 'data'),
+        app.getPath('userData'),
+      ])
+      let clearedBytes = 0
+      let clearedFiles = 0
+      for (const file of files) {
+        let before = 0
+        try {
+          const st = await fsp.stat(file)
+          if (!st.isFile()) continue
+          before = st.size
+        } catch (_) { continue }
+        await clearLogFile(file)
+        let after = 0
+        try { after = (await fsp.stat(file)).size } catch (_) { after = 0 }
+        if (before > after) {
+          clearedBytes += before - after
+          clearedFiles += 1
+        }
+      }
+      return ok({ clearedBytes, files: clearedFiles, at: Date.now() })
+    } catch (err) {
+      return fail(err)
+    }
+  })
 }
 
 module.exports = {

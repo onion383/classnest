@@ -58,7 +58,7 @@ const DEV_PORT = 5173
 function appLogCandidates() {
   if (opt.real) {
     const roaming = process.env.APPDATA || ''
-    return ['班集', 'classnest', 'campus-assistant'].map((n) => path.join(roaming, n, 'data', 'startup.log'))
+    return ['班集', 'classnest'].map((n) => path.join(roaming, n, 'data', 'startup.log'))
   }
   return [
     path.join(ISO_USER_DATA, 'data', 'startup.log'),

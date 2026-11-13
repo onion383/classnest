@@ -10,7 +10,7 @@ const path = require('path');
 const { initSchema } = require('../schema/schema');
 const { normalizePhrase } = require('../services/recoveryKey');
 const {
-  dataDir, openFile, wrapKey, unwrapKey, newPrivacySalt,
+  dataDir, thumbsDir, openFile, wrapKey, unwrapKey, newPrivacySalt,
   SCRYPT_PARAMS, serializeScryptParams,
   wrapKeyByPrivacySecret, unwrapKeyByPrivacySecret,
   setUnlockedKey, getUnlockedKey,
@@ -107,6 +107,13 @@ function deleteTeacher(slug) {
   fs.rmSync(`${base}-wal`, { force: true });
   fs.rmSync(`${base}-shm`, { force: true });
   registryDelete(slug);
+  // 账号都没了，{THUMB_DIR}/{slug}/ 整个目录也不可能再被引用：
+  // album_photos.id 是 AUTOINCREMENT，别的新账号不会重用这些 id，孤儿只会越积越多。
+  // 异步删（几万文件的同步 rm 会卡住事件循环），失败也不影响删账号结果 ——
+  // 剩下的由「空间管理 → 回收」按库对账兜住（登记与库文件都没了 = 整个目录是孤儿）。
+  if (/^[A-Za-z0-9_@-]{1,64}$/.test(slug)) {
+    fs.promises.rm(path.join(thumbsDir, slug), { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 // 通过账号定位并打开其对应的班主任库（供登录 / 忘记密码使用）。

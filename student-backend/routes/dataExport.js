@@ -515,6 +515,78 @@ router.get('/tables', (req, res) => {
   res.json({ tables: list });
 });
 
+// ===== 空间回收：POST /api/data/vacuum（性能面板「整理」） =====
+// 背景：删除学生/记录/相册索引只会把页面标成空闲（freelist），库文件本身不会变小，
+// 长期使用后文件大小停在高水位。全仓原来没有任何回收入口（v6 · 0-4 的探针只测量、不处理），
+// 这里是唯一由用户显式触发的整理动作：VACUUM 重写整份库，把空闲页真正还给磁盘。
+//
+// 边界：
+//   · better-sqlite3 是同步 API，VACUUM 期间独占连接并阻塞后端事件循环（8.7MB 库实测 4~7ms，
+//     百 MB 级按线性估算在百毫秒~秒级），所以只允许手动点击，不做自动/定时整理。
+//   · 相册扫描 / 导入等持有读事务时 SQLite 会拒绝 VACUUM（SQLITE_BUSY），如实回报让用户稍后重试，
+//     不自动重试、不排队。
+//   · WAL 模式下先 checkpoint(TRUNCATE) 把 WAL 落回主库，VACUUM 后再 checkpoint 一次，
+//     否则刚省下的空间会被新 WAL 占回去，前端看到的释放量会失真。
+function fileBytes(file) {
+  try { return fs.statSync(file).size; } catch (_) { return 0; }
+}
+
+// 库「实际占盘」= 主库 + WAL（-shm 是共享内存索引，VACUUM 不会回收它，不计入）
+function dbDiskBytes(slug) {
+  const file = dbManager.dbFilePath(slug);
+  return fileBytes(file) + fileBytes(file + '-wal');
+}
+
+router.post('/vacuum', (req, res) => {
+  const started = Date.now();
+  try {
+    const conn = db;
+    const slug = dbManager.currentSlug();
+    const beforeBytes = dbDiskBytes(slug);
+    const freelistBefore = Number(conn.pragma('freelist_count', { simple: true })) || 0;
+    // 没有空闲页就没有「空间」可回收：直接返回，不让用户白等一次全库重写。
+    // （VACUUM 的耗时与库体积成正比 —— 实测 50MB/75ms、150MB/387ms、400MB/1.1s，约 3ms/MB。）
+    if (freelistBefore === 0) {
+      return res.json({
+        success: true,
+        data: {
+          beforeBytes,
+          afterBytes: beforeBytes,
+          freedBytes: 0,
+          freelistBefore: 0,
+          freelistAfter: 0,
+          durationMs: Date.now() - started,
+          noop: true,
+        },
+      });
+    }
+    try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* 非 WAL 模式没有可落盘的内容 */ }
+    conn.exec('VACUUM');
+    try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* 同上 */ }
+    const afterBytes = dbDiskBytes(slug);
+    res.json({
+      success: true,
+      data: {
+        beforeBytes,
+        afterBytes,
+        // 释放量不报负数：页对齐可能让文件略微变大，显示「释放 -12KB」只会让用户困惑
+        freedBytes: Math.max(0, beforeBytes - afterBytes),
+        freelistBefore,
+        freelistAfter: Number(conn.pragma('freelist_count', { simple: true })) || 0,
+        durationMs: Date.now() - started,
+      },
+    });
+  } catch (err) {
+    const msg = String((err && err.message) || err);
+    const busy = /SQLITE_BUSY|database is locked|database table is locked/i.test(msg);
+    res.status(500).json({
+      error: busy
+        ? '数据库正忙（可能有相册扫描或数据导入正在进行），请稍后再试'
+        : `整理失败：${msg}`,
+    });
+  }
+});
+
 // POST /api/data/sources { keys: [...] } —— 取指定表的数据
 router.post('/sources', (req, res) => {
   const keys = Array.isArray(req.body && req.body.keys) ? req.body.keys : [];

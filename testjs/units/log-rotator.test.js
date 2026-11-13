@@ -15,7 +15,7 @@ const path = require('node:path')
 
 const MAIN = path.join(__dirname, '../../electron/main')
 const read = (rel) => fs.readFileSync(path.join(MAIN, rel), 'utf8')
-const { rotateIfNeeded, appendWithRotation, NOTICE } = require(path.join(MAIN, 'main.logRotator.js'))
+const { rotateIfNeeded, appendWithRotation, clearLogFile, NOTICE } = require(path.join(MAIN, 'main.logRotator.js'))
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'cn-logrot-'))
@@ -71,6 +71,27 @@ test('appendWithRotation：建目录、串行追加、超限回收', async () =>
   const finalSize = fs.statSync(file).size
   assert.ok(finalSize <= 4096 + 64, `轮转后应受上限约束，实际 ${finalSize}`)
   assert.ok(fs.readFileSync(file, 'utf8').includes('big-399'), '最新一行必须在')
+
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('clearLogFile：截断为 0，且与追加共用串行链（清完不会被排队中的旧行写回）', async () => {
+  const dir = tmpDir()
+  const file = path.join(dir, 'backend.log')
+  fs.writeFileSync(file, 'a'.repeat(1024))
+
+  // 先排一笔追加、再排清空：清空必须排在追加之后，最终体积才是 0
+  const queued = appendWithRotation(file, 'queued-line\n')
+  const cleared = clearLogFile(file)
+  await Promise.all([queued, cleared])
+  assert.equal(fs.statSync(file).size, 0, '清空必须落在排队写入之后')
+
+  // 清完继续写：从 0 开始追加，不报错也不残留旧内容
+  await appendWithRotation(file, 'after\n')
+  assert.equal(fs.readFileSync(file, 'utf8'), 'after\n')
+
+  // 文件不存在也不能抛（清理时可能刚好被外部删掉）
+  await clearLogFile(path.join(dir, 'nope.log'))
 
   fs.rmSync(dir, { recursive: true, force: true })
 })

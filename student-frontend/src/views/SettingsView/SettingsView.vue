@@ -544,13 +544,138 @@
           </div>
         </div>
 
-        <!-- 上次启动耗时 -->
-        <div class="border-t border-border pt-6 mt-6 flex items-center gap-4">
-          <div class="flex items-center gap-1.5">
-            <span class="text-sm text-text-muted">上次启动耗时</span>
-            <AppHelp text="口径：进程启动到占位页移除（首屏内容真正绘制出来的那一刻），与 startup.log 同一口径" aria-label="启动耗时口径说明" :size="13" />
+        <!-- 空间管理：磁盘占用彩条（一段一类）+ 图例给数值与占比 -->
+        <div class="border-t border-border pt-6 mt-6">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-1.5">
+              <span class="text-sm font-medium text-text">空间管理</span>
+              <AppHelp
+                text="统计本身只读，不会删除任何文件。「图片微缩图」后面的两个按钮都是显式操作：「清理」删全部缓存（下次查看会重建），「回收」只删没有索引引用的孤儿、保留正在用的图，且会先报数再等确认。口径：软件本体＝程序安装目录（exe 与 resources）；该账号数据＝当前账号库文件（含 -wal/-shm）；其他账号数据＝其余账号库文件；图片微缩图＝缩略图目录（所有账号合计）；其他＝上传附件、相册回收站、快照与日志。"
+                aria-label="空间管理统计口径说明"
+                :size="13"
+              />
+            </div>
+            <button
+              @click="loadDiskUsage(true)"
+              :disabled="busyDisk"
+              class="w-24 text-center bg-bg hover:bg-surface-hover text-text border border-border px-4 py-1.5 rounded text-sm transition-theme disabled:opacity-50"
+            >{{ busyDisk ? '统计中…' : '重新统计' }}</button>
           </div>
-          <span class="text-sm font-medium text-text" style="font-variant-numeric: tabular-nums;">{{ (perfStartupTotal / 1000).toFixed(3) }} s</span>
+          <div v-if="diskSegments.length" class="space-y-3">
+            <div class="flex items-center gap-3">
+              <!-- key 用统计时间：每次「重新统计」换一份彩条，入场展开动画重播一次 -->
+              <div
+                :key="diskUsage.at"
+                class="disk-bar flex-1 h-5 rounded-full overflow-hidden flex bg-bg border border-border"
+                @mouseleave="hideDiskTip()"
+              >
+                <div
+                  v-for="seg in diskSegments"
+                  :key="seg.key"
+                  class="h-full disk-seg"
+                  :class="selectedDiskSegment && selectedDiskSegment.key === seg.key ? 'disk-seg-active' : (selectedDiskSegment ? 'disk-seg-dim' : '')"
+                  :style="{ flex: `0 0 ${seg.pct}%`, background: seg.color }"
+                  :title="`${seg.label} ${fmtBytes(seg.bytes)}（${seg.pctText}）`"
+                  @mousemove="showDiskTip(seg, $event)"
+                  @click="selectDiskSegment(seg.key)"
+                ></div>
+              </div>
+              <span class="w-20 flex-shrink-0 text-right text-sm text-text" style="font-variant-numeric: tabular-nums;">{{ fmtBytes(diskUsage.total) }}</span>
+            </div>
+            <!-- 跟随鼠标的悬浮详情：Teleport 到 body + 行内 fixed（毛玻璃主题会改 .bg-surface 定位），
+                 pointer-events-none 免得浮层吞掉 mousemove 造成闪烁 -->
+            <Teleport to="body">
+              <div
+                v-if="diskTip"
+                class="disk-tip fixed z-[10002] bg-surface rounded-lg shadow-card border border-border px-3 py-2 pointer-events-none"
+                :style="{ position: 'fixed', left: diskTip.x + 'px', top: diskTip.y + 'px', width: '216px' }"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-sm flex-shrink-0" :style="{ background: diskTip.seg.color }"></span>
+                  <span class="min-w-0 truncate text-sm font-medium text-text" :title="diskTip.seg.label">{{ diskTip.seg.label }}</span>
+                </div>
+                <div class="flex items-baseline justify-between mt-1.5">
+                  <span class="text-xl font-medium text-text" style="font-variant-numeric: tabular-nums;">{{ diskTip.seg.pctText }}</span>
+                  <span class="text-sm text-text-secondary" style="font-variant-numeric: tabular-nums;">{{ fmtBytes(diskTip.seg.bytes) }}</span>
+                </div>
+                <div class="h-1 rounded-full bg-border overflow-hidden mt-2">
+                  <div class="h-full rounded-full" :style="{ width: diskTip.seg.pct + '%', background: diskTip.seg.color }"></div>
+                </div>
+                <div class="text-xs text-text-muted mt-1.5">共 {{ fmtBytes(diskUsage.total) }}</div>
+              </div>
+            </Teleport>
+            <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+              <!-- 按钮紧跟文字（清的是文件不是索引，album_photos 一行不动），
+                   后面用可伸缩空白把数值/占比顶到行尾，保证左右两列仍然对齐。
+                   整行可点选，按钮用 .stop 免得顺带改变选中项。 -->
+              <div
+                v-for="seg in diskSegments"
+                :key="seg.key"
+                class="disk-legend-row flex items-center gap-2 min-w-0 rounded px-1 -mx-1 cursor-pointer hover:bg-surface-hover"
+                :class="selectedDiskSegment && selectedDiskSegment.key === seg.key ? 'bg-surface-hover' : ''"
+                @mousemove="showDiskTip(seg, $event)"
+                @mouseleave="hideDiskTip()"
+                @click="selectDiskSegment(seg.key)"
+              >
+                <span class="w-2.5 h-2.5 rounded-sm flex-shrink-0" :style="{ background: seg.color }"></span>
+                <span class="min-w-0 truncate text-sm text-text-secondary" :title="seg.label">{{ seg.label }}</span>
+                <button
+                  v-if="seg.key === 'thumbs'"
+                  @click.stop="purgeThumbs"
+                  :disabled="busyPurgeThumbs || busyDisk"
+                  class="flex-shrink-0 whitespace-nowrap text-xs px-1.5 py-0.5 rounded border border-border bg-bg hover:bg-surface-hover text-text-secondary hover:text-text transition-theme disabled:opacity-50"
+                  title="删除所有账号的图片微缩图缓存文件；照片与相册索引不受影响，下次查看时自动重建。旁边的「整理」只删孤儿、保留正在用的图"
+                >{{ busyPurgeThumbs ? '清理中' : '清理' }}</button>
+                <button
+                  v-if="seg.key === 'thumbs'"
+                  @click.stop="sweepThumbs"
+                  :disabled="busySweepThumbs || busyPurgeThumbs || busyDisk"
+                  class="flex-shrink-0 whitespace-nowrap text-xs px-1.5 py-0.5 rounded border border-border bg-bg hover:bg-surface-hover text-text-secondary hover:text-text transition-theme disabled:opacity-50"
+                  title="只整理没有索引引用的孤儿微缩图；正在使用的缩略图、照片和索引都不受影响"
+                >{{ busySweepThumbs ? '整理中' : '整理' }}</button>
+                <button
+                  v-if="seg.key === 'logs'"
+                  @click.stop="clearLogs"
+                  :disabled="busyLogs || busyDisk"
+                  class="flex-shrink-0 whitespace-nowrap text-xs px-1.5 py-0.5 rounded border border-border bg-bg hover:bg-surface-hover text-text-secondary hover:text-text transition-theme disabled:opacity-50"
+                  title="清空后端、启动、INP、桌面挂件四个日志文件（只截断不删文件）；不影响任何数据和照片，运行期的日志会继续照常写入"
+                >{{ busyLogs ? '清理中' : '清理' }}</button>
+                <button
+                  v-if="seg.key === 'currentAccount'"
+                  @click.stop="vacuumDb"
+                  :disabled="busyVacuum || busyDisk"
+                  class="flex-shrink-0 whitespace-nowrap text-xs px-1.5 py-0.5 rounded border border-border bg-bg hover:bg-surface-hover text-text-secondary hover:text-text transition-theme disabled:opacity-50"
+                  title="整理当前账号的库文件：把删除记录后留下的空闲页真正还给磁盘（VACUUM）；整理期间应用会短暂无响应，数据与照片都不受影响"
+                >{{ busyVacuum ? '整理中' : '整理' }}</button>
+                <span class="flex-1"></span>
+                <span class="text-sm text-text" style="font-variant-numeric: tabular-nums;">{{ fmtBytes(seg.bytes) }}</span>
+                <span class="w-11 text-right text-xs text-text-muted" style="font-variant-numeric: tabular-nums;">{{ seg.pctText }}</span>
+              </div>
+            </div>
+          </div>
+          <p v-else class="text-sm text-text-muted">{{ busyDisk ? '正在统计磁盘占用…' : (diskUsageError || '暂无数据') }}</p>
+        </div>
+
+        <!-- 启动相关：快速启动开关 + 上次启动耗时（同一区块，共用一条分隔线） -->
+        <div class="border-t border-border pt-6 mt-6 space-y-4">
+          <div class="flex items-center gap-4">
+            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+              <span class="text-sm font-medium text-text">快速启动</span>
+              <AppHelp
+                text="开启：占位页在界面元素（路由与样式）就绪时立即让位，首页数据边加载边显示，各卡片先显示加载中；关闭：等首页数据全部返回后才显示首页，整窗会多被占位页多挡一段接口往返。改动在下次启动生效。"
+                aria-label="快速启动说明"
+              />
+            </div>
+            <AppSwitch :model-value="fastStartup" aria-label="快速启动" @change="onFastStartupChange" />
+            <span class="text-xs text-text-muted">下次启动生效</span>
+          </div>
+          <div class="flex items-center gap-4">
+            <div class="flex items-center gap-1.5">
+              <span class="text-sm text-text-muted">上次启动耗时</span>
+              <AppHelp text="口径：进程启动到占位页移除（首屏内容真正绘制出来的那一刻），与 startup.log 同一口径" aria-label="启动耗时口径说明" :size="13" />
+            </div>
+            <span class="text-sm font-medium text-text" style="font-variant-numeric: tabular-nums;">{{ (perfStartupTotal / 1000).toFixed(3) }} s</span>
+          </div>
         </div>
       </div>
     </div>
@@ -756,6 +881,23 @@
       @confirm="onDialogConfirm"
       @cancel="onDialogCancel"
     />
+
+    <!-- 整理数据库期间：复用统一的确认框外壳（不另写遮罩），只做进度提示。
+         「取消」只关进度框、不中止后端 —— VACUUM 是 better-sqlite3 的同步原生调用，
+         执行期间后端连 IPC 都处理不了，真正可中止只能把 VACUUM 放进 worker 线程后强杀，
+         代价是留下需要回滚的热日志，暂不做；所以按钮文案是「取消」而非「停止」。
+         关掉后 busyVacuum 仍为 true，整理按钮保持禁用，避免再排一次整理。 -->
+    <ConfirmDialog
+      v-if="vacuumDialog"
+      :visible="true"
+      title="正在整理数据库"
+      :message="vacuumProgressText"
+      :showCancel="true"
+      cancelText="取消"
+      :confirmDisabled="true"
+      confirmText="整理中…"
+      @cancel="cancelVacuumWait"
+    />
   </div>
 </template>
 
@@ -772,6 +914,8 @@ import DataExportPanel from '../../components/data-manage/DataExportPanel.vue'
 import { useThemeStore } from '../../stores/theme'
 import { storeToRefs } from 'pinia'
 import { resourceUrl } from '../../utils/apiUrl'
+import { readFastStartup } from '../../utils/fastStartup.js'
+import { useDisposables } from '../../utils/disposables.js'
 import '../../styles/dialog-transition.css'
 import { useSettingsSearch } from './SettingsView.search.js'
 import { useSettingsData } from './SettingsView.data.js'
@@ -969,6 +1113,24 @@ const perfFront = ref(null)
 const perfBackend = ref(null)
 const perfOther = ref(null)
 const perfStartupTotal = ref(0)
+// 快速启动：占位页是否等首页数据（下次启动生效）。初值直接读 localStorage，
+// 避免进页面先显示默认值再跳一下；读写单源见 utils/fastStartup.js。
+const fastStartup = ref(readFastStartup())
+// 空间管理：磁盘占用统计（主进程只读扫描，按四类 + 其他归账），null 表示还没扫过
+const diskUsage = ref(null)
+const diskUsageError = ref('')
+const busyDisk = ref(false)
+// 「清理微缩图」进行中：删几千个文件要几秒，期间按钮禁用避免重复点
+const busyPurgeThumbs = ref(false)
+const busySweepThumbs = ref(false)
+// 「整理数据库」进行中：VACUUM 会独占库文件并阻塞后端，期间按钮禁用避免重复点
+const busyVacuum = ref(false)
+// 进度框是否可见：点「取消」只关它，busyVacuum 继续为 true（后台还在整理）
+const vacuumDialog = ref(false)
+// 「清理日志」进行中：四个日志文件逐个截断，期间按钮禁用避免重复点
+const busyLogs = ref(false)
+// 整理进度文案：ConfirmDialog 是 whitespace-pre-line，换行必须用 \n 而不是 <br>
+const vacuumProgressText = '耗时与库大小成正比（约 3 秒/GB）。\n期间请勿操作，数据与照片不会丢失，完成后会自动刷新占用。'
 const busyGc = ref(false)
 const busyRestartBackend = ref(false)
 const busyRestartWidget = ref(false)
@@ -1143,6 +1305,44 @@ const perfMaxKB = computed(() => {
   const topKB = Math.max(1, (top && top.memKB) || 0)
   return topKB / (perfTopRatio.value || 0.9)
 })
+// 空间管理：彩条分段。颜色是固定的图表色板，不走主题变量 ——
+// 四套主题里 --color-primary / --color-info 有重合（base-accent 下两者同值），
+// 用主题色会出现「软件本体」和「其他账号」同色的情况，图例就失去意义。
+const DISK_CATEGORIES = [
+  { key: 'app', label: '软件本体', color: '#5b8def' },
+  { key: 'currentAccount', label: '该账号数据', color: '#22c55e' },
+  { key: 'otherAccounts', label: '其他账号数据', color: '#f59e0b' },
+  { key: 'uploads', label: '上传文件（各账号共享）', color: '#14b8a6' },
+  { key: 'thumbs', label: '图片微缩图', color: '#a855f7' },
+  { key: 'logs', label: '日志', color: '#64748b' },
+  { key: 'other', label: '其他', color: '#94a3b8' },
+]
+// 空间管理：当前选中的分类（null = 未选中），点彩条或图例走同一入口，再点一次取消
+const selectedDiskKey = ref(null)
+// 悬浮详情：{ x, y, seg }，鼠标在彩条/图例上移动时更新，移出即清空
+const diskTip = ref(null)
+// 点别处退出后先抑制浮窗，直到鼠标离开彩条/图例再恢复，免得鼠标没动就立刻弹回来
+const diskTipSuppressed = ref(false)
+// 百分比按各段合计（= 磁盘上属于本软件的全部体积）算，图例里的占比加起来是 100%
+const diskSegments = computed(() => {
+  const u = diskUsage.value
+  if (!u) return []
+  const total = Number(u.total) || 0
+  return DISK_CATEGORIES.map((c) => {
+    const bytes = Number(u[c.key]) || 0
+    const pct = total > 0 ? (bytes / total) * 100 : 0
+    return {
+      ...c,
+      bytes,
+      pct,
+      pctText: pct >= 9.95 ? `${Math.round(pct)}%` : (pct > 0 ? `${pct.toFixed(1)}%` : '0%'),
+    }
+  }).filter((s) => s.bytes > 0)
+})
+// 选中详情以 diskSegments 为唯一真源：重新统计后该分类消失就自动回到未选中态
+const selectedDiskSegment = computed(() =>
+  selectedDiskKey.value ? diskSegments.value.find((s) => s.key === selectedDiskKey.value) || null : null,
+)
 
 // ===== ctx 袋：三个逻辑模块经它互调 =====
 const ctx = {
@@ -1157,8 +1357,9 @@ const ctx = {
   busyDataDir, busyThumbsDir, busySkillsDir, securityLevel, securityLevelLoading, busySecurityLevel,
   securityDialog, privacyPhrase, undoGroups, busyUndo, selectedThemeId, mergeNotifications,
   bgImageUrl, bgImageFileName, perfProcs, perfTopRatio, perfAlive, perfTotal, perfAvg, perfMax,
-  perfFront, perfBackend, perfOther, perfStartupTotal, busyGc, busyRestartBackend, busyRestartWidget,
-  busyRestartAll, _perfTimer,
+  perfFront, perfBackend, perfOther, perfStartupTotal, fastStartup, busyGc, busyRestartBackend, busyRestartWidget,
+  busyRestartAll, _perfTimer, diskUsage, diskUsageError, busyDisk, busyPurgeThumbs, busySweepThumbs, busyVacuum, vacuumDialog, busyLogs,
+  selectedDiskKey, diskTip, diskTipSuppressed,
   // storeToRefs（也是 ref）
   currentTheme, bgMaskOpacity, glassOpacity, iconStyle, topbarColor, animationsEnabled, pendingMode,
   nightSupported, followSystem,
@@ -1166,31 +1367,36 @@ const ctx = {
   user, securityLevelOptions, securityLevelHint, dbEncrypted, hasLoginPassword, securityNeedsCurrent, securityNeedsNew,
   securityDialogMessage, themeOptions, isGlassTheme, settingsSearchResults, semesterOptions, activeSemester,
   deleteSemesterMessage, semesterWeeks, semesterDateError, semesterDatesDirty, bgImagePreviewUrl,
-  hasUndoRecords, _undoKeyLabels, perfAllAlive, perfRows, perfMaxKB,
+  hasUndoRecords, _undoKeyLabels, perfAllAlive, perfRows, perfMaxKB, diskSegments,
   // store / router（普通对象）
   themeStore, route, router,
   // 模板 ref
   settingsSearchInput, settingsSearchPopup, bgImageInput,
   // 非响应式临时字段
-  _flashTimer: null, _flashRaf: null, _focusSig: null,
+  _flashTimer: null, _flashRaf: null, _focusSig: null, _diskAt: 0,
 }
 
 // 迟绑定：三个逻辑模块的方法回填进 ctx（互相调用在运行时经 ctx 解析）
 Object.assign(ctx, useSettingsSearch(ctx), useSettingsData(ctx), useSettingsAppearance(ctx))
+
+// 点彩条/图例以外的地方 → 退出悬浮详情与选中预览。监听器随组件作用域自动释放。
+const diskDisposables = useDisposables()
+diskDisposables.listen(document, 'click', (ev) => ctx.onDiskOutsideClick(ev))
 
 // ===== 模板顶层绑定：由逻辑模块提供、模板用到的方法 =====
 const {
   barPct, changeDataDir, changePassword, changeSkillsDir, changeThumbsDir, changeUsername,
   clearBgImage, clearUndo, closeModal, closeSecurityDialog,
   confirmAddSemester, confirmDeleteSemester, confirmLogout, confirmSearchActive, confirmSecurityLevel,
-  exportDb, fmtMem, fmtTs, goToSettingsSection, groupLabel, moveSearchActive,
+  exportDb, fmtBytes, fmtMem, fmtTs, goToSettingsSection, groupLabel, hideDiskTip, loadDiskUsage, moveSearchActive,
   onAnimationsChange, onBgImageFileChange, onBgMaskOpacityChange, onDesktopWidgetChange,
-  onDialogCancel, onDialogConfirm, onFollowSystemChange, onGlassOpacityChange, onIconStyleChange,
+  onDialogCancel, onDialogConfirm, onFastStartupChange, onFollowSystemChange, onGlassOpacityChange, onIconStyleChange,
   onMergeNotificationsChange, onPrivacyPhraseSaved, onSecurityLevelChange, onSelectMode, onSelectSemester,
   onSettingsSearchBlur, onSettingsSearchFocus, onThemeSelect, onToolboxChange, onTopbarColorChange,
   onUsbAutoOpenChange, openAddSemester, openDeleteAccount, openDir, openModal, openRenameSemester,
+  purgeThumbs, sweepThumbs, vacuumDb, cancelVacuumWait, clearLogs,
   recycleAll, redoEntry, requestDeleteSemester, restartAll, restartBackend, restartFrontend,
-  restartWidget, saveSemesterName, saveSemesterSettings, selectFolder, undoableCount, undoEntry,
+  restartWidget, saveSemesterName, saveSemesterSettings, selectDiskSegment, selectFolder, showDiskTip, undoableCount, undoEntry,
 } = ctx
 
 // 「修改密码 → 忘记密码？」：已登录且账号已知，所以不列账号列表，直接拿当前账号的库文件验证。
@@ -1229,6 +1435,8 @@ onMounted(() => {
   ctx.loadSecurityLevel()
   // 性能面板：先取一次启动耗时，轮询由 _startPerfPolling 负责
   ctx.loadStartup()
+  // 空间管理：磁盘占用不进轮询（目录遍历代价大），进页面扫一次，20s 内重复进入复用上次结果
+  ctx.loadDiskUsage()
   ctx._startPerfPolling()
   _fromMainHandler.value = window.electron?.on(RECEIVE.FROM_MAIN, (data) => {
     // 浮窗右键「关闭工具箱」会把持久化开关置 false，这里刷新一下开关状态
@@ -1239,6 +1447,8 @@ onMounted(() => {
 // 必须在这里停掉轮询，否则离开设置页后仍会每 1.8s 采样一次（常驻开销）。
 onActivated(() => {
   ctx._startPerfPolling()
+  // 从别的页面切回来时库文件可能已经变大，重扫一次（20s 节流在方法内）
+  ctx.loadDiskUsage()
   // KeepAlive 恢复时若恢复词仍在展示，重新开启屏幕捕获保护
   ctx.syncPrivacyPhraseGuard(!!privacyPhrase.value)
   // 首次进入（或被缓存的页被重新激活）时若 URL 带 focus，定位到目标设置
@@ -1312,5 +1522,41 @@ onBeforeUnmount(() => {
       0 0 26px 8px rgba(37, 99, 235, 0.45),
       inset 0 1px 0 rgba(255, 255, 255, 0.15);
   }
+}
+
+/* ===== 空间管理：加粗圆角彩条 + 入场展开 + 点选反馈 + 跟随鼠标的悬浮详情 =====
+   .no-animations（设置页动画总开关）已在全局把时长压到 0.001ms，这里再兜一层系统偏好。 */
+.disk-bar {
+  border-radius: 999px;
+  animation: diskBarReveal 0.62s cubic-bezier(0.22, 0.8, 0.24, 1) both;
+}
+@keyframes diskBarReveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
+}
+/* 圆角只由 .disk-bar 的 overflow-hidden 裁一次：分段保持方角，
+   紧贴的交界处才是直线；若给每段也加圆角，相接处会削出透镜状空隙。 */
+.disk-seg {
+  border-radius: 0;
+  cursor: pointer;
+  transition: opacity 0.22s ease, filter 0.22s ease, flex-basis 0.48s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.disk-seg:hover { filter: brightness(1.12); }
+.disk-seg-dim { opacity: 0.38; }
+.disk-seg-active {
+  filter: brightness(1.08);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.9), inset 0 0 0 3px rgba(0, 0, 0, 0.18);
+}
+/* 悬浮只做淡入；位置由 left/top 直接跟鼠标，不加过渡免得拖影 */
+.disk-tip {
+  animation: diskTipIn 0.14s ease-out both;
+}
+@keyframes diskTipIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .disk-bar, .disk-tip { animation: none; }
+  .disk-seg { transition: none; }
 }
 </style>

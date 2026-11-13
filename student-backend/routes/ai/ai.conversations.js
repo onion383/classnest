@@ -3,7 +3,7 @@ const { db } = require('../../db');
 const dbManager = require('../../dbManager/dbManager');
 const { currentSettings } = require('./ai.config');
 const { buildSystemPrompt, consumeStream, getMainTools } = require('./ai.llm');
-const { toolResultContent } = require('./ai.helpers');
+const { toolResultContent, hasUnbackedToolClaim } = require('./ai.helpers');
 // 工具执行器惰性加载：仅在执行工具/取工具信息时才 require
 const tools = () => require('./ai.tools/tools');
 const { loadConversationContext, compressConversation, CONTEXT_COMPRESS_AT, compressingConvs } = require('./ai.memory');
@@ -245,7 +245,12 @@ router.post('/chat/stream', async (req, res) => {
 
   // 本轮启用的技能（md 指令文件）：前端按「/」选中的技能名，读取内容注入系统提示
   const skills = dbManager.readSkills(req.user && req.user.dbSlug, req.body.skills);
-  const history = [{ role: 'system', content: buildSystemPrompt(req.user && req.user.dbSlug, attachments, convCtx && convCtx.summary, skills) }, ...messages];
+  // 跨轮补证据：把此前轮次实际执行过的工具步骤追加到系统提示末尾。
+  // 只用一段文本，不改消息序列形状（不插入中间 system 消息、不重放 tool_calls），
+  // 因此对所有上游接口都兼容；没有历史工具记录时 toolTrace 为空串，零影响。
+  const systemText = buildSystemPrompt(req.user && req.user.dbSlug, attachments, convCtx && convCtx.summary, skills)
+    + (convCtx ? convCtx.toolTrace : '');
+  const history = [{ role: 'system', content: systemText }, ...messages];
   let proposal = null;
   let ask = null;
   let exportFile = null;
@@ -255,6 +260,13 @@ router.post('/chat/stream', async (req, res) => {
   // 联网搜索开关：仅当请求未显式关闭（webSearch === false）时下发 web_search 工具
   const webSearchOn = !!(req.body && req.body.webSearch !== false);
   const ctx = { blocks, slug: req.user && req.user.dbSlug, images: tools().latestUserImages(messages), attachments, signal: clientGone.signal, cfg: s };
+  // 子助手轨迹实时下发：增量事件挂到当前工具步骤 id 上，前端据此把片段追加到那一格过程块。
+  // 只在工具执行期间有 stepId，没有宿主步骤时不下发（避免前端收到孤儿事件）。
+  ctx.stepId = null;
+  ctx.emitSub = (p) => {
+    if (!ctx.stepId) return;
+    send({ type: 'sub_step', stepId: ctx.stepId, ...p });
+  };
   // 预算闸门：主对话与子助手共用同一本账（审查 v4 · B03-10）。
   // 超限后不再继续调用模型，把已有信息收尾成最终回答，避免「模型自己无限循环调工具」。
   const budget = createBudget();
@@ -267,8 +279,14 @@ router.post('/chat/stream', async (req, res) => {
   let maxPromptTokens = 0; // 单次调用最大的 prompt token（判断是否接近上下文上限）
   const donePayload = () => {
     afterRound();
+    // 收尾对账：本轮没有任何工具调用记录，正文却声称「已调用／已生成产物」。
+    // 不改写模型原文（保留可追溯性），补一条由系统给出、基于 steps 的事实说明，
+    // 让「我调用了工具」不再是一句无证据的最终结论。
+    const claimNote = hasUnbackedToolClaim(answerText, steps)
+      ? '\n\n> 系统核对：本轮没有实际的工具调用记录，上文中「已调用工具／已生成产物」的说法没有依据。'
+      : '';
     return {
-      reply: tools().appendBlocks(answerText, blocks), steps, ms: Date.now() - startedAt,
+      reply: tools().appendBlocks(answerText + claimNote, blocks), steps, ms: Date.now() - startedAt,
       // tokens 取统一预算闸门的累计值（含子助手消耗）——原先只统计主对话自己那几轮
       tokens: budget.total() || tokenTotal.total,
       promptTokens: tokenTotal.prompt, completionTokens: tokenTotal.completion,
@@ -350,6 +368,7 @@ router.post('/chat/stream', async (req, res) => {
         for (const tc of toolCalls) {
           const info = tools().TOOL_INFO[tc.name] || { running: '正在调用工具…', done: '调用工具' };
           const sid = 's' + (++stepSeq);
+          ctx.stepId = sid;
           const t0 = Date.now();
           send({ type: 'step', step: { id: sid, kind: 'tool', title: info.running, status: 'running' } });
           let args = {};
@@ -363,10 +382,15 @@ router.post('/chat/stream', async (req, res) => {
           const step = {
             id: sid,
             kind: 'tool',
+            // 工具名随步骤一起落库（前端过程块不用它，但 loadConversationContext
+            // 要靠它把「界面标题」还原成模型能对应上的真实工具调用记录）。
+            tool: tc.name,
             title: info.done,
             status: result && result.error ? 'error' : 'done',
             summary: tools().toolSummary(tc.name, result),
             detail: tools().toolDetailText(result),
+            // 子助手的思考 / 工具轨迹：挂在 run_subagent 这一步下，随 steps 落库，刷新后仍在
+            ...(Array.isArray(out.trace) && out.trace.length ? { subSteps: out.trace } : {}),
             ms: Date.now() - t0,
           };
           steps.push(step);

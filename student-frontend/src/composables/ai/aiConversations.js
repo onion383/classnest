@@ -87,9 +87,14 @@ export function useAiConversations(ctx) {
     },
     // 预计算助手消息的渲染块（在后台异步加载库后重算）
     async _computeHtml(msg) {
-      if (msg.role !== 'assistant' || !msg.content || msg._blocks) return
+      if (msg.role !== 'assistant' || !msg.content) return
+      // 按内容比对，不能只看 _blocks 是否存在：流式期间 _computeAllHtml 可能已按「草稿正文」
+      // 算过一次，而收尾时 reply 才带上 ```chart / ```record 数据块。早退会让图表永远不出现，
+      // 刷新会话才显示 —— 记下渲染时的正文，内容变了就重算。
+      if (msg._blocks && msg._blocksSrc === msg.content) return
       await ensureMarkdown()
       msg._blocks = ctx._buildBlocks(msg.content)
+      msg._blocksSrc = msg.content
       // 渲染已切到 _blocks（模板里 _blocks 分支优先于 _live 分支），
       // 流式期的临时缓冲是同一份内容的第二、三份拷贝，这里主动释放。
       // 注意保留 msg._live：它决定「未返回思考内容」提示是否显示，清掉会改变观感。
@@ -99,11 +104,10 @@ export function useAiConversations(ctx) {
     },
     _computeAllHtml() {
       ctx.messages.value.forEach((m) => {
-        if (m.role === 'assistant' && m.content && !m._blocks) {
-          if (isMarkdownReady()) {
-            m._blocks = ctx._buildBlocks(m.content)
-          }
-        }
+        if (m.role !== 'assistant' || !m.content || !isMarkdownReady()) return
+        if (m._blocks && m._blocksSrc === m.content) return
+        m._blocks = ctx._buildBlocks(m.content)
+        m._blocksSrc = m.content
       })
     },
     // 加载会话列表

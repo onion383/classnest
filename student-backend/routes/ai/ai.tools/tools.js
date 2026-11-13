@@ -146,19 +146,24 @@ async function runTool(name, args, ctx) {
       return { result: runDeleteImpact(args || {}) };
     case 'teaching_week':
       return { result: runTeachingWeek(args || {}) };
-    case 'run_subagent':
-      return { result: await runSubagent(args || {}, ctx) };
+    case 'run_subagent': {
+      const out = await runSubagent(args || {}, ctx);
+      // trace（子助手的思考与工具轨迹）只给界面过程块，不进 result：
+      // result 会被 toolResultContent 回灌给主模型，带进去只会白白撑大上下文。
+      const { trace, ...result } = out || {};
+      return { result, trace };
+    }
     case 'show_record': {
       const sr = runShowRecord(args);
       if (!sr.block) return { result: { ok: false, error: sr.error } };
       ctx.blocks.push(sr.block);
-      return { result: { ok: true, displayed: true, table: sr.table, count: sr.count, note: '前端已把完整数据渲染为表格，正文无需再罗列字段值' } };
+      return { result: { ok: true, displayed: true, table: sr.table, count: sr.count, note: '表格数据块已附加在回复末尾，由界面渲染；正文只需一句话说明这是什么数据，不要声明「已渲染」' } };
     }
     case 'show_chart': {
       const sc = runShowChart(args);
       if (!sc.block) return { result: { ok: false, error: sc.error } };
       ctx.blocks.push(sc.block);
-      return { result: { ok: true, displayed: true, type: sc.type, count: sc.count, title: sc.title, note: '前端已把图表渲染出来，正文只需一句话概括结论' } };
+      return { result: { ok: true, displayed: true, type: sc.type, count: sc.count, title: sc.title, note: '图表数据块已附加在回复末尾，由界面渲染；正文只需一句话概括结论，不要声明「已渲染」' } };
     }
     case 'get_time':
       return { result: currentTimeInfo() };

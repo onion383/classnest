@@ -68,13 +68,53 @@ async function compressConversation(cfg, conversationId, effectiveRows, upto) {
   return true;
 }
 
-// 依据会话 id 从数据库重建「完整上下文」：全量历史消息 + 历史附件，并按已有摘要裁剪较早部分
-//   返回 { summary, upto, lastPromptTokens, messages, attachments, effectiveRows }；会话不存在返回 null
+// 把落库的过程块还原成模型能读到的「事实清单」。
+//
+// 背景：一次请求里的工具调用（assistant.tool_calls + role:'tool' 结果）只活在那个请求的
+// history 数组里，res.end() 后就没了；ai_messages 只存 content + process_json，而
+// process_json 是给界面过程块用的摘要（title/summary/status），不是 tool_calls。
+// 于是下一轮重建上下文时，模型只看得到「用户说了什么 + 自己答了什么」，无从判断自己
+// 到底调过哪些工具 —— 只能照着系统提示词里「图表由前端渲染」这类话术补写叙事。
+//
+// 不重放成 tool_calls：上游要求 tool_call_id 与 role:'tool' 严格配对，重放还会让模型
+// 误以为旧结果本轮仍可消费。这里只给一段明确标注为「此前轮次」的自然语言记录，
+// 追加在系统提示末尾，消息序列形状不变（不插入中间 system 消息，兼容所有上游）。
+function buildToolTrace(rows) {
+  const lines = [];
+  for (const r of rows || []) {
+    if (r.role !== 'assistant' || !r.process_json) continue;
+    let proc;
+    try { proc = JSON.parse(r.process_json); } catch (_) { continue; }
+    const steps = Array.isArray(proc && proc.steps) ? proc.steps : [];
+    const used = steps.filter((s) => s && s.kind === 'tool' && s.status !== 'running');
+    if (!used.length) continue;
+    const parts = used.map((s) => {
+      // 新版步骤带 tool（真实工具名）与 detail（工具结果明细）；旧记录没有 tool 时
+      // 退回界面标题，历史会话照样能读出来。
+      const title = String(s.title || '工具').slice(0, 30);
+      const name = String(s.tool || '').trim().slice(0, 40);
+      const label = name ? `${title}[${name}]` : title;
+      const state = s.status === 'error' ? '失败' : '已执行';
+      const summary = String(s.summary || '').trim().slice(0, 60);
+      const detail = String(s.detail || '').trim().slice(0, 60);
+      return `${label}（${state}${summary ? '，' + summary : ''}${detail ? '；' + detail : ''}）`;
+    });
+    lines.push(`· 消息 #${r.id}：${parts.join('、')}`.slice(0, 300));
+  }
+  if (!lines.length) return '';
+  return '\n\n【此前轮次的实际工具调用记录】以下是系统在此前对话中确实执行过的工具步骤，'
+    + '供你回答「刚才调了什么／做过什么」。它们属于过去的轮次，不代表本轮已调用任何工具；'
+    + '本轮是否调用过工具，只以本轮实际收到的工具返回结果为准。\n'
+    + lines.slice(-20).join('\n');
+}
+
+// 依据会话 id 从数据库重建「完整上下文」：全量历史消息 + 历史附件 + 工具调用记录，并按已有摘要裁剪较早部分
+//   返回 { summary, upto, lastPromptTokens, messages, attachments, effectiveRows, toolTrace }；会话不存在返回 null
 function loadConversationContext(conversationId) {
   const conv = db.prepare('SELECT summary, summary_upto, last_prompt_tokens FROM ai_conversations WHERE id = ?').get(conversationId);
   if (!conv) return null;
   const upto = conv.summary_upto || 0;
-  const all = db.prepare('SELECT id, role, content, attachments_json FROM ai_messages WHERE conversation_id = ? ORDER BY id').all(conversationId);
+  const all = db.prepare('SELECT id, role, content, process_json, attachments_json FROM ai_messages WHERE conversation_id = ? ORDER BY id').all(conversationId);
   const effectiveRows = [];
   for (const r of all) {
     if (r.role !== 'user' && r.role !== 'assistant') continue;
@@ -85,7 +125,7 @@ function loadConversationContext(conversationId) {
     }
     // 跳过没有正文的助手消息（提问轮 / 占位），避免模型收到空消息
     if (r.role === 'assistant' && !contentToText(content).trim() && !(Array.isArray(content) && content.length)) continue;
-    effectiveRows.push({ id: r.id, role: r.role, content, attachments_json: r.attachments_json });
+    effectiveRows.push({ id: r.id, role: r.role, content, process_json: r.process_json, attachments_json: r.attachments_json });
   }
   const messages = effectiveRows.map((r) => ({ role: r.role, content: r.content }));
   const attachments = [];
@@ -98,7 +138,10 @@ function loadConversationContext(conversationId) {
       }
     } catch (_) { /* 忽略损坏的附件记录 */ }
   }
-  return { summary: conv.summary || '', upto, lastPromptTokens: conv.last_prompt_tokens || 0, messages, attachments, effectiveRows };
+  return {
+    summary: conv.summary || '', upto, lastPromptTokens: conv.last_prompt_tokens || 0,
+    messages, attachments, effectiveRows, toolTrace: buildToolTrace(effectiveRows),
+  };
 }
 
 // GET /api/ai/memory —— 读取当前班主任的长期记忆（md 原文）
@@ -119,4 +162,5 @@ module.exports.CONTEXT_COMPRESS_AT = CONTEXT_COMPRESS_AT;
 module.exports.CONTEXT_KEEP_RECENT = CONTEXT_KEEP_RECENT;
 module.exports.compressingConvs = compressingConvs;
 module.exports.loadConversationContext = loadConversationContext;
+module.exports.buildToolTrace = buildToolTrace;
 module.exports.compressConversation = compressConversation;

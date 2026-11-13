@@ -322,6 +322,29 @@ export function useAiChat(ctx) {
               else last.steps.splice(si, 1, { ...last.steps[si], ...evt.step })
               last.processOpen = true
               ctx.scrollBottom()
+            } else if (evt.type === 'sub_step') {
+              // 子助手轨迹增量：按主步骤 id 找到 run_subagent 的运行中步骤，按子任务 index 分组追加。
+              // done 事件带的是后端同一份全量 steps，会整体覆盖这份临时结构，
+              // 因此既不会重复，也不会在收尾时把已显示的文字换掉。
+              if (!last.steps) last.steps = []
+              let host = last.steps.find((s) => s.id === evt.stepId)
+              if (!host) host = last.steps.slice().reverse().find((s) => s.status === 'running' && s.kind === 'tool')
+              if (host) {
+                if (!host.subSteps) host.subSteps = []
+                const idx = Number(evt.index) || 0
+                while (host.subSteps.length <= idx) host.subSteps.push({ name: '子助手', steps: [] })
+                const g = host.subSteps[idx]
+                if (evt.name) g.name = evt.name
+                if (evt.kind === 'reason') {
+                  let s = g.steps.find((x) => x._round === evt.round && x.kind === 'reason')
+                  if (!s) { s = { kind: 'reason', text: '', _round: evt.round }; g.steps.push(s) }
+                  s.text += evt.text || ''
+                } else if (evt.kind === 'tool') {
+                  g.steps.push({ kind: 'tool', title: evt.title || '' })
+                }
+              }
+              last.processOpen = true
+              ctx.scrollBottom()
             } else if (evt.type === 'commit_process') {
               // 中间轮的草稿文本归入过程块：从正文移出，作为一条过程文本步骤
               if (!last.steps) last.steps = []

@@ -64,4 +64,19 @@ function displayColumns(table) {
 }
 
 
-module.exports = { normColVal, serializeColVal, tableColumns, displayColumns, clearTableColumnsCache, toolResultContent };
+// 收尾对账：纯文本轮（模型本轮没输出任何 tool_calls）却在正文里声称「已调用工具／已生成产物」。
+// 这类话没有结构化证据，不能让它原样成为最终答案、再被下一轮当成既成事实。
+// 只认完成态动作声明；能力描述（「我可以调用 query 工具」）与提问不算。
+const TOOL_ACTION_RE = /(?:已|已经|刚刚?|曾)(?:经)?[^。！？\n]{0,8}(?:调用|使用|执行)(?:了|过)?[^。！？\n]{0,12}工具|(?:调用|使用|执行)(?:了|过)[^。！？\n]{0,12}工具/;
+const PRODUCT_RE = /(?:已|已经|刚刚?|为您|为你)[^。！？\n]{0,8}(?:生成|绘制|渲染|展示|导出|保存|写入)[^。！？\n]{0,12}(?:图表|柱状图|饼图|折线图|统计表|表格|文件|图片|记忆)/;
+
+function hasUnbackedToolClaim(text, steps) {
+  const t = String(text || '');
+  if (!TOOL_ACTION_RE.test(t) && !PRODUCT_RE.test(t)) return false;
+  // 本轮只要有过一次工具调用（不论成功失败），「调用过工具」就是有据可依的。
+  // 失败步骤也算：模型说的是「调用」，不是「调用成功」。
+  const called = (steps || []).some((s) => s && s.kind === 'tool' && s.status !== 'running');
+  return !called;
+}
+
+module.exports = { normColVal, serializeColVal, tableColumns, displayColumns, clearTableColumnsCache, toolResultContent, hasUnbackedToolClaim };

@@ -63,20 +63,34 @@
           <div v-if="m.processOpen" class="px-2.5 pb-2 space-y-1.5">
             <div v-if="m.reasoning" class="text-[13px] text-text-secondary whitespace-pre-wrap break-words max-h-40 overflow-auto">{{ m.reasoning }}</div>
             <div v-for="st in (m.steps || [])" :key="st.id" class="text-[13px] leading-6">
-              <!-- 一级：思考 / 调用工具接口 的一行；带结果明细的工具步骤可点开做二级展开 -->
+              <!-- 一级：思考 / 使用工具 / 中间草稿，统一带分类标签；有结果明细的可点开二级展开 -->
               <div
                 class="flex items-start gap-1.5"
                 :class="st.detail ? 'cursor-pointer hover:text-text' : ''"
                 @click="st.detail && toggleStepDetail(st)"
               >
                 <span class="flex-shrink-0 w-3.5 text-center" :class="stepClass(st)">{{ stepIcon(st) }}</span>
-                <span v-if="st.kind === 'text' || st.kind === 'reason'" class="flex-1 min-w-0 whitespace-pre-wrap break-words" :class="st.kind === 'reason' ? 'text-text-secondary max-h-40 overflow-auto' : 'text-text-muted'">{{ st.text }}</span>
+                <span v-if="st.kind === 'text' || st.kind === 'reason'" class="flex-1 min-w-0 flex items-start gap-1.5">
+                  <span class="step-tag">{{ stepLabel(st) }}</span>
+                  <span class="min-w-0 whitespace-pre-wrap break-words" :class="st.kind === 'reason' ? 'text-text-secondary max-h-40 overflow-auto' : 'text-text-muted'">{{ st.text }}</span>
+                </span>
                 <span v-else class="flex-1 min-w-0 text-text-muted">
-                  <span :class="st.status === 'running' ? 'text-text-secondary' : ''">{{ st.title }}</span>
+                  <span class="step-tag mr-1">{{ stepLabel(st) }}</span><span :class="st.status === 'running' ? 'text-text-secondary' : ''">{{ st.title }}</span>
                   <span v-if="st.summary"> · {{ st.summary }}</span>
                   <span v-if="st.ms != null && st.status !== 'running'" class="text-text-muted/60"> · {{ stepSeconds(st) }}</span>
                 </span>
                 <span v-if="st.detail" class="flex-shrink-0 text-text-muted/60 transition-transform duration-150" :class="st._open ? 'rotate-180' : ''">▾</span>
+              </div>
+              <!-- 子助手轨迹：按子任务分组，步骤沿用同一套分类标签。
+                   与主过程一样带「思考 / 使用工具」，默认可见，不需要再点开二级明细。 -->
+              <div v-if="st.subSteps && st.subSteps.length" class="mt-1 ml-6 space-y-1">
+                <div v-for="(g, gi) in st.subSteps" :key="gi" class="space-y-0.5">
+                  <div class="text-[11px] text-text-muted/80">子助手 · {{ g.name }}</div>
+                  <div v-for="(s, si) in (g.steps || [])" :key="si" class="flex items-start gap-1.5 pl-2 text-[12px] leading-5">
+                    <span class="step-tag">{{ stepLabel(s) }}</span>
+                    <span class="min-w-0 whitespace-pre-wrap break-words text-text-muted" :class="s.kind === 'reason' ? 'max-h-40 overflow-auto' : ''">{{ s.text || s.title }}</span>
+                  </div>
+                </div>
               </div>
               <!-- 二级展开：工具返回的结果明细 -->
               <pre
@@ -204,6 +218,16 @@
 .user-bubble { border-radius: var(--radius-surface) var(--radius-surface) var(--radius-control) var(--radius-surface) !important; }
 .assistant-bubble { border-radius: var(--radius-surface) var(--radius-surface) var(--radius-surface) var(--radius-control) !important; }
 
+/* 全局「去网页感」把 html/body 设成 user-select:none（禁止选中文本），
+   但 AI 回复与用户提问必须能选中复制：只豁免这两种气泡（含过程块、markdown 正文、结果明细），
+   输入框仍走 index.css 里 input/textarea/contenteditable 的既有例外，其余界面保持禁止选择。
+   选中文本后 main.js 的全局右键监听会按 hasSelection 弹出带「复制」的原生菜单。 */
+.user-bubble,
+.assistant-bubble {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* 助手消息的 markdown 排版（加粗/斜体/表格/列表/代码） */
 .markdown-body :deep(p) { margin: 0 0 0.5em; }
 .markdown-body :deep(p:last-child) { margin-bottom: 0; }
@@ -251,6 +275,21 @@
   color: var(--color-text-muted, #64748b);
   margin: 0.4em 0;
 }
+/* 过程块步骤的分类标签：中性描边小胶囊，四套主题统一靠 CSS 变量取色。
+   主过程与子助手轨迹共用，避免再各写一套配色。 */
+.step-tag {
+  display: inline-block;
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-surface, #fff);
+  color: var(--color-text-muted, #6b7280);
+  white-space: nowrap;
+  vertical-align: 1px;
+}
 /* 「中断」按钮与「已中断」标记共用的小方块停止图标 */
 .stop-mark {
   display: inline-block;
@@ -268,7 +307,7 @@ import AiRecordTable from '../tables/AiRecordTable.vue'
 import EmptySnapshot from '../base/EmptySnapshot.vue'
 import AiStreamTail from './AiStreamTail.vue'
 import {
-  hasProcess, processTitle, stepIcon, stepClass, stepSeconds, toggleStepDetail,
+  hasProcess, processTitle, stepIcon, stepClass, stepSeconds, stepLabel, toggleStepDetail,
   hasReasonStep, tokenSpeed, extractFileName, extractUserText, summarizeProposalChanges,
 } from '../../composables/ai/aiMessages.js'
 import { TABLE_ROUTE } from '../../composables/ai/aiConstants.js'

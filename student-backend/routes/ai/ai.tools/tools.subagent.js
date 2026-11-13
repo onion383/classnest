@@ -63,8 +63,51 @@ function parseSubagentResult(text, task) {
 // 这里在执行侧再做一次强制校验：模型返回清单外的名字一律拒绝。
 const { isSubagentToolAllowed } = require('../ai.subagent-tools');
 
+// 子助手步骤沿用主过程块的工具中文名（TOOL_INFO 是同一份来源，用户看到的两级过程口径一致）。
+// 惰性 require：避免把 executors.js 拉进本模块的顶层加载链。
+function subagentToolTitle(name) {
+  const { TOOL_INFO } = require('./tools.executors/executors.js');
+  const info = TOOL_INFO[String(name || '')];
+  return (info && info.done) || String(name || '工具');
+}
+
+// 子助手轨迹的同一份数据源：既用于界面实时增量展示，也作为最终落库的全量步骤。
+// 原先只有「整个 runSubagent 跑完 → 从 __steps 汇总」一条路，界面只能一次性看到结果。
+// 这里让每片思维链 / 每个工具步骤同步记入 sink，并（可选）下发 SSE 增量事件；
+// done 事件带的是同一份 steps，覆盖实时结构时不会跳变、不会重复。
+// limit 与原来「每条思考截 600 字」保持一致：截断只作用于展示，
+// 上游 history 里回传的 reasoning_content 仍是完整文本。
+function makeTraceSink(index, emit, limit = 600) {
+  const steps = [];
+  const reasonByRound = new Map();
+  return {
+    index,
+    steps,
+    reason(round, piece) {
+      const cur = reasonByRound.get(round);
+      const room = limit - (cur ? cur.text.length : 0);
+      if (room <= 0) return;
+      const take = String(piece || '').slice(0, room);
+      if (!take) return;
+      let st = cur;
+      if (!st) {
+        st = { kind: 'reason', text: '' };
+        reasonByRound.set(round, st);
+        steps.push(st);
+      }
+      st.text += take;
+      if (emit) emit({ index, round, kind: 'reason', text: take });
+    },
+    tool(round, title) {
+      const st = { kind: 'tool', title };
+      steps.push(st);
+      if (emit) emit({ index, round, kind: 'tool', title });
+    },
+  };
+}
+
 // 单个子任务：独立上下文 + 受限只读工具子集，循环取数直至子助手给出最终 JSON
-async function runOneSubagent(cfg, item, ctx) {
+async function runOneSubagent(cfg, item, ctx, traceSink) {
   const { consumeStream, buildSubagentPrompt, getSubagentTools } = require('../ai.llm');
   const name = String((item && item.name) || '数据核查员').slice(0, 40);
   const task = String((item && item.task) || '').trim();
@@ -84,12 +127,20 @@ async function runOneSubagent(cfg, item, ctx) {
   const budget = ctx && ctx.budget;
   // 轮数上限取自统一预算闸门（limits() 是方法，必须调用它拿值）
   const maxRounds = (budget && budget.limits && budget.limits().maxSubagentRounds) || MAX_SUBAGENT_ROUNDS;
+  // 子助手的「思考 / 使用工具」轨迹：只供界面过程块展示，不回灌给主模型。
+  // 单测等直接调用本函数时没有 sink，建一个只记录、不下发的默认源即可。
+  const sink = traceSink || makeTraceSink(0, null);
   let usedTokens = 0;
   for (let i = 0; i < maxRounds; i++) {
     if (budget && budget.exceeded()) {
-      return { task, result: null, basis: '', count: 0, samples: [], error: budget.note(), needs_user_decision: [] };
+      return { task, result: null, basis: '', count: 0, samples: [], error: budget.note(), needs_user_decision: [], __steps: sink.steps };
     }
-    const { text, toolCalls, reasoning, usage } = await consumeStream(cfg, history, null, null, ctx && ctx.signal, subTools);
+    // 思维链增量回调：一边逐片下发给界面，一边按轮次合并成最终落库的那一条思考步骤。
+    // 上游 history 的 reasoning_content 仍用 consumeStream 返回的完整 reasoning 原样回传，
+    // 展示用的 600 字截断不会破坏带 tools 的思考模式兼容性。
+    const { text, toolCalls, reasoning, usage } = await consumeStream(
+      cfg, history, null, (d) => sink.reason(i, d), ctx && ctx.signal, subTools
+    );
     // usage 记账：子助手的消耗必须计入同一本账，否则主对话的统计是残缺的
     if (usage) {
       if (budget) budget.add(usage, 'subagent');
@@ -98,6 +149,7 @@ async function runOneSubagent(cfg, item, ctx) {
     if (!toolCalls || !toolCalls.length) {
       const parsed = parseSubagentResult(text, task);
       parsed.tokens = usedTokens;
+      parsed.__steps = sink.steps;
       return parsed;
     }
     history.push({
@@ -108,6 +160,7 @@ async function runOneSubagent(cfg, item, ctx) {
       tool_calls: toolCalls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: t.arguments } })),
     });
     for (const tc of toolCalls) {
+      sink.tool(i, subagentToolTitle(tc.name));
       let targs = {};
       try { targs = JSON.parse(tc.arguments || '{}'); } catch (_) {}
       let result;
@@ -123,7 +176,7 @@ async function runOneSubagent(cfg, item, ctx) {
       history.push({ role: 'tool', tool_call_id: tc.id, content: toolResultContent(result) });
     }
   }
-  return { task, result: null, basis: '', count: 0, samples: [], error: '子助手超过最大轮数仍未给出结论', needs_user_decision: [], tokens: usedTokens };
+  return { task, result: null, basis: '', count: 0, samples: [], error: '子助手超过最大轮数仍未给出结论', needs_user_decision: [], tokens: usedTokens, __steps: sink.steps };
 }
 
 // run_subagent：并行启动若干只读子助手，各自返回契约对象
@@ -149,15 +202,34 @@ async function runSubagent(args, ctx) {
     tasks = tasks.slice(0, remain);
     if (!tasks.length) return { results: [], count: 0, error: budget.note() };
   }
-  const results = await Promise.all(tasks.map((t) =>
-    runOneSubagent(cfg, t, ctx).catch((e) => ({
+  // 实时下发：每个子任务一个轨迹源，增量事件带上子任务名，避免并行子助手的文字串成一组。
+  // 没有 emitSub（单测 / 非流式调用）时只记录不下发，原有行为不变。
+  const emitSub = ctx && ctx.emitSub;
+  const sinks = tasks.map((t, i) => makeTraceSink(i, emitSub
+    ? (p) => emitSub({ ...p, name: String((t && t.name) || '子助手').slice(0, 40) })
+    : null));
+  const results = await Promise.all(tasks.map((t, i) =>
+    runOneSubagent(cfg, t, ctx, sinks[i]).catch((e) => ({
       task: String((t && t.task) || ''), result: null, basis: '', count: 0, samples: [],
       error: e.message || '子助手运行失败', needs_user_decision: [],
     }))
   ));
+  // 轨迹单独带走：results 会经 toolResultContent 回灌给主模型，子助手的思考过程
+  // 对主模型没有价值，整段塞进去只会撑大上下文。trace 只进界面过程块。
+  // 被 catch 接住的子任务没有 __steps，用同源 sink 兜底，实时已显示的步骤不会在收尾时消失。
+  const trace = results.map((r, i) => ({
+    name: String((tasks[i] && tasks[i].name) || '子助手').slice(0, 40),
+    steps: (r && Array.isArray(r.__steps)) ? r.__steps : sinks[i].steps,
+  }));
+  const clean = results.map((r) => {
+    if (!r || typeof r !== 'object') return r;
+    const copy = { ...r };
+    delete copy.__steps;
+    return copy;
+  });
   // 用量汇总回传：主对话据此知道子助手烧了多少（原先完全不可见）
-  const tokens = results.reduce((sum, r) => sum + ((r && r.tokens) || 0), 0);
-  return { results, count: results.length, tokens };
+  const tokens = clean.reduce((sum, r) => sum + ((r && r.tokens) || 0), 0);
+  return { results: clean, count: clean.length, tokens, trace };
 }
 
-module.exports = { subagentTool, runSubagent, runOneSubagent, isSubagentToolAllowed };
+module.exports = { subagentTool, runSubagent, runOneSubagent, makeTraceSink, isSubagentToolAllowed };

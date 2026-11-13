@@ -420,6 +420,15 @@ export function processTitle(m) {
   return parts.join(' · ')
 }
 
+// 过程块步骤的分类标签：把「这一行是什么」显式写出来，不靠图标猜。
+// 子助手轨迹复用同一个函数，保证主过程与子过程口径一致。
+export function stepLabel(st) {
+  if (!st) return ''
+  if (st.kind === 'reason') return '思考'
+  if (st.kind === 'text') return '过程'
+  return '使用工具'
+}
+
 export function stepIcon(st) {
   if (st.kind === 'reason') return '✻'
   if (st.kind === 'text') return '·'

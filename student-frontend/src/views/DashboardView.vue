@@ -323,6 +323,13 @@ import { useNotification } from '../composables/useNotification.js'
 import { pad2, formatDate } from '../utils/dateTime.js'
 import { leavesOn } from '../utils/leaveState.js'
 
+// 2-18 归因：Vue 挂载完成 → 首页数据发起 之间约 57ms 一直没人拆开过。这条标记
+// 「本组件模块已求值、setup 开始」，与下面 onMounted 那条一起把这段切成三截：
+//   挂载完成 → DashboardView 加载  = 路由 chunk 加载 + V8 编译
+//   DashboardView 加载 → 挂载      = 本组件 setup 执行
+//   挂载 → 首页数据发起            = onMounted 到 fetchAll 之间
+mark('DashboardView 加载')
+
 const router = useRouter()
 const { success: notifySuccess, error: notifyError } = useNotification()
 
@@ -740,6 +747,8 @@ let firstRenderMarked = false
 const refreshNow = () => { now.value = new Date() }
 
 onMounted(() => {
+  // 与 setup 首行那条配对，把「挂载 → 数据发起」再切一刀（见文件内 2-18 归因注释）
+  mark('DashboardView 挂载')
   loadData()
   loadClassInfo()
   // 每分钟刷新当前时间，让今日名单、窗口时间等随时间变化

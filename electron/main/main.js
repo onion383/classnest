@@ -293,6 +293,14 @@ function createMainWindow() {
   tray.resetShutdownState()
   mainWindowChrome = 'frameless'
   // webPreferences 提出对象字面量单独计时（仅 dev 打点用；打包版行为与内联写法完全一致）
+  // 打包版归因：上面的 _profMark 只在 dev 生效（_profOn = isDev），「建窗」这一段在打包版
+  // 一直没拆开过（56→85ms 之间发生了什么没人知道）。补一条 PERF_STARTUP 门控的打点：
+  // 只进 stdout，不进启动时间线（不进 LATE_STARTUP_LABELS，避免污染用户可见的耗时明细）。
+  const _mkT0 = Date.now()
+  const _mkPerf = (name) => {
+    if (process.env.PERF_STARTUP !== '1') return
+    try { console.log(`[perf] 建窗 ${name} ${Date.now() - _mkT0}ms`) } catch (_) { /* 打点失败忽略 */ }
+  }
   const _profWpT0 = Date.now()
   // devTools 不在这里写死：交给 buildWebPreferences 按环境决定（生产关闭、开发开启）。
   // 原来硬传 true 会让打包版也留着开发者工具，等于给注入点常备一个执行面板。
@@ -326,6 +334,7 @@ function createMainWindow() {
     webPreferences: _webPrefs,
   })
   _profMark('【prof】BrowserWindow 构造返回')
+  _mkPerf('BrowserWindow 构造完成')
 
   // 立即绑定全局（供 theme-chrome 重建等判断）；内部事件全部用局部 win 引用，
   // 避免重建时旧窗口的 'closed' 事件把 mainWindow 置空，影响到刚创建的新窗口。
@@ -334,6 +343,7 @@ function createMainWindow() {
   // 登记窗口角色：主窗口是唯一允许业务写操作的窗口（见 ipc-policy.json）。
   // 必须登记，否则主进程侧的发送方校验会把它当「未登记窗口」全部拒绝。
   ipcAuth.registerWindowRole(win, ipcAuth.ROLE.MAIN)
+  _mkPerf('窗口角色登记')
 
   // 所有主题统一（无边框 + 系统材质）：BrowserWindow 构造已带 backgroundMaterial: 'acrylic'，
   // 此处不再重复调 setBackgroundMaterial（省掉启动关键路径上一次 DWM 往返）。
@@ -364,9 +374,11 @@ function createMainWindow() {
     devLoader.pollViteAndNavigate(win)
   } else {
     backend.setBootStatus('正在加载界面…')
+    _mkPerf('setBootStatus 完成')
     // B1：页面仍用 app://local 源（origin 隔离不变），/api 由自定义协议代理到后端，
     // 页面与 API 同源 → 不发 CORS 预检。
     win.loadURL('app://local/index.html')
+    _mkPerf('loadURL 已发起')
   }
 
   // 监听渲染进程的 [startup] 日志，记录 Vue 挂载等首屏耗时。
@@ -385,6 +397,15 @@ function createMainWindow() {
     '首屏资源计时', '首屏发送开始',
     '长任务', '派发后宏任务', '派发后帧',
     '握手开始', '握手完成', '握手失败', '握手请求发出', '握手响应到达',
+    // 首屏路由组件（DashboardView）的加载/挂载两条：动态 import 的 chunk 是在
+    // did-finish-load 之后才解析的，不在这里就会被当成「重载日志」丢掉，
+    // 于是「Vue 挂载 → 首页数据发起」那几十毫秒永远拆不开（2-18 归因）。
+    'DashboardView 加载', 'DashboardView 挂载',
+    // 首屏导航链路三段（2-18 归因）：安装 → 守卫进入 → 落地页 chunk 求值。
+    // 同样晚于 did-finish-load，不放行就一条也看不到。
+    '路由安装完成', '路由守卫进入', '落地页 chunk 已求值',
+    // 挂载后的宏任务/首帧两条：用来判断「挂载 → 守卫进入」那 40ms 是否为主线程被占。
+    '挂载后宏任务', '挂载后首帧',
   ]
   const lateStartupLogged = new Set()
   win.webContents.on('console-message', (event, level, message) => {
@@ -646,11 +667,19 @@ app.whenReady().then(() => {
       backend.startBackend()
       startupTimer.mark('startBackend 完成')
 
-      // 延迟 IPC 注册：放在建窗与 fork 之后，让这 5 个模块的 require 与「窗口加载首屏」
-      // 「后端子进程引导」并行，不再串行排在窗口创建之前。
-      registerDeferredIpc()
+      // 延迟 IPC 注册：全局推到「界面可见」之后，不再按 CPU 核数分叉。
+      // 原本只有 ≤2 核才延后；真机 2 核 VM 的 21 段 A/B 证明整体错峰没有可测收益，
+      // 但这 5 个模块的同步 require 在高配机上同样零损失、且能挪出启动关键路径，
+      // 故并入全局而不是保留一个「低配模式」。锚点是占位页移除（startupTimer 定稿）。
+      // 安全性：这 5 组是 USB / 版本更新 / 文件对话框 / 常用软件 / 性能面板，全是用户交互
+      // 或定时触发；启动必需的 backend-status、backend-failure、widgets-ready 等通道在本文件
+      // 顶层已注册（见上方 backend.registerBackendIpc / widget.registerWidgetIpc），不在这批里。
+      // 最坏情况：占位页因后端失败永不移除时，12s 的 settleProvisional 也会触发 onFinal，
+      // 只是这 5 组功能晚可用，不会永久失效。
+      startupTimer.onFinal(() => { registerDeferredIpc() })
 
-      // 性能面板内存历史：自启动即开始定时采样「总计」，用于「平均（近一分钟）/ 最高（自启动起）」
+      // 性能面板内存历史：自启动即开始定时采样「总计」，用于「平均（近一分钟）/ 最高（自启动起）」。
+      // 保持立即开始 —— 延后会改掉「自启动起」这个用户可见统计口径，不值得。
       getPerf().startMemSampling()
     }
 

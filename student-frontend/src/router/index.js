@@ -3,9 +3,17 @@ import { createRouter, createWebHistory, createWebHashHistory } from 'vue-router
 import axios from 'axios'
 import { ensureDashboardData } from '../composables/useDashboardData'
 import { decodeJwtPayload } from '../utils/jwt'
+// 启动归因用（首屏导航链路），纯诊断，不参与路由逻辑
+import { mark } from '../utils/perfMark.js'
+// 首屏落地页**静态**导入（2026-11-14 归因）：动态 import 会让首次导航多等一次
+// 「chunk 解析 → 模块实例化 → CSS link load」的往返，实测稳定吃掉 45~50ms
+// （守卫进入 → 落地页 chunk 已求值）。它本来就是登录后必然要用的页面，
+// main.js 之前也已经用 landingPreload 提前把块拉下来了 —— 那就别绕这一圈。
+// 其余页面继续懒加载：那些是「点了才看」，不在首屏关键路径上。
+import DashboardView from '../views/DashboardView.vue'
 
 const routes = [
-  { path: '/', name: 'dashboard', component: () => import('../views/DashboardView.vue') },
+  { path: '/', name: 'dashboard', component: DashboardView },
   { path: '/students', name: 'classroom', component: () => import('../views/ClassroomView.vue') },
   { path: '/fee', name: 'fee', component: () => import('../views/FeeManagement.vue') },
   { path: '/login', name: 'login', component: () => import('../views/Login.vue') },
@@ -42,6 +50,9 @@ function isTokenExpired(token) {
 
 // 路由守卫必须在 router 实例创建之后
 router.beforeEach(async (to, from) => {
+  // 归因（2-18）：首次导航从 install 到守卫真正执行之间有一段说不清的空档，
+  // 这条与 main.js 的「路由安装完成」配对；只记首次，跳页不重复打。
+  if (!from.matched.length) mark('路由守卫进入')
   const stored = getToken()
   if (stored && isTokenExpired(stored)) {
     // 残留的过期 token 直接在路由阶段清除，避免先渲染内部页、再被 401 踢回登录页的闪烁。

@@ -72,6 +72,8 @@ module.exports = {
   registryList: base.registryList,
   registryListValid: account.registryListValid,
   warmup: conn.warmup,
+  // 让路链 warmup 步骤用：提前打开「最近使用」的库，把首屏第一笔 KDF + openFile 挪出请求路径
+  warmupMostRecent: conn.warmupMostRecent,
   // AI 长期记忆（md 文档，随备份/恢复一起带走）
   readMemory: memory.readMemory,
   writeMemory: memory.writeMemory,

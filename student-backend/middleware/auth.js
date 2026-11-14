@@ -7,6 +7,15 @@ function jwtLib() {
   if (!_jwt) _jwt = require('jsonwebtoken');
   return _jwt;
 }
+
+// 鉴权预热：jsonwebtoken 是延迟 require 的，首次加载实测 79ms（另一台机器上 100ms+）。
+// 这段成本原本落在**首个 API 请求的 verifyToken** 里 —— 那时连接已 accept、路由还没进去，
+// 后端的同步 require 会把同时到达的 5 个首屏请求一起挡在队列里（实测 87~133ms 的循环停顿，
+// CPU 全花在模块加载上）。由 app.js 的 warmupStep 在 listen 之后、首屏请求之前调一次，
+// 把它挪出关键路径。预热失败不抛：真请求会照常懒加载。
+function warmupAuth() {
+  try { jwtLib(); } catch (_) { /* 预热失败走懒加载兜底 */ }
+}
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -98,10 +107,20 @@ function resolveToken(req) {
 }
 
 function verifyToken(token, { allowMedia = false } = {}) {
-  const payload = jwtLib().verify(token, SECRET);
+  const _t0 = Date.now();
+  const lib = jwtLib();
+  const _t1 = Date.now();
+  const payload = lib.verify(token, SECRET);
+  const _t2 = Date.now();
   // 会话名单校验：主动退出会把 sid 移出名单，此后原 token 立即失效（用户须重新登录）。
   // 不带 sid 的旧 token（本次改动之前签发的）同样视为失效，全部需要重新登录一次。
-  if (!payload || !sessions.has(payload.sid)) throw new Error('会话已失效');
+  const alive = !!(payload && sessions.has(payload.sid));
+  if (process.env.PERF_STARTUP === '1') {
+    try {
+      console.log(`[boot] verifyToken: require ${_t1 - _t0}ms / verify ${_t2 - _t1}ms / sessions ${Date.now() - _t2}ms`);
+    } catch (_) { /* 静默 */ }
+  }
+  if (!alive) throw new Error('会话已失效');
   // 媒体凭据只能用于媒体路径，不能拿来调业务 API
   if (payload.scope === 'media' && !allowMedia) throw new Error('媒体凭据不可用于此接口');
   return payload;
@@ -161,7 +180,9 @@ function isRecoverScopeAllowed(req) {
 
 function auth(requiredRoles = []) {
   return (req, res, next) => {
+    const _t0 = Date.now();
     const { token, source } = resolveAuth(req);
+    const _t1 = Date.now();
     if (!token) {
       // 安全模式下没有可用凭据：让前端补发一份带 token 的信道凭据后重试，
       // 而不是直接判定「登录失效」把用户踢回登录页。
@@ -173,6 +194,7 @@ function auth(requiredRoles = []) {
     }
     try {
       const user = verifyToken(token, { allowMedia: isMediaRequest(req) });
+      const _t2 = Date.now();
       // 查询串里的凭据必须是受限媒体凭据：登录 JWT 不允许再通过 URL 使用
       if (source === 'media' && user.scope !== 'media') throw new Error('媒体凭据无效');
       if (requiredRoles.length > 0 && !requiredRoles.includes(user.role)) {
@@ -192,6 +214,14 @@ function auth(requiredRoles = []) {
       // async handler 在 await 间隙计数已归零、连接可能被 LRU 驱逐 ——
       // 这里用响应结束事件把「在用」延长到请求真正结束。
       return dbManager.withDb(slug, () => {
+        const _t3 = Date.now();
+        // 首屏首个请求的同步开销全在这三段里（connect 已 accept、路由还没进去）：
+        // resolveAuth=解信道凭据，verify=JWT+会话名单，withDb=首次打开加密库。
+        if (process.env.PERF_STARTUP === '1') {
+          try {
+            console.log(`[boot] auth 分段 ${req.originalUrl}: resolveAuth ${_t1 - _t0}ms / verify ${_t2 - _t1}ms / withDb ${_t3 - _t2}ms`);
+          } catch (_) { /* 静默 */ }
+        }
         dbManager.holdConnUntilResponse(slug, res);
         return next();
       });
@@ -233,6 +263,6 @@ function authStatic() {
 }
 
 module.exports = {
-  auth, authStatic, SECRET, resolveToken, resolveAuth, verifyToken,
+  auth, authStatic, SECRET, resolveToken, resolveAuth, verifyToken, warmupAuth,
   signMediaToken, TOKEN_SIGN_OPTS, TOKEN_COOKIE_MAX_AGE, isRecoverScopeAllowed,
 };

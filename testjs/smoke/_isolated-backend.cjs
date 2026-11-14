@@ -115,6 +115,10 @@ async function startIsolatedBackend(opts = {}) {
     PORT: String(port),
     DATA_DIR: dataDir,
     DB_MASTER_KEY: opts.masterKey || crypto.randomBytes(32).toString('hex'),
+    // app.js 的让路链会把 /api/data、/api/fee-records 延后 800ms 注册（让出首屏）。
+    // 现在有「命中即 flush」的按需门卫兜底，但冒烟用例常在就绪后 100ms 内就打到这些前缀；
+    // 这里仍置 0 = 立即注册，让用例不依赖门卫时序。要专门验证延后行为，用 opts.env 传回来。
+    CLASSNEST_LATE_LOAD_DELAY_MS: '0',
     ...(opts.env || {}),
   }
   // 显式剔除：终端或父进程可能透传安全通道密钥，留着就又会退回「只认信道凭据」的模式。

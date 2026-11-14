@@ -4,6 +4,7 @@
 //   打开/缓存/驱逐单个班主任库连接、请求上下文取库、后台暖机
 // =========================================================================
 
+const fs = require('fs');
 const path = require('path');
 const { initSchema } = require('../schema/schema');
 const {
@@ -18,9 +19,16 @@ function getConn(slug, passphrase, encrypted = true) {
     touchConn(slug);
     return connCache.get(slug);
   }
+  const _t0 = Date.now();
   const conn = openFile(path.join(dataDir, `${slug}.db`), passphrase, encrypted);
+  const _t1 = Date.now();
   try {
     initSchema(conn);
+    // 首屏请求的第一笔同步开销就在这里（KDF + 全量 DDL 检查），而它发生在
+    // 「连接已 accept、路由还没进去」的窗口里 —— 表现是首屏请求凭空多等 100ms+。
+    if (process.env.PERF_STARTUP === '1') {
+      try { console.log(`[boot] 首次打开账号库 ${_t1 - _t0}ms（openFile）+ ${Date.now() - _t1}ms（initSchema）`); } catch (_) { /* 静默 */ }
+    }
     setCachedConn(slug, conn);
   } catch (err) {
     // 硬顶拒绝或 initSchema 失败：新建的连接不能留在内存里
@@ -86,6 +94,9 @@ function withDb(slug, fn) {
     }
   }
   const conn = getConn(slug, passphrase, encrypted);
+  // 记下「这次真的用了哪个库」——下次启动的 warmup 靠它预热（见 warmupMostRecent）。
+  // 放在 getConn 之后：只有真打开成功才算数。
+  rememberDb(slug);
   return als.run({ slug, conn }, () => {
     // 标记「本请求正在使用该连接」：连接缓存的 LRU 驱逐会跳过在用连接，
     // 避免并发切换库时把仍在执行查询的连接 close() 掉（B04-01）。
@@ -140,4 +151,70 @@ function warmup() {
   } catch (_) { /* 暖机失败不影响正常懒加载路径 */ }
 }
 
-module.exports = { getConn, evictConn, current, currentSlug, withDb, holdConnUntilResponse, lockDb, warmup };
+// ---------- 「上次真正用的是哪个库」----------
+// 启动预热要先知道该打开哪个库，但那一刻还没有任何请求。
+//
+// 为什么不用会话名单里的 dbSlug：那个字段是后来才加进 sessions.create 的，
+// 老会话里根本没有 —— 实测本机 21 条会话里 16 条 dbSlug 为 null，于是只能退回
+// 「别的有 dbSlug 的会话」，必然猜错。猜错的代价不是零：白花 40~60ms 预热，
+// 首屏请求还要再付一次冷开，等于比不预热更慢。
+//
+// 所以这里记**事实**而不是猜：withDb 真正打开某个库后，把 slug 写进 data/.last-db；
+// 下次启动 warmup 读它来预热。首次安装/首次启动没有这个文件 → 不预热，零损失。
+//
+// 只在 slug 变化时写盘（进程内比对），不是每个请求都写；换账号也会立即更新。
+// 多环境（dev + 打包）共用一个数据目录时会互相覆盖，真实用户只有一个环境，不受影响。
+const LAST_DB_FILE = () => path.join(dataDir, '.last-db');
+let lastDbWritten = '';   // 进程内「已经写进去的值」
+
+// slug 白名单与 snapshotsDir 同一条规则：别把文件里的脏内容当路径用
+const SLUG_RE = /^[A-Za-z0-9_@-]+$/;
+
+function rememberDb(slug) {
+  const s = slug == null ? '' : String(slug);
+  if (!s || s === lastDbWritten) return;
+  try {
+    fs.writeFileSync(LAST_DB_FILE(), s, { encoding: 'utf8', mode: 0o600 });
+    lastDbWritten = s;
+  } catch (_) { /* 写不进去就算了：下次启动不预热，不影响任何功能 */ }
+}
+
+function rememberedDb() {
+  try {
+    const s = fs.readFileSync(LAST_DB_FILE(), 'utf8').trim();
+    return SLUG_RE.test(s) ? s : '';
+  } catch (_) {
+    return '';   // 没这个文件是常态（首次启动），不是错误
+  }
+}
+
+// 首屏第一笔同步开销的提前量（2026-11-14 打包版精确归因）：
+// 第一个请求进 auth 的 withDb 时才**第一次**开账号库，「KDF + openFile」实测 41~58ms；
+// better-sqlite3 是同步的，这一笔会把同时到达的另外 4 个首屏请求
+// （dashboard / seats-draft / ai-config / widget-settings）全挡在「连接到达」之后 ——
+// 表现是 dashboard 白白多等约 50ms，而它自己的聚合只要 2~3ms。
+//
+// 让路链的 warmup 里先把 `.last-db` 记的那个库打开：
+//   命中 → 首屏 withDb 直接走 connCache，省 40~60ms；
+//   没有文件 / 记录失效 / 猜错 → 白花一次开库（此时还没有用户请求），不比现在差。
+//
+// 超级隐私库（protect=1）的钥匙只在登录解锁后的内存表里，这里拿不到，直接跳过。
+// 全程静默失败：预热不成功时一切照旧走懒加载。
+function warmupMostRecent() {
+  try {
+    const slug = rememberedDb();
+    if (!slug || connCache.has(slug)) return;   // 没记录 / 已经开着：幂等返回
+    const rec = registryFindBySlug(slug);
+    if (!rec) return;
+    if (rec.protect === 1) return;              // 隐私库：钥匙只在本次登录的内存里
+    const encrypted = rec.encrypted !== 0;
+    const passphrase = encrypted ? unwrapKey(rec.wrapped_key) : null;
+    const t0 = Date.now();
+    getConn(slug, passphrase, encrypted);
+    if (process.env.PERF_STARTUP === '1') {
+      try { console.log(`[boot] 预热账号库 ${slug} ${Date.now() - t0}ms`); } catch (_) { /* 静默 */ }
+    }
+  } catch (_) { /* 预热失败：首屏请求照旧在自己那次 withDb 里冷开 */ }
+}
+
+module.exports = { getConn, evictConn, current, currentSlug, withDb, holdConnUntilResponse, lockDb, warmup, warmupMostRecent, rememberedDb };

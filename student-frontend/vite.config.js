@@ -267,6 +267,29 @@ function batchedEmptyOutDir() {
   }
 }
 
+// Vite 8（Rolldown）构建时会把 index.html 里 `<script type="module" src="/src/main.js">`
+// 的**源码路径**原样注入成一条 modulepreload。打包后 dist 里没有 src/ 目录，于是每次启动
+// 都会白发一个必然 404 的请求（控制台还会多一条报错）。
+// index.html 顶部那条「不要手写 modulepreload /src/main.js」的注释当年就在防这件事，
+// 但上游注入发生在模板处理之外，注释挡不住 —— 只能在这里事后摘掉。
+// 只删「指向源码路径」的那一条；产物 chunk 的 preload（./assets/xxx.js）原样保留。
+function stripSourcePreload() {
+  return {
+    name: 'strip-source-preload',
+    transformIndexHtml: {
+      // post：必须排在 Vite 自己的 html 处理（也就是上游注入）之后
+      order: 'post',
+      handler(html) {
+        return html.replace(/[ \t]*<link\b[^>]*>[ \t]*\r?\n?/gi, (tag) => {
+          const isPreload = /rel="modulepreload"/i.test(tag)
+          const pointsToSource = /href="\/src\//i.test(tag)
+          return isPreload && pointsToSource ? '' : tag
+        })
+      },
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     // 顺序无实质影响（该插件是 enforce:'pre'），放最前只为读起来直观
@@ -288,6 +311,8 @@ export default defineConfig({
     tailwindcss(),
     injectSplash(),
     nonBlockingCss(),
+    // 摘掉 Vite 8 注入的 `/src/main.js` 那条无效 preload（见 stripSourcePreload 注释）
+    stripSourcePreload(),
     // 构建产物里留通道标记（见上方 channelStamp）
     channelStamp(),
     // 必须在写产物之前把输出目录清干净（见上方 batchedEmptyOutDir）

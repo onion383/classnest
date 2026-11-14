@@ -117,14 +117,24 @@ function pruneStaleCodeCache(dir) {
 }
 
 function setupRendererCodeCache() {
+  // 分段打点（仅 PERF_STARTUP=1）：这一段在打包版稳定占 20~29ms，但从外面看不出花在哪。
+  // 只进 stdout，不进启动时间线（避免污染用户可见的耗时明细）；不打点时 _p 是空函数。
+  const _t0 = Date.now()
+  const _p = process.env.PERF_STARTUP === '1'
+    ? (name) => { try { console.log(`[perf] 代码缓存 ${name} ${Date.now() - _t0}ms`) } catch (_) { /* 打点失败忽略 */ } }
+    : () => {}
   try {
     const dir = path.join(app.getPath('userData'), 'renderer-code-cache')
+    _p('getPath 完成')
     fs.mkdirSync(dir, { recursive: true })
+    _p('mkdirSync 完成')
     pruneStaleCodeCache(dir)
+    _p('pruneStale 已排程')
     // 体积兜底：延后 8s 再跑。这一步要遍历整个缓存目录（可能上百 MB、上万个文件），
     // 立刻跑会和首屏资源的读取抢线程池 IO；它只是磁盘维护，晚几秒做完全等价。
     setTimeout(() => pruneOversizeCodeCache(dir), 8000)
     session.defaultSession.setCodeCachePath(dir)
+    _p('setCodeCachePath 完成')
   } catch (err) {
     console.error('[main] 渲染进程代码缓存不可用，跳过:', err?.message || err)
   }
@@ -132,6 +142,11 @@ function setupRendererCodeCache() {
 
 function setupAppProtocol() {
   if (isDev) return
+  // 分段打点（仅 PERF_STARTUP=1）：打包版「协议注册」稳定 20~29ms，逐段拆开看归属。
+  const _t0 = Date.now()
+  const _p = process.env.PERF_STARTUP === '1'
+    ? (name) => { try { console.log(`[perf] 协议注册 ${name} ${Date.now() - _t0}ms`) } catch (_) { /* 打点失败忽略 */ } }
+    : () => {}
   const distDir = path.join(__dirname, '../../student-frontend/dist')
   const root = path.normalize(distDir)
   const indexHtml = path.join(root, 'index.html')
@@ -143,9 +158,11 @@ function setupAppProtocol() {
   } catch (_) {
     // dist 缺失时不阻断启动，后续请求走 index.html 回退
   }
+  _p('readdirSync 入口枚举完成')
 
   // 懒加载 stream：只有生产模式的静态资源流式返回用得到，挪出主进程启动关键路径
   const { Readable } = require('stream')
+  _p('require stream 完成')
   const serveFile = (file, headers) =>
     new Response(Readable.toWeb(fs.createReadStream(file)), { headers })
 
@@ -215,8 +232,9 @@ function setupAppProtocol() {
   // B1：/api/* 同源代理到后端；其余路径仍走静态文件。
   // 2-16 对照：底层从 net.fetch 换成 Node http.request，绕过 Chromium 网络服务。
   const proxyApi = createApiProxy({ fetchImpl: nodeFetch })
+  _p('createApiProxy 完成')
 
-  protocol.handle('app', async (req) => {
+  const handleApp = async (req) => {
     const proxied = await proxyApi(req)
     if (proxied) return proxied
 
@@ -257,7 +275,27 @@ function setupAppProtocol() {
         ? 'public, max-age=31536000, immutable'
         : 'no-cache',
     })
+  }
+
+  // 2-18 归因：首屏要发十几个 app:// 资源请求，每次都要过这层 handler
+  // （Chromium 网络服务 → 主进程 IPC → asar 读 → 加 CSP/缓存头 → 回传）。
+  // app:// 不进 Resource Timing，前端完全量不到，只能在这里记账。
+  // 用 PERF_STARTUP 门控：正常启动零开销（不打点时不走计时分支）。
+  const protoPerfOn = process.env.PERF_STARTUP === '1'
+  protocol.handle('app', async (req) => {
+    if (!protoPerfOn) return handleApp(req)
+    const t0 = performance.now()
+    try {
+      return await handleApp(req)
+    } finally {
+      try {
+        let p = '?'
+        try { p = new URL(req.url).pathname } catch (_) { /* 非法 URL 就记 ? */ }
+        console.log(`[perf] 协议 ${p} ${(performance.now() - t0).toFixed(1)}ms`)
+      } catch (_) { /* 打点失败绝不能影响响应本身 */ }
+    }
   })
+  _p('protocol.handle 注册完成')
 }
 
 module.exports = { setupRendererCodeCache, setupAppProtocol }

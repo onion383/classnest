@@ -31,7 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 
-const { auth, authStatic } = require('./middleware/auth');
+const { auth, authStatic, warmupAuth } = require('./middleware/auth');
 const { createDynamicTableRouter } = require('./routes/dynamicTable');
 
 // 上传文件的类型校验（扩展名白名单 + 真实字节魔数）已统一到
@@ -153,6 +153,13 @@ app.use('/api/account', accountRoutes);
 // 队列跑完前就到达 —— 路由不存在会直接 404，前端首屏就拿不到数据。
 // 这里只 require 一个很轻的 Router；9 个业务读函数仍在 handler 内按需 require。
 app.use('/api/dashboard', auth(['teacher']), require('./routes/dashboard'));
+// 首屏 AI 配置：App.vue 挂载后立刻 GET /api/ai/config 决定是否显示浮动按钮，与 dashboard
+// 同一条原则 —— 首屏依赖不能交给让路链。慢机器上链要 ~85ms 才跑到 ai 这一步，请求先到
+// 就是 404，AI 入口会一直消失到下次刷新。
+// 这里只挂 ai.config（顶层仅 express / crypto / aiConfigStore，不碰 pdf-parse 等重模块）；
+// 让路链仍在后台注册完整 ai router，其它 /api/ai/* 穿过本 router 落到它，行为不变。
+// 两处复用同一个 ai.config 模块，配置读写只有一份实现。
+app.use('/api/ai', auth(['teacher']), require('./routes/ai/ai.config'));
 app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students', {
   protectedColumns: ['学号', '姓名'],
   extraRoutes: (router) => {
@@ -247,6 +254,22 @@ app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students',
 // B1 不再让后端托管 dist：页面 origin 保持 app://local，只有 /api 经主进程代理到本进程，
 // 避免把 UI 暴露成 127.0.0.1 上任何本机程序都能打开的源。
 
+// ---- 延后路由的「按需注册」门卫 ----
+// lateLoaders 要等 LATE_LOAD_DELAY_MS 才挂（让出首屏），但界面可见在 ~479ms，用户完全
+// 可能在这 800ms 里就点进「数据管理 / 班费明细」。少了这个门卫，这两个前缀会直接落到
+// Express 默认 404。命中就同步 flush 一次再 next()，本次请求可继续走到刚追加的 layer
+// （实测：请求处理期间 app.use 追加的路由，同一次请求就能命中）。
+// 定时到点与按需走同一个 flushLateLoaders，靠 lateLoaded 保证不重复 app.use。
+const LATE_PATH_PREFIXES = ['/api/data', '/api/fee-records'];
+let flushLateLoaders = null;
+app.use((req, res, next) => {
+  const p = req.path;
+  if (flushLateLoaders && LATE_PATH_PREFIXES.some((prefix) => p === prefix || p.startsWith(`${prefix}/`))) {
+    try { flushLateLoaders(); } catch (err) { console.error('[defer] 延后路由按需注册失败:', err); }
+  }
+  next();
+});
+
 // ===================== 启动服务器 =====================
 // 统一错误出口只装一次：startServer 在端口被占用时会递归重入，
 // 若每次都 app.use 会在栈里堆叠多个错误中间件（第一个处理完就结束，不会出错，但没必要）。
@@ -314,7 +337,20 @@ function startServer(port) {
       // 却直接决定第一个请求能不能立刻返回，也就是首屏数据什么时候到，因此单独计时。
       const _warmT0 = Date.now();
       try { dbManager.warmup(); } catch (_) { /* 暖机失败不影响正常懒加载路径 */ }
+      // 鉴权模块预热：jsonwebtoken 首次 require 实测 79ms，原先落在首个请求的
+      // verifyToken 里 —— 那次同步加载会把同时到达的首屏请求一起挡住（87~133ms 停顿）。
+      // 放在这里：listen 已就绪（就绪信号不受影响）、首屏请求还没到，正好错开。
+      try { warmupAuth(); } catch (_) { /* 暖机失败走懒加载兜底 */ }
       try { console.log(`[boot] +${Date.now() - _bootT0}ms 数据库 warmup 完成（本段 ${Date.now() - _warmT0}ms）`); } catch (_) { /* 忽略 */ }
+      // 首屏第一笔同步开销提前（2026-11-14 打包版归因）：第一个请求进 auth 的 withDb 时
+      // 才第一次开账号库，「KDF + openFile」实测 41~58ms；better-sqlite3 是同步的，这一笔
+      // 会把同时到达的另外 4 个首屏请求一起挡在「连接到达」之后（dashboard 因此白等约 50ms）。
+      // 这里趁「就绪已完成、首个请求还没到」的空窗先打开上次真正用过的那个库
+      // （后端自己在 withDb 里把 slug 记在 data/.last-db，不靠会话猜）。
+      // 与上面分开计时：上面那条日志的「本段」口径（含 sqlite 模块加载 + index 库 + 鉴权）保持不变。
+      const _wuT0 = Date.now();
+      try { dbManager.warmupMostRecent(); } catch (_) { /* 预热失败静默，首屏请求照旧自己冷开 */ }
+      try { console.log(`[boot] +${Date.now() - _bootT0}ms 账号库预热完成（本段 ${Date.now() - _wuT0}ms）`); } catch (_) { /* 忽略 */ }
     };
 
     // 非关键路由懒加载：服务器就绪后再逐个注册，不阻塞就绪信号。
@@ -345,9 +381,24 @@ function startServer(port) {
       () => { app.use('/api/undo', auth(['teacher']), require('./routes/undo/undo')); },
       () => { app.use('/api/search', auth(['teacher']), require('./routes/search')); },
       () => { app.use('/api/cadres', auth(['teacher']), require('./routes/cadres')); },
+      // ⚠️ /api/ai 是首屏依赖（App.vue 挂载后立刻拉 /api/ai/config）。它不许进
+      // lateLoaders（那要等 800ms），但配置部分的路由已在「关键路由」区提前挂好，
+      // 所以这里只负责完整 ai router 的注册与重模块预热，首屏不会等它。
+      () => { app.use('/api/ai', auth(['teacher']), require('./routes/ai/ai')); },
+    ];
+
+    // ---- 首屏用不到的重模块（延后注册）----
+    // 判据是「首屏会不会用到」，不是「重不重」：/api/dashboard 的 7 个读函数覆盖了上面
+    // 那一整组（连 album 的封面都在内），/api/ai 的完整 router 也首屏期间要用到 ——
+    // 配置部分已在关键路由区提前挂好，这一组仍不许挪进 lateLoaders。
+    // 真正能挪的只有这两个：数据管理（设置页）与班费明细，它们只在用户点进对应页面时用到，
+    // 却各自带着 xlsx / multer 这类依赖。实测两者各 <10ms，所以这一组是**收尾级**收益，
+    // 真正贵的那两步（album 20ms、ai 24ms）都是首屏依赖，挪不动。
+    // 排到首屏之后（见 LATE_LOAD_DELAY_MS）。这两个前缀若被提前点到，由文件上方的
+    // 按需门卫立刻 flush 注册，不会再出现 800ms 的固定 404 空窗。
+    const lateLoaders = [
       // 数据管理：设置页的「表清单 / 取表数据 / 打 zip」，只读业务表，无写路径
       () => { app.use('/api/data', auth(['teacher']), require('./routes/dataExport')); },
-      () => { app.use('/api/ai', auth(['teacher']), require('./routes/ai/ai')); },
       // 首屏聚合接口已提前到 listen 之前注册（见「关键路由」区），不再排进让路链：
       // 让路链下它可能在其余 loader 跑完之前就收到请求，路由必须先存在，否则 404。
       // 它的 9 个读函数在 handler 内 require，模块尚未加载时会自行同步加载，
@@ -452,8 +503,12 @@ function startServer(port) {
     // 这种样板：Express 5 会自动捕获 async handler 的 rejected promise，
     // 同步 throw 本来就会被捕获，两者最终都落到这里。
     // 这里也只**定义**步骤，由下方 runStep 排进让路链。
-    const errorHandlerStep = () => {
-      if (errorHandlerInstalled) return;
+    //
+    // ⚠️ 会注册**两次**（见下方 flushLateLoaders）：lateLoaders 里那两个路由是在第一次注册之后才入栈的，
+    // Express 只把错误交给「它之后注册的路由」抛出的错误，所以延后注册的路由需要末尾再兜一次。
+    // 两次注册都是同一个 handler，同一个错误只会被第一个命中的处理，不会重复响应。
+    const errorHandlerStep = (force) => {
+      if (errorHandlerInstalled && !force) return;
       errorHandlerInstalled = true;
       app.use((err, req, res, next) => {
         // 响应头已发出（如流式下载写到一半）：交回 Express 默认处理，
@@ -474,14 +529,45 @@ function startServer(port) {
     // 旧口径下它≈首个请求最早能被完整处理的时刻；现在请求可以提前插队，
     // 这个数字只表示「后台 require 链自己跑完要多久」，不再是请求的等待上限。
     const finishStep = () => {
-      try { console.log(`[boot] +${Date.now() - _bootT0}ms 懒加载路由全部注册完成（队列 ${Date.now() - _deferT0}ms）`); } catch (_) { /* 忽略 */ }
+      try { console.log(`[boot] +${Date.now() - _bootT0}ms 懒加载路由全部注册完成（队列 ${Date.now() - _deferT0 - _delayAcc}ms）`); } catch (_) { /* 忽略 */ }
     };
 
     // ===== 让路链启动 =====
     // 端口冲突时 startServer 会递归重入，这里保证链只排一次（否则路由会被重复 app.use）。
     if (deferredStarted) return;
     deferredStarted = true;
-    const steps = [warmupStep, ...deferredLoaders, errorHandlerStep, finishStep];
+
+    // 延后加载的等待时长。取值依据（打包版实测）：首屏请求在 listen 后 40~170ms 到达、
+    // 250ms 内返回；800ms 让出这一整段窗口。这两个前缀若被提前访问，由按需门卫立刻注册，
+    // 不依赖这段等待走完。
+    // 置 0 = 立即注册：冒烟测试的隔离后端走这条 —— 用例常在就绪后 100ms 内就打到
+    // /api/data、/api/fee-records，虽然有按需门卫兜底，置 0 可让用例不依赖门卫时序。
+    const LATE_LOAD_DELAY_MS = Number(process.env.CLASSNEST_LATE_LOAD_DELAY_MS ?? 800) || 0;
+    // 链里夹着一个「只等待」的步骤，队列耗时要把这段等待扣掉 —— 否则「队列 Xms」
+    // 这个口径会被 800ms 污染，看不出 require 本身到底花多久。
+    let _delayAcc = 0;
+
+    // 按需（门卫）与定时（让路链）共用同一个注册入口，幂等。
+    // 顺序要求：先补 ①「延后窗口内已注册路由」的错误兜底（链还没跑到就在这里补，
+    // 已装过则空转）；再挂 lateLoaders 的路由；末尾再兜一次 ② —— Express 只把错误
+    // 交给「在出错路由之后注册」的错误中间件，① 早于这些路由，接不住它们的错误。
+    let lateLoaded = false;
+    flushLateLoaders = () => {
+      if (lateLoaded) return;
+      lateLoaded = true;
+      errorHandlerStep();
+      for (const mount of lateLoaders) mount();
+      errorHandlerStep(true);
+    };
+
+    const steps = [
+      warmupStep,
+      ...deferredLoaders,
+      errorHandlerStep,                       // ① 先兜住「延后窗口」内已注册路由的错误
+      { delay: LATE_LOAD_DELAY_MS },          // 让出首屏，之后再注册那两个重模块
+      flushLateLoaders,                      // ② 到点也走同一入口（按需已注册过则空转）
+      finishStep,
+    ];
     let stepIdx = 0;
     let _deferT0 = 0;
     const runStep = () => {
@@ -489,6 +575,18 @@ function startServer(port) {
       // 链里第 0 步是 warmup，第 1 步起才是 loader，故在跑第 1 步前记时。
       if (stepIdx === 1) _deferT0 = Date.now();
       const step = steps[stepIdx++];
+      // 只等待的步骤：不执行任何 require，到点后接着跑下一跳。
+      // 等待时长为 0（冒烟测试）时直接跳过这一跳，不额外排一次 timer。
+      if (step && typeof step === 'object') {
+        const delayMs = Number(step.delay) || 0;
+        if (delayMs <= 0) return runStep();
+        _delayAcc += delayMs;
+        if (process.env.PERF_STARTUP === '1') {
+          try { console.log(`[boot] 让路链延后 ${delayMs}ms（首屏优先，之后注册 data / fee-records）`); } catch (_) { /* 静默 */ }
+        }
+        setTimeout(runStep, delayMs);
+        return;
+      }
       const _stepT0 = Date.now();
       if (process.env.PERF_STARTUP === '1') {
         try { console.log(`[boot] 链步骤 ${stepIdx - 1} 开始 @${_stepT0}`); } catch (_) { /* 静默 */ }

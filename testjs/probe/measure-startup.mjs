@@ -10,6 +10,7 @@
 //   node testjs/measure-startup.mjs                  # 正式版整体启动（默认 3 次）
 //   node testjs/measure-startup.mjs --runs=5         # 次数
 //   node testjs/measure-startup.mjs --exe=<path>     # 指定打包 exe
+//   node testjs/measure-startup.mjs --cwd=<dir>      # 指定工作目录（默认 exe 所在目录）
 //   node testjs/measure-startup.mjs --dev            # 未打包 electron + Vite（开发口径）
 //   node testjs/measure-startup.mjs --real           # 用真实用户数据（不隔离；先关闭正在运行的应用）
 //   node testjs/measure-startup.mjs --backend-only   # 只测后端冷启动（快，无 GUI）
@@ -29,6 +30,9 @@
 //    不会动真实 %APPDATA% 下的数据，也不会触发单实例锁冲突。
 //    不用项目目录：项目目录易被杀软实时扫描锁文件，会让 Chromium 的 GPU 持久缓存
 //    报「另一个程序正在使用此文件」并导致 GPU 进程启动失败。可用环境变量 CLASSNEST_ISO 覆盖。
+//  - **打包版必须从用户目录（如 %LOCALAPPDATA%\ClassNestMeasurePkg）启动，且 cwd 也要在用户目录**。
+//    只把 exe 拷出去、cwd 仍留在仓库，安全软件照样拦：进程静默退出、退出码 0、日志一行不写，
+//    看起来像「应用没起来」，实际是被拦（2026-11-14 两次实测）。--cwd= 就是为这件事加的。
 //  - 正式版模式会实际弹出主窗口（测量需要真实渲染），每次测完自动结束进程树。
 //  - Windows PowerShell 下中文可能显示为乱码，可先执行 `chcp 65001`。
 // =========================================================================
@@ -82,6 +86,7 @@ const opt = {
   cold: false,
   real: false,
   exeArgs: '',
+  cwd: null,
 }
 for (const a of process.argv.slice(2)) {
   const num = (s, d) => { const v = Number(s); return Number.isFinite(v) && v > 0 ? v : d }
@@ -95,6 +100,7 @@ for (const a of process.argv.slice(2)) {
   else if (a.startsWith('--duration=')) opt.duration = num(a.slice(11), 15000)
   else if (a.startsWith('--grace=')) opt.grace = num(a.slice(8), 6000)
   else if (a.startsWith('--exe=')) opt.exe = a.slice(6)
+  else if (a.startsWith('--cwd=')) opt.cwd = a.slice(6)
   else if (a.startsWith('--exe-args=')) opt.exeArgs = a.slice(11)
   else if (a === '-h' || a === '--help') { printHelp(); process.exit(0) }
   else { console.error(`未知参数：${a}`); printHelp(); process.exit(1) }
@@ -186,9 +192,14 @@ function launchAndCollect({ cmd, args, cwd, env, until, label, runIndex }) {
   return new Promise((resolve) => {
     const wallStart = Date.now()
     const t0 = performance.now()
+    // 必须摘掉 ELECTRON_RUN_AS_NODE：测量常从 WorkBuddy CLI / IDE 终端发起，那些环境会注入
+    // ELECTRON_RUN_AS_NODE=1，Electron 于是以**纯 Node 模式**跑 —— 不建窗口、不起 GPU/renderer、
+    // 一行日志不写、退出码还是 0。表现像「应用起不来 / 被杀软拦了」，实际是被这个开关吞了。
+    const childEnv = { ...process.env, ...env }
+    delete childEnv.ELECTRON_RUN_AS_NODE
     const child = spawn(cmd, args, {
       cwd,
-      env: { ...process.env, ...env },
+      env: childEnv,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -256,6 +267,7 @@ function printHelp() {
   node testjs/measure-startup.mjs                  正式版整体启动（默认 3 次）
   node testjs/measure-startup.mjs --runs=5         指定运行次数
   node testjs/measure-startup.mjs --exe=<path>     指定打包后的 exe
+  node testjs/measure-startup.mjs --cwd=<dir>      指定工作目录（默认 exe 所在目录；勿指向项目仓库）
   node testjs/measure-startup.mjs --dev            未打包 electron（需 Vite，开发口径）
   node testjs/measure-startup.mjs --real           用真实用户数据（不隔离；先关闭正在运行的应用）
   node testjs/measure-startup.mjs --backend-only   只测后端冷启动（快，无 GUI）
@@ -354,7 +366,11 @@ async function runApp() {
   prepareIso()
   let exe = null
   let args = []
-  const cwd = ROOT
+  // cwd 绝不能落在项目目录：安全软件会拦「打包版从仓库目录启动」，症状是进程静默退出、
+  // 退出码 0、stdout 与 startup.log 一行都不写（2026-11-14 实测踩过两次）。
+  // 打包版默认取 exe 所在目录（配合把产物 robocopy 到 %LOCALAPPDATA%\<专用目录>）；
+  // dev 模式必须留在 ROOT —— 它要加载项目 '.' 与 node_modules。
+  let cwd = ROOT
   let vite = null
 
   if (opt.dev) {
@@ -365,6 +381,7 @@ async function runApp() {
     console.log(ok ? '就绪' : '超时（继续尝试）')
     exe = ELECTRON_EXE
     args = ['.']
+    cwd = opt.cwd || ROOT
     if (!opt.real) args.push(`--user-data-dir=${ISO_USER_DATA}`)
     if (opt.exeArgs) args.push(...opt.exeArgs.split(/\s+/).filter(Boolean))
   } else {
@@ -374,9 +391,17 @@ async function runApp() {
       process.exit(1)
     }
     args = []
+    cwd = opt.cwd || path.dirname(exe)
     if (!opt.real) args.push(`--user-data-dir=${ISO_USER_DATA}`)
     if (opt.exeArgs) args.push(...opt.exeArgs.split(/\s+/).filter(Boolean))
     console.log(`使用 exe：${exe}${opt.exeArgs ? `（额外参数：${opt.exeArgs}）` : ''}`)
+    console.log(`工作目录：${cwd}`)
+    // 还是落在仓库里就明确提醒：换 exe 路径没用，cwd 才是被判定的那个。
+    const rel = path.relative(ROOT, cwd)
+    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+      console.warn('⚠ 工作目录仍在项目仓库内，安全软件可能拦截并让进程静默退出。')
+      console.warn('  建议：robocopy 产物到 %LOCALAPPDATA%\\ClassNestMeasurePkg 后，用 --exe= 和 --cwd= 一起指过去。')
+    }
   }
 
   const rows = []

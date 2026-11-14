@@ -156,6 +156,48 @@ function hsMark(name) {
   } catch (_) { /* 打点失败绝不能影响握手 */ }
 }
 
+// --- 临时密钥对的预生成 ---
+// 打包版实测：P-256 generateKey 要 22~37ms，原先它与 waitForBackendReady 一起排在
+// 首屏请求发出之后才 Promise.all —— 但它和 token、网络、后端全都无关，没有理由压在
+// 关键路径上。这里在页面加载的空窗（挂载前后）先备一把，握手时直接取；用掉后立刻
+// 在后台补下一把，保证「每次握手各用一把独立的 ephemeral 密钥」这条前向保密语义不变。
+// 任何失败都静默：槽位空着时 ensureSession 会自己现生成，行为与改前完全一致。
+let keyPairSlot = null
+let keyPairMarked = false
+
+function startKeyPair() {
+  const p = subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
+  // 失败时清空槽位，别让下一次复用一个已 reject 的 promise
+  p.catch(() => { if (keyPairSlot === p) keyPairSlot = null })
+  return p
+}
+
+// 取一把（可能已备好的）密钥对，并立即在后台补下一把给下次握手用
+function takeKeyPair() {
+  const p = keyPairSlot || startKeyPair()
+  // 补的这把必须写回槽位：只发起不赋值的话，第二次握手（换号 / 重连）又会退回
+  // 现生成 22~37ms，还白算一把没人用的密钥。startKeyPair 的失败清理也按槽位比对。
+  keyPairSlot = startKeyPair()
+  return p
+}
+
+// 入口在挂载前后调用一次即可；重复调用是幂等的（已有槽位就直接返回）。
+export function prewarmKeyPair() {
+  if (!safe() || !subtle) return null
+  if (keyPairSlot) return keyPairSlot
+  const t0 = performance.now()
+  const p = startKeyPair()
+  keyPairSlot = p
+  if (!keyPairMarked) {
+    keyPairMarked = true
+    p.then(
+      () => { try { console.log(`[startup] 密钥对预生成 ${Math.round(performance.now() - t0)}ms @${Math.round(performance.timeOrigin + performance.now())}`) } catch (_) { /* 打点失败忽略 */ } },
+      () => { /* 生成失败：ensureSession 现生成兜底，这里不该有任何用户可见输出 */ },
+    )
+  }
+  return p
+}
+
 async function ensureSession() {
   if (sessionKey) return { sessionId, sessionKey }
   if (pendingSession) return pendingSession
@@ -186,15 +228,23 @@ async function ensureSession() {
     // 每轮重试都白等一遍超时（最多 6 轮）。1500ms 已覆盖实测后端就绪 341~595ms。
     //
     // 2-18：前端的 ephemeral 密钥生成与就绪等待**并行**。两者无数据依赖（generateKey
-    // 跑在浏览器密码学线程，等待是纯等网络），串行会把生成耗时整段加到关键路径上；
-    // 并行后该段 ≈ max(等待, 生成)，实测首屏少 ~13ms。分段名仍叫 keygen，口径变为
-    // 「就绪 + 生成」的合并段，与 IPC / fetch 比较时只看绝对值，不要再按旧含义拆读。
+    // 跑在浏览器密码学线程，等待是纯等网络）。
+    // 2026-11-14 再进一步：密钥对通常已由 prewarmKeyPair() 在挂载前后备好，这里只是取用，
+    // 该段退化为 max(等待, ~0) —— 打包版实测 keygen 段由 22~37ms 降到 0~3ms。
+    // 分段名仍叫 keygen，口径是「就绪 + 取/生成密钥」的合并段。
+    // 2-18 归因修正：这一段历史名字叫 keygen（22~37ms），很容易被读成「密钥算力」。
+    // 实际上是「等后端就绪信号 + 取预生成密钥」的合并段 —— 密钥是 ECDH P-256，
+    // prewarm 已备好时接近 0；真正耗时的通常是 waitForBackendReady 那个信号。
+    // 拆成 (ready / key) 两个子值，一次启动就能判断该改哪一头。
+    let _readyMs = -1
+    let _keyMs = -1
+    const _pigT0 = Date.now()
     const [, kp] = await Promise.all([
-      waitForBackendReady(1500),
-      subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']),
+      waitForBackendReady(1500).then((v) => { _readyMs = Date.now() - _pigT0; return v }),
+      takeKeyPair().then((k) => { _keyMs = Date.now() - _pigT0; return k }),
     ])
     const pub = b64(new Uint8Array(await subtle.exportKey('raw', kp.publicKey)))
-    seg('keygen')
+    seg(`keygen(ready ${_readyMs} / key ${_keyMs})`)
 
     // 裸握手（握手不能加密，不触发 axios 拦截器）
     // 2-18 归因：握手是本应用第一条网络请求，往返里一直有 ~50ms 找不到归属。

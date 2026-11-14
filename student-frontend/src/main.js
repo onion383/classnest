@@ -14,11 +14,15 @@ import './styles/index.css'
 import { loadThemeStyles } from './styles/themeLoader'
 import { useThemeStore, PRESET_IDS } from './stores/theme'
 import { setupApiClient, backendBaseUrl } from './utils/httpClient'
+import { prewarmKeyPair } from './composables/secureChannel'
 import { ensureMediaToken, clearMediaToken, resourceUrl } from './utils/apiUrl'
 import { useNotification } from './composables/useNotification'
 import { ensureDashboardData } from './composables/useDashboardData'
 import { installInpProbe } from './utils/inpProbe'
 import { installLongTaskMarks } from './utils/inpLongtask'
+// 启动归因用（首屏导航链路）：mark() 会带上「事件真实发生时刻」的 epoch，
+// 主进程按它打点，跨进程投递延迟不计入。纯诊断，不参与业务逻辑。
+import { mark } from './utils/perfMark.js'
 import { readFastStartup } from './utils/fastStartup.js'
 import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
 
@@ -133,7 +137,9 @@ document.documentElement.classList.toggle(
   'bg-night-default',
   !customBg && savedTheme === 'glass' && savedMode === 'night'
 )
-console.log('[startup] 背景图 URL:', startupBg)
+// 同样必须带 @epoch：这条一直被当作「渲染层开始执行」的锚点，不带的时候按送达时刻打点，
+// 会凭空多出几十毫秒（2026-11-14 由 startup-io 判据抓出）。
+console.log(`[startup] 背景图 URL: ${startupBg} @${Math.round(performance.timeOrigin + performance.now())}`)
 if (startupBg) {
   document.documentElement.style.setProperty('--bg-image', `url('${startupBg.replace(/'/g, "\\'")}')`)
   document.documentElement.classList.add('has-bg-image')
@@ -145,10 +151,15 @@ if (startupBg) { const img = new Image(); img.src = startupBg }
 // 3. 预加载默认落地页组件（已登录→业务首页 DashboardView；未登录→登录页 Login），
 //    与 Vue 初始化并行执行，命中路由实际首帧，避免首屏首帧多等一次 chunk 下载。
 //    必须用静态字符串导入，保证 Vite/Rollup 能静态分析生成对应 chunk。
+// 3. 预加载落地页组件。已登录时 DashboardView 已在 router 里**静态导入**（并入入口块，
+//    不再需要提前拉）；未登录时登录页仍懒加载，这里提前拉一次，避免首帧多等一次下载。
+//    必须用静态字符串导入，保证 Vite/Rollup 能静态分析生成对应 chunk。
 const landingPreload = getToken()
-  ? import('./views/DashboardView.vue')
+  ? Promise.resolve()
   : import('./views/Login.vue')
-landingPreload.catch(() => {})
+// 归因（2-18）：chunk 早就下完了（协议层日志 0.1ms），但组件的模块求值晚得多，
+// 这条点出「落地页模块真正被求值」的时刻，用来判断那段等待到底在等谁。
+landingPreload.then(() => mark('落地页 chunk 已求值')).catch(() => {})
 
 // ===== Vue 应用初始化 =====
 const app = createApp(App)
@@ -158,6 +169,9 @@ if (vaporInterop) app.use(vaporInterop)
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
+// 归因（2-18）：vue-router 的首次导航在 install 里发起，挂载完到守卫进入那段约 50ms
+// 一直没人拆开。这条与「路由守卫进入」配对，用来区分「导航发起晚了」还是「守卫执行晚了」。
+mark('路由安装完成')
 
 // 全局注册 IconGlyph：页面主标题图标跟随「图标样式」设置（彩色 lucide / emoji）
 import IconGlyph from './components/base/IconGlyph.vue'
@@ -237,6 +251,16 @@ window.addEventListener('unhandledrejection', (e) => {
   console.error('[unhandled-rejection]', e.reason)
 })
 
+// 首屏预热（已实测否决，2026-11-14）：把握手提前到挂载前发起看似能省 92ms，
+// A/B 实测是负收益 —— 预热落在主进程最忙的时段（建窗 / 加载后端），拿 master key
+// 的 IPC 被事件循环阻塞 71~94ms（首屏请求时是 0ms），握手从 48ms 涨到 145ms，
+// 首屏汇总 269ms → 297ms。结论：握手时机本来就落在主进程空闲窗口，别再往前挪。
+// 若以后要做，前提是先把 master key 改成主进程主动推送（去掉这条 IPC 往返）。
+// ⚠️ 但「预生成临时密钥对」是另一回事，别混为一谈：它不碰 IPC、不碰网络，只在密码学
+// 线程算 20~40ms（打包版实测 22~37ms），所以这里照做 —— 握手时直接取，keygen 段归零。
+// 未登录不预热：登录页不发业务请求，多算一把密钥只是白花算力。
+if (getToken()) prewarmKeyPair()
+
 const mountStart = performance.now()
 // 首屏占位保活：Vue 挂载会清空 #app，但此刻首次导航往往还没完成（$route.path 仍是 '/'），
 // App 会先渲染出「标题栏 + 侧边栏 + 空内容区」的外壳。这里把 index.html 的占位节点移到
@@ -248,7 +272,15 @@ if (splashEl) {
 }
 
 app.mount('#app')
-console.log(`[startup] Vue 挂载完成: ${Math.round(performance.now() - mountStart)}ms`)
+// 必须带 @epoch：不带的话主进程退回「日志送达时刻」打点，console-message 的投递延迟
+// 会被算进「挂载完成 → 路由守卫进入」这段耗时里，看起来像有几十毫秒的主线程开销。
+// 2-18 归因时踩过这个坑（其它渲染层标记都带 @epoch，只有这条漏了）。
+console.log(`[startup] Vue 挂载完成: ${Math.round(performance.now() - mountStart)}ms @${Math.round(performance.timeOrigin + performance.now())}`)
+// A 段归因：挂载返回 → 路由守卫进入之间约 40ms 一直没归属。这两条判断主线程是否被占住：
+//   宏任务能按时跑 = 微任务队列没被卡（导航不是被微任务饿死）
+//   首帧能按时跑 = 布局/绘制已完成，那 40ms 就不是排版
+setTimeout(() => mark('挂载后宏任务'), 0)
+requestAnimationFrame(() => mark('挂载后首帧'))
 
 // 样式就绪：构建产物里的 CSS 已改为非阻塞加载（media="print" + onload 切回 all），
 // 移除占位前必须先确认它已应用，否则会露出一瞬间无样式界面。
@@ -262,6 +294,11 @@ const whenStylesReady = () => Promise.all(
     setTimeout(done, 2000)
   }))
 )
+
+// 占位页移除的 rAF 兜底时长（ms）。正常情况下 rAF 下一帧（~16ms）就提交，这个值只在
+// 「页面 hidden、rAF 被 Chromium 暂停」时才用得上。取 400 ≈ 已知最坏帧边界（~180ms）的两倍多，
+// 又明显小于实测的 900~1000ms 暂停时延 —— 既不会误伤重排卡顿，又能在暂停时及时收尾。
+const SPLASH_RAF_FALLBACK_MS = 400
 
 if (splashEl) {
   let dropped = false
@@ -287,7 +324,20 @@ if (splashEl) {
     // 只等一帧：DOM 早已被 Vue 渲染队列刷完（微任务），这一帧的绘制会把「移除占位」与
     // 「首屏内容」合并进同一帧，观感仍是硬切；多等第二帧只是白等一次帧边界——
     // 毛玻璃首次 raster 卡顿时，一次帧边界实测可达 ~180ms。
-    requestAnimationFrame(() => {
+    //
+    // ⚠ 但 rAF 不能是唯一出路：页面处于 hidden（窗口尚未 show / 启动后被最小化到托盘）时，
+    // Chromium 会暂停 rAF。实测同一时刻注册的 setTimeout(0) 在 +509ms 正常执行，而 rAF 回调
+    // 拖到 +1488ms 才跑（两次独立测量各复现一次）。只靠 rAF 会让占位页一直挂着，用户把窗口
+    // 恢复出来时先看到的仍是占位页、而不是已经渲染好的内容。
+    // 因此补两条不依赖 rAF 的提交路径：定时器（同样会被节流，但不会无限期不跑）与
+    // 可见性变化（窗口一亮就立刻提交，用户零感知）。三条路径共用 commitSplashRemove，幂等。
+    let committed = false
+    let rafFallback = null
+    const commitSplashRemove = () => {
+      if (committed) return
+      committed = true
+      if (rafFallback) clearTimeout(rafFallback)
+      document.removeEventListener('visibilitychange', onVisible)
       if (!splashEl.isConnected) return
       splashEl.remove()
       // 打点「界面真正可见」：占位移除的下一帧就是应用首屏被绘制的时刻。
@@ -297,7 +347,13 @@ if (splashEl) {
       console.log(`[startup] 占位页移除（界面可见） @${Math.round(performance.timeOrigin + performance.now())}`)
       // 广播给 App.vue：此刻才回报「小组件就绪」，避免主进程建窗的同步开销压在启动关键路径上。
       window.dispatchEvent(new Event('app-visible'))
-    })
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') commitSplashRemove()
+    }
+    requestAnimationFrame(commitSplashRemove)
+    rafFallback = setTimeout(commitSplashRemove, SPLASH_RAF_FALLBACK_MS)
+    document.addEventListener('visibilitychange', onVisible)
   }
 
   // ===== 启动失败兜底 =====
@@ -448,7 +504,7 @@ if (splashEl) {
     if (dropped || !splashEl.isConnected) return
     dropped = true
     splashEl.remove()
-    console.warn(`[startup] 占位页超时强制移除（12s）：backendOk=${backendOk} splashReady=${splashReady} backendFailed=${backendFailed}`)
+    console.warn(`[startup] 占位页超时强制移除（12s）：backendOk=${backendOk} splashReady=${splashReady} backendFailed=${backendFailed} @${Math.round(performance.timeOrigin + performance.now())}`)
     console.log(`[startup] 占位页移除（界面可见） @${Math.round(performance.timeOrigin + performance.now())}`)
     window.dispatchEvent(new Event('app-visible'))
   }, 12000)

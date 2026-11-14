@@ -16,7 +16,7 @@
 
 const { app } = require('electron')
 const { CH, IPC } = require('./channels')
-const path = require('node:path')
+const { resolveLogsDir } = require('./main.config')
 const fsp = require('node:fs/promises')
 const { getPrivateWorkingSetKB } = require('./main.privateWorkingSet')
 const { scanDiskUsage, logFilePaths } = require('./main.disk-usage')
@@ -425,9 +425,9 @@ function registerPerfIpc(opts = {}) {
         appDir: getInstallDir(),
         dataDir: getDataDir(),
         thumbsDir: getThumbsDir(),
-        // 数据目录之外的日志出口：backend.log/startup.log 固定在 userData/data，
-        // desktop-layer.log 在 userData 根；dataDir 与之相同时扫描端会自动去重。
-        logDirs: [path.join(app.getPath('userData'), 'data'), app.getPath('userData')],
+        // v2 布局下 backend.log/startup.log/inp.log 都在 <数据根>/logs/；
+        // desktop-layer.log 仍属应用级日志，留在 userData 根。扫描端按目录去重。
+        logDirs: [resolveLogsDir(), app.getPath('userData')],
         slug,
       })
       return ok({ ...usage, at: Date.now() })
@@ -443,7 +443,7 @@ function registerPerfIpc(opts = {}) {
   IPC.handle(CH.PERF_LOGS_CLEAR, async () => {
     try {
       const files = logFilePaths(getDataDir(), [
-        path.join(app.getPath('userData'), 'data'),
+        resolveLogsDir(),
         app.getPath('userData'),
       ])
       let clearedBytes = 0

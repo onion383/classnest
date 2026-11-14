@@ -352,24 +352,15 @@
           <template v-else-if="current === 'storage'">
             <div class="pane">
               <div class="f-row">
-                <label class="f-label">数据库目录</label>
+                <label class="f-label">数据目录</label>
                 <div class="f-static truncate" :title="dirs.dataDir">{{ dirs.dataDir || '加载中…' }}</div>
                 <button type="button" class="btn-info" :disabled="busyDataDir" @click="changeDataDir">
                   {{ busyDataDir ? '处理中…' : '修改' }}
                 </button>
                 <button type="button" class="btn-ghost" :disabled="busyDataDir" @click="openDir(dirs.dataDir)">打开</button>
               </div>
-              <p class="f-hint ind">存放数据库与上传图片等用户数据的目录。</p>
-
-              <div class="f-row">
-                <label class="f-label">缩略图缓存</label>
-                <div class="f-static truncate" :title="dirs.thumbsDir">{{ dirs.thumbsDir || '加载中…' }}</div>
-                <button type="button" class="btn-info" :disabled="busyThumbsDir" @click="changeThumbsDir">
-                  {{ busyThumbsDir ? '处理中…' : '修改' }}
-                </button>
-                <button type="button" class="btn-ghost" :disabled="busyThumbsDir" @click="openDir(dirs.thumbsDir)">打开</button>
-              </div>
-              <p class="f-hint ind">相册缩略图是可再生的缓存，可放到独立目录（如临时盘/SSD）。</p>
+              <p class="f-hint ind">全部本机数据的唯一根目录。目录下按用途分四层：core（数据库与密钥）、content（用户文件）、cache（缓存）、logs（日志）。</p>
+              <p class="f-hint ind">四层随根目录一起搬迁，无需单独设置。</p>
 
               <p v-if="errorMsg" class="f-error">{{ errorMsg }}</p>
               <p v-if="storageHint" class="f-ok">{{ storageHint }}</p>
@@ -573,9 +564,8 @@ const modeSwitchOptions = [
   { value: 'day', label: '日间', icon: 'sun' },
   { value: 'night', label: '夜间', icon: 'moon' },
 ]
-const dirs = ref({ dataDir: '', thumbsDir: '' })
+const dirs = ref({ dataDir: '' })
 const busyDataDir = ref(false)
-const busyThumbsDir = ref(false)
 const warmup = ref({ phase: '', detail: '', percent: 0, done: false })
 // 预热没跑完就点「完成」时的温馨提示（见 tryFinish）。只提示一次：学期保存失败留在
 // 同一屏再点「完成」时不该再弹一遍，否则成了「每次都要点知道了」的拦路虎。
@@ -718,7 +708,7 @@ async function loadWarmup() {
 async function loadDirs() {
   try {
     const res = await window.electron?.invoke(INVOKE.GET_DATA_DIRECTORIES)
-    if (res) dirs.value = { dataDir: res.dataDir || '', thumbsDir: res.thumbsDir || '' }
+    if (res) dirs.value = { dataDir: res.dataDir || '' }
   } catch (_) {}
 }
 async function pickDir() {
@@ -740,31 +730,13 @@ async function changeDataDir() {
   try {
     const res = await window.electron.invoke(INVOKE.SET_INITIAL_DATA_DIR, { dataDir: picked })
     if (res && res.ok) {
-      dirs.value = { dataDir: res.dataDir, thumbsDir: res.thumbsDir }
-      storageHint.value = res.changed ? '数据库目录已更新' : '目录未变化'
+      dirs.value = { dataDir: res.dataDir }
+      storageHint.value = res.changed ? '数据目录已更新' : '目录未变化'
     }
   } catch (err) {
-    errorMsg.value = err?.message || '数据库目录修改失败'
+    errorMsg.value = err?.message || '数据目录修改失败'
   } finally {
     busyDataDir.value = false
-  }
-}
-async function changeThumbsDir() {
-  const picked = await pickDir()
-  if (!picked) return
-  errorMsg.value = ''
-  storageHint.value = ''
-  busyThumbsDir.value = true
-  try {
-    const res = await window.electron.invoke(INVOKE.SET_INITIAL_DATA_DIR, { thumbsDir: picked })
-    if (res && res.ok) {
-      dirs.value = { dataDir: res.dataDir, thumbsDir: res.thumbsDir }
-      storageHint.value = res.changed ? '缩略图缓存目录已更新' : '目录未变化'
-    }
-  } catch (err) {
-    errorMsg.value = err?.message || '缩略图缓存目录修改失败'
-  } finally {
-    busyThumbsDir.value = false
   }
 }
 // ---------- 学期 ----------

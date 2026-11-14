@@ -22,7 +22,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 - 后端 `student-backend/app.js` 由主进程 `fork`（创建子进程）为独立子进程：
   - 开发模式用系统 `node`（探测/缓存其可执行路径）；
   - 打包模式用 `process.execPath`（当前可执行文件路径，即 electron.exe）+ `ELECTRON_RUN_AS_NODE=1`（以纯 Node 模式运行），以 Electron 内置 Node 的「纯 Node 模式」运行，目标机无需安装 Node。
-  - 两者均通过 `execArgv: ['--expose-gc']`（Node 启动参数：暴露垃圾回收接口）暴露 `GC`（垃圾回收），并通过 `env`（环境变量）注入 `DATA_DIR / ALBUM_THUMBS_DIR / SECURE_MASTER / DB_MASTER_KEY / NODE_COMPILE_CACHE`。
+  - 两者均通过 `execArgv: ['--expose-gc']`（Node 启动参数：暴露垃圾回收接口）暴露 `GC`（垃圾回收），并通过 `env`（环境变量）注入 `DATA_DIR / SECURE_MASTER / DB_MASTER_KEY / NODE_COMPILE_CACHE`。目录只有一个根：缩略图与 AI 技能路径由后端从 `DATA_DIR` 派生，不再单独注入。
 - 渲染层为 Vue 3 前端（`student-frontend/`）构建产物：
   - 开发模式经 Vite（`http://127.0.0.1:5173`）加载；
   - 打包模式经自定义 `app://local/*` 协议加载（如 `app://local/index.html`、`setup.html`、`widget.html`、`migration.html`、`desktop-widget.html`）。
@@ -85,7 +85,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 - `handleBackendDown`：最多 `RECONNECT_MAX`(5) 次重连，每次广播 `from-main{type:'backend-reconnecting', active, attempt, max}` 并 `setBootStatus`；成功即恢复心跳并广播解除；全部失败则 `markBackendFailed`。
 - 启动失败兜底：看门狗超时或自动重启用尽 → `markBackendFailed` 广播 `from-main{type:'backend-failed', failed:true}`，启动占位页给出「重启后端 / 退出应用」（`restart-backend` / `quit-app`）；恢复时广播 `failed:false`。
 - `stopBackendProcess`：返回 Promise 等进程真正退出（Windows 上 `kill()` 异步，需等句柄释放，否则搬迁数据库易 EBUSY/EPERM），并摘掉 `exit → scheduleBackendRestart` 监听避免「主动停止」被自动重启。`shutdownBackend` 置 `app.isQuitting`、杀后端、关闭日志流。
-- 后端日志写入 `userData/data/backend.log`。
+- 后端日志写入 `<数据目录>/logs/backend.log`。
 
 #### 2.5 启动计时（startup-timer 与渲染层 [startup] 日志的采集口径）
 
@@ -93,7 +93,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 - 主进程打点：`app.whenReady 就绪`、`协议注册完成`、`createMainWindow/createSetupWindow 完成`、`startBackend 完成`、`ready-to-show（窗口首次显示）`、`Vite 就绪，开始跳转`、`loading 页面加载完成`、`Vite 页面加载完成`、`后端就绪` 等。
 - 锚点口径（`main.js` `revealWindow`）：「上次启动耗时」= 进程启动 → **第一个窗口首次显示**的那一刻。所有窗口的显示都走 `revealWindow()`，其中调 `startupTimer.end('窗口首次显示')` 定死锚点：主窗口是 `ready-to-show`（未触发时走 1500ms 兜底 reveal），引导窗口是 `setup-ready`（dev 下此刻才 reveal；prod 下创建即显示，锚点顺延到 `setup-ready` 的 reveal）。后端就绪、首屏数据就绪等更晚事件不再抬高总耗时，用户在引导页的停留也不计入。
 - 渲染层日志采集：主窗口监听 `webContents.on('console-message')`，把渲染层以 `[startup]` 前缀打印的日志转成 mark（去掉前缀；含「Vue 挂载完成」「占位页移除（界面可见）」等，仅作时间线记录，不再参与锚点）。仅采集「首次加载」：非 `data:` 页面 `did-finish-load` 后置 `rendererStartupLogged=true` 停收，避免前端重启（`reload`）把这些日志以主进程已运行时长为基准重复计入；例外是「占位页移除」必然晚于 `did-finish-load`，放行第一次以保证界面可见时刻留在时间线上。
-- 输出：`whenReady` 后 5s 调用 `startupTimer.report()` 打印时间线，`startupTimer.saveLog()` 追加写入 `userData/data/startup.log`；性能面板用 `startupTimer.getTimeline()`（经 `perf-startup`）读取。
+- 输出：`whenReady` 后 5s 调用 `startupTimer.report()` 打印时间线，`startupTimer.saveLog()` 追加写入 `<数据目录>/logs/startup.log`；性能面板用 `startupTimer.getTimeline()`（经 `perf-startup`）读取。
 
 #### 2.6 preload 的 IPC 通道白名单机制
 
@@ -197,7 +197,7 @@ electron/
 ├── main/main.ipc-contract.js    IPC 结果契约层（成功 / 失败 / 用户取消 三态互斥的统一表达）
 ├── main/main.path-guard.js      IPC 路径 / URL 白名单
 ├── main/main.dev-loader.js      开发模式加载（Vite 轮询 / loading 页 / 重试导航）
-├── main/main.migration.js       数据目录搬迁引擎
+├── main/main.migration.js       数据目录搬迁引擎（换目录时整目录复制）
 ├── main/main.inpLog.js          INP 归因落盘（仅开发模式）
 ├── main/main.startup-timer.js   启动事件计时器
 ├── preload.js                   预加载脚本：IPC 通道白名单 + contextBridge

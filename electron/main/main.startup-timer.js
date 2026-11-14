@@ -173,8 +173,9 @@ function report() {
 function saveLog(filePath) {
   if (!filePath) {
     try {
-      const { app } = require('electron')
-      filePath = path.join(app.getPath('userData'), 'data', 'startup.log')
+      // v2 布局：启动时间线进 <数据根>/logs/，与其它日志同层
+      const { resolveLogsDir } = require('./main.config')
+      filePath = path.join(resolveLogsDir(), 'startup.log')
     } catch (_) {
       return
     }

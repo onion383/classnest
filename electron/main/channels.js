@@ -76,8 +76,6 @@ const CH = Object.freeze({
   APPS_LAUNCH: 'apps-launch',
   GET_DATA_DIRECTORIES: 'get-data-directories',
   SET_DATA_DIR: 'set-data-dir',
-  SET_THUMBS_DIR: 'set-thumbs-dir',
-  SET_SKILLS_DIR: 'set-skills-dir',
   SET_DB_ENCRYPTION: 'set-db-encryption',
   SET_INITIAL_DATA_DIR: 'set-initial-data-dir',
   GET_SETUP_WARMUP: 'get-setup-warmup',

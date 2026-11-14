@@ -30,7 +30,8 @@ process.env.DB_MASTER_KEY = 'test-only-master-key'
 
 const router = require('../../student-backend/routes/dataExport')
 
-const uploads = path.join(tmp, 'uploads')
+// v2 布局：上传文件在 content/uploads，dbManager.uploadsDir 也指向这里
+const uploads = path.join(tmp, 'content', 'uploads')
 fs.mkdirSync(uploads, { recursive: true })
 
 function readZipEntries(zipPath) {

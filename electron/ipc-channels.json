@@ -63,8 +63,6 @@
     "apps-launch",
     "get-data-directories",
     "set-data-dir",
-    "set-thumbs-dir",
-    "set-skills-dir",
     "set-db-encryption",
     "set-initial-data-dir",
     "get-setup-warmup",

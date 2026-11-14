@@ -26,9 +26,12 @@ const { slug } = dbManager.createTeacher('restore-test', 'not-a-real-hash', 'tea
 dbManager.withDb(slug, () => { dbManager.current().prepare('SELECT 1').get() })
 
 const dbFile = () => {
-  const hit = fs.readdirSync(DATA_DIR).find((f) => f.endsWith('.db') && !f.includes('index'))
+  // v2 布局：账号库都在 core/ 下；测试用的 sample-*.db 源文件仍放根目录，
+  // 正好不会被这里的扫描误认成业务库。
+  const core = path.join(DATA_DIR, 'core')
+  const hit = fs.readdirSync(core).find((f) => f.endsWith('.db') && !f.includes('index'))
   assert.ok(hit, '没找到业务库文件')
-  return path.join(DATA_DIR, hit)
+  return path.join(core, hit)
 }
 
 test.after(() => {

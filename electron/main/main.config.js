@@ -31,13 +31,20 @@ function getMasterKey() {
   return channelMasterKey
 }
 
-// 数据目录/缓存目录解析（app-config.json，存于 userData，独立于业务数据目录以便启动即读）
+// 数据目录解析（app-config.json，存于 userData，独立于业务数据目录以便启动即读）
+//
+// 【目录模型】可由用户配置的目录只有一个：dataDir（数据根目录）。根下固定四层：
+//   core/（库与密钥）content/（用户内容）cache/（可再生缓存）logs/（运行日志）
+// 不再有任何独立的子目录配置。这样「移动数据」= 搬一个目录 + 改一行配置。
+// 代码本身只认四层布局（见 student-backend/dbManager/dbManager.paths.js）。
+// 产品尚未对外发布、没有旧版数据需要升级，因此没有任何迁移或旧配置收敛逻辑。
 function getAppConfigPath() {
   return path.join(app.getPath('userData'), 'app-config.json')
 }
-// 内存缓存：启动阶段 resolveDataDir / resolveThumbsDir / getDbMasterKey 会反复调用，
+// 内存缓存：启动阶段 resolveDataDir / getDbMasterKey 会反复调用，
 // 原先每次都同步 readFileSync 一次。同一进程内配置的唯一写入点是 saveAppConfig，保存后刷新缓存。
 let appConfigCache = null
+
 function resolveAppConfig() {
   if (appConfigCache) return appConfigCache
   try { appConfigCache = JSON.parse(fs.readFileSync(getAppConfigPath(), 'utf8')) || {} } catch (_) { appConfigCache = {} }
@@ -46,8 +53,6 @@ function resolveAppConfig() {
 function saveAppConfig(patch) {
   const next = { ...resolveAppConfig(), ...patch }
   if (!next.dataDir) delete next.dataDir
-  if (!next.thumbsDir) delete next.thumbsDir
-  if (!next.skillsDir) delete next.skillsDir
   // 写失败必须抛错：否则「切配置」这一步会静默失败，而调用方（如数据目录搬迁）
   // 会继续删掉旧目录，导致数据在新目录、配置却指向已删除的旧目录。
   try {
@@ -59,28 +64,40 @@ function saveAppConfig(patch) {
   appConfigCache = next
   return next
 }
-// 数据库主目录：默认 userData/data，可被用户配置覆盖
+// 数据根目录：默认 userData/data，是唯一可由用户配置的目录
 function resolveDataDir() {
   const cfg = resolveAppConfig()
   return cfg.dataDir ? path.resolve(cfg.dataDir) : path.join(app.getPath('userData'), 'data')
 }
-// 相册缩略图缓存目录：默认位于数据目录下 album-thumbs，可单独配置为独立缓存位置
+// v2 分层布局：根下固定 core / content / cache / logs 四层。
+// 主进程侧只做路径解析与目录初始化；与后端 dbManager.paths.js 的层级名保持一致，
+// 改一处必须同步改另一处。
+function resolveCoreDir() { return path.join(resolveDataDir(), 'core') }
+function resolveContentDir() { return path.join(resolveDataDir(), 'content') }
+function resolveCacheDir() { return path.join(resolveDataDir(), 'cache') }
+function resolveLogsDir() { return path.join(resolveDataDir(), 'logs') }
+function resolveIndexPath() { return path.join(resolveCoreDir(), 'index.db') }
+function resolveDbMasterKeyPath() { return path.join(resolveCoreDir(), 'db-master.key') }
+// 相册缩略图缓存：cache/album-thumbs（可再生的缓存，随根一起搬）
 function resolveThumbsDir() {
-  const cfg = resolveAppConfig()
-  if (cfg.thumbsDir) return path.resolve(cfg.thumbsDir)
-  return path.join(resolveDataDir(), 'album-thumbs')
+  return path.join(resolveCacheDir(), 'album-thumbs')
 }
-// AI 技能 md 目录：默认位于数据目录下 ai-skills，可单独配置为独立目录
+// AI 技能 md：content/ai-skills（随根一起搬，也随备份包走）
 function resolveSkillsDir() {
-  const cfg = resolveAppConfig()
-  if (cfg.skillsDir) return path.resolve(cfg.skillsDir)
-  return path.join(resolveDataDir(), 'ai-skills')
+  return path.join(resolveContentDir(), 'ai-skills')
+}
+// 四层目录初始化：后端 paths.js 在模块加载时也会建，但主进程更早就要写主密钥
+// 与后端日志（core/ 与 logs/），所以启动早期先统一建一次。纯 mkdir，不做任何搬迁。
+function ensureDataDirs() {
+  for (const dir of [resolveCoreDir(), resolveContentDir(), resolveCacheDir(), resolveLogsDir()]) {
+    fs.mkdirSync(dir, { recursive: true })
+  }
 }
 
 // DB 静态加密主密钥（方案 A：首启现场随机生成 + safeStorage/DPAPI 持久化）：
 // 取代原先明文写在 student-backend/.env、随安装包分发的 DB_MASTER_KEY。
 // - Windows 上 safeStorage 底层走 DPAPI，密文绑定当前系统用户，解开安装包拿不到明文。
-// - 首启：文件不存在 → 生成随机 32 字节 → 加密写 userData/data/db-master.key。
+// - 首启：文件不存在 → 生成随机 32 字节 → 加密写 <数据根>/core/db-master.key。
 // - 之后：解密文件复用同一把钥匙，保证持久库可连续打开。
 // - 兜底：safeStorage 不可用（非 Windows 等）时仅返回运行期随机值，不落明文文件。
 // - 46 适配：同步的 isEncryptionAvailable / encryptString / decryptString 在 Electron 46
@@ -96,7 +113,7 @@ let dbMasterKeyPromise = null
 
 async function resolveDbMasterKey() {
   // 主密钥文件与数据库同目录存放，随数据目录一起迁移；解析用配置后的 dataDir，保证两者一致
-  const keyFile = path.join(resolveDataDir(), 'db-master.key')
+  const keyFile = resolveDbMasterKeyPath()
   const randomKey = () => crypto.randomBytes(32).toString('hex')
   try {
     const available = await safeStorage.isAsyncEncryptionAvailable()
@@ -173,6 +190,13 @@ module.exports = {
   resolveAppConfig,
   saveAppConfig,
   resolveDataDir,
+  ensureDataDirs,
+  resolveCoreDir,
+  resolveContentDir,
+  resolveCacheDir,
+  resolveLogsDir,
+  resolveIndexPath,
+  resolveDbMasterKeyPath,
   resolveThumbsDir,
   resolveSkillsDir,
   getDbMasterKey,

@@ -204,7 +204,7 @@ sequenceDiagram
 | 前端设置 | `propose_frontend_setting` 仅允许主题/日夜/图标/标题栏/动画/透明度/提示合并；**背景图、账号与密钥不在范围** | [`ai.llm.js`](../../../student-backend/routes/ai/ai.llm.js) |
 | 确认档位 | `approve`（默认，每次写入都要确认）/ `full`（切换时二次弹窗确认，提案自动执行）；仍记撤销 | [`views/AiAssistant.vue`](../../../student-frontend/src/views/AiAssistant.vue)、[`AiComposer.vue`](../../../student-frontend/src/components/ai/AiComposer/AiComposer.vue) |
 | 子代理 | 只读白名单 10 个工具（query / aggregate / resolve_student / search_all / run_checks / run_conflict_checks / score_weights / describe_table / teaching_week / get_time）；执行前按名单硬校验，`propose_*`、`save_memory`、`undo_change`、`ask_user` 全部拒绝 | [`ai.subagent-tools.js`](../../../student-backend/routes/ai/ai.subagent-tools.js)、[`tools.subagent.js`](../../../student-backend/routes/ai/ai.tools/tools.subagent.js) |
-| 数据隔离 | 记忆 `dataDir/ai-memory/<slug>.md`、技能 `ai-skills/<slug>/`（或 `AI_SKILLS_DIR`），按账号 slug 隔离 | [`dbManager.memory.js`](../../../student-backend/dbManager/dbManager.memory.js)、[`dbManager.skills.js`](../../../student-backend/dbManager/dbManager.skills.js) |
+| 数据隔离 | 记忆 `dataDir/ai-memory/<slug>.md`、技能 `dataDir/ai-skills/<slug>/`（均固定随数据根目录），按账号 slug 隔离 | [`dbManager.memory.js`](../../../student-backend/dbManager/dbManager.memory.js)、[`dbManager.skills.js`](../../../student-backend/dbManager/dbManager.skills.js) |
 | 回滚 | 写前可建整库快照（`dataDir/snapshots/<slug>/`）；所有 AI 写操作登记 `/api/undo`，模型可用 `undo_change` 回退自己最近 N 次更改 | [`ai.dataRoutes.js`](../../../student-backend/routes/ai/ai.dataRoutes.js)、[`routes/undo/undo.js`](../../../student-backend/routes/undo/undo.js) |
 | 附件 | 上传到系统临时目录、解析即删；模型只拿到文件名，需显式 `read_document` 才读取内容 | [`ai.upload.js`](../../../student-backend/routes/ai/ai.upload.js)、[`ai.llm.js`](../../../student-backend/routes/ai/ai.llm.js) |
 | 联网 | 联网搜索是独立开关，未启用时工具不可用；链接预览走隔离 webview，不进入主窗口 | [`AiComposer.vue`](../../../student-frontend/src/components/ai/AiComposer/AiComposer.vue)、[`main.webview-guard.js`](../../../electron/main/main.webview-guard.js) |
@@ -217,21 +217,30 @@ sequenceDiagram
 ├─ desktop-widget-pos.json         # 桌面小组件落点
 ├─ node-compile-cache/             # 主进程 Node 编译缓存
 ├─ renderer-code-cache/            # 渲染进程 V8 代码缓存（含 .cc-version；超限清理）
-└─ data/                           # 默认数据目录（可迁移，见 app-config.json）
-   ├─ index.db                     # 主密钥加密的账号登记表（registry）
-   ├─ <slug>.db                    # 每位班主任的自含加密库（slug 形如 @ + 12 hex）
-   ├─ <slug>.db-wal / -shm         # WAL 边车（删账号时一并删除）
-   ├─ db-master.key                # DB 主密钥密文（safeStorage/DPAPI，随数据目录迁移）
-   ├─ .jwt-secret                  # JWT 兜底密钥（mode 0o600）
-   ├─ uploads/                     # 班费收据等上传（多账号共享）
-   │  └─ background/               # 自定义背景图
-   ├─ album-thumbs/<slug>/         # 相册缩略图（按库隔离；可单独配置目录）
-   ├─ album-trash/                 # 应用内回收站（删照片可撤销）
-   ├─ snapshots/<slug>/            # AI 整库快照（文件名即时间戳）
-   ├─ ai-memory/<slug>.md          # AI 长期记忆（不可搬迁）
-   ├─ ai-skills/<slug>/<name>.md   # AI 技能（可由 AI_SKILLS_DIR 指向独立目录）
-   ├─ backend.log                  # 后端日志（主进程重定向）
-   └─ startup.log                  # 启动时间线
+└─ data/                           # 默认数据目录（唯一可配置，见 app-config.json）
+   ├─ core/                        # 不可再生的核心数据
+   │  ├─ index.db                  # 主密钥加密的账号登记表（registry）
+   │  ├─ <slug>.db                 # 每位班主任的自含加密库（slug 形如 @ + 12 hex）
+   │  ├─ <slug>.db-wal / -shm      # WAL 边车（删账号时一并删除）
+   │  ├─ db-master.key             # DB 主密钥密文（safeStorage/DPAPI，随数据目录迁移）
+   │  ├─ .jwt-secret               # JWT 兜底密钥（mode 0o600）
+   │  ├─ .sessions.json            # 有效登录会话名单
+   │  └─ .last-db                  # 启动预热用的上次库标识
+   ├─ content/                     # 用户内容（随备份包走）
+   │  ├─ uploads/                  # 班费收据等上传（多账号共享）
+   │  │  └─ background/            # 自定义背景图
+   │  ├─ album-trash/              # 应用内回收站（删照片可撤销）
+   │  ├─ receipt-trash/            # 收据回收站
+   │  ├─ snapshots/<slug>/         # AI 整库快照（文件名即时间戳）
+   │  ├─ ai-memory/<slug>.md       # AI 长期记忆
+   │  └─ ai-skills/<slug>/<name>.md # AI 技能
+   ├─ cache/                       # 可再生的缓存（不进备份包）
+   │  ├─ album-thumbs/<slug>/      # 相册缩略图（按库隔离）
+   │  └─ ffmpeg/                   # 视频组件下载缓存
+   └─ logs/                        # 运行日志
+      ├─ backend.log               # 后端日志（主进程重定向）
+      ├─ startup.log               # 启动时间线
+      └─ inp.log                   # 交互延迟归因（仅开发模式）
 ```
 
 - 删除账号：先关连接 → 删 `.db` 与 WAL 边车 → 摘登记；**不清理** `uploads/`、`album-thumbs/`、`album-trash/`（多账号共享）。

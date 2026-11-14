@@ -122,7 +122,8 @@ async function main() {
     fs.mkdirSync(staleDir, { recursive: true })
     const stale = path.join(staleDir, '1.jpg')
     fs.writeFileSync(stale, Buffer.alloc(555, 5))
-    fs.writeFileSync(path.join(DATA_DIR, '@stale0000.db'), 'not-a-real-db')
+    // v2 布局：账号库在 core/ 下，sweep 的「库文件还在但登记丢了」探测也去那里找
+    fs.writeFileSync(path.join(DATA_DIR, 'core', '@stale0000.db'), 'not-a-real-db')
 
     const before = dbManager.withDb(slug, () => dbManager.current()
       .prepare('SELECT id, thumb_path, thumb_v FROM album_photos ORDER BY id').all())

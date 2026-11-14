@@ -136,41 +136,49 @@ async function scanDiskUsage({ appDir, dataDir, thumbsDir, logDirs, slug } = {})
     total: 0,
   }
 
-  // 数据目录顶层逐项归账；缩略图目录按配置的绝对路径认，而不是按名字猜 ——
-  // 用户可以把缩略图目录改到数据目录下的任意名字，按名字特判就会把它算进「其他」。
+  // v2 分层布局：数据根目录下固定 core / content / cache / logs 四层。
+  // 顶层只剩四个目录名，原先「按顶层条目名分类」会全归进 other，因此逐层扫描、
+  // 每层用自己的分类器；classifyEntry 仍在 core 层负责账号库与 index.db 的区分。
+  const layers = [
+    { dir: path.join(dataDir, 'core'), classify: (name) => classifyEntry(name, slug) },
+    { dir: path.join(dataDir, 'content'), classify: (name) => UPLOAD_DIRNAMES.has(name) ? 'uploads' : 'other' },
+    { dir: path.join(dataDir, 'cache'), classify: (name) => name === THUMBS_DIRNAME ? 'thumbs' : 'other' },
+    { dir: path.join(dataDir, 'logs'), classify: (name) => LOG_FILENAMES.has(name) ? 'logs' : 'other' },
+  ]
   const thumbsResolved = thumbsDir ? path.resolve(thumbsDir) : ''
-  let entries = []
-  try {
-    entries = await fsp.readdir(dataDir, { withFileTypes: true })
-  } catch (_) {
-    entries = []
-  }
-  const absOf = (e) => path.join(dataDir, e.name)
-  const thumbsSeen = !!thumbsResolved && entries.some((e) => path.resolve(absOf(e)) === thumbsResolved)
-  // 顶层各项并行扫：库文件是零散大文件、uploads 等是成千上万小文件，
-  // 串行累加会让最慢的那项决定整体耗时。
-  const parts = await Promise.all(entries.map(async (e) => {
-    const p = absOf(e)
-    const isThumbs = thumbsResolved && path.resolve(p) === thumbsResolved
-    const bucket = isThumbs ? 'thumbs' : classifyEntry(e.name, slug)
-    if (e.isDirectory()) return { bucket, bytes: await dirSize(p) }
+  let thumbsSeen = false
+  for (const layer of layers) {
+    let entries = []
     try {
-      return { bucket, bytes: (await fsp.stat(p)).size }
+      entries = await fsp.readdir(layer.dir, { withFileTypes: true })
     } catch (_) {
-      return { bucket, bytes: 0 } // 单条失败忽略（文件刚被删/占用是常态）
+      continue // 目录不存在：按 0 计
     }
-  }))
-  for (const part of parts) out[part.bucket] += part.bytes
+    // 层内各项并行扫：库文件是零散大文件、uploads 等是成千上万小文件，
+    // 串行累加会让最慢的那项决定整体耗时。
+    const parts = await Promise.all(entries.map(async (e) => {
+      const p = path.join(layer.dir, e.name)
+      const isThumbs = thumbsResolved && path.resolve(p) === thumbsResolved
+      if (isThumbs) thumbsSeen = true
+      const bucket = isThumbs ? 'thumbs' : layer.classify(e.name)
+      if (e.isDirectory()) return { bucket, bytes: await dirSize(p) }
+      try {
+        return { bucket, bytes: (await fsp.stat(p)).size }
+      } catch (_) {
+        return { bucket, bytes: 0 } // 单条失败忽略（文件刚被删/占用是常态）
+      }
+    }))
+    for (const part of parts) out[part.bucket] += part.bytes
+  }
 
-  // 缩略图目录在数据目录之外（或不在顶层）时单独补扫一次；
-  // 已在上面算过的不重复加，否则同一批文件会被计两遍。
+  // 缩略图目录指在四层之外时单独补扫一次；已扫过的不重复加。
   if (thumbsResolved && !thumbsSeen) {
     out.thumbs += await dirSize(thumbsResolved)
   }
 
-  // 数据目录之外还有日志出口（userData/data、userData 根）；
-  // 与 dataDir 相同的目录跳过，避免同一份日志被数两遍。
-  const seenLogDirs = new Set([path.resolve(dataDir)])
+  // 额外的日志出口（desktop-layer.log 仍在 userData 根）；logs/ 层已扫过，
+  // 与它同目录的传参要跳过，避免同一份日志被数两遍。
+  const seenLogDirs = new Set([path.resolve(dataDir), path.resolve(path.join(dataDir, 'logs'))])
   for (const dir of Array.isArray(logDirs) ? logDirs : []) {
     if (!dir) continue
     const resolved = path.resolve(dir)

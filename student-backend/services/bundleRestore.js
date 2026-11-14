@@ -43,7 +43,7 @@ function dirPlanOf(slug) {
     { prefix: 'uploads', dest: dbManager.uploadsDir },
     { prefix: 'ai-skills', dest: dbManager.skillsDir(slug) },
     { prefix: 'album-trash', dest: dbManager.trashDir },
-    { prefix: 'receipt-trash', dest: path.join(dbManager.dataDir, 'receipt-trash') },
+    { prefix: 'receipt-trash', dest: dbManager.receiptTrashDir },
     { prefix: 'snapshots', dest: dbManager.snapshotsDir(slug) },
   ]
 }

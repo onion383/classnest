@@ -6,13 +6,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { dataDir, ensureDir } = require('./dbManager.base');
+const { memoryDir } = require('./dbManager.paths');
 // 本地日期（不能引 utils/sql.js：它会 require ../db，而 db 又 require dbManager —— 成环）
 const { todayStr } = require('../utils/date');
 
-// 与数据库同层存放，按班主任 slug 隔离：dataDir/ai-memory/<slug>.md；
+// v2 布局：content/ai-memory/<slug>.md（按班主任 slug 隔离）；
 // 内容会注入 AI 系统提示，并随备份/恢复一起带走。
-const memoryDir = ensureDir(path.join(dataDir, 'ai-memory'));
 function memoryFilePath(slug) {
   // 仅允许内部 slug 字符，异常值兜底为 default，避免路径穿越
   const safe = /^[A-Za-z0-9_@-]+$/.test(String(slug || '')) ? String(slug) : 'default';

@@ -63,7 +63,7 @@ flowchart LR
 ```
 
 - 驱动：`better-sqlite3-multiple-ciphers`（`SQLCipher`（加密 SQLite 扩展）兼容），在 dbManager 中**懒加载**，缩短就绪时间。
-- 目录：`DATA_DIR`（默认 `userData/data`，可由 `app-config.json` 覆盖）下的 `index.db`、`<slug>.db`、`.jwt-secret`、`db-master.key`、`album-thumbs/`、`album-trash/`。
+- 目录：`DATA_DIR`（默认 `userData/data`，唯一可由 `app-config.json` 覆盖的根）下固定四层：`core/`（`index.db`、`<slug>.db` 及 WAL 边车、`.jwt-secret`、`db-master.key`、`.sessions.json`、`.last-db`）、`content/`（`uploads/`、`album-trash/`、`receipt-trash/`、`snapshots/`、`ai-memory/`、`ai-skills/`）、`cache/`（`album-thumbs/`、`ffmpeg/`）、`logs/`。所有路径由 [`dbManager.paths.js`](../../../student-backend/dbManager/dbManager.paths.js) 统一定义，业务代码不再自己拼 `dataDir`。
 
 ### 2. [`db.js`](../../../student-backend/db.js) · 统一入口
 
@@ -81,7 +81,7 @@ flowchart LR
 | [`dbManager.account.js`](../../../student-backend/dbManager/dbManager.account.js) | 账号/登记表                               | `resolveByUsername`（按账号定位库）、`resolveByDbFile`（按库文件定位账号）、`registryFindByUsername`（按账号查登记）、`registryList`（列出登记项）、`registryUpsert`（写入/更新登记）、`registrySetEncrypted`（更新加密标记）、`registryDelete`（删除登记）、`registryRename`（登记改名） |
 | [`dbManager.backup.js`](../../../student-backend/dbManager/dbManager.backup.js)   | 备份包导出/恢复、库钥匙包裹                       | `wrapKey`（主密钥包裹库钥匙）、`unwrapKey`（主密钥解包库钥匙）、`wrapKeyBySecret`（用密码/助记词包裹库钥匙）、`decryptBundleKey`（解包备份中的库钥匙）、`exportBundle`（取出备份所需的库文件与钥匙）、`restoreBundle`（用备份数据重建库并登记）                               |
 | [`dbManager.memory.js`](../../../student-backend/dbManager/dbManager.memory.js)   | AI 长期记忆目录（固定位置，不可搬迁）                 | `memoryDir`（AI 长期记忆目录）                                                                                                                           |
-| [`dbManager.skills.js`](../../../student-backend/dbManager/dbManager.skills.js)   | AI 技能 md 目录（`AI_SKILLS_DIR`，可在设置页搬迁） | `skillsDirRoot`（AI 技能文件根目录）                                                                                                                      |
+| [`dbManager.skills.js`](../../../student-backend/dbManager/dbManager.skills.js)   | AI 技能 md 目录（固定 `dataDir/ai-skills`）   | `skillsDirRoot`（AI 技能文件根目录，随数据根目录一起搬迁）                                                                                                |
 
 ### 4. 库与密钥体系
 

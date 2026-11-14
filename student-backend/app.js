@@ -471,7 +471,7 @@ function startServer(port) {
               const moved = moveReceiptsToTrash(
                 list,
                 dbManager.uploadsDir,
-                path.join(dbManager.dataDir, 'receipt-trash')
+                dbManager.receiptTrashDir
               );
               res.json({ moved });
             });

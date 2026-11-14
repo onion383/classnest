@@ -262,7 +262,9 @@ for (const s of suite) {
     ...walk(path.join(ROOT, 'testjs'), (p) => p.endsWith('.js') || p.endsWith('.mjs') || p.endsWith('.cjs'))
   ]
   for (const f of srcAll) for (const m of read(f).matchAll(ENV_RE)) envUsed.add(m[1])
-  const documentedRuntimeEnv = ['PORT', 'JWT_SECRET', 'DB_MASTER_KEY', 'SECURE_MASTER', 'DATA_DIR', 'ALBUM_THUMBS_DIR', 'AI_SKILLS_DIR']
+  // 目录模型统一为单一根后，AI 技能目录固定由 DATA_DIR 派生，AI_SKILLS_DIR 覆盖已移除。
+  // ALBUM_THUMBS_DIR 仍被 testjs 的冒烟脚本赋值（兼容旧夹具），故保留在清单里。
+  const documentedRuntimeEnv = ['PORT', 'JWT_SECRET', 'DB_MASTER_KEY', 'SECURE_MASTER', 'DATA_DIR', 'ALBUM_THUMBS_DIR']
   const notUsed = documentedRuntimeEnv.filter((k) => !envUsed.has(k))
   checks.push({ name: '环境变量真实存在', ok: notUsed.length === 0, detail: `文档声明 ${documentedRuntimeEnv.length} 个，源码未读 ${notUsed.length}` })
   for (const k of notUsed) problems.push(`文档声明但源码未读取的环境变量：${k}`)

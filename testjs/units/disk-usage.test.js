@@ -63,23 +63,28 @@ function makeFixture() {
   write(path.join(appDir, 'resources', 'app.asar'), 200)
   write(path.join(appDir, 'resources', 'ffmpeg', 'ffmpeg.exe'), 300)
 
-  write(path.join(dataDir, `${SLUG}.db`), 100)
-  write(path.join(dataDir, `${SLUG}.db-wal`), 50)
-  write(path.join(dataDir, '@75ecd9191d48.db'), 200)
-  write(path.join(dataDir, 'index.db'), 10)
-  write(path.join(dataDir, 'uploads', 'a.png'), 30)
-  write(path.join(dataDir, 'album-trash', SLUG, 'trash.jpg'), 40)
-  write(path.join(dataDir, 'backend.log'), 20)
-  write(path.join(dataDir, 'album-thumbs', SLUG, '1.jpg'), 70)
-  return { root, appDir, dataDir }
+  // v2 分层布局：core / content / cache / logs
+  const core = path.join(dataDir, 'core')
+  const content = path.join(dataDir, 'content')
+  const cache = path.join(dataDir, 'cache')
+  const logs = path.join(dataDir, 'logs')
+  write(path.join(core, `${SLUG}.db`), 100)
+  write(path.join(core, `${SLUG}.db-wal`), 50)
+  write(path.join(core, '@75ecd9191d48.db'), 200)
+  write(path.join(core, 'index.db'), 10)
+  write(path.join(content, 'uploads', 'a.png'), 30)
+  write(path.join(content, 'album-trash', SLUG, 'trash.jpg'), 40)
+  write(path.join(logs, 'backend.log'), 20)
+  write(path.join(cache, 'album-thumbs', SLUG, '1.jpg'), 70)
+  return { root, appDir, dataDir, cache, logs }
 }
 
 test('scanDiskUsage：七类字节数与合计', async () => {
   resetAppSizeCache()
-  const { root, appDir, dataDir } = makeFixture()
+  const { root, appDir, dataDir, cache } = makeFixture()
   try {
     const u = await scanDiskUsage({
-      appDir, dataDir, thumbsDir: path.join(dataDir, 'album-thumbs'), slug: SLUG,
+      appDir, dataDir, thumbsDir: path.join(cache, 'album-thumbs'), slug: SLUG,
     })
     assert.equal(u.app, 600, '软件本体应递归包含 resources 子目录')
     assert.equal(u.currentAccount, 150, '当前账号 = 库文件 + wal')
@@ -108,7 +113,7 @@ test('scanDiskUsage：缩略图目录在数据目录之外时单独补扫，且�
     const u = await scanDiskUsage({
       appDir, dataDir, thumbsDir: externalThumbs, slug: SLUG,
     })
-    // dataDir 里的 album-thumbs（70）仍按名字归「缩略图」，外部目录（500）再补进来
+    // cache/album-thumbs（70）仍按名字归「缩略图」，外部目录（500）再补进来
     assert.equal(u.thumbs, 570, '内部残留 + 外部目录都要算，且各算一次')
     assert.equal(u.other, 10, '补扫不能把 uploads/index.db 也吞进其他')
     assert.equal(u.uploads, 70)
@@ -122,8 +127,8 @@ test('scanDiskUsage：缩略图目录在数据目录之外时单独补扫，且�
 
 test('scanDiskUsage：数据目录之外的日志单独补算，且同目录不重复计', async () => {
   resetAppSizeCache()
-  const { root, appDir, dataDir } = makeFixture()
-  // 模拟 userData 根与 userData/data：desktop-layer.log 在根、startup.log 在 data
+  const { root, appDir, dataDir, logs } = makeFixture()
+  // 模拟应用级日志：desktop-layer.log 在 userData 根、startup.log 在 userData/data
   const userData = path.join(root, 'userData')
   write(path.join(userData, 'desktop-layer.log'), 5)
   write(path.join(userData, 'data', 'startup.log'), 7)
@@ -133,12 +138,12 @@ test('scanDiskUsage：数据目录之外的日志单独补算，且同目录不�
     const u = await scanDiskUsage({
       appDir,
       dataDir,
-      thumbsDir: path.join(dataDir, 'album-thumbs'),
-      // 故意把 dataDir 自己与 userData/data 一起传进来：去重后 dataDir 的 backend.log 只算一次
-      logDirs: [dataDir, path.join(userData, 'data'), userData],
+      thumbsDir: path.join(dataDir, 'cache', 'album-thumbs'),
+      // logs/ 层已扫过 backend.log；这里故意再传一次 dataDir/logs 验证去重
+      logDirs: [logs, path.join(userData, 'data'), userData],
       slug: SLUG,
     })
-    assert.equal(u.logs, 20 + 5 + 7, 'dataDir 20 + desktop-layer 5 + startup 7，且不重复')
+    assert.equal(u.logs, 20 + 5 + 7, 'logs 层 20 + desktop-layer 5 + startup 7，且不重复')
     assert.equal(u.other, 10, 'notes.log 不在数据目录也不在固定名清单，不计入日志与其他')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

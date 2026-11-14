@@ -39,7 +39,7 @@
             <h2 class="text-base font-bold">Markdown 文件管理</h2>
             <button class="row-btn primary" @click="openNewSkill">新增文件</button>
           </div>
-          <!-- 技能文件目录：展示当前配置路径并提供打开文件夹（与系统设置一致） -->
+          <!-- 技能文件目录：数据根目录下的固定子目录，只读展示并提供打开文件夹 -->
           <div class="flex items-center justify-between gap-3 mb-2.5">
             <div class="text-xs text-text-muted truncate min-w-0" :title="skillsDir">技能目录：{{ skillsDir || '加载中…' }}</div>
             <button class="row-btn shrink-0" :disabled="!skillsDir" @click="openSkillsDir">打开文件夹</button>

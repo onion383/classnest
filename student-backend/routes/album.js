@@ -1323,7 +1323,7 @@ router.post('/thumbs/sweep', async (req, res) => {
     const apply = !!(req.body && req.body.apply);
     const getLiveIds = async (slug) => {
       const rec = dbManager.registryFindBySlug(slug);
-      const dbExists = await fsp.access(path.join(dbManager.dataDir, `${slug}.db`))
+      const dbExists = await fsp.access(dbManager.dbFilePath(slug))
         .then(() => true).catch(() => false);
       if (!rec) return dbExists ? undefined : null;
       try {

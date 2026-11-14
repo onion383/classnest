@@ -54,8 +54,8 @@ const EXE_NAME = IS_WIN ? 'ffmpeg.exe' : 'ffmpeg';
 // ffmpeg-master-latest-win64-lgpl/bin/ffmpeg.exe，可由下方 findFfmpeg 的一级子目录探测命中。
 const LGPL_URL = process.env.FFMPEG_LGPL_URL ||
   'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip';
-// 缓存目录：<userData>/ffmpeg
-const CACHE_DIR = path.join(dbManager.dataDir, 'ffmpeg');
+// 缓存目录：<数据根>/cache/ffmpeg（可再生的下载缓存）
+const CACHE_DIR = dbManager.ffmpegCacheDir;
 
 function exists(p) {
   try { return !!(p && fs.statSync(p).isFile()); } catch (_) { return false; }

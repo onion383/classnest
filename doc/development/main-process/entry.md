@@ -76,11 +76,11 @@ classnest/
 
 | 通道 | 动作 | 关键点 |
 | --- | --- | --- |
-| `set-initial-data-dir` | 引导期保存初始数据/缓存目录 | 尚未建库时直接写配置；已建库则复用安全搬迁；完成后重启后端 |
-| `set-data-dir` | 变更数据库目录 | 校验：绝对路径、拒绝盘符根/保护目录、目标须为空、不能迁到自身内部、源目录必须有 `index.db` 与 `db-master.key`；先建进度窗口再关其它窗口；成功后切配置、重启后端、重开主窗口；失败保留旧目录并重开后端 |
+| `set-initial-data-dir` | 引导期保存初始数据目录 | 只接受唯一的数据根目录；尚未建库时直接写配置；已建库则复用安全搬迁；完成后重启后端 |
+| `set-data-dir` | 变更数据目录（唯一根） | 校验：绝对路径、拒绝盘符根/保护目录、目标须为空、不能迁到自身内部、源目录必须有 `index.db` 与 `db-master.key`；先建进度窗口再关其它窗口；成功后切配置、重启后端、重开主窗口；失败保留旧目录并重开后端 |
 | `set-db-encryption` | 开关数据库加密 | 先从主窗口 `localStorage`（本地存储）取 JWT（登录令牌）；进度窗口就绪后关闭其它窗口，由渲染层调后端 NDJSON（逐行 JSON）流执行，`migration-dismiss` 回报结果；失败不改库 |
-| `set-thumbs-dir` | 变更缩略图缓存目录 | 缓存可再生，不搬迁：写配置 → 停/起后端 |
-| `set-skills-dir` | 变更 AI 技能目录 | 复制 → 校验条目数 → 切配置 → 删旧目录；失败保留旧目录并重启后端 |
+
+> 目录模型：数据目录只有一个根，根下固定 `core / content / cache / logs` 四层（见 `dbManager.paths.js`），随根一起搬迁；`set-thumbs-dir` / `set-skills-dir` 两个通道及对应设置项已移除。四层由 `main.config.js` 的 `ensureDataDirs()` 在 `whenReady` 早期建好，后端 `paths.js` 加载时也会各建一次。产品尚无旧版用户数据，因此没有迁移脚本或旧配置收敛逻辑。
 
 进度窗口固定 460×280、`alwaysOnTop`、`skipTaskbar`、禁止缩放；`migrationRunning` 期间拦截关闭；`waitMigrationReady()` 4s 超时兜底。
 
@@ -88,7 +88,7 @@ classnest/
 
 **`ipcMain.handle`（请求-响应）**：
 
-`open-external`（仅 http/https）、`get-master-key`（安全通道主密钥）、`secure-handshake`（安全通道握手报文桥，只转发公钥）、`set-content-protection`（敏感内容防截屏）、`copy-sensitive-text`（剪贴板 TTL（有效期）清理）、`get-pending-notification`（取迁移/引导提示）、`launch-plan`（启动计划）、`get-setup-warmup`（引导预热状态）、`set-initial-data-dir`、`set-data-dir`、`set-db-encryption`、`set-thumbs-dir`、`set-skills-dir`。
+`open-external`（仅 http/https）、`get-master-key`（安全通道主密钥）、`secure-handshake`（安全通道握手报文桥，只转发公钥）、`set-content-protection`（敏感内容防截屏）、`copy-sensitive-text`（剪贴板 TTL（有效期）清理）、`get-pending-notification`（取迁移/引导提示）、`launch-plan`（启动计划）、`get-setup-warmup`（引导预热状态）、`set-initial-data-dir`、`set-data-dir`、`set-db-encryption`。
 
 **`ipcMain.on`（单向通道）**：
 

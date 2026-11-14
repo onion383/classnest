@@ -181,10 +181,10 @@ npm run build:win:inno     # 仅生成安装包（需先完成 electron-builder 
 | 变量                                                | 默认值    | 说明                                                  |
 | ------------------------------------------------- | ------ | --------------------------------------------------- |
 | `PORT`                                            | `3000` | 后端监听端口（仅 `127.0.0.1`）；`app.js` 读 `process.env.PORT` |
-| `JWT_SECRET`                                      | 自动生成   | 可选；未设置时用 `data/.jwt-secret`                         |
+| `JWT_SECRET`                                      | 自动生成   | 可选；未设置时用 `data/core/.jwt-secret`                    |
 | `DB_MASTER_KEY`                                   | —      | 主进程注入（DPAPI 持久化的库主密钥），**无需手填**                      |
 | `SECURE_MASTER`                                   | —      | 主进程每次运行随机生成，**无需手填**                                |
-| `DATA_DIR` / `ALBUM_THUMBS_DIR` / `AI_SKILLS_DIR` | —      | 主进程按配置注入，**无需手填**                                   |
+| `DATA_DIR`                                        | —      | 唯一的数据根目录，主进程按配置注入，**无需手填**；其下固定 `core / content / cache / logs` 四层 |
 
 前端 dev 端口写死在 [`vite.config.js`](student-frontend/vite.config.js) 的 `server.port`（5173），可用 `dev-vite.js --port` 覆盖。
 
@@ -198,7 +198,7 @@ npm run build:win:inno     # 仅生成安装包（需先完成 electron-builder 
 
 - 迁移/备份：设置页「导出数据库」、登录页「从备份恢复」、数据库加密↔明文转换；结构细节见 [安全专题](doc/development/topics/security.md)。
 
-- 日志：`data/backend.log`、`data/startup.log`；启动耗时与内存口径见 [性能专题](doc/development/topics/performance.md)。
+- 日志：`data/logs/backend.log`、`data/logs/startup.log`；启动耗时与内存口径见 [性能专题](doc/development/topics/performance.md)。数据目录按 `core / content / cache / logs` 四层组织，详见 [数据在哪里](doc/user/43-where-data-lives.md)。
 
 ## 说明
 

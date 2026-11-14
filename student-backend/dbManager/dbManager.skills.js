@@ -6,19 +6,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { dataDir, ensureDir } = require('./dbManager.base');
-
-// 与长期记忆同层，按班主任 slug 隔离：dataDir/ai-skills/<slug>/<技能名>.md；
+// v2 布局：content/ai-skills/<slug>/<技能名>.md，按班主任 slug 隔离；
 // 技能是可编辑的 md 指令文件，聊天输入框打「/」按文件名匹配，选中后其内容随本轮注入系统提示。
-// 技能 md 根目录：默认可随数据目录走；被用户单独配置为独立目录时读 AI_SKILLS_DIR
-// （由 Electron 主进程按 app-config 注入）。目录内仍按班主任 slug 分子目录存放。
-const skillsDirRoot = ensureDir(
-  process.env.AI_SKILLS_DIR ? path.resolve(process.env.AI_SKILLS_DIR) : path.join(dataDir, 'ai-skills')
-);
-function skillsDir(slug) {
-  const safe = /^[A-Za-z0-9_@-]+$/.test(String(slug || '')) ? String(slug) : 'default';
-  return ensureDir(path.join(skillsDirRoot, safe));
-}
+// 路径统一由 dbManager.paths.js 定义，随数据根目录一起搬迁、随备份包一起带走。
+const { skillsDirRoot, skillsDir } = require('./dbManager.paths');
 // 技能名规范化：去扩展名、去首尾空白，禁止路径分隔/穿越与非法字符；非法返回 null
 function normalizeSkillName(name) {
   const base = String(name == null ? '' : name).trim().replace(/\.md$/i, '').trim();

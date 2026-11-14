@@ -18,7 +18,6 @@ function warmupAuth() {
 }
 const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
 const dbManager = require('../dbManager/dbManager');
 const sessions = require('../services/sessions');
 const secureChannel = require('../services/secureChannel');
@@ -31,7 +30,7 @@ function resolveSecret() {
   if (process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 16) {
     return process.env.JWT_SECRET;
   }
-  const secretFile = path.join(dbManager.dataDir, '.jwt-secret');
+  const secretFile = dbManager.jwtSecretPath;
   try {
     const existing = fs.readFileSync(secretFile, 'utf8').trim();
     if (existing) return existing;

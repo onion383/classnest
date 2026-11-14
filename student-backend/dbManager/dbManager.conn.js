@@ -5,10 +5,9 @@
 // =========================================================================
 
 const fs = require('fs');
-const path = require('path');
 const { initSchema } = require('../schema/schema');
 const {
-  dataDir, als, connCache, touchConn, setCachedConn, ensureIndex,
+  dbFilePath, lastDbPath, als, connCache, touchConn, setCachedConn, ensureIndex,
   openFile, registryFindBySlug, unwrapKey, getUnlockedKey, clearUnlockedKey,
   beginConnUse, endConnUse, isConnInUse,
 } = require('./dbManager.base');
@@ -20,7 +19,7 @@ function getConn(slug, passphrase, encrypted = true) {
     return connCache.get(slug);
   }
   const _t0 = Date.now();
-  const conn = openFile(path.join(dataDir, `${slug}.db`), passphrase, encrypted);
+  const conn = openFile(dbFilePath(slug), passphrase, encrypted);
   const _t1 = Date.now();
   try {
     initSchema(conn);
@@ -164,7 +163,7 @@ function warmup() {
 //
 // 只在 slug 变化时写盘（进程内比对），不是每个请求都写；换账号也会立即更新。
 // 多环境（dev + 打包）共用一个数据目录时会互相覆盖，真实用户只有一个环境，不受影响。
-const LAST_DB_FILE = () => path.join(dataDir, '.last-db');
+const LAST_DB_FILE = () => lastDbPath;
 let lastDbWritten = '';   // 进程内「已经写进去的值」
 
 // slug 白名单与 snapshotsDir 同一条规则：别把文件里的脏内容当路径用

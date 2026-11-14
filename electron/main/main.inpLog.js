@@ -19,7 +19,7 @@
 const { CH, IPC } = require('./channels')
 const path = require('path')
 const { isDev } = require('./main.env')
-const { resolveDataDir } = require('./main.config')
+const { resolveLogsDir } = require('./main.config')
 const { appendWithRotation } = require('./main.logRotator')
 
 // 把行数组格式化成日志行；keyName 为「类别」或「交互」
@@ -73,7 +73,7 @@ function registerInpLogIpc() {
       }
       lines.push('')
 
-      const file = path.join(resolveDataDir(), 'inp.log')
+      const file = path.join(resolveLogsDir(), 'inp.log')
       // 1-1：写前按体积轮转（1MB 封顶、保留最近 512KB），异步追加。
       // 旧实现每次 appendFileSync 且无上限，开发期反复导出会一直涨。
       appendWithRotation(file, lines.join('\n'), { maxBytes: 1024 * 1024, keepBytes: 512 * 1024 })

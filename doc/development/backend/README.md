@@ -12,7 +12,7 @@ Express 5 服务，由主进程 `child_process.fork`（创建 Node 子进程）�
 - 提供全部业务 `HTTP`（超文本传输协议）接口（`/api/*`，业务接口前缀）、静态资源（`/uploads`、`/api/background`）与安全通道握手（`/api/secure`）。
 - 每个请求经 `JWT`（JSON Web Token，登录令牌）鉴权后通过 `AsyncLocalStorage`（异步上下文存储，简称 `ALS`）绑定到「当前班主任的加密库」。
 - 启动完成后向父进程 `process.send({ type:'backend-ready', port })`（向主进程发送「后端就绪」消息）；之后响应 `ping`（心跳）、接受 `mem-report`（内存报告）/ `gc-report`（垃圾回收报告）查询。
-- 关键环境变量：`DB_MASTER_KEY`（数据库主密钥，缺省即抛错）、`SECURE_MASTER`（安全通道主密钥，缺失则降级为明文）、`JWT_SECRET`（JWT 签名密钥）、`DATA_DIR`（数据目录）、`AI_SKILLS_DIR`（AI 技能目录）、`PORT`（后端监听端口）。
+- 关键环境变量：`DB_MASTER_KEY`（数据库主密钥，缺省即抛错）、`SECURE_MASTER`（安全通道主密钥，缺失则降级为明文）、`JWT_SECRET`（JWT 签名密钥）、`DATA_DIR`（唯一的数据根目录；缩略图与 AI 技能固定为它的子目录，由后端自行派生）、`PORT`（后端监听端口）。
 
 ### 2. 后端启动与初始化时序
 
@@ -36,7 +36,7 @@ Express 5 服务，由主进程 `child_process.fork`（创建 Node 子进程）�
 ### 4. 后端错误处理与日志
 
 - 路由内校验失败返回 `4xx`（客户端错误状态码）+ `{ error }`（错误信息）；统一错误中间件在最末捕获，避免把栈信息回传给前端。
-- 后端日志由主进程重定向到 `userData/data/backend.log`（Electron 用户数据目录下的后端日志）；启动阶段关键节点打印 `[boot] +Nms ...`（启动日志前缀 + 毫秒）供启动计时对齐，含「核心模块 require 完成」「监听成功 = 就绪」「数据库 warmup 完成」「懒加载路由全部注册完成（队列 Nms）」与 `dashboard 首屏聚合 Nms（进入 N）`。后端日志与主进程 `startup.log` 的计时零点不同，只能各自做段内比较，不能跨文件相减绝对时刻。
+- 后端日志由主进程重定向到 `<数据目录>/logs/backend.log`（v2 四层布局，随数据目录一起搬迁）；启动阶段关键节点打印 `[boot] +Nms ...`（启动日志前缀 + 毫秒）供启动计时对齐，含「核心模块 require 完成」「监听成功 = 就绪」「数据库 warmup 完成」「懒加载路由全部注册完成（队列 Nms）」与 `dashboard 首屏聚合 Nms（进入 N）`。后端日志与主进程 `startup.log` 的计时零点不同，只能各自做段内比较，不能跨文件相减绝对时刻。
 - 关闭信号：`app.js` 在 `process.on('exit')`（进程退出事件）调 `scanWorker.shutdown()`（关闭扫描子进程），避免 `fork`（创建）出的扫描进程变成孤儿。
 
 ### 5. 后端路由前缀 ↔ 前端页面

@@ -165,8 +165,6 @@ export function useSettingsAppearance(ctx) {
         const res = await window.electron?.invoke(INVOKE.GET_DATA_DIRECTORIES)
         if (res) {
           ctx.dataDir.value = res.dataDir
-          ctx.thumbsDir.value = res.thumbsDir
-          ctx.skillsDir.value = res.skillsDir
           ctx.screenshotDir.value = res.screenshotDir || ''
         }
       } catch (_) {}
@@ -189,42 +187,7 @@ export function useSettingsAppearance(ctx) {
         }
       })
     },
-    async changeThumbsDir() {
-      const picked = await ctx.pickDir()
-      if (!picked) return
-      ctx.showConfirm(`确定把相册缩略图缓存目录改为「${picked}」吗？将自动重启应用服务，缩略图会按需重建。`, async () => {
-        ctx.busyThumbsDir.value = true
-        try {
-          const res = await window.electron.invoke(INVOKE.SET_THUMBS_DIR, picked)
-          if (res?.ok) {
-            ctx.thumbsDir.value = res.thumbsDir
-            ctx.showAlert(res.changed ? '缓存目录已切换，应用服务已重启。' : '目录未变化。')
-          }
-        } catch (err) {
-          ctx.showAlert(err?.message || '缓存目录切换失败')
-        } finally {
-          ctx.busyThumbsDir.value = false
-        }
-      })
-    },
-    async changeSkillsDir() {
-      const picked = await ctx.pickDir()
-      if (!picked) return
-      ctx.showConfirm(`确定把技能文件目录搬迁到「${picked}」吗？将把现有技能文件移动到该目录并重启应用服务。`, async () => {
-        ctx.busySkillsDir.value = true
-        try {
-          const res = await window.electron.invoke(INVOKE.SET_SKILLS_DIR, picked)
-          if (res?.ok) {
-            ctx.skillsDir.value = res.skillsDir
-            ctx.showAlert(res.changed ? '技能目录搬迁成功，应用服务已重启。' : '目录未变化。')
-          }
-        } catch (err) {
-          ctx.showAlert(err?.message || '技能目录搬迁失败')
-        } finally {
-          ctx.busySkillsDir.value = false
-        }
-      })
-    },
+    // 缩略图缓存与 AI 技能目录已固定为数据根目录下的子文件夹，不再提供独立切换入口。
     // 读取本账号的安全等级
     async loadSecurityLevel() {
       try {

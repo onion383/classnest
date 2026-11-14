@@ -70,7 +70,8 @@ function loadConfig(opts = {}) {
     if (prev) require.cache[electronId] = prev
     else delete require.cache[electronId]
   }
-  return { mod, state, userData, keyFile: path.join(userData, 'data', 'db-master.key') }
+  // v2 布局：主密钥与库文件同在 core/ 下
+  return { mod, state, userData, keyFile: path.join(userData, 'data', 'core', 'db-master.key') }
 }
 
 function stripComments(src) {

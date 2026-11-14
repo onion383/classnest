@@ -6,18 +6,15 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
 const {
-  getDatabase, dataDir, wrapKey, unwrapKey, sqlKey,
+  getDatabase, dbFilePath, wrapKey, unwrapKey, sqlKey,
   registryFindBySlug, registryUpsert, registrySetEncrypted,
   getUnlockedKey,
 } = require('./dbManager.base');
 const { evictConn } = require('./dbManager.conn');
 
-// 库文件路径：每个班主任库独立落盘为 ${slug}.db（slug 形如 @xxxxxxxxxxxx）
-function dbFilePath(slug) {
-  return path.join(dataDir, `${slug}.db`);
-}
+// 库文件路径：v2 布局下位于 core/${slug}.db（slug 形如 @xxxxxxxxxxxx）。
+// 由 dbManager.paths.js 统一定义，备份 / 恢复 / 就地加密转换共用同一份。
 
 // 供备份/导出：返回当前 slug 对应库文件路径与密钥
 function exportBundle(slug) {

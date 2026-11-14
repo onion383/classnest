@@ -55,7 +55,7 @@ const _profReq = (p) => {
 }
 
 // 内存采样与主密钥派生已分别迁至 perf.js / config.js 内部使用，main.js 不再直接引用
-const { resolveCompileCacheDir, getMasterKey, saveAppConfig, resolveDataDir, resolveThumbsDir, resolveSkillsDir, getDbMasterKey } = _profReq('./main.config')
+const { resolveCompileCacheDir, getMasterKey, saveAppConfig, resolveDataDir, ensureDataDirs, resolveThumbsDir, resolveIndexPath, resolveDbMasterKeyPath, getDbMasterKey } = _profReq('./main.config')
 const { setupRendererCodeCache, setupAppProtocol } = _profReq('./main.protocol')
 const { applyBackgroundMaterial } = _profReq('./main.window-material')
 const { buildWebPreferences } = _profReq('./main.web-prefs')
@@ -115,8 +115,8 @@ app.commandLine.appendSwitch('js-flags', '--expose-gc')
 // 这里不再调用：enableCompileCache 只对「启用之后」的编译生效，已经 require 过的模块
 // 不会补写缓存 —— 放在这里等于没开（实测缓存目录一直是空的，启动成本一分没省）。
 
-// 首启判定涉及同步读盘（app-config.json + existsSync index.db），提前到模块加载阶段完成，
-// 不占用 whenReady → 建窗的关键路径。looksLikeFirstRun 是函数声明，此处调用已被提升。
+// 首启判定涉及同步读盘（app-config.json + existsSync core/index.db），提前到模块加载
+// 阶段完成，不占用 whenReady → 建窗的关键路径。looksLikeFirstRun 是函数声明，调用已提升。
 const firstRunAtStartup = looksLikeFirstRun()
 
 // ============ 窗口原生背景材质（BackgroundMaterial / 亚克力） ============
@@ -553,6 +553,14 @@ app.whenReady().then(() => {
   if (!gotSingleInstanceLock) {
     app.quit()
     return
+  }
+
+  // 数据目录四层（core / content / cache / logs）初始化：主进程在 fork 之前就要写
+  // 主密钥与后端日志，目录不存在会导致 ENOENT。纯 mkdir，无迁移、无兼容分支。
+  try {
+    ensureDataDirs()
+  } catch (err) {
+    console.error('[main] 数据目录初始化失败:', err?.message || err)
   }
 
   // 46 适配：DB 主密钥改走 safeStorage 的异步 API，异步加密器要等 ready 之后才可用。
@@ -1033,7 +1041,7 @@ function setupPendingMarkerPath() {
 function looksLikeFirstRun() {
   try {
     if (fs.existsSync(setupPendingMarkerPath())) return true
-    return !fs.existsSync(path.join(resolveDataDir(), 'index.db'))
+    return !fs.existsSync(resolveIndexPath())
   } catch (_) { return false }
 }
 
@@ -1250,52 +1258,40 @@ IPC.on(CH.SETUP_QUIT, (event) => {
 // 供晚挂载的渲染层补齐预热状态
 IPC.handle(CH.GET_SETUP_WARMUP, () => setupWarmup)
 
-// 引导期「储存设置」：写入初始数据/缓存目录。首次建库前直接写配置；
+// 引导期「储存设置」：只写入唯一的数据根目录。首次建库前直接写配置；
 // 若引导中已建库（数据目录已存在），复用安全搬迁流程移动文件，随后重启后端让新目录生效。
+// 相册缩略图与 AI 技能固定为根下的 album-thumbs / ai-skills 子目录，不再单独选择。
 IPC.handle(CH.SET_INITIAL_DATA_DIR, async (event, payload) => {
   const p = payload || {}
   // 引导期同样来自渲染层：沿用与设置页一致的目录校验，拒绝相对路径/盘符根/系统保护目录
   const safeData = p.dataDir ? pathGuard.resolveSafeWriteDir(p.dataDir) : null
   if (safeData && safeData.error) throw new Error(safeData.error)
-  const safeThumbs = p.thumbsDir ? pathGuard.resolveSafeWriteDir(p.thumbsDir) : null
-  if (safeThumbs && safeThumbs.error) throw new Error(safeThumbs.error)
   const currentData = resolveDataDir()
   let dataDir = null
   if (safeData) {
     const t = safeData.path
     if (t.toLowerCase() !== currentData.toLowerCase()) dataDir = t
   }
-  let thumbsDir = null
-  if (safeThumbs) {
-    const t = safeThumbs.path
-    if (t.toLowerCase() !== resolveThumbsDir().toLowerCase()) thumbsDir = t
-  }
-  if (!dataDir && !thumbsDir) {
+  if (!dataDir) {
     return { ok: true, dataDir: currentData, thumbsDir: resolveThumbsDir(), changed: false }
   }
 
-  if (dataDir) {
-    // 防循环：不允许把数据目录迁到它自身内部
-    const rel = path.relative(currentData, dataDir)
-    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
-      throw new Error('新目录不能位于当前数据目录内部')
-    }
-    if (await pathExists(path.join(currentData, 'index.db'))) {
-      // 已建库：复用安全搬迁流程（预检非空 → 校验 → 复制 → 复检 → 写配置 → 删旧目录）
-      if (await pathExists(dataDir) && (await fsp.readdir(dataDir)).length > 0) {
-        throw new Error('目标目录非空，请选择空目录')
-      }
-      if (!(await pathExists(dataDir))) await fsp.mkdir(dataDir, { recursive: true })
-      await getMigration().migrateDataDir(currentData, dataDir, sendMigration) // 内部已停止后端并写配置
-    } else {
-      // 尚未建库：直接创建目录并写配置，无需搬迁
-      await fsp.mkdir(dataDir, { recursive: true })
-      saveAppConfig({ dataDir })
-    }
+  // 防循环：不允许把数据目录迁到它自身内部
+  const rel = path.relative(currentData, dataDir)
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    throw new Error('新目录不能位于当前数据目录内部')
   }
-  if (thumbsDir) {
-    await fsp.mkdir(thumbsDir, { recursive: true })
-    saveAppConfig({ thumbsDir })
+  if (await pathExists(resolveIndexPath())) {
+    // 已建库：复用安全搬迁流程（预检非空 → 校验 → 复制 → 复检 → 写配置 → 删旧目录）
+    if (await pathExists(dataDir) && (await fsp.readdir(dataDir)).length > 0) {
+      throw new Error('目标目录非空，请选择空目录')
+    }
+    if (!(await pathExists(dataDir))) await fsp.mkdir(dataDir, { recursive: true })
+    await getMigration().migrateDataDir(currentData, dataDir, sendMigration) // 内部已停止后端并写配置
+  } else {
+    // 尚未建库：直接创建目录并写配置，无需搬迁
+    await fsp.mkdir(dataDir, { recursive: true })
+    saveAppConfig({ dataDir })
   }
 
   // 重启后端让新目录生效（token 由同一 SECURE_MASTER 签发，重启后仍有效）
@@ -1340,8 +1336,8 @@ IPC.handle(CH.SET_DATA_DIR, async (event, dir) => {
   }
   // 预检：当前目录必须是有效的班主任数据库（登记表 + 主密钥），否则不进入迁移流程
   if (!(await pathExists(oldDir))) throw new Error('当前数据目录不存在')
-  if (!(await pathExists(path.join(oldDir, 'index.db')))) throw new Error('当前数据目录缺少 index.db，无法确认数据库有效')
-  if (!(await pathExists(path.join(oldDir, 'db-master.key')))) throw new Error('当前数据目录缺少 db-master.key，无法确认数据库有效')
+  if (!(await pathExists(resolveIndexPath()))) throw new Error('当前数据目录缺少 core/index.db，无法确认数据库有效')
+  if (!(await pathExists(resolveDbMasterKeyPath()))) throw new Error('当前数据目录缺少 core/db-master.key，无法确认数据库有效')
 
   migrationRunning = true
   migrationContext = { target, createdTarget, oldDir }
@@ -1413,73 +1409,10 @@ IPC.handle(CH.SET_DB_ENCRYPTION, async (event, payload) => {
   return { ok: true, started: true, encrypt }
 })
 
-// 变更「相册缩略图缓存目录」：缩略图是可再生的缓存，无需搬迁文件，
-// 直接更新配置并重启后端，让后端使用新缓存目录，已有小图按需重建。
-IPC.handle(CH.SET_THUMBS_DIR, async (event, dir) => {
-  const safe = pathGuard.resolveSafeWriteDir(dir)
-  if (safe.error) throw new Error(safe.error)
-  const target = safe.path
-  const oldDir = resolveThumbsDir()
-  if (!target || target.toLowerCase() === oldDir.toLowerCase()) {
-    return { ok: true, thumbsDir: oldDir, changed: false }
-  }
-  await fsp.mkdir(target, { recursive: true })
-  // 配置写入失败必须中止，不能继续重启后端去用一个尚未生效的目录
-  saveAppConfig({ thumbsDir: target })
-  await backend.stopBackendProcess()
-  backend.startBackend()
-  return { ok: true, thumbsDir: target, changed: true, oldThumbsDir: oldDir }
-})
-
-// 变更「AI 技能 md 目录」：技能是文本文件，采用「复制 → 校验 → 切配置 → 删旧目录」，
-// 先复制保留旧目录，配置写失败则中止并保留旧目录，绝不产生「文件在新目录、配置却指向已删旧目录」的错位。
-IPC.handle(CH.SET_SKILLS_DIR, async (event, dir) => {
-  const safe = pathGuard.resolveSafeWriteDir(dir)
-  if (safe.error) throw new Error(safe.error)
-  const target = safe.path
-  const oldDir = resolveSkillsDir()
-  if (!target || target.toLowerCase() === oldDir.toLowerCase()) {
-    return { ok: true, skillsDir: oldDir, changed: false }
-  }
-  // 防循环：新目录不能在当前技能目录内部，反之亦然
-  const rel = path.relative(oldDir, target)
-  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) throw new Error('新目录不能位于当前技能目录内部')
-  const relBack = path.relative(target, oldDir)
-  if (relBack && !relBack.startsWith('..') && !path.isAbsolute(relBack)) throw new Error('当前技能目录不能位于新目录内部')
-  // 目标目录须为空（不存在则创建）
-  if (await pathExists(target)) {
-    if ((await fsp.readdir(target)).length > 0) throw new Error('目标目录非空，请选择空目录')
-  } else {
-    await fsp.mkdir(target, { recursive: true })
-  }
-  // 停后端，避免搬迁过程中仍读写技能文件
-  await backend.stopBackendProcess()
-  try {
-    if (await pathExists(oldDir)) {
-      const names = await fsp.readdir(oldDir)
-      for (const name of names) {
-        // 整目录复制同样是磁盘密集操作：异步版在复制期间主进程仍可响应
-        await fsp.cp(path.join(oldDir, name), path.join(target, name), { recursive: true })
-      }
-      // 校验：新目录顶层条目不少于旧目录，否则视为复制不完整
-      if ((await fsp.readdir(target)).length < names.length) throw new Error('复制结果不完整')
-    }
-    saveAppConfig({ skillsDir: target })
-  } catch (err) {
-    // 失败：配置未改，旧目录原样保留；重启后端恢复原状
-    backend.startBackend()
-    throw new Error('技能目录切换失败：' + (err?.message || err))
-  }
-  // 复制完成且配置已切换：清理旧目录（失败仅告警，可手动删除）
-  try {
-    // force:true 时目录不存在也不报错，等价于原来的 existsSync + rmSync
-    await fsp.rm(oldDir, { recursive: true, force: true })
-  } catch (err) {
-    console.warn('[main] 旧技能目录清理失败（新目录已生效，可手动删除）:', err?.message || err)
-  }
-  backend.startBackend()
-  return { ok: true, skillsDir: target, changed: true, oldSkillsDir: oldDir }
-})
+// 「缩略图缓存目录」「AI 技能目录」两个独立设置通道已移除：
+// 数据目录统一为单一根，两者固定为 <dataDir>/album-thumbs 与 <dataDir>/ai-skills，
+// 由 resolveThumbsDir / resolveSkillsDir 派生，随根目录一起搬迁，不再有独立路径可改。
+// 旧 app-config.json 里的 thumbsDir / skillsDir 由 main.config.js 首次读取时一次性收敛。
 
 // 图片/文件对话框、截屏、注释保存：见 dialogs.js（registerDialogsIpc）
 

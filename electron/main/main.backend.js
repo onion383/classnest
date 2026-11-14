@@ -25,7 +25,7 @@ const fs = require('fs')
 const { rotateIfNeeded } = require('./main.logRotator')
 const startupTimer = require('./main.startup-timer')
 const perf = require('./main.perf')
-const { getMasterKey, resolveDataDir, resolveThumbsDir, resolveSkillsDir, getDbMasterKey, resolveCompileCacheDir } = require('./main.config')
+const { getMasterKey, resolveDataDir, resolveLogsDir, getDbMasterKey, resolveCompileCacheDir } = require('./main.config')
 
 const { isDev } = require('./main.env')
 
@@ -62,7 +62,8 @@ const backendLogQueue = []
 let backendLogRotateTimer = null
 
 function getBackendLogPath() {
-  return path.join(app.getPath('userData'), 'data', 'backend.log')
+  // v2 布局：日志统一进 <数据根>/logs/，随数据目录一起搬迁
+  return path.join(resolveLogsDir(), 'backend.log')
 }
 
 // 后端日志的建流/截断全部异步（1-1）。旧实现在 startBackend 的关键路径上同步做
@@ -214,12 +215,10 @@ async function compileBackendProcess() {
   // 不会解析出第二把钥匙。dev / 打包两条 fork 分支共用这一份值。
   const dbKey = await getDbMasterKey()
   const { backendDir, backendPath } = getBackendPaths()
+  // 目录模型：只注入唯一的数据根目录 dataDir。缩略图与技能文件固定为它的子目录，
+  // 由后端从 DATA_DIR 派生（见 dbManager.base.js / dbManager.skills.js），不再单独传路径。
   const dataDir = resolveDataDir()
-  const thumbsDir = resolveThumbsDir()
-  const skillsDir = resolveSkillsDir()
   fs.mkdirSync(dataDir, { recursive: true })
-  fs.mkdirSync(thumbsDir, { recursive: true })
-  fs.mkdirSync(skillsDir, { recursive: true })
   // 后端进程的 V8 编译缓存。为什么必须用环境变量而不是 enableCompileCache()：
   // 那是进程级 API，fork 出来的子进程不会继承主进程的设置（main.js 里那份只管主进程自己），
   // 所以后端一直没享受到，每次启动都要重新解析 163 个模块的源码（实测约 150ms）。
@@ -275,8 +274,6 @@ async function compileBackendProcess() {
         env: {
           ...process.env,
           DATA_DIR: dataDir,
-          ALBUM_THUMBS_DIR: thumbsDir,
-          AI_SKILLS_DIR: skillsDir,
           // bundle 后所有模块共用一个 __dirname，后端根目录必须由主进程显式注入
           BACKEND_ROOT: backendDir,
           NODE_COMPILE_CACHE: compileCacheDir,
@@ -337,8 +334,6 @@ async function compileBackendProcess() {
     env: {
       ...process.env,
       DATA_DIR: dataDir,
-      ALBUM_THUMBS_DIR: thumbsDir,
-      AI_SKILLS_DIR: skillsDir,
       ELECTRON_RUN_AS_NODE: '1',
       // bundle 后所有模块共用一个 __dirname，后端根目录必须由主进程显式注入
       BACKEND_ROOT: backendDir,

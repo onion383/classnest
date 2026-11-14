@@ -41,8 +41,7 @@ export const SETTINGS_ITEMS = [
   { label: '启用桌面小组件',           section: 'widget',   py: 'qyzmxjjs' },
   { label: '注释截屏保存位置',         section: 'savepath', py: 'zsjpbcwz' },
   { label: '一键截屏保存位置',         section: 'savepath', py: 'yjjpbcwz' },
-  { label: '数据库目录',               section: 'datadir',  py: 'sjkml' },
-  { label: '相册缩略图缓存',           section: 'datadir',  py: 'xcsltch' },
+  { label: '数据目录',                 section: 'datadir',  py: 'sjml' },
   { label: '数据库加密',               section: 'datadir',  py: 'sjkjm' },
 ]
 

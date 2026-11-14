@@ -202,12 +202,6 @@
   "set-data-dir": [
     "main"
   ],
-  "set-thumbs-dir": [
-    "main"
-  ],
-  "set-skills-dir": [
-    "main"
-  ],
   "set-db-encryption": [
     "main"
   ],

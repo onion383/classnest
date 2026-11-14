@@ -63,7 +63,7 @@ flowchart TD
 - `end(name)` 定死「启动完成」锚点（幂等，只认第一次）：**进程启动 → 第一个窗口首次显示**，即 `revealWindow()` 里的 `startupTimer.end('窗口首次显示')`。
 - 后端就绪、首屏数据、小组件就绪等更晚事件只记时间线，**不再抬高总耗时**；用户在引导页停留也不计入。
 - 渲染层 `[startup]` 日志（Vue 挂载完成、占位页移除）由主进程 `console-message` 采集；只收首次加载，`did-finish-load` 后停收（「占位页移除」例外放行一次）。
-- 输出：`whenReady` 后 5 秒打印时间线，并追加写入 `userData/data/startup.log`；性能面板经 `perf-startup` 读取。
+- 输出：`whenReady` 后 5 秒打印时间线，并追加写入 `<数据目录>/logs/startup.log`；性能面板经 `perf-startup` 读取。
 
 关键打点：`app.whenReady 就绪`、`协议注册完成`、`createMainWindow/createSetupWindow 完成`、`startBackend 完成`、`ready-to-show`、`Vite 就绪`、`loading 页面加载完成`、`Vite 页面加载完成`、`后端就绪`、`Vue 挂载完成`、`占位页移除（界面可见）`。
 
@@ -230,7 +230,7 @@ Node 的 `server.listen()` 要到 `nextTick` 才真正绑定端口（同步返�
 | [`testjs/probe/bundle-diff.mjs`](../../../testjs/probe/bundle-diff.mjs) | 构建产物体积差异 |
 | [`testjs/probe/etag-revalidate-probe.cjs`](../../../testjs/probe/etag-revalidate-probe.cjs) | 缓存校验 |
 | 性能面板 | `perf-snapshot`（逐进程内存、总计、平均、最高）、`perf-startup`（启动时间线）、`perf-disk-usage`（空间管理归账）、`perf-logs-clear`（清空日志） |
-| `userData/data/startup.log` + `backend.log` | 主进程时间线、握手分段、后端 `[boot]` 段与首屏请求到达时刻；两文件零点不同，只做各自内部的段内比较 |
+| `<数据目录>/logs/startup.log` + `backend.log` | 主进程时间线、握手分段、后端 `[boot]` 段与首屏请求到达时刻；两文件零点不同，只做各自内部的段内比较 |
 | 打包版复测 | 退出应用、机器空闲且接通电源后连启 2 次，取界面可见与握手 `fetch` 段的中位数；开发版不覆盖后端启动窗口 |
 
 结论口径：**收益要能端到端测出来**。例如 Vapor 迁移「100% 收益来自 Vapor，但绝对收益 <1ms、首屏 gzip +41KB」，因此只作为可选通道；命名管道方案实测快 70% 但因 fetch adapter 对 204 误判导致页面闪跳，已全量回退。后端让路链的收益也先在独立探针上测到「握手 467 → 235ms」，再由打包版界面可见 812~855 → 616~671ms 交叉印证；只测后台链完成时刻会得出相反结论（它反而更晚）。历史数据与推导在 `doc/开发文档/`（不入库）。

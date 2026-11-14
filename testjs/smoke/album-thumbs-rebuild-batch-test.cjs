@@ -160,8 +160,10 @@ async function main() {
   // **流式的硬证据**：首帧必须远早于整批结束，且数据分多次到达。
   // 攒完整包再 end 时，firstAt ≈ total、lastAt - firstAt ≈ 0 —— 上面那些
   // 「帧数对」「id 对」的断言在整包模式下也全绿，只有这两条能把它抓出来（实测过）。
+  // 阈值 0.7：整机负载高时首帧会被推迟（实测套件并发 55ms/90ms ≈ 0.61，独立跑 36ms/91ms ≈ 0.40）。
+  // 攒完整包再 end 时 firstAt ≈ total（比值接近 1），0.7 仍能把那种非流式实现抓出来。
   check(`首帧在结束前就到（firstAt ${batch.firstAt}ms vs total ${batch.total}ms）`,
-    batch.firstAt != null && batch.firstAt < batch.total * 0.6, { firstAt: batch.firstAt, total: batch.total })
+    batch.firstAt != null && batch.firstAt < batch.total * 0.7, { firstAt: batch.firstAt, total: batch.total })
   check(`数据分多次到达（${batch.firstAt}ms → ${batch.lastAt}ms，跨度 ${batch.lastAt - batch.firstAt}ms）`,
     (batch.lastAt - batch.firstAt) > 10, { firstAt: batch.firstAt, lastAt: batch.lastAt, total: batch.total })
   // 这条只防「显式设了长度」，防不住「先 writeHead 再补发整包」，所以不能单独当流式证据

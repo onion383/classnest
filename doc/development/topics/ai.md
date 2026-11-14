@@ -152,7 +152,7 @@ sequenceDiagram
 ### 5. 记忆、技能、子代理
 
 - **记忆**：`GET/PUT /api/ai/memory`，目录固定（`dbManager.memoryDir`），不随设置搬迁；长对话超过阈值时压缩（`compressConversation`），压缩状态用 `compressingConvs` 去重。
-- **技能**：md 文件存 `AI_SKILLS_DIR`（默认 `<数据目录>/ai-skills`，可在设置页搬迁）；接口 `GET/POST/PUT/DELETE /api/ai/skills`；聊天输入 `/` 触发匹配。
+- **技能**：md 文件固定存 `<数据目录>/content/ai-skills/<slug>/`，随数据根目录一起搬迁、随备份包一起带走；接口 `GET/POST/PUT/DELETE /api/ai/skills`；聊天输入 `/` 触发匹配。
 - **子代理**：`subagentTool` 派生只读子任务，工具集由 `getSubagentTools()` 提供，不授予写权限。
 
 ---

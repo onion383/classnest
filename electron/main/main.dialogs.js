@@ -16,7 +16,7 @@ const { app, BrowserWindow, desktopCapturer, screen, dialog, shell } = require('
 const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
-const { resolveDataDir, resolveThumbsDir, resolveSkillsDir } = require('./main.config')
+const { resolveDataDir, resolveContentDir, resolveThumbsDir, resolveSkillsDir } = require('./main.config')
 const {
   resolveSafeFolder,
   resolveSafeWriteDir,
@@ -152,7 +152,9 @@ function registerDialogsIpc(opts = {}) {
       if (base64.length > Math.ceil(MAX_WRITE_BYTES / 3) * 4) {
         return contract.fail('背景图片不能超过 50MB')
       }
-      const bgDir = path.join(app.getPath('userData'), 'data', 'uploads', 'background')
+      // v2 布局：content/uploads/background。原先硬编码 userData/data 会在用户
+      // 把数据目录改到别处时把背景图写到旧位置（顺带修掉这个老问题）。
+      const bgDir = path.join(resolveContentDir(), 'uploads', 'background')
       // mkdir recursive 在目录已存在时不报错，省掉一次 existsSync 同步探测
       await fsp.mkdir(bgDir, { recursive: true })
       // 扩展名来自渲染层传入的文件名：只接受图片扩展，其余统一按 .png 落盘，

@@ -158,16 +158,21 @@ router.post('/db-recover', (req, res) => {
 // ---------------------------------------------------------------------------
 router.post('/login', async (req, res) => {
   const { username, password, mnemonic } = req.body;
+  // 多班级：可选指定从哪个班进入；不传则进默认班（该账号最早创建的那个）
+  const classSlug = req.body && typeof req.body.classSlug === 'string' ? req.body.classSlug : '';
   if (!username) return res.status(400).json({ error: '请输入账号' });
 
   // 用 index.db 定位账号对应的班主任库，打开它并校验密码（账号存于各库内的 users）
   let resolved;
   try {
-    resolved = dbManager.resolveByUsername(String(username), { password, mnemonic });
+    resolved = dbManager.resolveClass(String(username), classSlug, { password, mnemonic });
   } catch (err) {
     if (err.code === 'PRIVACY_UNLOCK') {
       // 超级隐私模式：库钥匙解不开就到此为止，不泄露账号是否存在
       return res.status(401).json({ error: err.message, code: 'PRIVACY_UNLOCK' });
+    }
+    if (err.code === 'CLASS_NOT_OWNED') {
+      return res.status(400).json({ error: err.message });
     }
     console.warn('[login] 打开账号库失败:', err.message);
     return res.status(401).json({ error: '账号或密码错误' });
@@ -177,26 +182,47 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ error: '账号或密码错误' });
   }
 
-  const user = resolved.conn.prepare('SELECT id, username, role, db_slug, password FROM users WHERE username = ?').get(username);
+  // 多班级：改用户名只同步 registry 与 accounts —— 各库内 users 表的名字可能还是旧的
+  // （挨个开库改名要 N 次 KDF，代价与收益不匹配）。所以按新名查不到时退回「库里第一条」：
+  // 能打开这个库本身就说明密钥正确，身份本来也不是靠 users.username 建立的
+  // （一个库里只有一个班主任账号，id 恒为 1）。
+  const pickUser = () => resolved.conn
+    .prepare('SELECT id, username, role, db_slug, password FROM users WHERE username = ?').get(username)
+    || resolved.conn
+      .prepare('SELECT id, username, role, db_slug, password FROM users ORDER BY id LIMIT 1').get();
+  const user = pickUser();
   if (!user) {
     console.warn('[login] 库内查无此账号:', username, 'slug:', resolved.slug);
     return res.status(401).json({ error: '账号或密码错误' });
   }
   // 恢复词解锁本身就是所有者证明：不再校验登录密码（可用于忘记密码时登录后重设）
   const unlockedByMnemonic = resolved.unlockedBy === 'mnemonic';
-  // 无密码用户：直接放行；有密码用户：校验密码哈希
-  // 保持原短路语义：前两个条件不成立时完全不做密码比对（省一次 bcrypt 计算）。
-  if (!unlockedByMnemonic && user.password) {
-    const pwOk = await bcryptCompare(password, user.password);
+  // 多班级：密码校验以 accounts.password_hash 为权威（一个账号多个班共用一份凭证，
+  // 不必每个库各存一份）。老数据还没迁到 accounts 时退回库内 users.password，
+  // 登录成功后立刻回填 —— 迁移只发生在「真正用到的账号」上，不占启动时间，
+  // 也不需要一次性把本机所有库打开一遍。
+  const acc = dbManager.accountFindByUsername(String(username));
+  const hashSource = (acc && acc.password_hash) ? acc.password_hash : user.password;
+  // 保持原短路语义：不需要校验时完全不算 bcrypt
+  if (!unlockedByMnemonic && hashSource) {
+    const pwOk = await bcryptCompare(password, hashSource);
     if (!pwOk) {
       console.warn('[login] 密码校验失败:', username);
       return res.status(401).json({ error: '账号或密码错误' });
     }
   }
+  // 懒迁移：补 accounts 行 + 把同用户名的各库归属到该账号 + 回填密码哈希（三者都幂等）
+  const accountId = dbManager.linkAccount(String(username), user.password || '');
+  dbManager.backfillPasswordHash(accountId, user.password || '');
 
   const dbSlug = user.db_slug || resolved.slug;
+  // token 里的 username 必须取**账号维度**的名字，不能用库内 users.username：
+  // 改名只同步 registry / accounts，各库内 users 表刻意不同步（挨个开库改名要 N 次 KDF）。
+  // 用过期的名字签 token，switch-class 的归属校验（rec.username === u.username）
+  // 会把用户自己名下的另一个班判成「班级不存在」—— 改名后切班直接 404。
+  const authName = (acc && acc.username) || String(username);
   const { token, mediaToken } = issueSession(req, {
-    userId: user.id, username: user.username, role: user.role, dbSlug,
+    userId: user.id, username: authName, role: user.role, dbSlug,
   });
   setAuthCookie(res, token);
   res.json({
@@ -204,7 +230,9 @@ router.post('/login', async (req, res) => {
     mediaToken,
     protect: resolved.protect === true,
     unlockedBy: resolved.unlockedBy || 'password',
-    user: { id: user.id, username: user.username, role: user.role, dbSlug, hasPassword: !!user.password }
+    // 多班级：前端据此渲染班级切换列表。单班账号也会返回（长度 1），前端不必分叉。
+    classes: dbManager.listClasses(authName),
+    user: { id: user.id, username: authName, role: user.role, dbSlug, hasPassword: !!user.password }
   });
 });
 
@@ -215,6 +243,8 @@ router.post('/login', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.post('/register', async (req, res) => {
   const { username, password, role, encrypted, privacy, level } = req.body || {};
+  // 多班级：注册时可以顺手给第一个班起名；不传就由 createTeacher 落默认值「我的班级」
+  const className = typeof req.body?.className === 'string' ? req.body.className.trim().slice(0, 50) : '';
 
   // 仅班主任开放
   if (role !== 'teacher') {
@@ -258,8 +288,9 @@ router.post('/register', async (req, res) => {
     passwordHash = await bcryptHash(String(password), 10);
   }
 
-  // 检查账号唯一（跨所有库）
-  if (dbManager.registryFindByUsername(uname)) {
+  // 检查账号唯一。多班级后账号的权威表是 accounts（一个账号可对应多个库），
+  // 但老数据还没迁过去，registry 里也可能有存量 —— 两处都查才不会漏判。
+  if (dbManager.accountFindByUsername(uname) || dbManager.registryFindByUsername(uname)) {
     console.warn('[register] 账号重复:', uname);
     return res.status(409).json({ error: '该账号已被注册' });
   }
@@ -273,7 +304,7 @@ router.post('/register', async (req, res) => {
   // 但 defer 时所有等级都只存草稿，由 /register/confirm 统一收尾。
   if (!wantPrivacy && !defer) {
     try {
-      const { slug } = dbManager.createTeacher(uname, passwordHash, 'teacher', wantEncrypted);
+      const { slug } = dbManager.createTeacher(uname, passwordHash, 'teacher', wantEncrypted, className);
       console.log('[register] 注册成功:', uname, 'slug:', slug, 'encrypted:', wantEncrypted, 'hasPassword:', !!passwordHash);
       const { token, mediaToken } = issueSession(req, {
         userId: 1, username: uname, role: 'teacher', dbSlug: slug,
@@ -305,6 +336,8 @@ router.post('/register', async (req, res) => {
     // 建库时要按用户选的方式落盘：confirm 里不传就会默认加密，
     // 明文模式的草稿若丢了这一项，会被建成一个需要钥匙的加密库，用户下次登不进去
     encrypted: wantEncrypted,
+    // 多班级：班名随草稿一起留着，confirm 建库时才会用到（那时拿不到原始请求体）
+    className,
   });
   console.log('[register] 生成待确认草稿:', uname, 'draftId:', draftId, 'defer:', defer, 'privacy:', wantPrivacy, 'encrypted:', wantEncrypted);
   res.json({
@@ -342,7 +375,7 @@ router.post('/register/confirm', async (req, res) => {
   }
 
   // 确认前再次校验唯一（防止等待期间被他人注册占用）
-  if (dbManager.registryFindByUsername(draft.username)) {
+  if (dbManager.accountFindByUsername(draft.username) || dbManager.registryFindByUsername(draft.username)) {
     pendingRegs.remove(draftId);
     console.warn('[register/confirm] 确认时账号已被注册:', draft.username);
     return res.status(409).json({ error: '该账号已被注册' });
@@ -352,7 +385,7 @@ router.post('/register/confirm', async (req, res) => {
     // encrypted 必须从草稿带过来：不给第四参就默认 true，
     // 明文模式的草稿会被建成加密库（下次登录直接进不去）。
     // 兼容旧草稿（没有该字段）：`!== false` 落回「加密」，与原行为一致。
-    const { slug } = dbManager.createTeacher(draft.username, draft.passwordHash, draft.role, draft.encrypted !== false);
+    const { slug } = dbManager.createTeacher(draft.username, draft.passwordHash, draft.role, draft.encrypted !== false, draft.className || '');
     const resolved = dbManager.resolveByUsername(draft.username);
     if (resolved && draft.restoreHash) {
       resolved.conn.prepare('UPDATE users SET recovery_hash = ? WHERE username = ?').run(draft.restoreHash, draft.username);

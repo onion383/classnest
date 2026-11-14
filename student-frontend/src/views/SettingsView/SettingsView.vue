@@ -59,6 +59,14 @@
           <div class="space-y-2 text-text-secondary">
             <p><span class="text-text-muted">当前用户：</span>{{ user.username }}</p>
             <p><span class="text-text-muted">权限：</span>{{ user.role === 'teacher' ? '班主任' : '科任老师' }}</p>
+            <!-- 当前班级：多班级才给「切换」。点开的和首页齿轮是同一个班级弹窗
+                 （下拉切班 + 铅笔改名 + 新建班级），两处不再各做一套。
+                 单班账号只显示班名，没有可切的东西。 -->
+            <div class="flex items-center gap-2 flex-wrap">
+              <span><span class="text-text-muted">当前班级：</span>{{ currentClassName || '—' }}</span>
+              <button v-if="classList.length > 1" type="button" @click="openClassDialog"
+                class="glass-switch">切换</button>
+            </div>
           </div>
           <div class="flex gap-3">
             <button @click="openModal('username')" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme">修改用户名</button>
@@ -721,7 +729,7 @@
       <div class="bg-surface rounded-lg border border-border p-6 space-y-6">
         <div>
           <div class="flex items-center gap-4 mb-2">
-            <label class="text-sm font-medium text-text w-40 flex-shrink-0">数据库目录</label>
+            <label class="text-sm font-medium text-text w-40 flex-shrink-0">数据目录</label>
             <div class="flex-1 min-w-0">
               <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="dataDir">
                 {{ dataDir || '加载中…' }}
@@ -732,37 +740,8 @@
             </button>
             <button @click="openDir(dataDir)" :disabled="busyDataDir" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">打开文件夹</button>
           </div>
-          <p class="text-xs text-text-muted ml-40">存放数据库（index.db、各老师库）与上传图片等用户数据的目录。修改会整体搬迁现有数据并重启应用服务。</p>
-        </div>
-        <div>
-          <div class="flex items-center gap-4 mb-2">
-            <label class="text-sm font-medium text-text w-40 flex-shrink-0">相册缩略图缓存</label>
-            <div class="flex-1 min-w-0">
-              <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="thumbsDir">
-                {{ thumbsDir || '加载中…' }}
-              </div>
-            </div>
-            <button @click="changeThumbsDir" :disabled="busyThumbsDir" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">
-              {{ busyThumbsDir ? '切换中…' : '修改' }}
-            </button>
-            <button @click="openDir(thumbsDir)" :disabled="busyThumbsDir" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">打开文件夹</button>
-          </div>
-          <p class="text-xs text-text-muted ml-40">相册缩略图是可再生的缓存，可放到独立目录（如临时盘/SSD）；切换后已有缩略图会自动重建。</p>
-        </div>
-        <div>
-          <div class="flex items-center gap-4 mb-2">
-            <label class="text-sm font-medium text-text w-40 flex-shrink-0">技能文件目录</label>
-            <div class="flex-1 min-w-0">
-              <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="skillsDir">
-                {{ skillsDir || '加载中…' }}
-              </div>
-            </div>
-            <button @click="changeSkillsDir" :disabled="busySkillsDir" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">
-              {{ busySkillsDir ? '搬迁中…' : '修改' }}
-            </button>
-            <button @click="openDir(skillsDir)" :disabled="busySkillsDir" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">打开文件夹</button>
-          </div>
-          <p class="text-xs text-text-muted ml-40">AI 技能 md 文件的存放目录（按老师分文件夹）。修改会把现有技能文件搬迁到新目录并重启应用服务；AI 记忆文件不在此目录，不受影响。</p>
+          <p class="text-xs text-text-muted ml-40">全部本机数据的唯一根目录，修改会整体搬迁并重启应用服务。目录下按用途分四层，无需单独设置。</p>
+          <p class="text-xs text-text-muted ml-40 mt-1">core（数据库与密钥）、content（上传图片、AI 技能、快照）、cache（相册缩略图等可再生缓存）、logs（运行日志）。</p>
         </div>
       </div>
     </div>
@@ -776,13 +755,26 @@
     <!-- ========== 危险操作 ========== -->
     <div class="mb-6">
       <h2 id="settings-section-danger" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="trash" :size="20" /> 危险操作</h2>
-      <div class="bg-surface rounded-lg border border-border p-6">
+      <div class="bg-surface rounded-lg border border-border p-6 space-y-5">
         <div class="flex items-center justify-between flex-wrap gap-4">
           <div class="space-y-2 text-text-secondary">
             <p class="font-medium text-text">删除账号</p>
             <p class="text-sm text-text-muted">删除当前账号及其全部数据，操作不可恢复。</p>
           </div>
           <button @click="openDeleteAccount" class="bg-danger hover:bg-danger-hover text-text-inverse px-4 py-2 rounded transition-theme">删除账号</button>
+        </div>
+        <!-- 删除单个班级：多班级才给入口。它是「销毁一整套数据」，所以和删账号同列在危险区。
+             样式与「删除账号」完全一致（同一套 bg-danger/hover/圆角/内边距）——
+             两个都是不可恢复的破坏性操作，视觉上不该做出「一个更重一个更轻」的暗示。 -->
+        <div v-if="classCount > 1" class="flex items-center justify-between flex-wrap gap-4 border-t border-border pt-5">
+          <div class="space-y-2 text-text-secondary">
+            <p class="font-medium text-text">删除该班级</p>
+            <p class="text-sm text-text-muted">
+              只删除当前班级的数据（学生、成绩、班费、相册……），其它班级不受影响，操作不可恢复。
+            </p>
+          </div>
+          <button @click="openDeleteClass"
+            class="bg-danger hover:bg-danger-hover text-text-inverse px-4 py-2 rounded transition-theme">删除该班级</button>
         </div>
       </div>
     </div>
@@ -898,6 +890,22 @@
       confirmText="整理中…"
       @cancel="cancelVacuumWait"
     />
+
+    <!-- 班级切换弹窗：与首页齿轮打开的是同一个组件，但这里是「只做切换」——
+         口号/班风/学风是首页展示文案，从设置页点「切换」时摆出来是多余的。 -->
+    <ClassInfoDialog
+      :visible="classDialogVisible"
+      :class-data="classInfo"
+      :classes="classList"
+      :current-slug="currentSlug"
+      :switching="switchingClass"
+      switch-only
+      @confirm="saveClassInfoFromSettings"
+      @cancel="classDialogVisible = false"
+      @switch-class="switchClassFromSettings"
+      @create-class="createClassFromSettings"
+      @rename-class="renameClassFromSettings"
+    />
   </div>
 </template>
 
@@ -908,12 +916,15 @@ import { useRoute, useRouter } from 'vue-router'
 import AppHelp from '../../components/base/AppHelp.vue'
 import CustomScrollbar from '../../components/base/CustomScrollbar.vue'
 import AppSelect from '../../components/base/AppSelect.vue'
+import ClassInfoDialog from '../../components/dialogs/ClassInfoDialog.vue'
 import AppSwitch from '../../components/base/AppSwitch.vue'
 import ViewSwitch from '../../components/base/ViewSwitch.vue'
 import DataExportPanel from '../../components/data-manage/DataExportPanel.vue'
 import { useThemeStore } from '../../stores/theme'
 import { storeToRefs } from 'pinia'
 import { resourceUrl } from '../../utils/apiUrl'
+// 班级弹窗的显隐跨视图重建保留（切班/建班会重建整个视图，见 utils/classScope.js）
+import { settingsClassDialogOpen } from '../../utils/classScope.js'
 import { readFastStartup } from '../../utils/fastStartup.js'
 import { useDisposables } from '../../utils/disposables.js'
 import '../../styles/dialog-transition.css'
@@ -1060,6 +1071,24 @@ const dialogMounted = ref(false)
 const dialogCallback = ref(null)
 // 「删除账号」倒计时定时器
 const deleteTimer = ref(null)
+// 当前账号有几个班：决定危险区要不要出现「删除该班级」。
+// 初始 0（= 未知）时按「不显示」处理，拉回来再显示 —— 宁可晚一帧出现，
+// 也不要在单班账号上闪一个点下去必然被拒的按钮。
+const classCount = ref(0)
+// 账号信息区的「当前班级」：列表与当前 slug 同一次请求拿回来，
+// 切换时只换 slug，不重新拉列表（切完会重建视图，onMounted 再拉一次）。
+const classList = ref([])
+const currentSlug = ref('')
+const switchingClass = ref(false)
+const currentClassName = computed(
+  () => classList.value.find((c) => c.slug === currentSlug.value)?.className || ''
+)
+// 班级弹窗（与首页齿轮打开的是同一个组件）：显隐 + 弹窗里的班名/口号等。
+// 显隐同步到模块级状态：切班/建班会重建整个视图，新实例靠它恢复弹窗；
+// 与首页那份分开记，两边互不覆盖（见 utils/classScope.js 的说明）。
+const classDialogVisible = ref(false)
+watch(classDialogVisible, (v) => { settingsClassDialogOpen.value = v })
+const classInfo = ref({ name: '', motto: '', mottoStyle: '', xuefeng: '' })
 // 工具箱设置
 const toolboxEnabled = ref(true)
 const noteSavePath = ref('')
@@ -1070,13 +1099,9 @@ const usbAutoOpen = ref(false)
 const desktopWidgetEnabled = ref((localStorage.getItem('desktopWidgetEnabled') ?? '0') !== '0')
 const loaded = ref(false)
 const _fromMainHandler = ref(null)
-// 数据目录 / 缓存目录
+// 数据目录（唯一可配置的目录）
 const dataDir = ref('')
-const thumbsDir = ref('')
-const skillsDir = ref('')
 const busyDataDir = ref(false)
-const busyThumbsDir = ref(false)
-const busySkillsDir = ref(false)
 // 安全等级（仅当前账号）：plain / nopass / password / privacy
 const securityLevel = ref('')
 const securityLevelLoading = ref(true)
@@ -1352,9 +1377,9 @@ const ctx = {
   usernameError, busyUsername, exportPassword, exportEncrypt, exportDbPwd, busyExport, exportProgress,
   semesters, semesterId, semesterNameDraft, showRenameSemester, newSemesterName, showAddSemester,
   showDeleteSemester, busySemester, busySemesterDate, semesterStart, semesterEnd, semesterDateErrorText,
-  dialog, dialogMounted, dialogCallback, deleteTimer, toolboxEnabled, noteSavePath, screenshotSavePath,
-  screenshotDir, usbAutoOpen, desktopWidgetEnabled, loaded, _fromMainHandler, dataDir, thumbsDir, skillsDir,
-  busyDataDir, busyThumbsDir, busySkillsDir, securityLevel, securityLevelLoading, busySecurityLevel,
+  dialog, dialogMounted, dialogCallback, deleteTimer, classCount, classList, currentSlug, currentClassName, switchingClass, classDialogVisible, classInfo, toolboxEnabled, noteSavePath, screenshotSavePath,
+  screenshotDir, usbAutoOpen, desktopWidgetEnabled, loaded, _fromMainHandler, dataDir,
+  busyDataDir, securityLevel, securityLevelLoading, busySecurityLevel,
   securityDialog, privacyPhrase, undoGroups, busyUndo, selectedThemeId, mergeNotifications,
   bgImageUrl, bgImageFileName, perfProcs, perfTopRatio, perfAlive, perfTotal, perfAvg, perfMax,
   perfFront, perfBackend, perfOther, perfStartupTotal, fastStartup, busyGc, busyRestartBackend, busyRestartWidget,
@@ -1385,7 +1410,7 @@ diskDisposables.listen(document, 'click', (ev) => ctx.onDiskOutsideClick(ev))
 
 // ===== 模板顶层绑定：由逻辑模块提供、模板用到的方法 =====
 const {
-  barPct, changeDataDir, changePassword, changeSkillsDir, changeThumbsDir, changeUsername,
+  barPct, changeDataDir, changePassword, changeUsername,
   clearBgImage, clearUndo, closeModal, closeSecurityDialog,
   confirmAddSemester, confirmDeleteSemester, confirmLogout, confirmSearchActive, confirmSecurityLevel,
   exportDb, fmtBytes, fmtMem, fmtTs, goToSettingsSection, groupLabel, hideDiskTip, loadDiskUsage, moveSearchActive,
@@ -1393,10 +1418,11 @@ const {
   onDialogCancel, onDialogConfirm, onFastStartupChange, onFollowSystemChange, onGlassOpacityChange, onIconStyleChange,
   onMergeNotificationsChange, onPrivacyPhraseSaved, onSecurityLevelChange, onSelectMode, onSelectSemester,
   onSettingsSearchBlur, onSettingsSearchFocus, onThemeSelect, onToolboxChange, onTopbarColorChange,
-  onUsbAutoOpenChange, openAddSemester, openDeleteAccount, openDir, openModal, openRenameSemester,
+  onUsbAutoOpenChange, openAddSemester, openClassDialog, openDeleteAccount, openDeleteClass, openDir, openModal, openRenameSemester,
   purgeThumbs, sweepThumbs, vacuumDb, cancelVacuumWait, clearLogs,
   recycleAll, redoEntry, requestDeleteSemester, restartAll, restartBackend, restartFrontend,
-  restartWidget, saveSemesterName, saveSemesterSettings, selectDiskSegment, selectFolder, showDiskTip, undoableCount, undoEntry,
+  restartWidget, renameClassFromSettings, saveClassInfoFromSettings, saveSemesterName, saveSemesterSettings, selectDiskSegment, selectFolder, showDiskTip,
+  switchClassFromSettings, createClassFromSettings, undoableCount, undoEntry,
 } = ctx
 
 // 「修改密码 → 忘记密码？」：已登录且账号已知，所以不列账号列表，直接拿当前账号的库文件验证。
@@ -1433,6 +1459,15 @@ onMounted(() => {
   ctx.loadUsbAutoOpen()
   ctx.loadDataDirs()
   ctx.loadSecurityLevel()
+  // 班级列表：账号信息区的「当前班级」和危险区的删班入口都要用，进页面拉一次。
+  // 如果是从切班 / 建班的重建中回来（弹窗原本开着），顺带把班级信息一起拉回来再重开。
+  // 顺序与首页一致：先填后显 —— ClassInfoDialog 只在 visible 由 false→true 时初始化
+  // 表单，先开再填会得到一个字段全空的表单，数据回来也不会补。
+  if (settingsClassDialogOpen.value) {
+    Promise.all([ctx.loadClassInfo(), ctx.loadClasses()]).finally(() => { classDialogVisible.value = true })
+  } else {
+    ctx.loadClasses()
+  }
   // 性能面板：先取一次启动耗时，轮询由 _startPerfPolling 负责
   ctx.loadStartup()
   // 空间管理：磁盘占用不进轮询（目录遍历代价大），进页面扫一次，20s 内重复进入复用上次结果
@@ -1478,6 +1513,26 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 「当前班级」旁边的「切换」：白色毛玻璃小胶囊。
+   配方与 ClassInfoDialog 的 .glass-cancel 同源（半透明白 + 背景模糊），
+   保证全应用所有毛玻璃按钮观感一致；字色跟随主题，夜间不会变成白底黑字的硬块。 */
+.glass-switch {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  color: var(--color-text);
+  background-color: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(12px) saturate(1.3);
+  /* 只有玻璃自身的内高光，不投外阴影：外投影会让它从账号信息行里"浮起来" */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: background-color 0.15s ease;
+}
+.glass-switch:hover {
+  background-color: rgba(255, 255, 255, 0.64);
+}
+
 /* 设置项搜索跳转锚点：滚动到标题时留出上边距，避免紧贴内容区顶端 */
 [id^="settings-section-"] {
   scroll-margin-top: 1.5rem;

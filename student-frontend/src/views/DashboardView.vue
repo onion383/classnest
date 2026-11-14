@@ -300,16 +300,26 @@
     <ClassInfoDialog
       :visible="showClassModal"
       :class-data="classInfo"
+      :classes="classList"
+      :current-slug="currentSlug"
+      :switching="switchingClass"
       @confirm="saveClassInfo"
+      @switch-class="switchClass"
+      @create-class="createClass"
       @cancel="showClassModal = false"
     />
   </div>
 </template>
 
 <script setup vapor>
-import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
+// 切班要作废两类状态：模块级缓存（这里）与 KeepAlive 里缓存的组件实例（classScope）。
+// 两者缺一都会串班：只清模块缓存，已挂载的视图仍显示旧班的 ref；
+// 只作废实例，模块缓存会让重新挂载的页面立刻读回上一批数据。
+import { resetUserScopedCaches } from '../utils/userScopedCache.js'
+import { bumpClassScope, classDialogOpen } from '../utils/classScope.js'
 import { ensureDashboardData } from '../composables/useDashboardData'
 import { mark, perfNow, perfSince } from '../utils/perfMark.js'
 import { reportError } from '../utils/reportError.js'
@@ -389,8 +399,83 @@ const classInfo = ref({
 
 // 班级设置弹窗
 const showClassModal = ref(false)
+// 弹窗显隐同步到模块级状态：切班/建班会重建整个视图（见 applyClassSwitch），
+// 新实例靠这个标记判断「重建前弹窗是开着的」，从而原地恢复，而不是把用户踢出来。
+watch(showClassModal, (v) => { classDialogOpen.value = v })
+// 多班级：该账号名下的班级列表与当前班。只在打开弹窗时拉一次 ——
+// 这是低频操作，没必要塞进首屏。
+const classList = ref([])
+const currentSlug = ref('')
+const switchingClass = ref(false)
+
+// 拉班级列表。抽出成独立函数是为了「重建后恢复弹窗」那条路径也能复用 ——
+// 恢复时不能走 openClassModal（它会把 visible 再设一次，导致弹窗先空一帧再填）。
+async function loadClasses() {
+  try {
+    const res = await axios.get('/api/account/classes')
+    classList.value = res.data?.classes || []
+    currentSlug.value = res.data?.current || ''
+  } catch (e) {
+    // 拉不到就只显示当前班信息表单（切换区按「只有一个班」隐藏），不影响改班名
+    classList.value = []
+    reportError(e, { action: '加载班级列表', level: 'log' })
+  }
+}
+
 function openClassModal() {
   showClassModal.value = true
+  loadClasses()
+}
+
+// 切班成功后的统一收尾：把整个前端切到新班的数据上，不重载页面。
+// 新 token 已经由响应拦截器随 X-Renewed-Token 落盘（后端 switch-class 下发），
+// 所以这里只剩两步，且顺序不能反：
+//   1. 清模块级缓存 + 代次 +1：在途请求的响应回来时会发现代次已变而丢弃，
+//      不会把上一个班的数据写回缓存（photoInfoCache / 仪表盘 dataCache 都是这类）。
+//   2. 作废 KeepAlive 里的全部视图实例：当前路由重新 mount，各页 onMounted 重新拉数据。
+// 反过来的话，重新挂载的页面会先读到还没清掉的旧缓存，把上个班的数据又渲染一遍。
+function applyClassSwitch(className) {
+  resetUserScopedCaches()
+  bumpClassScope()
+  // 防御：正常情况下这个组件马上会被 KeepAlive 重建销毁，这行没机会跑；
+  // 但万一 classScopeKey 没接上（比如 App.vue 的 key 被改掉），按钮不能永久停在 disabled。
+  switchingClass.value = false
+  // 提示放在清理之后：resetUserScopedCaches 会清空通知列表（通知属于上一个班），
+  // 先弹再清就看不到了。
+  if (className) notifySuccess(`已切换到「${className}」`)
+}
+
+// 新建班级：建的是空库，不复制当前班的东西（复制会把同一批学生塞进两个班）。
+// 建完直接进新班 —— 用户点「新建」的意图基本就是「开始用这个班」。
+async function createClass(className) {
+  if (!className || switchingClass.value) return
+  switchingClass.value = true
+  try {
+    const res = await axios.post('/api/account/class', { className })
+    const slug = res.data?.slug
+    if (!slug) throw new Error('后端未返回班级标识')
+    await axios.post('/api/account/switch-class', { slug })
+    applyClassSwitch(className)
+  } catch (e) {
+    switchingClass.value = false
+    notifyError(e?.response?.data?.error || '新建班级失败，请重试')
+  }
+}
+
+// 切班 = 换一个库，学生/座位/班费/相册全都是另一套。
+// 不整页重载：token 换掉之后靠 applyClassSwitch 作废缓存的视图实例，
+// 当前页重新挂载就能读到新班，滚动位置与路由都保留。
+async function switchClass(slug) {
+  if (!slug || slug === currentSlug.value || switchingClass.value) return
+  switchingClass.value = true
+  try {
+    const res = await axios.post('/api/account/switch-class', { slug })
+    const target = (res.data?.classes || []).find((c) => c.slug === slug)
+    applyClassSwitch(target?.className)
+  } catch (e) {
+    switchingClass.value = false
+    notifyError(e?.response?.data?.error || '切换班级失败，请重试')
+  }
 }
 async function loadClassInfo() {
   try {
@@ -419,7 +504,8 @@ async function saveClassInfo(data) {
     showClassModal.value = false
     notifySuccess('班级信息保存成功')
   } catch (e) {
-    notifyError('班级信息保存失败，请重试')
+    // 优先用后端的文案：重名会被回 409 并带上具体班名，吞成通用提示用户不知道要改什么
+    notifyError(e?.response?.data?.error || '班级信息保存失败，请重试')
   }
 }
 
@@ -750,7 +836,14 @@ onMounted(() => {
   // 与 setup 首行那条配对，把「挂载 → 数据发起」再切一刀（见文件内 2-18 归因注释）
   mark('DashboardView 挂载')
   loadData()
-  loadClassInfo()
+  if (classDialogOpen.value) {
+    // 从切班/建班的重建中回来：弹窗本来开着，先把班级信息与列表拉回来再显示。
+    // 不能先显后填 —— ClassInfoDialog 只在 visible 由 false→true 时初始化表单，
+    // 先开弹窗会得到一个字段全空的表单，且数据回来后也不会补。
+    Promise.all([loadClassInfo(), loadClasses()]).finally(() => { showClassModal.value = true })
+  } else {
+    loadClassInfo()
+  }
   // 每分钟刷新当前时间，让今日名单、窗口时间等随时间变化
   timer = setInterval(refreshNow, 60000)
 })

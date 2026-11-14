@@ -140,7 +140,7 @@ router.post('/export-zip', auth(), async (req, res) => {
         { prefix: 'uploads', dir: dbManager.uploadsDir },
         { prefix: 'ai-skills', dir: dbManager.skillsDir(slug) },
         { prefix: 'album-trash', dir: dbManager.trashDir },
-        { prefix: 'receipt-trash', dir: require('path').join(dbManager.dataDir, 'receipt-trash') },
+        { prefix: 'receipt-trash', dir: dbManager.receiptTrashDir },
         { prefix: 'snapshots', dir: dbManager.snapshotsDir(slug) },
       ],
     }, res);
@@ -371,6 +371,21 @@ router.put('/username', auth(), async (req, res) => {
     return res.status(500).json({ error: msg });
   }
 
+  // 多班级：账号名是**账号维度**的属性，不止当前这个库。
+  // 上面只改名了「当前 slug 的 registry 行 + 当前库 users 表」，同账号的其它班还留着旧名；
+  // 不同步的话，切到另一个班后按新名在登记表里一条都对不上，等于把自己锁在门外。
+  // 这一步放在主流程成功之后，失败只记日志：改名已经生效，回滚反而会造成更割裂的状态。
+  try {
+    const oldName = user.username;
+    for (const rec of dbManager.registryFindAllByUsername(oldName)) {
+      if (rec.slug !== req.user.dbSlug) dbManager.registryRename(rec.slug, newName);
+    }
+    const acc = dbManager.accountFindByUsername(oldName);
+    if (acc) dbManager.accountRename(acc.id, newName);
+  } catch (err) {
+    console.warn('[account] 同步账号名到其它班级失败:', err.message);
+  }
+
   // 登录态里带的是旧用户名：重新签发一份含新用户名的 token，并同步换发媒体凭据。
   // （sid 沿用原会话，登出/会话名单机制不受影响）
   const payload = {
@@ -385,13 +400,28 @@ router.put('/username', auth(), async (req, res) => {
   res.json({ message: '用户名修改成功', username: newName, token, mediaToken: signMediaToken(payload) });
 });
 
+// 多班级：吊销范围要覆盖该账号名下**所有**班级，而不只是当前这个。
+// 一个账号多个班时，各班窗口签发的 token 带着各自的 dbSlug；只吊销当前班那一个，
+// 另一个班窗口的旧 token 在改密后照样能用 —— 等于密码没改。
+// 返回数组，当前班排首位（rotateAccountSessions 用第一个作为新会话的归属）。
+function accountSlugsForRevoke(user) {
+  const cur = user && user.dbSlug;
+  let list = [];
+  try {
+    list = dbManager.listClasses(user.username).map((c) => c.slug);
+  } catch (_) { /* 登记表读不到就退回单班，不影响改密本身 */ }
+  const rest = list.filter((s) => s !== cur);
+  const all = [cur, ...rest].filter(Boolean);
+  return all.length ? all : cur;
+}
+
 // 凭证变更后「全量吊销旧会话 + 换发当前窗口登录态」的唯一实现。
 // 改密（PUT /password）与切换安全等级（POST /security-level，会写入或清空密码）
 // 都是凭证变更：既不能留着其它窗口的旧 token，也不能把当前窗口踢回登录页。
 // 返回新 payload / token，供需要显式回传 token 的分支（本机恢复）使用。
 function rotateLoginAfterCredentialChange(req, res) {
   const u = req.user;
-  const { sid } = rotateAccountSessions(u.userId, u.dbSlug);
+  const { sid } = rotateAccountSessions(u.userId, accountSlugsForRevoke(u));
   const payload = {
     userId: u.userId, username: u.username, role: u.role, dbSlug: u.dbSlug, sid,
   };
@@ -407,6 +437,121 @@ function rotateLoginAfterCredentialChange(req, res) {
   res.set('X-Renewed-Media', signMediaToken(payload));
   return { payload, token };
 }
+
+// 当前账号名下的班级列表（设置弹窗打开时拉一次）
+router.get('/classes', auth(), (req, res) => {
+  const u = req.user;
+  let classes = [];
+  try {
+    classes = dbManager.listClasses(u.username);
+  } catch (err) {
+    return res.status(500).json({ error: '读取班级列表失败：' + err.message });
+  }
+  res.json({ classes, current: u.dbSlug || '' });
+});
+
+// 新增班级：给当前账号再建一个独立的班（新建一个库，不是复制 —— 复制会把学生、
+// 班费记录一起带过去，两个班共用同一批人会立刻产生脏数据）。
+// 加密方式跟随当前班：明文账号建的还是明文库，避免同一账号下混着两种保存方式。
+//
+// 超级隐私模式暂不支持：隐私库的钥匙由「登录密码 + 恢复词」各包裹一份，每个班都是
+// 一把独立的新钥匙 + 一套新恢复词。要做对得让用户当场抄写新恢复词，这一轮先明确拒绝，
+// 不做半吊子（否则新班建出来却没有口令包裹，等于绕过隐私模式）。
+router.post('/class', auth(), async (req, res) => {
+  const u = req.user;
+  const raw = req.body && typeof req.body.className === 'string' ? req.body.className : '';
+  const className = raw.trim().slice(0, 50);
+
+  if (dbManager.isProtected(u.username)) {
+    return res.status(400).json({ error: '超级隐私模式下暂不支持新增班级' });
+  }
+
+  // 班名在同一账号内唯一。为什么必须有：
+  //   · 班级切换器里两个同名项只差 slug（用户看不见），根本没法区分点哪个
+  //   · 创建后会自动切进新班，重名会让用户以为「没切过去」，回头再点一次又建一个
+  // 空名会落成默认的「我的班级」（见 createTeacher），所以比较的是最终写入的名字。
+  const wanted = className || '我的班级';
+  const dup = dbManager.listClasses(u.username)
+    .some((c) => (c.className || '').trim() === wanted);
+  if (dup) {
+    return res.status(409).json({ error: `已有同名班级「${wanted}」，请换个名字` });
+  }
+
+  const cur = u.dbSlug ? dbManager.registryFindBySlug(u.dbSlug) : null;
+  const encrypted = cur ? cur.encrypted !== 0 : true;
+  const acc = dbManager.accountFindByUsername(u.username);
+  // 新库的 users 表要写一份密码哈希（保持库内自洽）；登录校验走 accounts，两者此时一致
+  const passwordHash = acc ? acc.password_hash : '';
+
+  try {
+    const { slug } = dbManager.createTeacher(u.username, passwordHash, u.role, encrypted, className);
+    console.log('[account] 新增班级:', u.username, 'slug:', slug, 'name:', className || '(默认)');
+    res.json({
+      message: '班级已创建',
+      slug,
+      classes: dbManager.listClasses(u.username),
+    });
+  } catch (err) {
+    console.warn('[account] 新增班级失败:', err.message);
+    res.status(500).json({ error: '创建班级失败：' + err.message });
+  }
+});
+
+// 切换班级：把当前会话的 dbSlug 换到该账号名下的另一个班，并重签 token。
+// 为什么必须重签：middleware/auth.js 直接用 JWT 里的 dbSlug 去 withDb(slug) 选库，
+// 会话名单只是旁路校验 ——「换了班」这件事只能通过新 token 表达，改服务端状态不够。
+// 为什么不吊销会话：切班不是凭证变更，吊销会连带作废媒体凭据（<img> 的 token 绑同一个 sid），
+// 表现就是切完班图片全裂。
+router.post('/switch-class', auth(), (req, res) => {
+  const target = req.body && typeof req.body.slug === 'string' ? req.body.slug.trim() : '';
+  if (!target) return res.status(400).json({ error: '缺少班级标识' });
+  const u = req.user;
+
+  const rec = dbManager.registryFindBySlug(target);
+  // 不区分「不存在」与「不是你的」：否则可以拿这个接口探测别人的 slug 是否存在
+  if (!rec || rec.username !== u.username) {
+    return res.status(404).json({ error: '班级不存在' });
+  }
+
+  // 目标库必须真的能打开才换 token，否则切过去之后每个请求都会 500。
+  // 隐私模式的班若本次会话还没解锁过库钥匙，这里会抛 PRIVACY_UNLOCK → 让前端要密码。
+  try {
+    dbManager.resolveClass(u.username, target);
+  } catch (err) {
+    if (err.code === 'PRIVACY_UNLOCK') {
+      return res.status(403).json({
+        error: '该班级已开启超级隐私模式，请重新输入密码后切换',
+        code: 'CLASS_NEEDS_PASSWORD',
+      });
+    }
+    return res.status(409).json({ error: '该班级暂时无法打开：' + err.message });
+  }
+
+  // 会话里的 dbSlug 同步改掉：改密吊销是按 (userId, dbSlug) 匹配的，
+  // 两边不一致会让这个 sid 在吊销时被漏掉（改完密码旧 token 还能用）。
+  if (!sessions.setSlug(u.sid, target)) {
+    return res.status(401).json({ error: '登录状态已失效，请重新登录' });
+  }
+
+  const payload = { userId: u.userId, username: u.username, role: u.role, dbSlug: target, sid: u.sid };
+  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
+  res.cookie('token', token, {
+    httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
+  });
+  // 沿用滑动续期的响应头协议：前端成功拦截器统一走 absorbRenewalTokens 落盘，
+  // 调用点不用自己处理 token 替换，也不会出现「切完班图片全裂」。
+  res.set('X-Renewed-Token', token);
+  res.set('X-Renewed-Media', signMediaToken(payload));
+
+  res.json({
+    message: '已切换班级',
+    token,
+    mediaToken: signMediaToken(payload),
+    classes: dbManager.listClasses(u.username),
+    user: { id: u.userId, username: u.username, role: u.role, dbSlug: target },
+  });
+});
 
 // 修改密码
 router.put('/password', auth(), async (req, res) => {
@@ -453,6 +598,15 @@ router.put('/password', auth(), async (req, res) => {
 
     const hashed = await bcryptHash(newPassword, 10);
     userStore.updatePassword(req.user.userId, hashed);
+    // 多班级：登录校验以 accounts.password_hash 为权威，改密必须同步写过去。
+    // 否则切到同账号的另一个班时，登录用的还是旧密码哈希 —— 改密看起来「没生效」。
+    // 各库 users.password 仍写当前这个（保持库内自洽），其余班下次登录不受影响。
+    try {
+      const acc = dbManager.accountFindByUsername(req.user.username);
+      if (acc) dbManager.accountSetPassword(acc.id, hashed);
+    } catch (err) {
+      console.warn('[account] 同步账号密码失败:', err.message);
+    }
     // 密码已变 → 该账号在**所有窗口**签发的旧 token 立即失效（含本机恢复 token）。
     // 以前只有「本机恢复」分支 revoke 当前 sid + create 新 sid：普通改密不吊销任何会话，
     // 兄弟窗口的 token 还能用满 30 天；而只吊销兄弟会话、放过当前 token 也不行 ——
@@ -468,6 +622,62 @@ router.put('/password', auth(), async (req, res) => {
   } catch (err) {
     res.status(err.code === 'PRIVACY_UNLOCK' ? 400 : 500).json({ error: err.message });
   }
+});
+
+// 删除当前班级：只删这一个库，不动账号本身、也不碰其它班级。
+// 与「删除账号」（下面的 DELETE /）是两件事，语义必须分清：
+//   · 删班级：销毁一套数据，账号还在，会自动切到剩下的某个班
+//   · 删账号：销毁全部班级 + 凭证，回到登录页
+router.delete('/class', auth(), (req, res) => {
+  const u = req.user;
+  const current = u.dbSlug;
+  const rec = current ? dbManager.registryFindBySlug(current) : null;
+  if (!rec) return res.status(404).json({ error: '班级不存在或已被删除' });
+
+  const classes = dbManager.listClasses(u.username);
+  // 唯一一个班不能删：删完这个账号就没有任何库可用，而那件事的入口叫「删除账号」。
+  // 这里拒绝而不是顺手把账号也删掉 —— 用户点的是「删除该班级」，不该产生更大的后果。
+  if (classes.length <= 1) {
+    return res.status(400).json({ error: '这是唯一的班级。如需销毁全部数据，请使用「删除账号」' });
+  }
+  const target = classes.find((c) => c.slug !== current);
+  if (!target) return res.status(400).json({ error: '找不到可切换的班级' });
+
+  try {
+    dbManager.deleteTeacher(current);
+  } catch (err) {
+    console.warn('[account] 删除班级失败:', err.message);
+    return res.status(500).json({ error: '删除班级失败：' + err.message });
+  }
+
+  // 会话跟着挪到剩下的班。不挪的话当前窗口的 token 还指着已删的库，下一个请求就是 500。
+  // 顺序必须是「先 setSlug 再吊销旧 slug」：setSlug 之后这个 sid 的 dbSlug 已经是 target，
+  // 才不会在下面那步被自己的吊销逻辑顺手删掉。
+  if (!sessions.setSlug(u.sid, target.slug)) {
+    revokeAccountSessions(u.userId, current);
+    return res.status(401).json({ error: '登录状态已失效，请重新登录' });
+  }
+  // 同一个已删班上的其它窗口：token 必须立即作废，否则它们会持续请求一个不存在的库
+  revokeAccountSessions(u.userId, current);
+
+  const payload = { userId: u.userId, username: u.username, role: u.role, dbSlug: target.slug, sid: u.sid };
+  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
+  res.cookie('token', token, {
+    httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
+  });
+  // 与 switch-class 同一套续期协议：前端拦截器统一落盘，调用点不用自己换 token
+  res.set('X-Renewed-Token', token);
+  res.set('X-Renewed-Media', signMediaToken(payload));
+
+  console.log('[account] 删除班级:', u.username, 'slug:', current, '→ 已切到:', target.slug);
+  res.json({
+    message: '班级已删除',
+    token,
+    mediaToken: signMediaToken(payload),
+    current: target.slug,
+    classes: dbManager.listClasses(u.username),
+  });
 });
 
 // 删除当前登录账号：关闭并删除该账号的库文件、清除 index 登记，不可恢复。

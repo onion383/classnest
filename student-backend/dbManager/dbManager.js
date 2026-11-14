@@ -35,6 +35,16 @@ module.exports = {
   createTeacher: account.createTeacher,
   deleteTeacher: account.deleteTeacher,
   resolveByUsername: account.resolveByUsername,
+  // 多班级：按班打开 / 列班级 / 账号归属（懒迁移）
+  resolveClass: account.resolveClass,
+  listClasses: account.listClasses,
+  linkAccount: account.linkAccount,
+  backfillPasswordHash: account.backfillPasswordHash,
+  registrySetClassName: base.registrySetClassName,
+  accountFindByUsername: base.accountFindByUsername,
+  // 多班级：改密/改账号名要同步账号表（各库 users 表不再作为校验依据）
+  accountSetPassword: base.accountSetPassword,
+  accountRename: base.accountRename,
   resolveByDbFile: account.resolveByDbFile,
   isProtected: account.isProtected,
   enablePrivacy: account.enablePrivacy,
@@ -46,6 +56,8 @@ module.exports = {
   lockDb: conn.lockDb,
   registryFindByUsername: base.registryFindByUsername,
   registryFindBySlug: base.registryFindBySlug,
+  // 多班级：同一用户名的所有班级（改用户名时要把每一行都改掉）
+  registryFindAllByUsername: base.registryFindAllByUsername,
   // 改账号名用：只改 registry.username，不碰库钥匙包裹
   registryRename: base.registryRename,
   wrapKey: base.wrapKey,
@@ -86,13 +98,30 @@ module.exports = {
   writeSkill: skills.writeSkill,
   deleteSkill: skills.deleteSkill,
   readSkills: skills.readSkills,
-  // 可写资源目录（与数据库同层，随 userData 持久化）
+  // 数据目录分层布局（v2）：root 下固定 core / content / cache / logs 四层。
+  // 所有具体路径都从 dbManager.paths.js 经 base 转出，业务代码不要再自己拼 dataDir。
   dataDir: base.dataDir,
+  coreDir: base.coreDir,
+  contentDir: base.contentDir,
+  cacheDir: base.cacheDir,
+  logsDir: base.logsDir,
+  indexPath: base.indexPath,
+  dbMasterKeyPath: base.dbMasterKeyPath,
+  jwtSecretPath: base.jwtSecretPath,
+  sessionsPath: base.sessionsPath,
+  lastDbPath: base.lastDbPath,
+  // dbFilePath 已在上面从 backup 门面导出（backup 内部也取自 paths），不要重复声明
   uploadsDir: base.uploadsDir,
   backgroundDir: base.backgroundDir,
   thumbsDir: base.thumbsDir,
   trashDir: base.trashDir,
-  skillsDirRoot: skills.skillsDirRoot,
+  receiptTrashDir: base.receiptTrashDir,
+  memoryDir: base.memoryDir,
+  skillsDirRoot: base.skillsDirRoot,
+  ffmpegCacheDir: base.ffmpegCacheDir,
+  backendLogPath: base.backendLogPath,
+  startupLogPath: base.startupLogPath,
+  inpLogPath: base.inpLogPath,
   // 备份包 v3 要按 slug 收集「这个账号自己的」文件：AI 技能目录是按 slug 分的
   // （snapshotsDir 本文件上面已经导出过，别再加一行）
   skillsDir: skills.skillsDir,

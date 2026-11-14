@@ -79,7 +79,7 @@ async function runE2E() {
   console.log('=== 2. 登录（正确密码，异步 compare）===');
   r = await post('/api/login', { username: uname, password: pwd });
   chk(r.status === 200 && r.json && r.json.token, '登录成功并签发 token', 'status=' + r.status);
-  const token = r.json && r.json.token;
+  let token = r.json && r.json.token;
   if (!token) { console.error('登录失败，终止普通账号用例'); return { pass, fail: fail + 1 }; }
 
   console.log('=== 3. 登录（错误密码应被拒）===');
@@ -97,12 +97,17 @@ async function runE2E() {
   console.log('=== 6. 新密码应可登录 ===');
   r = await post('/api/login', { username: uname, password: 'newpass456' });
   chk(r.status === 200 && r.json && r.json.token, '新密码登录成功', 'status=' + r.status);
+  // 改密会轮换该账号的全部会话（credentialChange.rotateAccountSessions），
+  // 旧 token 已作废；后续用例必须换新签发的 token，否则全是 401 连锁假失败。
+  if (r.json && r.json.token) token = r.json.token;
 
   console.log('=== 7. 改用户名（正确密码）===');
   const newName = uname + 'x';
   const r7 = await put('/api/account/username', { newUsername: newName, password: 'newpass456' }, token);
   chk(r7.status === 200, '改用户名成功', 'status=' + r7.status + ' ' + (r7.json && (r7.json.message || r7.json.error)));
   chk(r7.json && r7.json.token, '改名后重新签发 token', r7.json && r7.json.token ? '✓' : '✗');
+  // 改名同样会轮换会话，后面「错误密码应被拒」要用新 token 才能走到密码校验那一步
+  if (r7.json && r7.json.token) token = r7.json.token;
 
   console.log('=== 8. 改用户名（错误密码应被拒）===');
   const r8 = await put('/api/account/username', { newUsername: uname + 'y', password: 'badpass' }, token);

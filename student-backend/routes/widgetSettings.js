@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { cleanPath } = require('../services/sanitize');
 const widgetSettingsStore = require('../services/widgetSettingsStore');
+const dbManager = require('../dbManager/dbManager');
 
 // 桌面小组件「常用软件」最多 8 个（4 列 × 2 行）。
 // 渲染层会隐藏多余的添加入口，这里再兜一层：即使直接调接口也写不进第 9 个。
@@ -151,7 +152,26 @@ router.put('/class-info', (req, res) => {
     mottoStyle: String(mottoStyle ?? '').trim().slice(0, 500),
     xuefeng: String(xuefeng ?? '').trim().slice(0, 500),
   };
+  // 班名在同一账号内唯一，与「新增班级」同一条规则 —— 只在新增时拦是不够的，
+  // 改个名照样能造出两个同名班。改自己不算重名，所以排除当前这个库。
+  if (clean.name && req.user && req.user.username) {
+    const clash = dbManager.listClasses(req.user.username)
+      .some((c) => c.slug !== req.user.dbSlug && (c.className || '').trim() === clean.name);
+    if (clash) {
+      return res.status(409).json({ error: `已有同名班级「${clean.name}」，请换个名字` });
+    }
+  }
   widgetSettingsStore.writeClassInfo(JSON.stringify(clean));
+  // 多班级：班名要同步一份到 index.db —— 登录时要列班级，而那时还没开库，读不到
+  // widget_settings.class_info。库内这份仍是真相（进库后显示的永远是它），
+  // registry.class_name 只是「目录索引」，所以同步失败不影响保存结果。
+  try {
+    if (req.user && req.user.dbSlug && clean.name) {
+      dbManager.registrySetClassName(req.user.dbSlug, clean.name);
+    }
+  } catch (err) {
+    console.warn('[widget-settings] 同步班名到登记表失败:', err.message);
+  }
   res.json({ success: true, data: clean });
 });
 

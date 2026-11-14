@@ -63,8 +63,14 @@
         <main ref="mainScrollRef" class="h-full flex-1 min-w-0 p-6 bg-bg overflow-auto app-custom-scroll">
           <router-view v-slot="{ Component }">
             <!-- 缓存全部业务页面：当前共 15 个（不含 /login 与 /account 重定向），取 16 留 1 个余量。
-                 实测多缓存几个页面仅多几 MB，故不再按最近访问淘汰。 -->
-            <KeepAlive :max="16">
+                 实测多缓存几个页面仅多几 MB，故不再按最近访问淘汰。
+
+                 :key 绑 classScopeKey（班级作用域代次）：切班时递增它，这个 KeepAlive
+                 会被当成「一个新组件」卸载重建，它内部缓存的 15 个视图实例随之全部销毁，
+                 当前路由页重新 mount 并拉取新班的整套数据。
+                 这是「切班不重启」的实现点 —— 单纯给 <component> 加 key 只会重建当前页，
+                 其它被缓存的页面仍留着上一个班的 ref，切回去就是串班。 -->
+            <KeepAlive :key="classScopeKey" :max="16">
               <component :is="Component" />
             </KeepAlive>
           </router-view>
@@ -194,6 +200,9 @@ import axios from 'axios'
 import { undoState as undo, performUndo, refreshUndoStatus } from './composables/useUndo.js'
 import './styles/dialog-transition.css'
 import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
+// 切班后作废全部缓存的视图实例（见 utils/classScope.js 顶部说明）。
+// 不重载页面，只换 KeepAlive 的 key：当前路由重新 mount 就会拉新班的数据。
+import { classScopeKey } from './utils/classScope.js'
 import IconGlyph from './components/base/IconGlyph.vue'
 import CustomScrollbar from './components/base/CustomScrollbar.vue'
 
@@ -734,6 +743,13 @@ fetchPendingNotification()
 window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) { backendEverReady.value = true; checkSeatDraft(); loadAiEnabled(); applyToolboxPreference() } }).catch(() => {})
 // AI 设置变更（启用/停用、换模型）后刷新图标显隐
 window.addEventListener('ai-config-changed', onAiConfigChanged)
+
+// 切班（classScopeKey +1）后整套内容都换了：滚动位置留着会让用户停在新班的半截处。
+// 滚动容器 <main> 在 KeepAlive 外面，不随视图重建而重置，所以必须在这里手动归零。
+// 用 pre flush（默认）即可：此时旧 DOM 还在，归零立即生效，随后内容整体替换。
+watch(classScopeKey, () => {
+  if (mainScrollRef.value) mainScrollRef.value.scrollTop = 0
+})
 
 // 切页时保持浮窗状态（用户可边操作边问）；若切换到 AI 助手页则收起浮窗
 watch(() => route.path, (to, from) => {

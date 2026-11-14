@@ -182,8 +182,14 @@ test('接线：全量吊销 + 换发当前窗口登录态只有一份实现，�
   assert.strictEqual((src.match(/function rotateLoginAfterCredentialChange\(/g) || []).length, 1)
   assert.ok((src.match(/rotateLoginAfterCredentialChange\(req, res\)/g) || []).length >= 2,
     '改密与切换安全等级都要走同一份换发实现')
-  // 换发必须真的换 sid：沿用旧 sid 会把自己一起吊销
-  assert.match(src, /rotateAccountSessions\(u\.userId,\s*u\.dbSlug\)/)
+  // 换发必须真的换 sid：沿用旧 sid 会把自己一起吊销。
+  // 多班级后第二个参数可以是「该账号所有班级的 slug 列表」（accountSlugsForRevoke），
+  // 但必须仍然来自账号维度 —— 不能写成常量或单个硬编码 slug。
+  assert.match(src, /rotateAccountSessions\(u\.userId,\s*(?:u\.dbSlug|accountSlugsForRevoke\(u\))\)/,
+    '换发必须按账号维度吊销并换新 sid')
+  // 多班级：吊销范围要覆盖该账号名下所有班，否则「切班后改密」会漏掉另一个班的会话
+  assert.match(src, /function accountSlugsForRevoke\(user\)[\s\S]{0,600}dbManager\.listClasses\(/,
+    'accountSlugsForRevoke 必须用 listClasses 取该账号全部班级，不能只看当前 dbSlug')
 })
 
 test('接线：恢复词两条改密路径都传 resolved.slug，不靠 userId 单键', () => {

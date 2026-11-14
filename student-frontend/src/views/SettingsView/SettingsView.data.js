@@ -9,6 +9,10 @@ import { invalidateSemesterStart } from '../../utils/semesterStart.js'
 import { clearMediaToken } from '../../utils/apiUrl'
 import { AUTH_API } from '../../utils/apiPaths.js'
 import { friendlyError } from '../../utils/blobError.js'
+// 删班 = 换库，与切班走同一条收尾：清模块级缓存 + 作废 KeepAlive 里的视图实例。
+import { resetUserScopedCaches } from '../../utils/userScopedCache.js'
+import { bumpClassScope } from '../../utils/classScope.js'
+import { useNotification } from '../../composables/useNotification.js'
 
 // 这里不再自己读 Blob：响应错误拦截器（utils/blobError.js）已把失败体还原成对象，
 // 统一从 friendlyError 取文案，避免每个 blob 调用点各写一份解析。
@@ -377,6 +381,171 @@ export function useSettingsData(ctx) {
         clearAuth()
         clearMediaToken()
         ctx.router.push('/login')
+      } catch (err) {
+        ctx.showAlert(err.response?.data?.error || '删除失败')
+      }
+    },
+    // 班级列表 + 当前班。账号信息区的「当前班级」和危险区的「删除该班级」
+    // 共用这一次请求（两者都只关心「有几个班、现在在哪个」）。
+    async loadClasses() {
+      try {
+        const r = await axios.get('/api/account/classes')
+        const list = r.data?.classes || []
+        ctx.classList.value = list
+        ctx.currentSlug.value = r.data?.current || ''
+        ctx.classCount.value = list.length
+      } catch (_) {
+        // 拉不到就按「没有班级信息」处理：危险区不显示删班入口，账号区显示 —
+        ctx.classList.value = []
+        ctx.currentSlug.value = ''
+        ctx.classCount.value = 0
+      }
+    },
+    // 打开班级弹窗：与首页齿轮打开的是同一个组件。先拉数据再显示 ——
+    // ClassInfoDialog 只在 visible false→true 时初始化表单，先开再填会得到一个空表单。
+    async openClassDialog() {
+      await Promise.all([ctx.loadClasses(), ctx.loadClassInfo()])
+      ctx.classDialogVisible.value = true
+    },
+    // 弹窗里的班名/口号/班风/学风
+    async loadClassInfo() {
+      try {
+        const r = await axios.get('/api/widget-settings/class-info')
+        const d = r.data?.data
+        if (d) {
+          ctx.classInfo.value = {
+            name: d.name ?? '',
+            motto: d.motto ?? '',
+            mottoStyle: d.mottoStyle ?? '',
+            xuefeng: d.xuefeng ?? '',
+          }
+        }
+      } catch (_) {
+        // 拉不到就让弹窗显示空表单，用户填写后保存即可
+      }
+    },
+    // 保存班级信息（班名/口号/班风/学风）
+    async saveClassInfoFromSettings(data) {
+      try {
+        await axios.put('/api/widget-settings/class-info', data || {})
+        ctx.classInfo.value = { ...(data || {}) }
+        ctx.classDialogVisible.value = false
+        // 班名可能改了，账号信息区那行要跟着更新
+        await ctx.loadClasses()
+        useNotification().success('班级信息保存成功')
+      } catch (err) {
+        ctx.showAlert(err.response?.data?.error || '班级信息保存失败，请重试')
+      }
+    },
+    // 设置页的弹窗只做切换，没有「保存」按钮 —— 铅笔改的名字必须当场落库，否则一关就丢。
+    // 先读一次完整的 class-info 再写回：PUT 是整对象覆盖，只发 name 会把口号/班风/学风抹掉。
+    async renameClassFromSettings(name) {
+      const clean = String(name || '').trim().slice(0, 50)
+      if (!clean || clean === ctx.currentClassName.value) return
+      try {
+        const cur = await axios.get('/api/widget-settings/class-info')
+        const d = cur.data?.data || {}
+        await axios.put('/api/widget-settings/class-info', { ...d, name: clean })
+        ctx.classInfo.value = { ...d, name: clean }
+        // 下拉里的班名来自 classes 列表，改完要重新拉一次才显示新名
+        await ctx.loadClasses()
+        useNotification().success('班级名称已更新')
+      } catch (err) {
+        // 重名由后端 409 兜底（前端已在弹窗里拦过一轮，这里是绕过前端时的最后一道）
+        ctx.showAlert(err.response?.data?.error || '班级重命名失败，请重试')
+      }
+    },
+    // 新建班级：建完直接切进去，与首页同一条路径
+    async createClassFromSettings(className) {
+      if (!className || ctx.switchingClass.value) return
+      ctx.switchingClass.value = true
+      try {
+        const r = await axios.post('/api/account/class', { className })
+        const slug = r.data?.slug
+        if (!slug) throw new Error('后端未返回班级标识')
+        await axios.post('/api/account/switch-class', { slug })
+        // 与 switchClassFromSettings 同理：不关弹窗，让它跟着重建原地恢复，
+        // 建完班就能接着在同一个弹窗里改名/继续切。
+        resetUserScopedCaches()
+        bumpClassScope()
+      } catch (err) {
+        ctx.switchingClass.value = false
+        ctx.showAlert(err.response?.data?.error || '新建班级失败，请重试')
+      }
+    },
+    // 设置页里切班。与首页的 applyClassSwitch 是同一条收尾，顺序不能反：
+    // 先清模块级缓存并让在途响应作废，再作废 KeepAlive 里的视图实例。
+    // 新 token 由后端随 X-Renewed-Token 下发，响应拦截器自动落盘。
+    async switchClassFromSettings(slug) {
+      if (!slug || slug === ctx.currentSlug.value || ctx.switchingClass.value) return
+      ctx.switchingClass.value = true
+      try {
+        await axios.post('/api/account/switch-class', { slug })
+        // 这里刻意**不关**弹窗：切班要重建整个视图（见 classScope.js），
+        // 关掉会写回 settingsClassDialogOpen=false，重建后就不再恢复，
+        // 用户每切一个班就被弹出一次。留着开，新实例挂载时原地恢复。
+        resetUserScopedCaches()
+        bumpClassScope()
+      } catch (err) {
+        ctx.switchingClass.value = false
+        ctx.showAlert(err.response?.data?.error || '切换班级失败，请重试')
+      }
+    },
+    // 打开「删除该班级」警告弹窗：与删账号同一套 10 秒倒计时（删除不可恢复，
+    // 倒计时挡的是手滑连点）。先拉一次班级列表，因为「只有一个班」必须当场拦住 ——
+    // 否则用户盯着倒计时数满 10 秒，点下去才被告知不能删。
+    async openDeleteClass() {
+      let classes = []
+      let current = ''
+      try {
+        const r = await axios.get('/api/account/classes')
+        classes = r.data?.classes || []
+        current = r.data?.current || ''
+      } catch (_) {
+        ctx.showAlert('读取班级列表失败，请稍后再试')
+        return
+      }
+      if (classes.length <= 1) {
+        ctx.showAlert('这是你唯一的班级。删除后就没有可用数据了；如需销毁全部数据，请使用「删除账号」。')
+        return
+      }
+      const name = classes.find((c) => c.slug === current)?.className || '当前班级'
+
+      ctx.clearDeleteTimer()
+      ctx.dialog.value = {
+        visible: true,
+        title: '删除该班级',
+        message: `将删除「${name}」及其全部数据（学生、成绩、班费、相册……），不可恢复。其它班级不受影响。`,
+        type: 'confirm',
+        showCancel: true,
+        confirmText: '确定(10)',
+        confirmDisabled: true,
+      }
+      ctx.dialogCallback.value = () => ctx.performDeleteClass()
+      let remain = 10
+      ctx.deleteTimer = setInterval(() => {
+        remain -= 1
+        if (remain <= 0) {
+          ctx.clearDeleteTimer()
+          ctx.dialog.value.confirmText = '确定'
+          ctx.dialog.value.confirmDisabled = false
+        } else {
+          ctx.dialog.value.confirmText = `确定(${remain})`
+        }
+      }, 1000)
+    },
+    // 删除当前班级。后端会把会话切到剩下的那个班并换发 token
+    // （随 X-Renewed-Token 下发，响应拦截器自动落盘），所以这里不用自己处理凭据。
+    async performDeleteClass() {
+      try {
+        const r = await axios.delete('/api/account/class')
+        // 换库了，与切班同一条路径：先清模块缓存并让在途响应作废，再作废缓存的视图实例。
+        // 顺序不能反（见 views/DashboardView.vue 的 applyClassSwitch 注释）。
+        resetUserScopedCaches()
+        bumpClassScope()
+        const target = (r.data?.classes || []).find((c) => c.slug === r.data?.current)
+        // 提示放在清理之后：resetUserScopedCaches 会清空通知列表
+        useNotification().success(`班级已删除，已切换到「${target?.className || '剩余班级'}」`)
       } catch (err) {
         ctx.showAlert(err.response?.data?.error || '删除失败')
       }

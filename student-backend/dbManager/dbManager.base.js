@@ -42,31 +42,17 @@ if (!MASTER_KEY) {
 // 主密钥派生为 AES-256 包裹密钥
 const WRAP_KEY = crypto.createHash('sha256').update(MASTER_KEY).digest();
 
-// 数据目录优先取环境变量（打包后由 Electron 主进程指向 userData），兜底用 student-backend/data
-const dataDir = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : path.join(BACKEND_ROOT, 'data');
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-
-// 可写资源目录：上传文件（收据/背景图）统一放 dataDir 下，避免打包后 __dirname 位于只读
-// asar 归档内导致写入失败（ENOTDIR/无权限）。
-function ensureDir(p) { fs.mkdirSync(p, { recursive: true }); return p; }
-const uploadsDir = ensureDir(path.join(dataDir, 'uploads'));
-const backgroundDir = ensureDir(path.join(uploadsDir, 'background'));
-// 相册缩略图缓存目录：可再生的缓存，默认可随数据目录走；被用户单独配置为独立缓存目录时
-// 读 ALBUM_THUMBS_DIR（由 Electron 主进程按 app-config 注入），相册缩略图移到该位置。
-const thumbsDir = ensureDir(
-  process.env.ALBUM_THUMBS_DIR ? path.resolve(process.env.ALBUM_THUMBS_DIR) : path.join(dataDir, 'album-thumbs')
-);
-// 相册应用内回收站目录：删除照片时的文件先移到这里（可编程撤销还原），替代系统回收站。
-const trashDir = ensureDir(path.join(dataDir, 'album-trash'));
-// AI 数据快照目录：整库文件快照按 slug 隔离存于 dataDir/snapshots/<slug>/，文件名即时间戳。
-// 快照是加密 .db 原文（沿用同一库密钥），还原时直接覆盖库文件，用于大批量写入前的「后悔药」。
-const snapshotsDirRoot = ensureDir(path.join(dataDir, 'snapshots'));
-function snapshotsDir(slug) {
-  const safe = /^[A-Za-z0-9_@-]+$/.test(String(slug || '')) ? String(slug) : 'default';
-  return ensureDir(path.join(snapshotsDirRoot, safe));
-}
+// 数据目录分层布局（v2）的唯一定义处是 dbManager.paths.js。这里只做转发并重新导出，
+// 让既有 require('./dbManager.base') 的调用点保持不变；**不要再 path.join(dataDir, ...)**，
+// 所有具体路径请从 paths / dbManager 门面取常量。
+const paths = require('./dbManager.paths');
+const {
+  dataDir, coreDir, contentDir, cacheDir, logsDir, ensureDir,
+  indexPath, dbMasterKeyPath, jwtSecretPath, sessionsPath, lastDbPath, dbFilePath,
+  uploadsDir, backgroundDir, thumbsDir, trashDir, receiptTrashDir,
+  snapshotsDirRoot, snapshotsDir, memoryDir, skillsDirRoot, skillsDir,
+  ffmpegCacheDir, backendLogPath, startupLogPath, inpLogPath,
+} = paths;
 
 // ---------- 库密钥 包裹/解包 ----------
 // wrapped = base64(iv).base64(tag).base64(ciphertext)
@@ -310,7 +296,6 @@ let indexDb = null;
 
 function ensureIndex() {
   if (indexDb) return indexDb;
-  const indexPath = path.join(dataDir, 'index.db');
   const Database = getDatabase();
   indexDb = new Database(indexPath);
   indexDb.pragma(`key = '${sqlKey(MASTER_KEY)}'`);
@@ -331,13 +316,48 @@ function ensureIndex() {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  ensureAccountsSchema(indexDb);
   return indexDb;
+}
+
+// ---------- 多班级：账号表 ----------
+// 原设计是「一个账号 = 一个库 = 一个班级」，账号凭证存在各库自己的 users 表里。
+// 支持「一个账号多个班级」后，同一个用户名会对应多个 slug（registry 里多行），于是需要
+// 一个库外的稳定账号标识和统一的密码校验位置：
+//   accounts.id            —— 稳定主键，改用户名不影响班级归属
+//   accounts.password_hash —— 登录校验的唯一依据（各库 users 表降级为「该库属于谁」的标记）
+// registry.account_id 指向它；registry.class_name 供登录时列班级（那时还没开库）。
+//
+// 幂等：表用 IF NOT EXISTS，列用 PRAGMA 探测后补（SQLite 的 ADD COLUMN 不支持 IF NOT EXISTS）。
+// 全内存操作，实测亚毫秒，放在启动关键路径上无影响。
+function ensureAccountsSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'teacher',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  const cols = new Set(db.prepare('PRAGMA table_info(registry)').all().map((r) => r.name));
+  if (!cols.has('account_id')) {
+    db.exec('ALTER TABLE registry ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!cols.has('class_name')) {
+    db.exec("ALTER TABLE registry ADD COLUMN class_name TEXT NOT NULL DEFAULT ''");
+  }
 }
 
 // ---------- index.db 操作 ----------
 function registryFindByUsername(username) {
   ensureIndex();
-  return indexDb.prepare('SELECT * FROM registry WHERE username = ?').get(username);
+  // 多班级：同一用户名会有多行（一库一行）。加 ORDER BY 让「取第一条」确定下来 ——
+  // 否则 SQLite 返回顺序未定义，登录时默认进哪个班可能每次都不一样。
+  // 排序取「最早创建的那个班」作为默认班（用户在设置弹窗里切换后由 token 里的 dbSlug 接管）。
+  return indexDb
+    .prepare('SELECT * FROM registry WHERE username = ? ORDER BY created_at, slug LIMIT 1')
+    .get(username);
 }
 
 function registryFindBySlug(slug) {
@@ -385,6 +405,73 @@ function registryList() {
   return indexDb.prepare('SELECT slug, username, protect FROM registry ORDER BY created_at').all();
 }
 
+// ---------- 多班级：registry 侧查询与归属 ----------
+// 某个用户名名下的全部班级（registry 一库一行）。用 username 兜底是为了迁移前后都能列全：
+// 迁移只回填 account_id，不改 username，所以哪怕还没回填也能靠它找齐。
+function registryFindAllByUsername(username) {
+  ensureIndex();
+  return indexDb.prepare('SELECT * FROM registry WHERE username = ? ORDER BY created_at, slug').all(username);
+}
+
+// 某个账号名下的全部班级（登录后列班级列表用）
+function registryFindByAccount(accountId) {
+  ensureIndex();
+  return indexDb.prepare(
+    'SELECT slug, username, class_name, account_id, protect, encrypted FROM registry WHERE account_id = ? ORDER BY created_at, slug'
+  ).all(accountId);
+}
+
+// 把库归属到账号。className 传 undefined 表示只改归属不动班名。
+// 迁移与「新建班级」共用这一个入口，避免两处写不一样的 SQL。
+function registrySetAccount(slug, accountId, className) {
+  ensureIndex();
+  if (className === undefined) {
+    indexDb.prepare('UPDATE registry SET account_id = ? WHERE slug = ?').run(accountId, slug);
+  } else {
+    indexDb.prepare('UPDATE registry SET account_id = ?, class_name = ? WHERE slug = ?').run(accountId, className, slug);
+  }
+}
+
+// 改班级名（用户在设置弹窗里改班名时调用；只动 class_name 这一列）
+function registrySetClassName(slug, className) {
+  ensureIndex();
+  indexDb.prepare('UPDATE registry SET class_name = ? WHERE slug = ?').run(className, slug);
+}
+
+// ---------- 多班级：accounts 侧 ----------
+function accountFindByUsername(username) {
+  ensureIndex();
+  return indexDb.prepare('SELECT * FROM accounts WHERE username = ?').get(username);
+}
+
+function accountFindById(id) {
+  ensureIndex();
+  return indexDb.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
+}
+
+function accountCreate(username, passwordHash, role = 'teacher') {
+  ensureIndex();
+  const info = indexDb
+    .prepare('INSERT INTO accounts(username, password_hash, role) VALUES (?, ?, ?)')
+    .run(username, passwordHash, role);
+  return Number(info.lastInsertRowid);
+}
+
+function accountSetPassword(accountId, passwordHash) {
+  ensureIndex();
+  indexDb.prepare('UPDATE accounts SET password_hash = ? WHERE id = ?').run(passwordHash, accountId);
+}
+
+function accountRename(accountId, newUsername) {
+  ensureIndex();
+  indexDb.prepare('UPDATE accounts SET username = ? WHERE id = ?').run(newUsername, accountId);
+}
+
+function accountDelete(accountId) {
+  ensureIndex();
+  indexDb.prepare('DELETE FROM accounts WHERE id = ?').run(accountId);
+}
+
 // 开启超级隐私模式：写入两份口令包裹的库钥匙，并抹掉主密钥包裹的 wrapped_key。
 // 此后没有登录密码/恢复词，任何路径（包括持有 db-master.key）都解不出库钥匙。
 // kdfParamsPassword / kdfParamsMnemonic 分别记录两份包裹实际使用的 scrypt 参数。
@@ -430,12 +517,12 @@ module.exports = {
   WRAP_KEY,
   dataDir,
   ensureDir,
-  uploadsDir,
-  backgroundDir,
-  thumbsDir,
-  trashDir,
-  snapshotsDirRoot,
-  snapshotsDir,
+  // v2 分层布局：core / content / cache / logs 与所有具体路径常量
+  coreDir, contentDir, cacheDir, logsDir,
+  indexPath, dbMasterKeyPath, jwtSecretPath, sessionsPath, lastDbPath, dbFilePath,
+  uploadsDir, backgroundDir, thumbsDir, trashDir, receiptTrashDir,
+  snapshotsDirRoot, snapshotsDir, memoryDir, skillsDirRoot, skillsDir,
+  ffmpegCacheDir, backendLogPath, startupLogPath, inpLogPath,
   wrapKey,
   unwrapKey,
   wrapWithKey,
@@ -475,6 +562,18 @@ module.exports = {
   registryRename,
   registryDelete,
   registryList,
+  // 多班级：账号与班级归属
+  ensureAccountsSchema,
+  registryFindAllByUsername,
+  registryFindByAccount,
+  registrySetAccount,
+  registrySetClassName,
+  accountFindByUsername,
+  accountFindById,
+  accountCreate,
+  accountSetPassword,
+  accountRename,
+  accountDelete,
   registrySetPrivacy,
   registryClearPrivacy,
   registrySetPasswordWrap,

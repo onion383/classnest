@@ -1,13 +1,12 @@
 const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
 const dbManager = require('../dbManager/dbManager');
 
 // 有效登录会话名单（sid）：JWT 里只带一个随机 sid，服务端按这份名单校验。
 // 「不主动退出就一直有效」+「退出后原 token 立即失效」都由此实现——
 // 退出时把 sid 从名单里删掉，那个 token 下一次请求就验不过了。
-// 名单持久化到 dataDir（随 userData 保留），重启后端不会把所有人登出。
-const FILE = () => path.join(dbManager.dataDir, '.sessions.json');
+// 名单持久化到 core/.sessions.json（随数据根目录保留），重启后端不会把所有人登出。
+const FILE = () => dbManager.sessionsPath;
 
 // 会话名单的保留期与容量上限。
 //
@@ -120,6 +119,20 @@ function has(sid) {
   return true;
 }
 
+// 切班：把某个会话的当前班级换掉（sid 不变，由调用方用新 dbSlug 重签 token）。
+// 不能「吊销 + 新建」：切班不是凭证变更，没有安全理由把同窗口踢下线，
+// 吊销还会连带作废媒体凭据（<img> 的 token 绑同一个 sid），表现为切完班图片全裂。
+// 返回 false 表示该 sid 已不在名单里（会话过期/已登出），调用方应让用户重新登录。
+function setSlug(sid, dbSlug) {
+  const list = load();
+  if (!sid || !Object.prototype.hasOwnProperty.call(list, sid)) return false;
+  const rec = list[sid];
+  if (!rec) return false;
+  rec.dbSlug = dbSlug == null ? null : String(dbSlug);
+  save();
+  return true;
+}
+
 // 主动退出：吊销该会话，原 token 立即失效
 function revoke(sid) {
   const list = load();
@@ -152,7 +165,7 @@ function revokeAllByUser(userId, dbSlug) {
 }
 
 module.exports = {
-  create, has, revoke, prune, revokeAllByUser,
+  create, has, revoke, prune, revokeAllByUser, setSlug,
   SESSION_TTL_MS, MAX_SESSIONS,
   // —— 以下仅供单元测试构造场景，生产代码不要用 ——
   __test_insert: (sid, userId, at, dbSlug) => {

@@ -1322,6 +1322,54 @@
   background-color: rgba(59, 130, 246, 0.12) !important;
 }
 
+/* ========== 工具栏「更多」下拉（Teleport 到 body，与候选弹窗/右键菜单同族） ========== */
+/* position 不在这里管：组件把 fixed 写进了内联样式（.bg-surface 的 relative 会顶掉 .fixed，
+   见 MoreMenu.vue 的注释）。这里只负责皮肤——原来的纯 .bg-surface 卡片观感在工具栏下方
+   像贴了块不发光的白纸，既没有浮层该有的"更实一档"，也和旁边那排琥珀色按钮不是一个材质。 */
+:root:is([data-theme="glass"]) .more-menu-popup {
+  /* 暖白玻璃：色温贴住工具栏那排琥珀按钮（rgba(245,158,11,…)），别用冷白——
+     冷白浮在暖调底图上会显脏。刻意不描边：1px 亮边 + 外圈 0 0 0 1px 在浅色底图上
+     会叠成双线，看着像贴纸；只留一层暖棕柔影把浮层托起来即可。 */
+  background-color: rgba(255, 250, 241, 0.9) !important;
+  backdrop-filter: blur(18px) saturate(1.1);
+  border: none !important;
+  border-radius: var(--radius-control) !important;
+  box-shadow: 0 3px 12px rgba(146, 110, 60, 0.1) !important;
+  padding: 5px;
+  overflow: hidden;
+}
+/* 卡片那层顶部高光（.bg-surface::before）压在浮层上是生硬的白霜，关掉 */
+:root:is([data-theme="glass"]) .more-menu-popup::before {
+  display: none !important;
+}
+/* 菜单项：卡内一行玻璃按钮。hover 用琥珀淡底（与工具栏按钮同源），不用白色提亮——
+   白提亮在暖底上会发灰；危险项只靠文字色区分，不再叠红底。
+   必须显式清掉全局 button 皮肤：`:root:is([data-theme="glass"]) button` 给了
+   border-width/style: solid 却没给颜色，边框走 currentColor —— 危险项文字红，
+   框就跟着红；禁用项文字灰，框就发灰。再加 `0 0 0 1px` 白环和 ::before 荧光描边，
+   一个菜单项上会叠三层框，看着像三个独立输入框。 */
+:root:is([data-theme="glass"]) .more-menu-popup .more-menu-item {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--color-text) !important;
+  padding: 7px 11px !important;
+  gap: 9px;
+}
+:root:is([data-theme="glass"]) .more-menu-popup .more-menu-item::before {
+  display: none !important;
+}
+:root:is([data-theme="glass"]) .more-menu-popup .more-menu-item:hover:not(:disabled) {
+  background-color: rgba(245, 158, 11, 0.16) !important;
+  box-shadow: none !important;
+}
+:root:is([data-theme="glass"]) .more-menu-popup .more-menu-item.text-danger {
+  color: #b91c1c !important;
+}
+:root:is([data-theme="glass"]) .more-menu-popup .more-menu-item:disabled {
+  color: var(--color-text-muted) !important;
+}
+
 /* ========== 毛玻璃滚动条 ========== */
 /* scrollbar-width / scrollbar-color 都是可继承属性，设在 :root 上即可覆盖全站，
    无需再用 `:root *` 逐元素下发（原来的通用选择器写法结果等价，纯属多余匹配开销）。 */

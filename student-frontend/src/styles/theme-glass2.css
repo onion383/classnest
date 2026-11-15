@@ -734,6 +734,35 @@
 :root[data-theme="glass2"] .context-menu-popup .hover\:bg-surface-hover:hover {
   background-color: var(--color-primary-light) !important;
 }
+/* 工具栏「更多」下拉：与上面两族同一材质。
+   position 同样由组件内联兜住（MoreMenu.vue），这里只管皮肤——
+   原来只有 .bg-surface 的卡片底，浮在工具栏下方像块平白纸。
+   不描边：glass2 的 --g2-line 是亮白边，叠在浅底上会显双线；靠阴影分层即可。 */
+:root[data-theme="glass2"] .more-menu-popup {
+  background-color: var(--alpha-white-92) !important;
+  backdrop-filter: blur(14px) saturate(1.2);
+  border: none !important;
+  border-radius: var(--radius-control) !important;
+  box-shadow: var(--g2-shadow-2) !important;
+  /* 内缩一圈：菜单项才是"卡里的一组按钮"，不是文字贴边 */
+  padding: 5px;
+  overflow: hidden;
+}
+:root[data-theme="glass2"] .more-menu-popup .more-menu-item {
+  border-radius: var(--radius-xs) !important;
+  padding: 7px 11px !important;
+  gap: 9px;
+}
+:root[data-theme="glass2"] .more-menu-popup .more-menu-item:hover:not(:disabled) {
+  background-color: var(--color-primary-light) !important;
+  box-shadow: var(--g2-hl);
+}
+:root[data-theme="glass2"] .more-menu-popup .more-menu-item.text-danger {
+  color: var(--color-danger) !important;
+}
+:root[data-theme="glass2"] .more-menu-popup .more-menu-item.text-danger:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--color-danger) 12%, transparent) !important;
+}
 :root[data-theme="glass2"] .search-panel {
   background-color: var(--g2-glass) !important;
   backdrop-filter: blur(var(--g2-blur)) saturate(var(--g2-saturate));

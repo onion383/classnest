@@ -31,13 +31,6 @@
       <button @click="refreshRecords" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme" title="刷新表格">
         <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
       </button>
-      <button
-        @click="onBatchDelete"
-        :disabled="selectedCount === 0"
-        class="bg-danger hover:bg-danger-hover text-text-inverse px-4 py-2 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-theme"
-      >
-        <IconGlyph name="trash" :size="14" tint="current" /> 批量删除 ({{ selectedCount }})
-      </button>
       <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
         <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
       </button>
@@ -48,9 +41,8 @@
       >
         <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
       </button>
-      <button @click="dedupeDialogVisible = true" @mouseenter="prefetch(loadDeduplicateDialog)" class="bg-danger hover:bg-danger-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-        <IconGlyph name="search" :size="14" tint="current" /> 去除重复数据
-      </button>
+      <!-- 低频/危险操作收进「更多操作」：批量删除、去除重复数据 -->
+      <MoreMenu :items="moreItems" @select="onMoreSelect" @hover="onMoreHover" />
     </div>
 
     <SearchBar
@@ -190,6 +182,7 @@ import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } fr
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import SearchBar from '../components/base/SearchBar.vue'
+import MoreMenu from '../components/base/MoreMenu.vue'
 import AppSwitch from '../components/base/AppSwitch.vue'
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import { useTableCRUD } from '../composables/useTableCRUD.js'
@@ -284,6 +277,28 @@ const {
   onMoveSelectedRows, onSwapRows, onSwapColumns,
   onSelectionChange, onImportData, onDeleteDuplicates
 } = table
+
+// 工具栏「更多操作」：两个低频/危险操作收进下拉，避免工具栏排到换行（与学生管理同一套）。
+// 批量删除沿用原来的禁用口径（没勾选记录就不给点）；去重弹窗的 chunk 预取
+// 从按钮 @mouseenter 挪到菜单项 hover，别因为按钮换了位置就丢掉预热。
+const moreItems = computed(() => [
+  {
+    key: 'batchDelete',
+    label: `批量删除 (${selectedCount.value})`,
+    icon: 'trash',
+    danger: true,
+    disabled: selectedCount.value === 0,
+    hint: selectedCount.value === 0 ? '请先在表格中勾选记录' : ''
+  },
+  { key: 'dedupe', label: '去除重复数据', icon: 'search', danger: true }
+])
+function onMoreSelect(key) {
+  if (key === 'batchDelete') onBatchDelete()
+  else if (key === 'dedupe') dedupeDialogVisible.value = true
+}
+function onMoreHover(key) {
+  if (key === 'dedupe') prefetch(loadDeduplicateDialog)
+}
 
 // 弹窗首次打开时置 mounted=true（保活），此后保持挂载，关闭仅降 visible 以播放退出动画
 watch(() => exportDialogVisible.value, v => { if (v) exportMounted.value = true })

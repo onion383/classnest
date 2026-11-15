@@ -107,10 +107,13 @@ export function recordRowDelete(key, row) {
   return pushRow('row_delete', key, row)
 }
 // 编辑加分/记录（整条替换）：payload { rowId, oldRow, newRow }
-export function recordRowUpdate(key, oldRow, newRow) {
+// origin：可选。一次动作改了多行时（如弹窗「全部销假」）传同一个 newUndoBatchId()，
+// 后端 Ctrl+Z 会整批回退；不传时与原来一样一条记录一步撤销。
+// 注意：传了 origin 就不再逐条刷撤销可用态，调用方登记完要自己 flushUndoStatus()。
+export function recordRowUpdate(key, oldRow, newRow, origin = '') {
   const payload = { table: key, rowId: newRow ? newRow.id : oldRow.id, oldRow, newRow }
   const name = (newRow || oldRow)?.姓名 || (newRow || oldRow)?.group_name || (newRow || oldRow)?.主题 || (newRow || oldRow)?.名称 || `#${payload.rowId}`
-  return recordUndo({ key, type: 'row_update', label: `${name}`, payload })
+  return recordUndo({ key, type: 'row_update', label: `${name}`, payload, origin })
 }
 
 // 删除学生（级联）：后端 delete-with-relations 一次动了七处（学生 / 请假 / 加减分 /

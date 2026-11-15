@@ -103,6 +103,7 @@
     developing: { lucide: 'Construction', emoji: '🚧', color: '#f59e0b' },
 
     // ---- 工具型图标（按钮/箭头/窗口控件）----
+    bell: { lucide: 'Bell', emoji: '🔔', color: '#f59e0b' },
     // 从 @lucide/vue 直连收口而来：这些不是「语义图标」（不代表某个页面/功能），
     // 所以用 tint="current" + glyph 使用，emoji 档也保持 SVG —— 见模板里 v-if 的第三个条件。
     // emoji 字段只是兜底：万一将来有人不带 glyph 用它，至少不会渲染成空白。

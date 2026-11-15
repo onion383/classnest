@@ -129,7 +129,12 @@ const props = defineProps({
       { value: 'leave', label: '离开校园', colorKey: 'danger', color: '#dc2626' },
       { value: 'return', label: '返校', colorKey: 'success', color: '#16a34a' }
     ]
-  }
+  },
+  // 搜索补词：把「界面上显示、却不在节点字段里」的文字并进搜索索引。
+  // 传 (node) => string，按节点返回该行 slot 里的固定文案；不传则只索引节点字段 + 状态 label。
+  // 组件拿不到 slot 内容（它渲染在调用方作用域），所以只能由调用方提供。
+  // 必须是 script 里定义好的稳定函数引用，别在模板里写内联箭头函数。
+  searchExtras: { type: Function, default: null }
 })
 
 const keyword = ref('');
@@ -161,17 +166,27 @@ const nodeTypeIndex = computed(() => {
 //   `Object.values(n).map(...).join(' ').toLowerCase()` —— 纯重复劳动。
 //   节点对象引用不变时（列表数据没变），缓存直接命中。
 //   值变了要失效：缓存里同时存「参与拼接的原值快照」，对不上就重算。
+// 可搜索文本 = 节点字段值 + 两类「界面上看得见、却不在节点数据里」的文字：
+//   ① 状态标签 label：节点只存 type（如 'future'），label（'未到'）在 nodeTypes 里。
+//      只取**该节点自己**的 label，否则搜「未到」会把「已过」的节点一起捞出来。
+//   ② 页面 slot 里写死的文案：由可选 prop searchExtras(node) 提供，按节点状态拼
+//      （如倒计时的「距离该事件还有 N 天」/「已经过去了 N 天」），别两种都塞给所有节点。
+// 缓存快照必须连 label / extras 一起比：nodeTypes 与 searchExtras 的输出都可能变，
+// 只比 values 的话 visibleNodes 虽会重算，WeakMap 却仍命中旧串。
 const haystackCache = new WeakMap();
 function haystackOf(n) {
   const values = Object.values(n);
+  const label = nodeTypeIndex.value.get(n.type)?.label || '';
+  const extras = typeof props.searchExtras === 'function' ? String(props.searchExtras(n) || '') : '';
   const hit = haystackCache.get(n);
   // 原值快照逐项比对：任何一项变了就重算（不能只看引用，节点内容可能被就地改）
   if (hit && hit.values.length === values.length
-    && hit.values.every((v, i) => v === values[i])) {
+    && hit.values.every((v, i) => v === values[i])
+    && hit.label === label && hit.extras === extras) {
     return hit.text;
   }
-  const text = values.map(v => String(v || '')).join(' ').toLowerCase();
-  haystackCache.set(n, { values: values.slice(), text });
+  const text = [...values.map(v => String(v || '')), label, extras].join(' ').toLowerCase();
+  haystackCache.set(n, { values: values.slice(), label, extras, text });
   return text;
 }
 
@@ -269,7 +284,11 @@ function badgeClass(node) {
   /* 行内留出左侧内边距：行带 content-visibility:auto（绘制裁剪），
      圆点外圈描边必须落在行盒子内，否则会被裁掉 */
   padding: 0 0 18px 6px;
-  gap: 2px;
+  /* 圆点与卡片的间距：marker 的 box-shadow 外圈会向外扩 2px，
+     原来 gap:2px 正好被它吃掉，蓝色描边几乎贴住卡片左边缘。
+     留 14px（12px 净距 + 2px 外圈）。竖线 left:28px 是相对 .timeline
+     的绝对定位，与 gap 无关，不用跟着改。 */
+  gap: 14px;
 }
 .timeline-row:last-child {
   padding-bottom: 4px;

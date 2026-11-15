@@ -29,6 +29,17 @@
       </div>
 
       <div class="window-controls flex items-center" style="height:100%;">
+        <!-- 逾期销假待办：只在有待办、且已登录时显示。点它跳到请假页并强制展开弹窗。
+             放在 window-controls 内是为了复用它已有的 no-drag（标题栏整条是拖拽区）。 -->
+        <button
+          v-if="$route.path !== '/login' && overdueCount > 0"
+          class="tb-bell"
+          :title="`有 ${overdueCount} 位同学需要销假，点击去处理`"
+          @click="goToOverdueLeaves"
+        >
+          <IconGlyph name="bell" tint="current" glyph :size="14" :stroke-width="1.8" />
+          <span>有 {{ overdueCount }} 位同学需要销假</span>
+        </button>
         <button class="win-btn" title="最小化" @click="winMinimize">
           <IconGlyph name="minus" tint="current" glyph :size="14" :stroke-width="1.5" />
         </button>
@@ -203,6 +214,7 @@ import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
 // 切班后作废全部缓存的视图实例（见 utils/classScope.js 顶部说明）。
 // 不重载页面，只换 KeepAlive 的 key：当前路由重新 mount 就会拉新班的数据。
 import { classScopeKey } from './utils/classScope.js'
+import { useOverdueLeaveBadge, refreshOverdueLeaveBadge, startOverdueLeaveBadge } from './composables/useOverdueLeaveBadge.js'
 import IconGlyph from './components/base/IconGlyph.vue'
 import CustomScrollbar from './components/base/CustomScrollbar.vue'
 
@@ -310,6 +322,11 @@ const accountOpen = ref(false)
 // 挪到占位页移除后（app-visible，见下方 reportWidgetsOnce）再挂载，
 // 把约 14KB JS + 5.7KB CSS 移出首屏窗口；关闭态不渲染，观感无任何变化。
 const chromeReady = ref(false)
+// 标题栏逾期销假铃铛：只显示数量，不弹窗；弹窗归请假页管（点铃铛跳过去才展开）
+const { count: overdueCount } = useOverdueLeaveBadge()
+function goToOverdueLeaves() {
+  router.push({ path: '/leaves', query: { overdue: '1' } }).catch(() => {})
+}
 
 // 非响应式实例状态
 // 主进程消息监听（on 返回的 wrapper，供 beforeUnmount off）
@@ -749,6 +766,8 @@ window.addEventListener('ai-config-changed', onAiConfigChanged)
 // 用 pre flush（默认）即可：此时旧 DOM 还在，归零立即生效，随后内容整体替换。
 watch(classScopeKey, () => {
   if (mainScrollRef.value) mainScrollRef.value.scrollTop = 0
+  // 换班后铃铛数字必须按新库重算，别留着上一个班的人数
+  refreshOverdueLeaveBadge()
 })
 
 // 切页时保持浮窗状态（用户可边操作边问）；若切换到 AI 助手页则收起浮窗
@@ -758,7 +777,11 @@ watch(() => route.path, (to, from) => {
   // 切页时收起搜索弹窗
   searchOpen.value = false
   // 刚登录：登录页没有 token，上面几处都跳过了，这里补一次工具箱状态
-  if (from === '/login' && to !== '/login') applyToolboxPreference()
+  if (from === '/login' && to !== '/login') {
+    applyToolboxPreference()
+    startOverdueLeaveBadge()
+    refreshOverdueLeaveBadge()
+  }
 })
 
 onMounted(() => {
@@ -787,6 +810,10 @@ onMounted(() => {
     // 让它们的 chunk 下载/解析落在首屏之后。
     chromeReady.value = true
     reportWidgetsReady()
+    // 首屏可交互之后才起铃铛的 10 分钟检测，别压在启动关键路径上。
+    // 登录页不启动：那时没凭据，请求只会白跑一趟并可能触发未登录提示；
+    // 登录成功后由下面的 route watcher 补启动。
+    if (route.path !== '/login') startOverdueLeaveBadge()
     // 小组件就绪之后再延迟 4 秒，才去恢复「上次没跑完」的相册扫描。
     // 恢复扫描是重活（读目录 + 生成缩略图），绝不能压在启动关键路径上。
     albumTaskResume.schedule()
@@ -909,6 +936,31 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-control) !important;
 }
 .tb-search-row::before { display: none !important; }
+/* 标题栏逾期销假铃铛：贴在窗口控制按钮左侧的空白区，宽度按文案自适应。
+   app-region 不继承，容器设了 no-drag 仍要逐个子元素显式覆盖，否则点不动。
+   配色全走 currentColor，四套主题的顶栏文字色都能自动跟上。 */
+.tb-bell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  margin-right: 8px;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background-color 0.12s ease;
+}
+.tb-bell::before { display: none !important; }
+.tb-bell:hover { background: color-mix(in srgb, currentColor 16%, transparent); }
+
 /* 右侧三个控制按钮及其容器必须可点击（脱离拖拽区） */
 .window-controls {
   -webkit-app-region: no-drag;

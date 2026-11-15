@@ -74,6 +74,7 @@
         :node-types="countdownNodeTypes"
         :title="'倒计时列表'"
         :max-height="640"
+        :search-extras="countdownSearchText"
         align-right
       >
         <template #content="{ node }">
@@ -312,6 +313,16 @@ const countdownTimelineNodes = computed(() => sortedCountdowns.value.map(c => ({
   deadline: c.截止日,
   days: daysMap.value[c.id]
 })))
+// 时间轴搜索补词：slot 里「截止日 / 距离该事件还有 N 天 / 已经过去了 N 天」
+// 都不在节点字段里，组件自己搜不到。按 days 正负拼，与下方模板 :83-85 的显示保持一致，
+// 别把两种状态的文案都塞给所有节点（否则搜「已经过去了」会把未到的也捞出来）。
+// 必须是稳定函数引用：LeaveTimeline 会把它纳入 haystack 缓存的有效性判据。
+function countdownSearchText(node) {
+  const tail = node.days >= 0
+    ? `距离该事件还有 ${node.days} 天`
+    : `已经过去了 ${Math.abs(node.days)} 天`
+  return `截止日 ${node.deadline} ${tail}`
+}
 const countdownExportRows = computed(() => countdowns.value.map(c => {
   const days = daysMap.value[c.id]
   return {

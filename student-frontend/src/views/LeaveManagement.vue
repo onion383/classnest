@@ -42,6 +42,9 @@
         </button>
       </div>
 
+      <!-- 两张「今日」小表通常只有几行，却默认跟着 virtualFrom=1 跑窗口化渲染：
+           挂载后 recalcWindow 才把窗口算出来、行是后补的；叠加 sticky 操作列的独立绘制层
+           与玻璃主题按钮描边，会出现「数据先出、按钮逐行补齐」和滚动重绘。传 0 走整表 DOM。 -->
       <!-- 当前请假中 -->
       <div class="bg-surface border border-border rounded-xl mb-4 overflow-hidden">
         <div class="px-5 py-3 border-b border-border font-bold text-text flex items-center gap-2">
@@ -51,6 +54,7 @@
           fit-content
           no-select
           hide-add-row
+          :virtualFrom="0"
           class="leave-today-table leave-empty-sm"
           :fields="activeLeaveFields"
           :rows="activeLeaveRows"
@@ -97,6 +101,7 @@
           fit-content
           no-select
           hide-add-row
+          :virtualFrom="0"
           class="leave-today-table leave-empty-sm"
           :fields="returnedLeaveFields"
           :rows="returnedLeaveRows"
@@ -260,8 +265,11 @@
       v-if="overdueDialogMounted"
       :visible="overdueDialogVisible"
       :records="overdueList"
+      :busy="overdueBusy"
       @not="handleOverdueNot"
       @ret="handleOverdueReturn"
+      @close="closeOverdueDialog"
+      @retall="handleOverdueReturnAll"
     />
   </div>
 </template>
@@ -280,9 +288,10 @@ import LeaveTimeline from '../components/base/LeaveTimeline.vue'
 import { zhCollator } from '../utils/collator.js'
 import StatBarList from '../components/base/StatBarList.vue'
 import { useNotification } from '../composables/useNotification.js'
-import { recordCellUndo, recordRowDelete, recordRowInsert, recordRowUpdate, recordRowReorder, recordRowsBatchInsert, useUndoShortcut } from '../composables/useUndo.js'
+import { recordCellUndo, recordRowDelete, recordRowInsert, recordRowUpdate, recordRowReorder, recordRowsBatchInsert, newUndoBatchId, flushUndoStatus, useUndoShortcut } from '../composables/useUndo.js'
 import { formatDate, formatDateTime } from '../utils/dateTime.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
+import { refreshOverdueLeaveBadge } from '../composables/useOverdueLeaveBadge.js'
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
 const loadAddLeaveDialog = () => import('../components/dialogs/AddLeaveDialog.vue')
@@ -338,6 +347,8 @@ const leaveTypeOptions = ['病假', '事假', '其他']
 const overdueDialogVisible = ref(false)
 const overdueDialogMounted = ref(false)
 const overdueList = ref([])
+// 「全部销假」在途标志：禁用弹窗里的关闭入口与批量按钮，避免重复提交
+const overdueBusy = ref(false)
 // 本次会话内已提醒过（无论处理与否）的记录 id，避免重复弹窗
 const promptedIds = new Set()
 const todayExportFields = [
@@ -484,6 +495,14 @@ watch(() => confirm.value.visible, (n) => { if (n) confirmMounted.value = true }
 watch(overdueDialogVisible, (n) => { if (n) overdueDialogMounted.value = true })
 // 跨页定位：标题栏全局搜索点「请假记录」结果跳转 /leaves?focus=<id>
 watch(() => route.query.focus, () => { _applyRowFocus() })
+// 标题栏铃铛点进来（页面已被 KeepAlive 缓存，不会重跑下面的 created）：
+// 先清掉 query，避免刷新或重复点同一路径时值不变导致 watch 不触发；
+// 再按当前库重拉一次数据并强制展开弹窗。
+watch(() => route.query.overdue, async (v) => {
+  if (!v) return
+  router.replace({ path: route.path, query: { ...route.query, overdue: undefined } })
+  if (await loadAll()) checkOverdue(true)
+})
 
 // 非响应式实例状态
 let _overdueTimer = null
@@ -551,6 +570,8 @@ async function loadAll() {
     ])
     students.value = stuRes.data.data || []
     leaves.value = leavesRes.data.data || []
+    // 标题栏铃铛直接吃这份刚拉回来的数据，不额外发请求
+    refreshOverdueLeaveBadge(leaves.value)
     return true
   } catch (err) {
     notifyError('加载失败')
@@ -577,10 +598,10 @@ function recordLeaveInsert(id) {
 }
 // 状态流转（销假 / 撤销销假）改的字段由后端决定（销假时间等），
 // 所以「之后」的行必须重新读库后的真值，而不是前端拼一个近似对象。
-function recordLeaveUpdate(before, id) {
+function recordLeaveUpdate(before, id, origin = '') {
   if (!before) return
   const after = snapshotLeaveRow(id)
-  if (after) recordRowUpdate('leave_records', before, after)
+  if (after) recordRowUpdate('leave_records', before, after, origin)
 }
 async function onImportData({ fields, rows }) {
   importDialogVisible.value = false
@@ -604,11 +625,13 @@ function nowStr() {
   return formatDateTime(new Date())
 }
 // 检测「假期已结束但尚未销假」的记录并弹出提示
-function checkOverdue() {
+// force=true：标题栏铃铛点进来时用，绕过「本次会话已提醒」再展开一次。
+// 全局检测器只管计数、不写 promptedIds，所以这里不会被它挡住。
+function checkOverdue(force = false) {
   const now = nowStr()
-  // 状态为「请假中」且结束时间已到、且本会话未提醒过
+  // 状态为「请假中」且结束时间已到、且本会话未提醒过（强制时忽略后者）
   const overdue = activeLeaves.value.filter(
-    (l) => l.结束时间 && l.结束时间 <= now && !promptedIds.has(l.id)
+    (l) => l.结束时间 && l.结束时间 <= now && (force || !promptedIds.has(l.id))
   )
   if (overdue.length === 0) return
   // 本次会话记录已提醒，避免该同学反复弹出
@@ -639,6 +662,66 @@ async function handleOverdueReturn(rec) {
 function removeOverdue(id) {
   overdueList.value = overdueList.value.filter((l) => l.id !== id)
   if (overdueList.value.length === 0) overdueDialogVisible.value = false
+}
+// 「关闭窗口 / 左上角 ✕」：只收起弹窗，不改任何记录，也不清列表。
+// promptedIds 已在 checkOverdue 里记过，本次会话不会再弹这批人。
+function closeOverdueDialog() {
+  if (overdueBusy.value) return
+  overdueDialogVisible.value = false
+}
+// 「全部销假」：只处理弹窗列表里剩下的记录 —— 点过「未返校」的已被移出列表，
+// 那是用户明确做出的判断，不能被一键推翻。
+function handleOverdueReturnAll() {
+  if (overdueBusy.value) return
+  const list = [...overdueList.value]
+  if (!list.length) return
+  confirm.value = {
+    visible: true,
+    message: `确认将这 ${list.length} 位同学全部标记为「已返校并销假」吗？`,
+    ok: async () => {
+      confirm.value.visible = false
+      await runOverdueReturnAll(list)
+    }
+  }
+}
+// 后端只有单条销假接口，所以逐条调用（串行，避免并发写库）；
+// 一条失败不影响其余，失败项留在列表里供重试。整批撤销共用一个 origin，
+// 一次 Ctrl+Z 就能退完，不会变成按 N 次。
+async function runOverdueReturnAll(list) {
+  overdueBusy.value = true
+  const origin = list.length > 1 ? newUndoBatchId() : ''
+  const done = []
+  const failedNames = []
+  let lastErr = null
+  try {
+    for (const rec of list) {
+      const before = snapshotLeaveRow(rec.id) || { ...rec }
+      try {
+        await axios.post(`${API}/leaves/${rec.id}/return`)
+        done.push({ id: rec.id, before })
+      } catch (err) {
+        failedNames.push(rec.姓名)
+        lastErr = err
+      }
+    }
+    if (done.length) {
+      // 一次全表刷新后再取 after 快照，别逐条刷界面
+      await loadAll()
+      for (const { id, before } of done) {
+        recordLeaveUpdate(before, id, origin)
+        removeOverdue(id)
+      }
+      if (origin) flushUndoStatus()
+      notifySuccess(`已为 ${done.length} 位同学销假`)
+    }
+    if (failedNames.length) {
+      if (lastErr) reportError(lastErr, { action: '批量销假' })
+      notifyError(`${failedNames.length} 位销假失败，已保留在列表：${failedNames.join('、')}`)
+    }
+    // 全部成功时 removeOverdue 已在列表清空后自动关窗
+  } finally {
+    overdueBusy.value = false
+  }
 }
 async function submitAdd(payload) {
   try {
@@ -900,8 +983,13 @@ function openStatsExport() {
 ;(async () => {
   await loadAll()
   await loadColumnOrder()
-  // 打开页面后检测一次超时未销假
-  checkOverdue()
+  // 打开页面后检测一次超时未销假；带 ?overdue=1（标题栏铃铛点进来）时强制展开
+  if (route.query.overdue) {
+    router.replace({ path: route.path, query: { ...route.query, overdue: undefined } })
+    checkOverdue(true)
+  } else {
+    checkOverdue()
+  }
   // 每 10 分钟低频检测一次（纯前端比较时间，成本极低）
   _startOverdueTimer()
 })()

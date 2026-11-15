@@ -52,3 +52,41 @@ export function leavesOn(leaves, dateStr) {
   const list = Array.isArray(leaves) ? leaves : []
   return list.filter((l) => isOnLeaveOn(l, dateStr))
 }
+
+/**
+ * 从学生名单里剔除「今天不在校」的人（工具箱点名器的候选名单）。
+ * 判定仍然只走 leavesOn，不另写一份请假条件 —— 点名结果与首页「在校人数」同源。
+ *
+ * 请假记录有两种身份来源：新增时优先带 student_id，导入/临时姓名可能只有姓名。
+ * 所以按 id 和「trim 后的姓名」双路匹配：学生改过名也能靠 id 排除，
+ * 只有姓名的历史请假行也能靠规范名排除（姓名口径与名册表一致，不做模糊匹配）。
+ *
+ * @returns {{ list: object[], excludedCount: number }} 剩余候选名单与被排除的人数
+ */
+export function filterPresentStudents(students, leaves, dateStr) {
+  const ids = new Set()
+  const names = new Set()
+  for (const leave of leavesOn(leaves, dateStr)) {
+    if (leave.student_id !== null && leave.student_id !== undefined && leave.student_id !== '') {
+      const id = Number(leave.student_id)
+      if (Number.isFinite(id)) ids.add(id)
+    }
+    const name = String(leave.姓名 || '').trim()
+    if (name) names.add(name)
+  }
+
+  const list = Array.isArray(students) ? students : []
+  let excludedCount = 0
+  const present = list.filter((stu) => {
+    if (!stu) return false
+    const id = stu.id === null || stu.id === undefined || stu.id === '' ? NaN : Number(stu.id)
+    const absentById = Number.isFinite(id) && ids.has(id)
+    const absentByName = names.has(String(stu.姓名 || '').trim())
+    if (absentById || absentByName) {
+      excludedCount++
+      return false
+    }
+    return true
+  })
+  return { list: present, excludedCount }
+}

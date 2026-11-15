@@ -1,6 +1,6 @@
 import { reportError } from '../../utils/reportError.js'
 import axios from 'axios'
-import { undoById } from '../../api/undo.js'
+import { undoById, redoById } from '../../api/undo.js'
 import { useNotification } from '../useNotification.js'
 import { useThemeStore } from '../../stores/theme.js'
 import { ASK_OTHER_KEY, AI_PERMISSION_FULL } from './aiConstants.js'
@@ -8,6 +8,10 @@ import { apiFetch } from '../../utils/apiUrl.js'
 import { normalizeAsk } from './aiMessages.js'
 import { encodeStreamRequest, decodeStreamEvent, clearSession, safe } from '../secureChannel.js'
 import { nextTick } from 'vue'
+
+// 流式思维链在时间轴里的临时步骤 id：本轮思考结束前用它占位，后端下发完整
+// reason 步骤时就地替换（位置不动、不新增），随后换回后端真实 id。
+const LIVE_REASON_ID = '_live_reason'
 
 // send / _streamReply / interrupt / retry / rollback / ask 相关的方法组（原 Options API mixin，现为 ctx 闭包 composable）。
 // ctx 契约：状态 ref 用 .value 访问，跨模块方法经 ctx 运行时解析。
@@ -118,35 +122,58 @@ export function useAiChat(ctx) {
       ctx.messages.value.push({ role: 'assistant', loading: true, content: '', _live: true, steps: [], processOpen: true, isError: false })
       await ctx._streamReply()
     },
-    // 点「回退」按钮：先弹确认框（提示 AI 更改的数据可能会丢失），确认后再执行
-    askRollback() {
-      const i = ctx._lastAssistantIndex()
-      if (i < 0 || !ctx.isRollbackable(i)) return
+    // 点某条回复的「回退」：记下以哪条为界，弹确认框
+    askRollback(i) {
+      if (i == null || !ctx.isRollbackable(i)) return
+      ctx.rollbackTarget.value = i
       ctx.rollbackConfirmShow.value = true
     },
-    // 确认框点「确定」：关闭弹窗并执行回退
+    // 确认框点「确定」：关闭弹窗，以记下的索引执行回退
     onRollbackConfirm() {
       ctx.rollbackConfirmShow.value = false
-      ctx.rollbackTurn()
+      const i = ctx.rollbackTarget.value
+      ctx.rollbackTarget.value = -1
+      if (i >= 0) ctx.rollbackFrom(i)
     },
-    // 回退到本轮提问前：还原本轮已执行的数据改动 → 移除本轮消息 → 把原提问放回输入框供编辑重发
-    async rollbackTurn() {
-      const li = ctx._lastAssistantIndex()
-      if (li < 0 || !ctx.isRollbackable(li)) return
+    // 以第 i 条助手消息为界：这条及其后的消息 + 这些消息里 AI 已执行的数据改动一起失效。
+    // 先存完整快照，供「撤销回退 / 重做回退」在两种状态间来回切（undoRollback / redoRollback）。
+    async rollbackFrom(i) {
+      if (ctx.busy.value || !ctx.isRollbackable(i)) return
       const { success: notify } = useNotification()
-      // 本轮起点：从末尾往前找最近的「真实用户提问」（排除自动续跑消息）
-      let start = ctx.messages.value.length - 1
-      while (start >= 0 && !(ctx.messages.value[start].role === 'user' && !ctx._isAutoMessage(ctx.messages.value[start]))) start--
-      if (start < 0) start = 0
-      const turn = ctx.messages.value.slice(start)
+      const list = ctx.messages.value
+      // 起点往前找最近一条真实用户提问，连它一起删（否则会留下没有回复的孤立提问）
+      let start = i - 1
+      while (start >= 0 && !(list[start].role === 'user' && !ctx._isAutoMessage(list[start]))) start--
+      if (start < 0) start = i
+      const turn = list.slice(start)
+      if (!turn.length) return
+      // 快照必须在改动内存对象之前深拷贝：撤销时会把 proposal.undoIds 划掉、reverted 置 true，
+      // 直接引用会让「复原」后的提案状态错乱（已撤回 / 撤不回来）。
+      const snap = {
+        conversationId: ctx.conversationId.value,
+        start,
+        messages: turn.map((m) => JSON.parse(JSON.stringify({
+          role: m.role, content: m.content || '', _id: m._id, _auto: !!m._auto,
+          images: m.images || [], attachments: m.attachments || [],
+          steps: m.steps || [], reasoning: m.reasoning || '',
+          processMs: m.processMs || 0, tokens: m.tokens || 0,
+          promptTokens: m.promptTokens || 0, completionTokens: m.completionTokens || 0,
+          proposal: m.proposal || null, ask: m.ask || null,
+          isError: !!m.isError, interrupted: !!m.interrupted,
+        }))),
+        // 自动反馈消息落库靠 process.auto，不是 buildProc 的过程块结构
+        proc: turn.map((m) => (m._auto ? { auto: true, text: m.content || '' } : ctx._buildProc(m))),
+        undoIds: [], frontUndos: [], skipped: [],
+        firstQuestion: (turn.find((m) => m.role === 'user' && !ctx._isAutoMessage(m)) || {}).content || '',
+      }
       try {
-        // 1) 还原本轮已执行且未撤回的数据改动（逆序，保证批量新增按相反顺序删除）
+        // 1) 还原这段里所有已执行且未撤回的数据改动（逆序，批量新增按相反顺序删除）
         for (const m of turn) {
           const p = m.proposal
           if (!p || !p.executed || p.reverted) continue
           if (p.kind === 'front' && p.frontUndo) {
-            // 前端设置：写回执行前的值
             ctx._setFrontSetting(useThemeStore(), p.frontUndo.key, p.frontUndo.before)
+            snap.frontUndos.push({ ...p.frontUndo })
             p.reverted = true
           } else if (p.undoIds && p.undoIds.length) {
             for (const id of p.undoIds.slice().reverse()) {
@@ -155,40 +182,139 @@ export function useAiChat(ctx) {
               // 撤一条就从队列里划掉一条：整段失败时已成功的那些不能再撤第二次，
               // 否则重试会对同一笔改动二次撤回（审查 v4 · B10-07）。
               p.undoIds = p.undoIds.filter((x) => x !== id)
+              snap.undoIds.push(id)
             }
             p.reverted = true
+          } else if (p.kind === 'snapshot_restore' || p.kind === 'skill') {
+            // 这两类不登记撤销记录，本来就撤不回来，明确记下来给用户看
+            snap.skipped.push(p.label || p.kind)
           }
         }
-        // 2) 移除本轮消息：按落库 id 精确删除，再清出内存
+        // 2) 按落库 id 精确删除这段消息，再清出内存
         const ids = turn.map((m) => m._id).filter((v) => v != null)
         if (ctx.conversationId.value && ids.length) {
           try { await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages/delete`, { ids }) } catch (_) { /* 删除失败不阻塞回退 */ }
         }
-        ctx.messages.value.splice(start)
-        // 3) 把本轮的用户提问放回输入框，供继续编辑后重新发送
-        const userMsg = turn.find((m) => m.role === 'user')
-        ctx.input.value = (userMsg && userMsg.content) || ''
+        list.splice(start)
+        // 3) 把这段的第一条提问放回输入框，供改改再发
+        ctx.input.value = snap.firstQuestion
+        ctx.rollbackSnapshot.value = snap
+        ctx.rollbackUndone.value = false
         nextTick(() => {
           ctx.scrollBottom()
           if (ctx.composer.value) ctx.composer.value.focusInput()
         })
-        notify('已回退到本轮提问前')
+        notify(`已回退 ${snap.messages.length} 条消息与 ${snap.undoIds.length + snap.frontUndos.length} 处数据改动`)
         await ctx.loadConversationList()
       } catch (err) {
         reportError(err, { action: '回退' })
       }
     },
+    // 后悔药是否还能用：会话一致、且消息条数仍是那次回退后的期望值
+    // （回退后或撤销回退后用户又发了新消息，插回去会打乱顺序，直接让记录失效）
+    _rollbackUsable(expected) {
+      const snap = ctx.rollbackSnapshot.value
+      return !!snap && !ctx.busy.value
+        && snap.conversationId === ctx.conversationId.value
+        && ctx.messages.value.length === expected
+    },
+    // 撤销回退：数据改回去、被删的消息原样落回来，之后仍可「重做回退」
+    async undoRollback() {
+      const snap = ctx.rollbackSnapshot.value
+      if (!snap || ctx.rollbackUndone.value) return
+      if (!ctx._rollbackUsable(snap.start)) { ctx.dismissRollback(); useNotification().error('回退后已产生新消息，无法再撤销'); return }
+      try {
+        ctx.busy.value = true
+        // 1) 数据重做：按撤销顺序的逆序 redo（后端 flip 0→1）；前端设置应用 after
+        for (const id of snap.undoIds.slice().reverse()) {
+          const { data } = await redoById(id)
+          if (!data || !data.ok) throw new Error((data && data.error) || '重做失败')
+        }
+        for (const f of snap.frontUndos) ctx._setFrontSetting(useThemeStore(), f.key, f.after)
+        // 2) 消息重新落库：id 会变，逐条换掉快照里的 _id，供重做时精确删除
+        for (let k = 0; k < snap.messages.length; k++) {
+          const row = snap.messages[k]
+          row._id = await ctx.persistMessage(row.role, row.content, row.images, snap.proc[k], row.attachments)
+        }
+        // 3) 还原前端消息对象（丢掉渲染缓存，交给 _computeHtml 重算 markdown）
+        const restored = snap.messages.map((row) => ({
+          ...JSON.parse(JSON.stringify(row)),
+          _live: false, _blocks: null, _liveHtml: '', _liveTail: '',
+          processDone: true, processOpen: false, loading: false,
+        }))
+        ctx.messages.value.splice(snap.start, 0, ...restored)
+        for (const m of restored) if (m.role === 'assistant') ctx._computeHtml(m)
+        ctx.input.value = ''
+        ctx.rollbackUndone.value = true
+        useNotification().success('已撤销回退：消息与数据改动已复原')
+        await ctx.loadConversationList()
+      } catch (err) {
+        reportError(err, { action: '撤销回退' })
+      } finally {
+        ctx.busy.value = false
+      }
+    },
+    // 重做回退：数据再撤销、消息再删掉，输入框重新放回那条提问
+    async redoRollback() {
+      const snap = ctx.rollbackSnapshot.value
+      if (!snap || !ctx.rollbackUndone.value) return
+      if (!ctx._rollbackUsable(snap.start + snap.messages.length)) { ctx.dismissRollback(); useNotification().error('撤销回退后已产生新消息，无法再重做'); return }
+      try {
+        ctx.busy.value = true
+        // 1) 数据再撤销（后端 flip 1→0）；前端设置写回 before
+        for (const id of snap.undoIds) {
+          const { data } = await undoById(id)
+          if (!data || !data.ok) throw new Error((data && data.error) || '还原失败')
+        }
+        for (const f of snap.frontUndos) ctx._setFrontSetting(useThemeStore(), f.key, f.before)
+        // 2) 按当前（重新落库后的）id 删除消息并移出内存
+        const ids = snap.messages.map((m) => m._id).filter((v) => v != null)
+        if (ctx.conversationId.value && ids.length) {
+          try { await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages/delete`, { ids }) } catch (_) { /* 删除失败不阻塞 */ }
+        }
+        ctx.messages.value.splice(snap.start)
+        ctx.input.value = snap.firstQuestion
+        ctx.rollbackUndone.value = false
+        useNotification().success('已重做回退')
+        await ctx.loadConversationList()
+      } catch (err) {
+        reportError(err, { action: '重做回退' })
+      } finally {
+        ctx.busy.value = false
+      }
+    },
+    // 关掉提示条：丢弃这次后悔药记录，之后不再能撤销/重做
+    dismissRollback() {
+      ctx.rollbackSnapshot.value = null
+      ctx.rollbackUndone.value = false
+    },
     // auto=true 时为「自动反馈」消息（回答提问 / 执行或取消提案）：落库标记 process.auto，界面不渲染气泡
     // target 为「续写目标」助手消息：本轮输出继续追加到它身上（时间轴保持连续，不再拆成多段）
-    async send(auto, autoText, target) {
+    // feedbackText 为自动反馈正文：自动轮不经过输入框，既不污染用户草稿，也不依赖清空来收尾
+    async send(auto, autoText, target, feedbackText) {
       const isAuto = auto === true
       const cont = target && target.role === 'assistant' ? target : null
-      const text = ctx.input.value.trim()
-      const file = ctx.attachedFile.value
+      const text = isAuto ? String(feedbackText ?? '').trim() : ctx.input.value.trim()
+      const file = isAuto ? null : ctx.attachedFile.value
       if (!text && !file) return
-      if (ctx.busy.value) return
-      ctx.input.value = ''
-      ctx.attachedFile.value = null
+      // AI 回复期间用户又写了一句话：不打断、不丢弃，排进等待队列，
+      // 等本次回复（含全权限自动执行提案的续跑）整个结束后自动发送。
+      if (ctx.busy.value && !isAuto) {
+        ctx.queuedMessages.value.push({
+          id: `q${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          text,
+          conversationId: ctx.conversationId.value || 0,
+        })
+        ctx.input.value = ''
+        ctx.attachedFile.value = null
+        return
+      }
+      // 自动反馈轮（全权限自动执行提案后的续跑）在 busy 未复位时也要能发起，
+      // 所以这里不能有统一的 busy 闸门；用户手发已在 busy 时转为排队。
+      if (!isAuto) {
+        ctx.input.value = ''
+        ctx.attachedFile.value = null
+      }
       try {
         ctx.conversationId.value = await ctx.ensureConversation()
       } catch (_) { /* 建会话失败也继续（本轮消息不落库） */ }
@@ -237,9 +363,33 @@ export function useAiChat(ctx) {
         await ctx._streamReply()
       }
     },
+    // 本次回复结束后自动发送队列里的下一条：一次只发一条，
+    // 这条的回复结束时再发下下条（由 _streamReply 的 streamDepth 收尾触发）。
+    async sendNextQueued() {
+      if (ctx.busy.value || !ctx.queuedMessages.value.length) return
+      const q = ctx.queuedMessages.value[0]
+      ctx.queuedMessages.value.shift()
+      // 会话已切换：丢弃不属于当前会话的排队消息，继续找下一条
+      if (q.conversationId !== (ctx.conversationId.value || 0)) return ctx.sendNextQueued()
+      ctx.input.value = q.text
+      try {
+        await ctx.send()
+      } catch (e) {
+        // 发送失败不要把用户写的话弄丢：放回队首
+        ctx.queuedMessages.value.unshift(q)
+        reportError(e, { action: '发送排队消息' })
+      }
+    },
+    // 从等待队列里移除一条（输入框上方的 ✕）
+    removeQueued(id) {
+      ctx.queuedMessages.value = ctx.queuedMessages.value.filter((q) => q.id !== id)
+    },
     // 向 /api/ai/chat/stream 发起请求，把回复流式写入目标助手消息（发送 / 重试共用；不传则取最后一条助手）
     async _streamReply(target) {
       ctx.busy.value = true
+      // 全权限自动执行提案会在 finally 里嵌套发起续跑，用层数区分「整条任务链结束」
+      // 与「中间某一轮结束」：只有最外层归零才能消费等待队列。
+      ctx.streamDepth.value++
       // 「中断」按钮通过它停止本次响应：abort 后 fetch 读取会抛 AbortError
       ctx.abortCtrl.value = new AbortController()
       const cont = target && target.role === 'assistant' ? target : null
@@ -307,19 +457,36 @@ export function useAiChat(ctx) {
               if (last.reasoningStreaming) { last.reasoningStreaming = false; last.processOpen = false }
               ctx.scrollBottom()
             } else if (evt.type === 'reasoning') {
-              // 思维链增量：首次出现时自动展开过程块
-              if (!last.reasoning) { last.reasoning = ''; last.reasoningStreaming = true }
-              last.reasoning += evt.text || ''
+              // 思考直接作为时间轴末尾的一条「进行中」步骤实时增长。
+              // 旧写法把它单独渲染在过程块最顶部（m.reasoning blob）：新一轮思考会插到
+              // 所有历史步骤之上，本轮结束又变成 reason 步骤落到末尾 —— 看起来就是跳来跳去。
+              if (!last.steps) last.steps = []
+              let live = last.steps.find((s) => s.id === LIVE_REASON_ID)
+              if (!live) {
+                live = { id: LIVE_REASON_ID, kind: 'reason', title: '正在思考…', text: '', status: 'running' }
+                last.steps.push(live)
+              }
+              live.text += evt.text || ''
+              last.reasoningStreaming = true
               last.processOpen = true
               ctx.scrollBottom()
             } else if (evt.type === 'step') {
-              // 思考（思维链）已作为时间轴步骤下发：清掉思维链 blob，避免与步骤重复展示
-              if (evt.step.kind === 'reason') { last.reasoning = ''; last.reasoningStreaming = false }
-              // 工具调用步骤：按 id 合并同一步（running → done/error）
               if (!last.steps) last.steps = []
-              const si = last.steps.findIndex((s) => s.id === evt.step.id)
-              if (si === -1) last.steps.push(evt.step)
-              else last.steps.splice(si, 1, { ...last.steps[si], ...evt.step })
+              let merged = false
+              if (evt.step.kind === 'reason') {
+                // 本轮思考收尾：后端下发完整步骤 → 原地替换「进行中」的临时步骤，
+                // 位置不动、不新增；换回后端真实 id，下一轮才能再新建一条临时步骤
+                // （沿用临时 id 会让下一轮命中这条已完成的思考，把新文字接到旧文字后面）。
+                last.reasoningStreaming = false
+                const li = last.steps.findIndex((s) => s.id === LIVE_REASON_ID)
+                if (li !== -1) { last.steps.splice(li, 1, evt.step); merged = true }
+              }
+              if (!merged) {
+                // 按 id 合并同一步（running → done/error）；没有对应步骤就按发生顺序追加到末尾
+                const si = last.steps.findIndex((s) => s.id === evt.step.id)
+                if (si === -1) last.steps.push(evt.step)
+                else last.steps.splice(si, 1, { ...last.steps[si], ...evt.step })
+              }
               last.processOpen = true
               ctx.scrollBottom()
             } else if (evt.type === 'sub_step') {
@@ -436,17 +603,26 @@ export function useAiChat(ctx) {
         }
       } finally {
         ctx.abortCtrl.value = null
-        if (last) { last.reasoningStreaming = false; last.processDone = true }
-        // 用 stickBottom：流结束这一刻正文才刚变成 _blocks，里面的 AiRecordTable 还要异步取数、
-        // 图片要加载、图表要绘制，高度会在之后继续长。只贴一次会停在半路，用户得自己往下滑。
-        ctx.stickBottom()
+        if (last) {
+          last.reasoningStreaming = false
+          last.processDone = true
+          // 中断 / 异常时后端不会下发收尾步骤，把「进行中」的思考就地标成完成，
+          // 否则落库后刷新会看到一条永远转圈的步骤。
+          const live = (last.steps || []).find((s) => s.id === LIVE_REASON_ID)
+          if (live) live.status = 'done'
+        }
+        // 流结束这一刻正文才刚变成 _blocks，里面的 AiRecordTable 还要异步取数、
+        // 图片要加载、图表要绘制，高度会在之后继续长 —— 交给 ResizeObserver 在贴底时跟随。
+        // 只做一次「贴底才置底」，不强制：用户翻历史时收尾不能把他拽回底部。
+        ctx.scrollBottom()
         // 完全权限：写入提案不等用户确认，流一结束就自动执行。
         // 例外：技能（md 指令文件）变更即使在全权限下也须老师确认，故不自动执行（走浮窗确认）。
         //
         // ⚠️ busy 必须在提案执行**之后**才复位：
-        //   executeProposal 是 async（要 POST 写库），原来这里没 await 就先把 busy 置 false，
-        //   用户在提案还没写完时就能发下一条消息 → 两轮同时写同一张表 → 数据竞态。
-        //   放在 busy 复位之后，执行的收尾才能沿用既有链路（写回思维链 + 让 AI 续跑说明结果）。
+        //   executeProposal 是 async（要 POST 写库），提前置 false 会让用户在提案没写完时
+        //   发下一条消息 → 两轮同时写同一张表 → 数据竞态。
+        //   执行收尾的 _sendFeedback 是自动反馈轮，send 对 auto 放行 busy 闸门，
+        //   因此它能在写库期间接着续跑（写回思维链 + 让 AI 说明结果），用户仍插不了队。
         if (ctx.permissionMode.value === AI_PERMISSION_FULL
           && last && last.proposal && last.proposal.kind !== 'skill'
           && !last.proposal.executed && !last.proposal.dismissed && !last.interrupted) {
@@ -459,6 +635,12 @@ export function useAiChat(ctx) {
         }
         ctx.busy.value = false        // 刷新会话列表（更新标题和消息数）
         await ctx.loadConversationList()
+        ctx.streamDepth.value--
+        // 只有最外层回复结束才发送队列下一条：内层（自动执行提案后的续跑）结束就发，
+        // 新流会和外层的收尾重叠，且内层已把 busy 复位，等于并发两条回复。
+        if (ctx.streamDepth.value === 0 && !ctx.busy.value) {
+          ctx.sendNextQueued().catch((e) => console.error('[aiChat] 发送排队消息失败', e))
+        }
       }
     },
     // 中断当前回复：停止流式请求并保留已完成的部分，用户可继续输入、发送下一条

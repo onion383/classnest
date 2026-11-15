@@ -61,7 +61,10 @@
             <span class="ml-auto flex-shrink-0 transition-transform duration-150" :class="m.processOpen ? 'rotate-180' : ''">▾</span>
           </button>
           <div v-if="m.processOpen" class="px-2.5 pb-2 space-y-1.5">
-            <div v-if="m.reasoning" class="text-[13px] text-text-secondary whitespace-pre-wrap break-words max-h-40 overflow-auto">{{ m.reasoning }}</div>
+            <!-- 时间轴只认 steps：思考 / 过程草稿 / 工具都按发生顺序往下追加。
+                 旧的「顶部思维链 blob」会让新一轮思考插到所有历史步骤之上，已不再作为主展示；
+                 仅老会话只有 reasoning、没有 reason 步骤时兜底显示，避免丢内容。 -->
+            <div v-if="m.reasoning && !hasReasonStep(m)" class="text-[13px] text-text-secondary whitespace-pre-wrap break-words max-h-40 overflow-auto">{{ m.reasoning }}</div>
             <div v-for="st in (m.steps || [])" :key="st.id" class="text-[13px] leading-6">
               <!-- 一级：思考 / 使用工具 / 中间草稿，统一带分类标签；有结果明细的可点开二级展开 -->
               <div
@@ -167,7 +170,7 @@
           </div>
         </div>
       </div>
-      <!-- 回复操作：复制 / 重试 / 撤回数据更改；右侧统计用时与 token（浮窗模式精简掉） -->
+      <!-- 回复操作：复制 / 重试 / 回退（数据改动与聊天记录一起回退，可撤销）；右侧统计用时与 token -->
       <div v-if="m.role !== 'user' && !m.loading" class="mt-2 flex items-center gap-2 text-xs">
         <button
           @click="$emit('copy', m)"
@@ -182,19 +185,13 @@
           class="ai-glass-panel bg-white/55 backdrop-blur-md border border-border rounded-sm px-2.5 py-1 text-text-muted hover:text-primary transition-theme cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1"
           title="用上一条提问重新生成"
         ><IconGlyph name="refresh" :size="12" tint="current" /> 重试</button>
-        <button
-          v-if="m.proposal && (m.proposal.executed || m.proposal.reverted)"
-          @click="$emit('undo', m)"
-          :disabled="!canUndo(m) || busy"
-          class="ai-glass-panel bg-white/55 backdrop-blur-md border border-border rounded-sm px-2.5 py-1 text-text-muted hover:text-danger transition-theme cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1"
-          :title="m.proposal.reverted ? '已撤回这次数据更改' : '撤回这次对数据的更改'"
-        ><IconGlyph name="undo" :size="12" tint="current" /> {{ m.proposal.reverted ? '已撤回' : '撤回更改' }}</button>
+        <!-- 「撤回更改」已并入「回退」：一个按钮同时还原数据改动与聊天记录，不再拆成两个 -->
         <button
           v-if="isRollbackable(i)"
-          @click="$emit('rollback')"
+          @click="$emit('rollback', i)"
           :disabled="busy"
           class="ai-glass-panel bg-white/55 backdrop-blur-md border border-border rounded-sm px-2.5 py-1 text-text-muted hover:text-warning transition-theme cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1"
-          title="回退到本轮提问前：还原本轮的数据更改，并把这条提问放回输入框"
+          title="回退到这条之前：这条及其后的消息、以及这些消息里 AI 改的数据一起失效（可在提示条上撤销）"
         ><IconGlyph name="rollback" :size="12" tint="current" /> 回退</button>
         <span v-if="m.interrupted" class="ai-glass-panel bg-white/55 backdrop-blur-md border border-border rounded-sm px-2 py-0.5 text-text-muted inline-flex items-center gap-1.5">
           <span class="stop-mark"></span> 已中断

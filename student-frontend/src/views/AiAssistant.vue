@@ -82,6 +82,33 @@
           <!-- 消息区滚动条：细滑块 + 淡入（长对话里不抢视觉，靠右缘悬停/滚动时出现） -->
           <CustomScrollbar :target="msgBox" compact :arrows="false" auto-hide :min-thumb="24" />
 
+          <!-- 回退后悔药：一次回退可在「已回退 / 已复原」之间来回切，关掉即丢弃记录 -->
+          <div
+            v-if="rollbackSnapshot && rollbackSnapshot.conversationId === conversationId"
+            class="mb-2 flex items-center gap-2 rounded-md border border-border bg-surface/70 px-2.5 py-1.5 text-xs text-text-secondary"
+          >
+            <span class="min-w-0 flex-1 truncate">
+              {{ rollbackUndone ? '已撤销回退' : '已回退' }}：{{ rollbackSnapshot.messages.length }} 条消息 · {{ rollbackSnapshot.undoIds.length + rollbackSnapshot.frontUndos.length }} 处改动<template v-if="rollbackSnapshot.skipped.length"> · {{ rollbackSnapshot.skipped.length }} 项无法回退</template>
+            </span>
+            <button
+              class="ai-glass-panel bg-white/55 backdrop-blur-md border border-border rounded-sm px-2 py-0.5 text-text-muted hover:text-primary transition-theme cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              :disabled="busy || rollbackUndone"
+              title="把回退掉的消息和数据改动全部复原"
+              @click="undoRollback"
+            >撤销回退</button>
+            <button
+              class="ai-glass-panel bg-white/55 backdrop-blur-md border border-border rounded-sm px-2 py-0.5 text-text-muted hover:text-warning transition-theme cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              :disabled="busy || !rollbackUndone"
+              title="再回退一次"
+              @click="redoRollback"
+            >重做回退</button>
+            <button
+              class="px-1 text-text-muted hover:text-text cursor-pointer"
+              title="关闭（之后不能再撤销 / 重做这次回退）"
+              @click="dismissRollback"
+            >×</button>
+          </div>
+
           <!-- 附件预览 -->
           <div v-if="attachedFile" class="mb-2 flex items-center gap-2">
             <!-- 图片预览 -->
@@ -126,6 +153,8 @@
             :model-options="modelOptions"
             :skill-options="skillOptions"
             :selected-skills="selectedSkills"
+            :queued="queuedMessages"
+            @remove-queued="removeQueued"
             @pick-permission="onPickPermission"
             @toggle-search="onToggleSearch"
             @select-skill="onSelectSkill"
@@ -208,10 +237,10 @@
       @cancel="confirmDeleteShow = false"
     />
 
-    <!-- 回退确认弹窗：提示 AI 更改的数据可能丢失 -->
+    <!-- 回退确认弹窗：以点中的那条为界，之后的聊天记录与 AI 数据改动一起失效（可撤销） -->
     <ConfirmDialog
       :visible="rollbackConfirmShow"
-      message="确定回退吗？AI 更改的数据可能会丢失。"
+      message="确定回退吗？这条及其后的消息、以及这些消息里 AI 改的数据会一起失效；下方提示条可撤销或重做。"
       :show-cancel="true"
       @confirm="onRollbackConfirm"
       @cancel="rollbackConfirmShow = false"
@@ -521,6 +550,11 @@ const dataManageOpened = ref(false) // 是否已首次打开过（首次打开�
 const confirmDeleteShow = ref(false) // 删除确认弹窗
 const confirmDeleteId = ref(null) // 待删除的会话 id
 const rollbackConfirmShow = ref(false) // 回退确认弹窗
+const rollbackTarget = ref(-1)        // 以第几条助手消息为界回退
+const rollbackSnapshot = ref(null)    // 后悔药记录：回退前的消息 / 数据快照
+const rollbackUndone = ref(false)     // 已「撤销回退」→ 提示条改给「重做回退」
+const queuedMessages = ref([])        // AI 回复期间排队的下一句话（输入框上方「等待发送」）
+const streamDepth = ref(0)            // _streamReply 嵌套层数（全权限自动执行提案会嵌套续跑）
 const attachedFile = ref(null)    // 当前待发送的附件：{name, isImage, dataUrl, textContent, sizeLabel}
 const capturing = ref(false)      // 截屏进行中（按钮转圈并禁用，避免重复触发）
 const abortCtrl = ref(null)       // 当前流式请求的 AbortController（供「中断」按钮停止响应）
@@ -580,7 +614,8 @@ const ctx = {
   // 状态 ref（.value 访问）
   _unmounted, enabled, busy, messages, hasEarlier, loadingEarlier, earliestMsgId, input,
   conversationId, conversationList, showSettings, dataManageOpen, dataManageOpened,
-  confirmDeleteShow, confirmDeleteId, rollbackConfirmShow, attachedFile, capturing, abortCtrl,
+  confirmDeleteShow, confirmDeleteId, rollbackConfirmShow, rollbackTarget, rollbackSnapshot, rollbackUndone,
+  attachedFile, capturing, abortCtrl, queuedMessages, streamDepth,
   regionShot, regionRect, regionDragging, regionStart, models, activeModelId, convDrawerOpen,
   linkDrawerOpen, linkDrawerUrl, changeDrawerOpen, changeDrawerProposal, visibleConvCount,
   askPage, permissionMode, webSearchOn, permConfirmShow, skillOptions, selectedSkills,
@@ -782,9 +817,10 @@ async function endRegionSelect() {
 function onMsgScroll() {
   const box = msgBox.value
   if (!box) return
-  // 用户滚离底部（上滑翻历史 / 拖动滚动条）→ 立刻停止贴底跟随，
-  // 否则后面表格、图片长高会把视口一次次拽回底部，他就没法看历史了
-  if (_stickOn && box.scrollHeight - box.scrollTop - box.clientHeight > 48) _stickOn = false
+  // 只有滚动事件才改跟随状态：内容长高并不触发 scroll，所以不能在 scrollBottom 里
+  // 拿「此刻距离底部」实时判定 —— 新内容一撑高就会被误判成用户翻历史，跟随就此断掉。
+  // 用户上滑 → 关掉跟随；滑回底部 → 自动恢复，期间绝不把人拽回来。
+  _stickOn = box.scrollHeight - box.scrollTop - box.clientHeight <= 48
   if (box.scrollTop > 60) return
   if (!hasEarlier.value || loadingEarlier.value) return
   ctx.loadEarlier()
@@ -851,24 +887,26 @@ function openLinkExternal(url) {
 }
 // 置底：合并到下一帧执行。流式输出时每个 chunk 都会请求置底，
 // 若每次都同步读写 scrollTop / scrollHeight 会反复触发强制布局；
-// 用 rAF 去重，把同一帧内的多次请求合并为一次（行为不变，仍始终贴底）。
+// 用 rAF 去重，把同一帧内的多次请求合并为一次。
+// 只在视口本来就贴底时跟随：用户翻历史时后续 chunk 不再抢滚动。
 function scrollBottom() {
   nextTick(() => {
     if (_scrollRaf) return
     _scrollRaf = requestAnimationFrame(() => {
       _scrollRaf = null
       const box = msgBox.value
-      if (box) box.scrollTop = box.scrollHeight
+      if (box && _stickOn) box.scrollTop = box.scrollHeight
     })
   })
 }
 
-// ===== 首屏贴底跟随（打开 / 切换会话时用）=====
+// ===== 贴底跟随 =====
 // 打开会话时消息是分批长高的：markdown 库懒加载完成后才重算 _blocks、AiRecordTable 还要异步
 // 取数（先是一行「正在读取数据…」再变成整张表）、图片是 lazy 加载、图表要绘制。
 // 一次性 scrollBottom 只贴到「那一刻」的底部，高度长出来后视口就留在上面，用户得自己往下滑。
-// 这里在「用户还没手动离开底部」之前持续跟随；用户一旦滚离底部立即停止，绝不抢滚动。
-let _stickOn = false
+// _stickOn = 「视口贴底 / 用户想跟随」：初始贴底，上滑即关、滑回底部即开。
+// 流式 chunk、ResizeObserver 都只在它为 true 时跟随，绝不把翻历史的人拽回底部。
+let _stickOn = true
 let _stickRo = null
 let _stickMo = null
 const _stickTargets = new Set()
@@ -907,7 +945,8 @@ watch(msgBox, (box) => {
   _syncStickTargets(box)
 })
 
-// 打开 / 切换会话：开启跟随并立即置底（与 scrollBottom 的区别只多了一个「之后还跟」）
+// 打开 / 切换 / 新建会话：强制回到贴底并开启后续跟随（新会话不管之前停在哪）。
+// 流结束不调它 —— 那时用户可能正在翻历史，强制置底等于抢滚动。
 function stickBottom() {
   _stickOn = true
   scrollBottom()
@@ -937,7 +976,7 @@ const {
   loadMoreConversations, deleteConversation, onDeleteConfirm, onSettingsSaved, newConversation,
   // 方法（aiChat）
   pickAsk, skipAsk, setAskOther, askNext, submitAsk, dismissAsk, copyMessage, retryMessage,
-  askRollback, onRollbackConfirm, send, interrupt,
+  askRollback, onRollbackConfirm, undoRollback, redoRollback, dismissRollback, removeQueued, send, interrupt,
   // 方法（aiExec）
   confirmProposal, dismissProposal, canUndoChange, undoChange,
 } = ctx
@@ -946,6 +985,8 @@ const {
 watch(pendingAsk, (a) => {
   if (a) askPage.value = 0
 })
+// 切换 / 新建会话：等待队列属于上一个会话，不能带到新会话里发出去
+watch(conversationId, () => { queuedMessages.value = [] })
 // 网页抽屉打开时挂 document 级监听：点击「抽屉面板以外、且不是消息链接」的地方即收起。
 // 之所以不在模板里放遮罩层：遮罩会盖住消息区，导致抽屉已打开时再点其它链接被遮罩吃掉，
 // 变成「先关抽屉、还要再点一次」；改用面板穿透 + document 监听后，点链接直达 onMsgClick 直接切换。

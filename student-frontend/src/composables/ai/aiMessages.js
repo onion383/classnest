@@ -474,17 +474,13 @@ export function isRetryable(list, i, busy) {
   return !!(prev && prev.role === 'user' && !isAutoMessage(prev))
 }
 
-// 最近一轮是否可回退：仅最后一条助手回复、且其上一条是用户提问
-// （反馈轮次已并入同一条助手消息，其后可能跟着隐藏的「自动反馈」用户消息，这里一并容忍）
+// 任意一条助手回复都可回退：以它为界，这条及其后的消息、以及这些消息里 AI 改的数据
+// 一起失效（回退动作可撤销/重做，见 aiChat.rollbackFrom）。
+// 与 isRetryable 不同：后面允许还有别的真实提问，因为那些轮次要一起被回退掉。
 export function isRollbackable(list, i, busy) {
   if (busy) return false
   const m = list[i]
-  if (!m || m.role !== 'assistant' || m.loading) return false
-  for (let j = i + 1; j < list.length; j++) {
-    if (!isAutoMessage(list[j])) return false
-  }
-  const prev = list[i - 1]
-  return !!(prev && prev.role === 'user' && !isAutoMessage(prev))
+  return !!(m && m.role === 'assistant' && !m.loading)
 }
 
 // 自动反馈消息（回答提问 / 执行或取消提案后回填给 AI 的提示），不算「本轮真实提问」，也不渲染气泡

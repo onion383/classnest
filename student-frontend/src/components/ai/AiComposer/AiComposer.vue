@@ -254,13 +254,24 @@
             <span class="skill-chip-x" title="移除技能" @click="$emit('remove-skill', s)">✕</span>
           </span>
         </div>
+        <!-- 等待发送队列：AI 回复期间输入的下一句话，回复结束后自动依次发出 -->
+        <div v-if="queued.length" class="mb-1.5 space-y-1">
+          <div
+            v-for="q in queued"
+            :key="q.id"
+            class="flex items-center gap-1.5 rounded-sm border border-border bg-black/5 px-2 py-1 text-xs text-text-secondary"
+          >
+            <span class="text-text-muted/70 flex-shrink-0">等待发送</span>
+            <span class="min-w-0 flex-1 truncate">{{ q.text }}</span>
+            <span class="skill-chip-x" title="从队列移除" @click="$emit('remove-queued', q.id)">✕</span>
+          </div>
+        </div>
         <textarea
           ref="textareaRef"
           v-model="inputModel"
-          :placeholder="busy ? 'AI 正在回复…' : '输入问题，回车发送（Shift+Enter 换行）；打「/」选择技能'"
-          :disabled="busy"
+          :placeholder="busy ? 'AI 正在回复，可继续输入下一句并排队发送…' : '输入问题，回车发送（Shift+Enter 换行）；打「/」选择技能'"
           rows="1"
-          class="w-full resize-none text-sm text-text placeholder:text-text-muted px-2.5 py-1.5 disabled:opacity-50"
+          class="w-full resize-none text-sm text-text placeholder:text-text-muted px-2.5 py-1.5"
           @input="onComposerInput"
           @keydown="onComposerKeydown"
           @blur="skillMenuOpen = false"
@@ -317,8 +328,10 @@
             title="切换当前模型"
             @update:model-value="$emit('update:modelId', $event)"
           />
+          <!-- AI 回复中：输入框有内容 → 主按钮变「发送」（排队），空 → 仍是「中断」。
+               排队后输入框清空，按钮自动变回「中断」，随时能停下当前回复。 -->
           <button
-            v-if="busy"
+            v-if="busy && !input.trim() && !attachedFile"
             class="comp-perm"
             @click="$emit('interrupt')"
             title="停止本次回复（已生成的内容会保留）"
@@ -327,6 +340,7 @@
             v-else
             class="comp-send"
             :disabled="!input.trim() && !attachedFile"
+            :title="busy ? 'AI 正在回复，点击把这句排进等待队列，回复结束后自动发送' : '发送'"
             @click="$emit('send')"
           >发送</button>
         </div>
@@ -483,11 +497,14 @@ const props = defineProps({
   skillOptions: { type: Array, default: () => [] },
   // 本轮已启用的技能名（打「/」选中后加入，展示为可移除的小标签）
   selectedSkills: { type: Array, default: () => [] },
+  // AI 回复期间排队的下一句话：[{ id, text }]，显示在输入框上方，回复结束后自动依次发送
+  queued: { type: Array, default: () => [] },
 })
 const emit = defineEmits([
   'update:input', 'send', 'interrupt', 'screenshot', 'attach',
   'pick', 'other', 'next', 'submit', 'skip', 'dismiss', 'confirm', 'dismiss-proposal',
   'pick-permission', 'update:modelId', 'select-skill', 'remove-skill', 'toggle-search',
+  'remove-queued',
 ])
 
 // 模板 ref（与模板 ref="xxx" 同名自动绑定）

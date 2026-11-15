@@ -14,20 +14,23 @@
         <!-- 区块一：聊天记录管理 -->
         <section class="mb-6">
           <h2 class="text-base font-bold mb-2.5">聊天记录管理</h2>
-          <div v-if="loadingConv" class="text-sm text-text-muted py-5 text-center">正在加载…</div>
-          <div v-else-if="!conversations.length" class="text-sm text-text-muted py-5 text-center">暂无聊天记录</div>
-          <div v-else class="list-box border border-border rounded-lg overflow-y-auto">
-            <div
-              v-for="c in conversations" :key="c.id"
-              class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-b-0 hover:bg-surface-hover transition-theme"
-            >
-              <div class="min-w-0">
-                <div class="text-sm text-text truncate">{{ c.title || '未命名对话' }}</div>
-                <div class="text-xs text-text-muted">{{ c.msg_count }} 条 · {{ formatTime(c.updated_at) }}</div>
-              </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <button class="row-btn" @click="openChatExport(c)">导出</button>
-                <button class="row-btn" @click="askDeleteConversation(c)">删除</button>
+          <!-- 玻璃内层只包内容，标题留在层外 -->
+          <div class="dm-glass bg-white/55 backdrop-blur-md ai-glass-panel">
+            <div v-if="loadingConv" class="text-sm text-text-muted py-5 text-center">正在加载…</div>
+            <div v-else-if="!conversations.length" class="text-sm text-text-muted py-5 text-center">暂无聊天记录</div>
+            <div v-else class="list-box border border-border rounded-lg overflow-y-auto">
+              <div
+                v-for="c in conversations" :key="c.id"
+                class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-b-0 hover:bg-surface-hover transition-theme"
+              >
+                <div class="min-w-0">
+                  <div class="text-sm text-text truncate">{{ c.title || '未命名对话' }}</div>
+                  <div class="text-xs text-text-muted">{{ c.msg_count }} 条 · {{ formatTime(c.updated_at) }}</div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <button class="row-btn" @click="openChatExport(c)">导出</button>
+                  <button class="row-btn" @click="askDeleteConversation(c)">删除</button>
+                </div>
               </div>
             </div>
           </div>
@@ -39,44 +42,47 @@
             <h2 class="text-base font-bold">Markdown 文件管理</h2>
             <button class="row-btn primary" @click="openNewSkill">新增文件</button>
           </div>
-          <!-- 技能文件目录：数据根目录下的固定子目录，只读展示并提供打开文件夹 -->
-          <div class="flex items-center justify-between gap-3 mb-2.5">
-            <div class="text-xs text-text-muted truncate min-w-0" :title="skillsDir">技能目录：{{ skillsDir || '加载中…' }}</div>
-            <button class="row-btn shrink-0" :disabled="!skillsDir" @click="openSkillsDir">打开文件夹</button>
-          </div>
-          <div v-if="loadingSkill" class="text-sm text-text-muted py-5 text-center">正在加载…</div>
-          <div v-else class="list-box border border-border rounded-lg overflow-y-auto">
-            <!-- AI 记忆文件：名称固定，删除按钮置灰不可点 -->
-            <div class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border hover:bg-surface-hover transition-theme">
-              <div class="min-w-0">
-                <div class="text-sm text-text truncate">AI 记忆文件</div>
-                <div class="flex items-center gap-1.5">
-                  <span class="text-xs text-text-muted">系统长期记忆</span>
-                  <AppHelp text="随对话自动注入" aria-label="AI 记忆文件说明" :size="12" :z-index="10002" />
+          <!-- 玻璃内层只包内容，标题行（含「新增文件」）留在层外 -->
+          <div class="dm-glass bg-white/55 backdrop-blur-md ai-glass-panel">
+            <!-- 技能文件目录：数据根目录下的固定子目录，只读展示并提供打开文件夹 -->
+            <div class="flex items-center justify-between gap-3 mb-2.5">
+              <div class="text-xs text-text-muted truncate min-w-0" :title="skillsDir">技能目录：{{ skillsDir || '加载中…' }}</div>
+              <button class="row-btn shrink-0" :disabled="!skillsDir" @click="openSkillsDir">打开文件夹</button>
+            </div>
+            <div v-if="loadingSkill" class="text-sm text-text-muted py-5 text-center">正在加载…</div>
+            <div v-else class="list-box border border-border rounded-lg overflow-y-auto">
+              <!-- AI 记忆文件：名称固定，删除按钮置灰不可点 -->
+              <div class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border hover:bg-surface-hover transition-theme">
+                <div class="min-w-0">
+                  <div class="text-sm text-text truncate">AI 记忆文件</div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs text-text-muted">系统长期记忆</span>
+                    <AppHelp text="随对话自动注入" aria-label="AI 记忆文件说明" :size="12" :z-index="10002" />
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <button class="row-btn" disabled title="AI 记忆文件不可删除">删除</button>
+                  <button class="row-btn" @click="openEditMemory">编辑</button>
+                  <button class="row-btn" @click="openExportMemory">导出</button>
                 </div>
               </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <button class="row-btn" disabled title="AI 记忆文件不可删除">删除</button>
-                <button class="row-btn" @click="openEditMemory">编辑</button>
-                <button class="row-btn" @click="openExportMemory">导出</button>
+              <!-- 技能文件 -->
+              <div
+                v-for="s in skills" :key="s.name"
+                class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-b-0 hover:bg-surface-hover transition-theme"
+              >
+                <div class="min-w-0">
+                  <div class="text-sm text-text truncate">{{ s.name }}</div>
+                  <div class="text-xs text-text-muted">{{ sizeText(s.size) }} · {{ formatTime(s.updatedAt) }}</div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <button class="row-btn" @click="askDeleteSkill(s)">删除</button>
+                  <button class="row-btn" @click="openEditSkill(s)">编辑</button>
+                  <button class="row-btn" @click="openExportSkill(s)">导出</button>
+                </div>
               </div>
+              <div v-if="!skills.length" class="text-sm text-text-muted py-5 text-center">暂无技能文件，点击「新增文件」创建</div>
             </div>
-            <!-- 技能文件 -->
-            <div
-              v-for="s in skills" :key="s.name"
-              class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-b-0 hover:bg-surface-hover transition-theme"
-            >
-              <div class="min-w-0">
-                <div class="text-sm text-text truncate">{{ s.name }}</div>
-                <div class="text-xs text-text-muted">{{ sizeText(s.size) }} · {{ formatTime(s.updatedAt) }}</div>
-              </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <button class="row-btn" @click="askDeleteSkill(s)">删除</button>
-                <button class="row-btn" @click="openEditSkill(s)">编辑</button>
-                <button class="row-btn" @click="openExportSkill(s)">导出</button>
-              </div>
-            </div>
-            <div v-if="!skills.length" class="text-sm text-text-muted py-5 text-center">暂无技能文件，点击「新增文件」创建</div>
           </div>
         </section>
       </div>
@@ -301,6 +307,14 @@ async function openExportSkill(s) {
 }
 .dm-body {
   padding-right: 2px;
+}
+/* 两块「管理」内容的玻璃内层：标题留在层外。
+   颜色与模糊直接复用项目浮层玻璃（bg-white/55 + backdrop-blur-md + ai-glass-panel，
+   夜间由 theme-night.css 统一覆盖成深玻璃），这里只补内边距、描边和圆角。 */
+.dm-glass {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card, 12px);
 }
 /* 列表滚动区：条目多时超过 30vh 出现滚动条（不撑高整个弹窗） */
 .list-box {

@@ -38,8 +38,10 @@ export function useAiExec(ctx) {
         // 避免续跑期间刷新时又还原成「待确认」，造成重复执行同一笔数据更改。
         if (msg._id != null) ctx.updateMessage(msg._id, msg.content || '', ctx._buildProc(msg))
       }
-      ctx.input.value = content
-      return ctx.send(true, stepText, isAssistant ? msg : null)
+      // 反馈文本直接作为参数交给 send，不再写 ctx.input：输入框是用户可编辑的草稿，
+      // 原先靠 send() 清空才不残留，而全权限自动执行提案时 send 会被 busy 闸门挡下，
+      // 于是「已执行：…」这类内部文案留在输入框里，续跑也被一起吞掉。
+      return ctx.send(true, stepText, isAssistant ? msg : null, content)
     },
     async executeProposal(m) {
       if (m.proposal.executing || m.proposal.executed) return

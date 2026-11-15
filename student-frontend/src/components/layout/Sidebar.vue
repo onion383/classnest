@@ -73,6 +73,7 @@ import { useThemeStore } from '../../stores/theme'
 import { prefetchRoute } from '../../utils/routePrefetch.js'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import CustomScrollbar from '../../components/base/CustomScrollbar.vue'
+import { useDisposables } from '../../utils/disposables.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -106,10 +107,58 @@ function onNavOver(e) {
 /* 侧边栏折叠：折叠后仅保留图标，状态写入 localStorage 记忆 */
 const COLLAPSE_KEY = 'app-sidebar-collapsed'
 const collapsed = ref(localStorage.getItem(COLLAPSE_KEY) === '1')
+
+/* 内容区宽度逐帧变化有两个来源：侧栏折叠、拖窗口改大小。两者都会让表格文字
+   每帧重新换行重排，所以 styles/index.css 在「布局变动窗口」里把 <table> 钉在
+   起始宽度、并让表格内容淡出（露出外层容器现成的那块玻璃），结束按终态一次性排布。
+   列表型 / 网格型表格通用。这里只负责发/收 <html> 上的窗口标记与起始宽度变量，
+   不碰任何表格组件，也不动布局。 */
+const MASK_CLASS = 'sidebar-collapsing'
+const MASK_DIR_COLLAPSED = 'sidebar-to-collapsed'
+const MASK_DIR_EXPANDED = 'sidebar-to-expanded'
+const MASK_MS = 170            // 侧栏 width 过渡 150ms + 20ms 余量
+const WINDOW_CLASS = 'window-resizing'
+const WINDOW_IDLE_MS = 180     // 与 usePhotoTimeline 的 RESIZE_IDLE_MS 同口径
+const d = useDisposables()
+const endCollapseMask = d.defer()
+const endWindowResize = d.defer()
+function clearMask() {
+  document.documentElement.classList.remove(MASK_CLASS, MASK_DIR_COLLAPSED, MASK_DIR_EXPANDED)
+}
 function toggleCollapsed() {
   collapsed.value = !collapsed.value
   localStorage.setItem(COLLAPSE_KEY, collapsed.value ? '1' : '0')
+  if (document.documentElement.classList.contains('no-animations')) {
+    clearMask()
+    endCollapseMask.cancel()
+    return
+  }
+  // 连点折叠/展开：defer 每次自动取消上一次排期，class 保持到最后一轮的尾巴。
+  // 方向 class 让 CSS 知道起始侧栏宽是 240 还是 64，好把表格宽度钉在起始值。
+  const root = document.documentElement
+  root.classList.remove(MASK_DIR_COLLAPSED, MASK_DIR_EXPANDED)
+  root.classList.add(MASK_CLASS, collapsed.value ? MASK_DIR_COLLAPSED : MASK_DIR_EXPANDED)
+  endCollapseMask(clearMask, MASK_MS)
 }
+
+/* 拖窗口改大小：与折叠共用同一套 CSS 冻结规则，但有三点不同：
+   ① resize 没有明确终点，用「最后一次事件后静默 180ms」判定松手（折叠是 150ms 定时）；
+   ② **不能跳过 no-animations** —— 关动画只压 CSS 过渡，拖窗口照样逐帧发 resize 事件；
+   ③ 起始宽度是实时值，纯 CSS 算不出：只在**进入窗口的第一帧**量一次当前表格宽度，
+      之后每帧只重排期、不再读 DOM（避免每帧 getBoundingClientRect 强制同步布局）。 */
+function onWindowResize() {
+  const root = document.documentElement
+  if (!root.classList.contains(WINDOW_CLASS)) {
+    const table = document.querySelector('.table-scroll-wrapper table, .grid-view-container table')
+    if (table) root.style.setProperty('--win-freeze-w', Math.round(table.getBoundingClientRect().width) + 'px')
+  }
+  root.classList.add(WINDOW_CLASS)
+  endWindowResize(() => {
+    root.classList.remove(WINDOW_CLASS)
+    root.style.removeProperty('--win-freeze-w')
+  }, WINDOW_IDLE_MS)
+}
+d.listen(window, 'resize', onWindowResize, { passive: true })
 
 const navRef = ref(null)
 </script>

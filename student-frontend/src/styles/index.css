@@ -326,6 +326,78 @@ html.theme-switching *::after {
   transition-delay: 0ms !important;
 }
 
+/* ==================== 布局变动窗口：表格冻结 + 内容淡出 ====================
+   内容区宽度逐帧变化有两个来源：Sidebar.vue 的 `width 0.15s` 折叠、拖窗口改大小。
+   两种表格都受影响：列表型 .table-scroll-wrapper、网格型 .grid-view-container。
+   宽度每帧变 → 表格文字每帧重新换行、列宽每帧重新求解，这是「一顿一顿」的来源。
+   做法分两半：
+   ① 窗口期间把 <table> 宽度钉在**起始**宽度（--table-freeze-w），容器照旧变宽，
+      但表格内部不重新排布；窗口结束撤掉，按终态一次性排布。
+   ② 表格内容同时淡出，露出**外层容器本身就是的那块玻璃** —— 空态块不画底色
+      （.dt-empty / .grid-empty 都是 background:transparent；DynamicTable 注释明确否过
+      「在玻璃上再叠一层模糊，观感会变浊」，故本方案不叠 backdrop-filter），玻璃来自
+      .table-scroll-wrapper / .grid-view-container / .bg-surface，四套主题各自调好。
+      注意 GridView 的空态自己额外叠了 blur(22px)，本方案只露容器的 blur(16px)，
+      观感略淡，待实机确认要不要补。结束后 160ms opacity 淡入，只过渡 opacity。
+   起始宽度两种算法：折叠按方向纯 CSS 算（侧栏起始 240/64）；拖窗口是实时值，
+   第一次事件时由 Sidebar.vue 量一次写到 --win-freeze-w，之后每帧只重排期、不读 DOM。 */
+:is(.table-scroll-wrapper, .grid-view-container) table {
+  transition: opacity 160ms ease;
+}
+html:is(.sidebar-collapsing, .window-resizing) :is(.table-scroll-wrapper, .grid-view-container) table {
+  opacity: 0;
+  /* 盖上要瞬时（否则淡出那 160ms 里还是能看见重排），复原才走 160ms 淡入 */
+  transition-duration: 0ms;
+  width: var(--table-freeze-w);
+}
+/* 关掉「动画效果」时折叠宽度是瞬时切换、没有窗口，兜底保持可见；
+   但拖窗口照样逐帧发 resize，不能一起跳过。 */
+html.no-animations:not(.window-resizing) :is(.table-scroll-wrapper, .grid-view-container) table {
+  opacity: 1;
+  transition: none;
+}
+/* 起始侧栏 240 / 64，main 左右各 24px padding。钉住值与真实起始宽可能差一个
+   滚动条宽度，但窗口期间表格不可见、结束按真实终态排布，不影响结果。 */
+html.sidebar-to-collapsed :is(.table-scroll-wrapper, .grid-view-container) table {
+  --table-freeze-w: calc(100vw - 240px - 48px);
+}
+html.sidebar-to-expanded :is(.table-scroll-wrapper, .grid-view-container) table {
+  --table-freeze-w: calc(100vw - 64px - 48px);
+}
+html.window-resizing :is(.table-scroll-wrapper, .grid-view-container) table {
+  --table-freeze-w: var(--win-freeze-w);
+}
+/* 展开 / 缩窗方向表格比容器宽会冒横向滚动条，窗口期间一并收掉。
+   GridView 的滚动容器是 .grid-view-container 的直接子层（.overflow-auto）。 */
+html:is(.sidebar-collapsing, .window-resizing) :is(.table-scroll-wrapper, .grid-view-container > .overflow-auto) {
+  overflow-x: hidden;
+}
+/* 表格淡出期间中央的状态提示：图标在上、文案在下，排版沿用空态（.dt-empty / .grid-empty）。
+   挂在非滚动的 relative 父级上，不会随表格内容滚走；不接管指针事件。
+   盖上瞬时（和表格淡出同步），复原走 120ms 淡出，与表格 160ms 淡入叠在一起更自然。 */
+.layout-shift-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--color-text-secondary, #64748b);
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+html:is(.sidebar-collapsing, .window-resizing) .layout-shift-hint {
+  opacity: 1;
+  transition-duration: 0ms;
+}
+html.no-animations .layout-shift-hint {
+  transition: none;
+}
+
 /* ==================== 班干部管理 · 树状视图滚动条 ====================
    折叠/展开时内容高度剧变（展开还带轻微回弹超调），原生滚动条会随着
    scrollHeight 反复跨越容器高度而来回闪现（抽搐）。这里做两件事：

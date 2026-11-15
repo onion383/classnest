@@ -245,6 +245,13 @@
       </Teleport>
     </div>
     <CustomScrollbar :target="gridTable" />
+  <!-- 布局变动窗口里表格内容淡出，只剩一块玻璃容易被当成卡死：
+       表格区域中央给一枚自转图标 + 文案。与 DynamicTable 用同一个
+       .layout-shift-hint，显示由 <html> 上的 class 驱动（见 styles/index.css）。 -->
+  <div class="layout-shift-hint" aria-hidden="true">
+    <IconGlyph name="loading" :size="22" tint="current" glyph :stroke-width="1.8" />
+    <span>正在调整表格布局</span>
+  </div>
   </div>
 </template>
 
@@ -252,6 +259,7 @@
 import { ref, computed, watch, onMounted, onActivated, onBeforeUnmount, nextTick, toRef, TransitionGroup } from 'vue';
 import { useGridViewDrag } from './GridView.drag.js';
 import CustomScrollbar from '../../base/CustomScrollbar.vue';
+import IconGlyph from '../../base/IconGlyph.vue';
 
 defineOptions({ name: 'GridView' })
 

@@ -339,6 +339,14 @@
     @confirm="confirmDiscardNewRow"
     @cancel="discardConfirmVisible = false"
   />
+  <!-- 布局变动窗口（侧栏折叠 / 拖窗口）里表格内容淡出，只剩一块玻璃容易被当成卡死，
+       所以在表格区域中央给一枚会自转的图标 + 文案。竖排排版沿用空态，
+       显示完全由 <html> 上的 class 驱动，不进响应式、不参与表格逻辑。
+       样式见 styles/index.css 的 .layout-shift-hint。 -->
+  <div class="layout-shift-hint" aria-hidden="true">
+    <IconGlyph name="loading" :size="22" tint="current" glyph :stroke-width="1.8" />
+    <span>正在调整表格布局</span>
+  </div>
   </div>
 </template>
 
@@ -351,6 +359,7 @@ import ConfirmDialog from '../../base/ConfirmDialog.vue'
 import CustomScrollbar from '../../base/CustomScrollbar.vue'
 import { useDynamicTableDrag } from './DynamicTable.drag.js'
 import { zhCollator } from '../../../utils/collator.js'
+import { useDisposables } from '../../../utils/disposables.js'
 import IconGlyph from '../../../components/base/IconGlyph.vue'
 
 // 表头筛选面板：独立组件 + 懒加载。
@@ -934,6 +943,45 @@ function measureRows() {
         ctx._scrollTop = wrap.scrollTop;
       });
     }
+/* ===== 容器尺寸变化的「安静窗口」 =====
+ * 侧栏折叠（Sidebar.vue 的 transition: width 0.15s）会让主内容区宽度逐帧变化，
+ * 下面的 ResizeObserver 因此每帧回调一次。回调原来无条件 nextTick(measureRows())：
+ * measureRows 对当前所有渲染行逐个 getBoundingClientRect（强制同步布局），再写响应式
+ * rowHeights、按 padTop 差值补 scrollTop，等于每帧一整套整表测量。宽度变化还会让
+ * 单元格换行、行高真的变 → 缓存失效 → 窗口重算 → 再测量，这就是「表格页折叠侧栏特别卡」。
+ *
+ * 照搬相册 usePhotoTimeline.js 的安静窗口语义：**布局照旧跟手**（这里一行 DOM 都不冻），
+ * 只把「逐行行高测量」压成最后一次尺寸变化后静默 RESIZE_IDLE_MS 补测一次。
+ * 触发源挂在 ResizeObserver 自己身上，而不是相册那边的 window.resize —— 侧栏折叠
+ * 不改窗口尺寸，window.resize 根本不触发（相册那套因此在折叠时是裸奔的）。
+ *
+ * 关掉「动画效果」（html.no-animations）时宽度瞬时切换、RO 只回调一次，第一轮立即测，
+ * 别白等一个静默窗口；判据与 themeTransition.js 的 snapshotTransitionAllowed 同源。
+ * 连续回调（拖窗口）仍只重排期，用 defer 的 pending 判定是不是新一轮的第一帧。
+ */
+const RESIZE_IDLE_MS = 180;
+const d = useDisposables();
+// defer() 每次调用自动取消上一次未触发的定时器，天然覆盖连点折叠 / 连续拖窗口；
+// 卸载时仍在排期的那次由 onScopeDispose 清掉，不会往已销毁实例上写状态。
+const scheduleResizeMeasure = d.defer();
+function onWrapperResize(wrap) {
+  // KeepAlive 切走时容器被挪进未插入文档的 div，clientHeight 归 0 仍会触发 RO。
+  if (!wrap.isConnected) return;
+  ctx._viewportH = wrap.clientHeight;
+  ctx.recalcWindow();
+  // 新一轮尺寸变化的第一帧（上一次已结算完）：关掉动画时这是唯一一帧，立即测，
+  // 免得白等 180ms。连续变化中（折叠过渡 / 拖窗口）只重排期 —— 否则关动画的用户
+  // 拖窗口时会退化回「每帧一整套 measureRows」。
+  const firstOfBurst = !scheduleResizeMeasure.pending;
+  if (firstOfBurst && document.documentElement.classList.contains('no-animations')) {
+    nextTick(() => ctx.measureRows());
+  }
+  scheduleResizeMeasure(() => {
+    if (!ctx.scrollWrapper.value || !ctx.scrollWrapper.value.isConnected) return;
+    nextTick(() => ctx.measureRows());
+  }, RESIZE_IDLE_MS);
+}
+
     // 初始化：先按容器固定高度估一次窗口（首帧就不能把全部行画出来），再把滚动/尺寸接上
 function initVirtual() {
       const wrap = ctx.scrollWrapper.value;
@@ -943,11 +991,7 @@ function initVirtual() {
       ctx.recalcWindow();
       nextTick(() => ctx.measureRows());
       if (typeof ResizeObserver !== 'undefined' && !ctx._ro) {
-        ctx._ro = new ResizeObserver(() => {
-          ctx._viewportH = wrap.clientHeight;
-          ctx.recalcWindow();
-          nextTick(() => ctx.measureRows());
-        });
+        ctx._ro = new ResizeObserver(() => onWrapperResize(wrap));
         ctx._ro.observe(wrap);
       }
     }

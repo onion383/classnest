@@ -240,6 +240,7 @@ const COLUMN_RULES = {
   // —— 系统设置 ——
   widget_settings: {
     toolbox_enabled: { kind: 'bool' },
+    rollcall_exclude_absent: { kind: 'bool' },
     note_save_path: { kind: 'path' },
     screenshot_save_path: { kind: 'path' },
     desktop_apps: { kind: 'apps' },

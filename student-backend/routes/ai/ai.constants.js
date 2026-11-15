@@ -12,7 +12,7 @@ const READ_TABLES = {
   cadres: '班干部职务（name 职务名/parent_id 上级职务id（0=顶级）/max_count 可任职人数/sort_order 排序）',
   cadre_members: '班干部任职（cadre_id 职务id/student_id 学生id/student_name 姓名/sort_order 排序）',
   semesters: '学期列表（name 学期名/start_date 开始日/end_date 结束日/is_current 是否当前学期（1 是））',
-  widget_settings: '系统设置（toolbox_enabled 是否启用桌面悬浮小组件（1 启用/0 关闭）/note_save_path 随手记保存目录/screenshot_save_path 截图保存目录/desktop_apps JSON 数组：桌面软件列表，元素形如 {id,name,path,icon}/class_info JSON 对象：首页班级信息 {name 班名,motto 班级口号,mottoStyle 班风,xuefeng 学风}）',
+  widget_settings: '系统设置（toolbox_enabled 是否启用桌面悬浮小组件（1 启用/0 关闭）/rollcall_exclude_absent 点名器是否排除今天不在校的学生（1 排除/0 全员）/note_save_path 随手记保存目录/screenshot_save_path 截图保存目录/desktop_apps JSON 数组：桌面软件列表，元素形如 {id,name,path,icon}/class_info JSON 对象：首页班级信息 {name 班名,motto 班级口号,mottoStyle 班风,xuefeng 学风}）',
   master_schedule: '主课表模板（cells 为 JSON 课程数据、settings 为 JSON 配置）',
   schedule: '当前课表（cells 为 JSON 课程数据、settings 为 JSON 配置）',
   schedule_history: '历史课表快照（week_start 周一起始日/cells JSON 课程数据/settings JSON/created_at 时间）',

@@ -11,10 +11,19 @@ function migrateWidget(conn) {
       -- desktop_apps：桌面小组件常用软件列表（JSON 数组文本）
       desktop_apps TEXT DEFAULT '[]',
       -- class_info：首页班级信息（班名/口号/班风/学风，JSON 文本）
-      class_info TEXT DEFAULT '{}'
+      class_info TEXT DEFAULT '{}',
+      -- 点名器是否排除「今天不在校」的学生；默认关，保持原有全员点名行为
+      rollcall_exclude_absent INTEGER NOT NULL DEFAULT 0
     );
     INSERT OR IGNORE INTO widget_settings (id) VALUES (1);
   `);
+
+  // 旧库升级：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列（同 schema.ai.js 的做法）。
+  // 少了这一步，旧库上的 PUT /api/widget-settings 会直接报 no such column。
+  const cols = conn.prepare('PRAGMA table_info(widget_settings)').all().map((c) => c.name);
+  if (!cols.includes('rollcall_exclude_absent')) {
+    conn.exec('ALTER TABLE widget_settings ADD COLUMN rollcall_exclude_absent INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 module.exports = { migrateWidget };

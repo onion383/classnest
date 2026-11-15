@@ -446,6 +446,7 @@ function tSettings() {
 
   const w = get('SELECT * FROM widget_settings WHERE id = 1') || {};
   rows.push({ 设置项: '工具箱', 值: w.toolbox_enabled ? '开启' : '关闭' });
+  rows.push({ 设置项: '点名器排除不在校同学', 值: w.rollcall_exclude_absent ? '开启' : '关闭' });
   rows.push({ 设置项: '便签保存路径', 值: w.note_save_path || '' });
   rows.push({ 设置项: '截图保存路径', 值: w.screenshot_save_path || '' });
   rows.push({ 设置项: '班级信息', 值: readable(safeJson(w.class_info, {}, 'widget_settings.class_info'), 0, LABELS_CLASS_INFO) });

@@ -59,6 +59,7 @@ router.get('/', (req, res) => {
     success: true,
     data: {
       toolboxEnabled: !!settings.toolbox_enabled,
+      rollcallExcludeAbsent: !!settings.rollcall_exclude_absent,
       noteSavePath: settings.note_save_path || '',
       screenshotSavePath: settings.screenshot_save_path || '',
       desktopApps
@@ -72,7 +73,7 @@ router.get('/', (req, res) => {
 // （只改截屏目录 → 工具箱开关被写成 0、笔记目录被清空）。
 router.put('/', (req, res) => {
   try {
-    const { toolboxEnabled, noteSavePath, screenshotSavePath, desktopApps } = req.body || {};
+    const { toolboxEnabled, rollcallExcludeAbsent, noteSavePath, screenshotSavePath, desktopApps } = req.body || {};
 
     const sets = [];
     const vals = [];
@@ -80,6 +81,12 @@ router.put('/', (req, res) => {
     if (toolboxEnabled !== undefined) {
       sets.push('toolbox_enabled = ?');
       vals.push(toolboxEnabled ? 1 : 0);
+    }
+
+    // 只写请求里真的出现的字段：点名器单独开关时不能顺带改掉工具箱启用状态
+    if (rollcallExcludeAbsent !== undefined) {
+      sets.push('rollcall_exclude_absent = ?');
+      vals.push(rollcallExcludeAbsent ? 1 : 0);
     }
 
     // 保存目录同样禁止「..」上跳与非法字符，避免桌面挂件把文件写到预期之外的位置

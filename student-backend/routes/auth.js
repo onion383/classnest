@@ -9,7 +9,9 @@ const useJwt = () => (_jwt || (_jwt = require('jsonwebtoken')));
 // 改为首次调用时才 require，避免把它的冷加载成本压在启动关键路径上（行为完全不变）。
 // 惰性加载逻辑已下沉到 services/bcryptAsync.js，本文件只引用它的异步接口。
 const { hash: bcryptHash, compare: bcryptCompare } = require('../services/bcryptAsync');
-const { SECRET, auth, TOKEN_SIGN_OPTS, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middleware/auth');
+const { SECRET, auth, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middleware/auth');
+// 登录保持天数按账号配置：签发点一律现取，不再共享模块级常量
+const authPolicy = require('../services/authPolicy');
 const secureChannel = require('../services/secureChannel');
 const sessions = require('../services/sessions');
 // 恢复词重置密码 = 凭证变更，必须走统一动作层吊销该账号全部会话
@@ -30,7 +32,7 @@ const albumThumbs = require('../albumThumbs');
 function issueSession(req, user, extra = {}) {
   const sid = sessions.create(user.userId, user.dbSlug);
   const payload = { userId: user.userId, username: user.username, role: user.role, dbSlug: user.dbSlug, sid, ...extra };
-  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(user.dbSlug));
   if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
   return { token, mediaToken: signMediaToken(payload) };
 }

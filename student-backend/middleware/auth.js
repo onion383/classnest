@@ -20,6 +20,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const dbManager = require('../dbManager/dbManager');
 const sessions = require('../services/sessions');
+const authPolicy = require('../services/authPolicy');
 const secureChannel = require('../services/secureChannel');
 
 // 杜绝硬编码兜底：优先使用环境变量 JWT_SECRET。
@@ -44,14 +45,18 @@ function resolveSecret() {
 
 const SECRET = resolveSecret();
 
-// 登录 Token 签发策略：30 天有效期 + 会话名单双保险。
+// 登录 Token 签发策略：天数按账号配置（services/authPolicy），默认 30 天 + 会话名单双保险。
 // 主动退出时由 services/sessions 把 sid 移出名单，原 token 立即失效；
-// 即使 token 被从 localStorage/备份/内存中捞走，也最多只能用 30 天。
-const TOKEN_SIGN_OPTS = { expiresIn: '30d' };
-// 滑动续期：剩余有效期少于该阈值时，任意一次正常业务请求都会顺带续签一份新的 30 天 token。
-// 效果是「活跃用户永不过期，长期不用的账号最多 30 天后失效」；sid 不变，
-// 因此会话名单、媒体凭据（同 sid）都不受影响。
-const SLIDE_RENEW_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// 即使 token 被从 localStorage/备份/内存中捞走，也最多只能用配置的天数。
+//
+// 这里刻意不再有 TOKEN_SIGN_OPTS 这样的模块级常量：天数变成按账号可配之后，
+// 任何「一次性求值、所有账号共用」的值都会在下次改设置时变成静默的错值。
+// 所有签发点一律调 authPolicy.signOptsFor(dbSlug) 现取。
+//
+// 滑动续期：剩余有效期少于该账号天数的 1/4 时，任意一次正常业务请求都会顺带续签一份
+// 完整天数的新 token。效果是「活跃用户永不过期，长期不用的账号到期失效」；sid 不变，
+// 因此会话名单、媒体凭据（同 sid）都不受影响。窗口长度与天数的联动原因见 authPolicy.js。
+//
 // 配套 Cookie 仍按 100 年设置（JWT 自身有 exp，Cookie 活多久都不会延长鉴权）。
 // 前端登录态走 localStorage + 加密信道凭据；Cookie 仅作为静态资源的兼容兜底。
 const TOKEN_COOKIE_MAX_AGE = 100 * 365 * 24 * 60 * 60 * 1000;
@@ -59,7 +64,7 @@ const TOKEN_COOKIE_MAX_AGE = 100 * 365 * 24 * 60 * 60 * 1000;
 // 媒体凭据：只用于 <img> / CSS url() 这类无法携带自定义头的静态资源。
 // 登录 JWT 不再出现在 URL 里（URL 会进 Referer/日志/浏览器历史），换成一个
 // scope=media 的受限凭据：能取图，不能调业务 API；登出吊销 sid 后同时失效。
-const MEDIA_TOKEN_TTL = '30d';
+// 寿命由 authPolicy.mediaTtlFor 按账号给出（与登录 token 同天数）。
 const MEDIA_URL_RE = /^\/api\/album\/photo\/\d+\/(?:thumb|file)$/;
 
 function isMediaRequest(req) {
@@ -125,7 +130,8 @@ function verifyToken(token, { allowMedia = false } = {}) {
   return payload;
 }
 
-// 签发媒体凭据：sid 与登录 token 相同，登出时随会话一起吊销
+// 签发媒体凭据：sid 与登录 token 相同，登出时随会话一起吊销。
+// 天数按账号取（authPolicy），与登录 token 保持一致。
 function signMediaToken(user) {
   return jwtLib().sign(
     {
@@ -133,23 +139,26 @@ function signMediaToken(user) {
       dbSlug: user.dbSlug, sid: user.sid, scope: 'media',
     },
     SECRET,
-    { expiresIn: MEDIA_TOKEN_TTL }
+    { expiresIn: authPolicy.mediaTtlFor(user.username) }
   );
 }
 
-// 滑动续期：token 剩余有效期进入 7 天窗口后，随本次正常请求续签一份新的 30 天 token。
+// 滑动续期：token 剩余有效期进入窗口（账号天数的 1/4）后，随本次正常请求续签一份新 token。
 // 新 token 沿用原 sid（会话名单 / 媒体凭据继续有效），通过响应头交前端落盘；
 // 绑定到信道的 token 也同步更新，否则旧 token 到点后该信道会失效。
 // 媒体路径（<img> 取图）不续签：图片请求读不到响应头，且不应因取图凭空签发凭据。
+//
+// 注意取的是 username 而不是 dbSlug：天数按**账号**配置，一个账号可能有多个班，
+// 切班只换 dbSlug，不应该连带改变登录保持天数。
 function slideSession(req, res, user, source) {
   if (!user || source === 'media') return;
   const exp = Number(user.exp) || 0;
-  if (!exp || exp * 1000 - Date.now() > SLIDE_RENEW_WINDOW_MS) return;
+  if (!exp || exp * 1000 - Date.now() > authPolicy.slideWindowMs(user.username)) return;
   const payload = {
     userId: user.userId, username: user.username, role: user.role,
     dbSlug: user.dbSlug, sid: user.sid,
   };
-  const token = jwtLib().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  const token = jwtLib().sign(payload, SECRET, authPolicy.signOptsFor(user.username));
   res.set('X-Renewed-Token', token);
   res.set('X-Renewed-Media', signMediaToken(payload));
   // 明文模式下 Cookie 还参与鉴权，一并续上；安全模式下 Cookie 不参与鉴权，刷新无副作用
@@ -263,5 +272,5 @@ function authStatic() {
 
 module.exports = {
   auth, authStatic, SECRET, resolveToken, resolveAuth, verifyToken, warmupAuth,
-  signMediaToken, TOKEN_SIGN_OPTS, TOKEN_COOKIE_MAX_AGE, isRecoverScopeAllowed,
+  signMediaToken, TOKEN_COOKIE_MAX_AGE, isRecoverScopeAllowed,
 };

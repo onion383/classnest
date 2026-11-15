@@ -48,7 +48,7 @@ const WRAP_KEY = crypto.createHash('sha256').update(MASTER_KEY).digest();
 const paths = require('./dbManager.paths');
 const {
   dataDir, coreDir, contentDir, cacheDir, logsDir, ensureDir,
-  indexPath, dbMasterKeyPath, jwtSecretPath, sessionsPath, lastDbPath, dbFilePath,
+  indexPath, dbMasterKeyPath, jwtSecretPath, sessionsPath, authPolicyPath, lastDbPath, dbFilePath,
   uploadsDir, backgroundDir, thumbsDir, trashDir, receiptTrashDir,
   snapshotsDirRoot, snapshotsDir, memoryDir, skillsDirRoot, skillsDir,
   ffmpegCacheDir, backendLogPath, startupLogPath, inpLogPath,
@@ -519,7 +519,7 @@ module.exports = {
   ensureDir,
   // v2 分层布局：core / content / cache / logs 与所有具体路径常量
   coreDir, contentDir, cacheDir, logsDir,
-  indexPath, dbMasterKeyPath, jwtSecretPath, sessionsPath, lastDbPath, dbFilePath,
+  indexPath, dbMasterKeyPath, jwtSecretPath, sessionsPath, authPolicyPath, lastDbPath, dbFilePath,
   uploadsDir, backgroundDir, thumbsDir, trashDir, receiptTrashDir,
   snapshotsDirRoot, snapshotsDir, memoryDir, skillsDirRoot, skillsDir,
   ffmpegCacheDir, backendLogPath, startupLogPath, inpLogPath,

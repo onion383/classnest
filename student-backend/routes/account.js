@@ -13,7 +13,9 @@ const { resolveSecurityLevel } = require('../utils/securityLevel');
 // 改为首次调用时才 require，避免把它的冷加载成本压在启动关键路径上（行为完全不变）。
 // 惰性加载逻辑已下沉到 services/bcryptAsync.js，本文件只引用它的异步接口。
 const { hash: bcryptHash, compare: bcryptCompare } = require('../services/bcryptAsync');
-const { SECRET, auth, TOKEN_SIGN_OPTS, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middleware/auth');
+const { SECRET, auth, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middleware/auth');
+// 登录保持天数按账号配置：签发点一律现取，不再共享模块级常量
+const authPolicy = require('../services/authPolicy');
 const secureChannel = require('../services/secureChannel');
 const { pickPhrase, deriveRestoreHash, formatPhrase } = require('../services/recoveryKey');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
@@ -250,7 +252,7 @@ router.post('/restore-zip-offline', (req, res, next) => backupUploadMw()(req, re
   // 恢复成功后直接签发登录态，前端据此跳首页，不必再手动登录一次
   const sid = sessions.create(1, out.slug);
   const payload = { userId: 1, username: out.username, role: 'teacher', dbSlug: out.slug, sid };
-  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(out.username));
   secureChannel.bindAuth(req.sessionId, token);
   const mediaToken = signMediaToken(payload);
   res.cookie('token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE });
@@ -388,11 +390,15 @@ router.put('/username', auth(), async (req, res) => {
 
   // 登录态里带的是旧用户名：重新签发一份含新用户名的 token，并同步换发媒体凭据。
   // （sid 沿用原会话，登出/会话名单机制不受影响）
+  //
+  // 登录保持天数按**账号名**存，改名后必须把配置搬到新名下 ——
+  // 否则用户改一次用户名，「180 天」会在没有任何提示的情况下退回 30 天。
+  authPolicy.renameKey(user.username, newName);
   const payload = {
     userId: req.user.userId, username: newName, role: req.user.role,
     dbSlug: req.user.dbSlug, sid: req.user.sid,
   };
-  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(newName));
   if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
   res.cookie('token', token, {
     httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
@@ -425,7 +431,7 @@ function rotateLoginAfterCredentialChange(req, res) {
   const payload = {
     userId: u.userId, username: u.username, role: u.role, dbSlug: u.dbSlug, sid,
   };
-  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(u.username));
   if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
   res.cookie('token', token, {
     httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
@@ -534,7 +540,7 @@ router.post('/switch-class', auth(), (req, res) => {
   }
 
   const payload = { userId: u.userId, username: u.username, role: u.role, dbSlug: target, sid: u.sid };
-  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(u.username));
   if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
   res.cookie('token', token, {
     httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
@@ -661,7 +667,7 @@ router.delete('/class', auth(), (req, res) => {
   revokeAccountSessions(u.userId, current);
 
   const payload = { userId: u.userId, username: u.username, role: u.role, dbSlug: target.slug, sid: u.sid };
-  const token = useJwt().sign(payload, SECRET, TOKEN_SIGN_OPTS);
+  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(u.username));
   if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
   res.cookie('token', token, {
     httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
@@ -696,6 +702,49 @@ router.delete('/', auth(), (req, res) => {
 // 当前账号的安全等级：plain 明文 / nopass 免密加密 / password 普通密码 / privacy 超级隐私
 // 判定口径在 utils/securityLevel.js 单源维护 —— 本机恢复（routes/auth.js）也用同一份，
 // 两处各写一遍会分叉成「设置页显示免密、登录却要密码」这类矛盾。
+// —— 登录保持天数（按账号） ——
+// 读：设置页打开时拉一次，界面显示当前值 + 可选档位。
+const LOGIN_DAYS_OPTIONS = [1, 7, 15, 30, 90, 180];
+
+router.get('/login-policy', auth(), (req, res) => {
+  res.json({
+    days: authPolicy.daysFor(req.user.username),
+    defaultDays: authPolicy.DEFAULT_DAYS,
+    min: authPolicy.MIN_DAYS,
+    max: authPolicy.MAX_DAYS,
+    options: LOGIN_DAYS_OPTIONS,
+  });
+});
+
+// 写：改完**立刻**用新策略重签当前窗口的 token 并回给前端。
+// 为什么必须当场重签，而不是「下次登录才生效」：
+//   用户把 30 天改成 1 天，期望的是「马上就变严」。不重签的话，手里这份 token 还带着
+//   原来的 30 天 exp，改完设置当天看上去毫无变化，用户会以为设置没生效。
+// 为什么不是「吊销全部会话再把所有人踢下线」：
+//   改个设置就把自己所有窗口踢回登录页，代价太大。其它窗口的旧 token 仍按原 exp 走完，
+//   下次登录/续期时自然用上新天数。
+router.post('/login-policy', auth(), (req, res) => {
+  const raw = req.body ? req.body.days : undefined;
+  const days = Number(raw);
+  if (!Number.isInteger(days) || days < authPolicy.MIN_DAYS || days > authPolicy.MAX_DAYS) {
+    return res.status(400).json({
+      error: `登录保持天数需为 ${authPolicy.MIN_DAYS}~${authPolicy.MAX_DAYS} 之间的整数`,
+    });
+  }
+
+  const effective = authPolicy.setDays(req.user.username, days);
+
+  // 重签：sid 不变，会话名单与媒体凭据照旧有效，只换 exp
+  const u = req.user;
+  const payload = { userId: u.userId, username: u.username, role: u.role, dbSlug: u.dbSlug, sid: u.sid };
+  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(u.username));
+  if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
+  res.cookie('token', token, {
+    httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_COOKIE_MAX_AGE,
+  });
+  res.json({ days: effective, token, mediaToken: signMediaToken(payload) });
+});
+
 function currentSecurityLevel(req) {
   return resolveSecurityLevel(db, {
     dbSlug: req.user.dbSlug, username: req.user.username, userId: req.user.userId,

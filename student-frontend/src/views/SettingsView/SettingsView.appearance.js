@@ -4,7 +4,8 @@ import axios from 'axios'
 import { useNotification } from '../../composables/useNotification'
 import { SEND, INVOKE } from '../../electronChannels.js'
 import { readFastStartup, writeFastStartup } from '../../utils/fastStartup.js'
-import { getToken } from '../../utils/authStorage.js'
+import { getToken, setToken } from '../../utils/authStorage.js'
+import { storeMediaToken } from '../../utils/apiUrl'
 
 export function useSettingsAppearance(ctx) {
   return {
@@ -109,6 +110,7 @@ export function useSettingsAppearance(ctx) {
         const res = await axios.get('/api/widget-settings')
         if (res.data.success) {
           ctx.toolboxEnabled.value = res.data.data.toolboxEnabled
+          ctx.rollcallExcludeAbsent.value = !!res.data.data.rollcallExcludeAbsent
           ctx.noteSavePath.value = res.data.data.noteSavePath || ''
           ctx.screenshotSavePath.value = res.data.data.screenshotSavePath || ''
         }
@@ -122,6 +124,7 @@ export function useSettingsAppearance(ctx) {
       try {
         await axios.put('/api/widget-settings', {
           toolboxEnabled: ctx.toolboxEnabled.value,
+          rollcallExcludeAbsent: ctx.rollcallExcludeAbsent.value,
           noteSavePath: ctx.noteSavePath.value,
           screenshotSavePath: ctx.screenshotSavePath.value
         })
@@ -139,6 +142,13 @@ export function useSettingsAppearance(ctx) {
       // 立即生效（不再有「本次启用」这个会话开关）：
       // true 会重建/显示浮窗，false 会直接销毁浮窗释放渲染进程。
       window.electron?.send(SEND.WIDGET_SET_SESSION_VISIBLE, ctx.toolboxEnabled.value)
+    },
+    // 点名器开关只写库，不重建浮窗：RollCall 每次打开时读 /api/widget-settings，
+    // 所以下一次打开点名器生效。settings-changed 由 saveWidgetSettings 统一发。
+    onRollcallExcludeAbsentChange(value) {
+      ctx.rollcallExcludeAbsent.value = !!value
+      if (!ctx.loaded.value) return
+      ctx.saveWidgetSettings()
     },
     async loadUsbAutoOpen() {
       try {
@@ -251,6 +261,40 @@ export function useSettingsAppearance(ctx) {
         d.error = err.response?.data?.error || '切换失败'
       } finally {
         ctx.busySecurityLevel.value = false
+      }
+    },
+    // 登录保持天数：读当前账号的设置。
+    // 后端按**账号名**存，同一账号下的多个班共用一套 —— 切班后这里显示的仍是同一个值。
+    async loadLoginPolicy() {
+      try {
+        const { data } = await axios.get('/api/account/login-policy')
+        ctx.loginPolicyDays.value = Number(data.days) || 30
+        ctx.loginPolicyOptions.value = (data.options || []).map((d) => ({ value: d, label: `${d} 天` }))
+      } catch (_) {
+        // 读取失败：保留下拉可用，避免用户连改都改不了
+        ctx.loginPolicyOptions.value = [1, 7, 15, 30, 90, 180].map((d) => ({ value: d, label: `${d} 天` }))
+      } finally {
+        ctx.loginPolicyLoading.value = false
+      }
+    },
+    // 改完立即生效：后端按新策略重签当前 token 并回传，这里必须落盘 ——
+    // 不落盘的话手里这份还带着旧 exp，把 30 天改成 1 天后界面上看不出任何变化。
+    // 其它窗口的旧 token 仍按原 exp 走完（改设置不把全端踢下线），下次登录/续期自动用新天数。
+    async onLoginPolicyChange(days) {
+      const value = Number(days)
+      if (!Number.isInteger(value) || value === ctx.loginPolicyDays.value) return
+      ctx.busyLoginPolicy.value = true
+      try {
+        const { data } = await axios.post('/api/account/login-policy', { days: value })
+        // 用后端返回的生效值，而不是本地选的值：越界/非法值后端会归一
+        ctx.loginPolicyDays.value = Number(data.days) || value
+        if (data.token) setToken(data.token)
+        if (data.mediaToken) storeMediaToken(data.mediaToken)
+        ctx.notifySuccess(`登录保持已设为 ${ctx.loginPolicyDays.value} 天`)
+      } catch (err) {
+        ctx.showAlert(err.response?.data?.error || '保存失败')
+      } finally {
+        ctx.busyLoginPolicy.value = false
       }
     },
     // 恢复词展示期间把窗口排除在屏幕捕获之外；离开设置页/关闭展示时恢复

@@ -21,6 +21,7 @@ classnest/
         ├── arrange-datasource.test.js  # 智能排表「选择数据源」：只排当前表已有的人 / 从名册取人两种语义，切换数据源时清掉上一次的…
         ├── arrange-desk-mixed.test.js  # 智能排表按「桌号表」工作：混合桌（两列之间是走廊）下同桌判定不能再用列号奇偶，判据换成按桌号…
         ├── arrange-grid-boundary.test.js  # 智能排表弹窗的「网格 ↔ dense」边界：库里 seats 是网格（走廊是真实列），算法按…
+        ├── auth-policy.test.js  # 登录保持天数（按账号）：默认 30 天、按账号隔离、派生值自洽（续签窗口必须 < 天数、名单清理期必须 > token 寿命）、改名搬迁、坏文件退回默认
         ├── auth-sync.test.js  # 跨窗口登录态同步（v6 · 2-3b）：滑动续期只换 token 不算换人；换号/登出先清用户级缓存再广播 AUTH_CHANGED_EVENT，三个窗口入口共用一份判定
         ├── backend-boundary.test.js  # 写入边界与实际结构脱节：①PATCH /cell 是唯一不经过 normalizeSeats…
         ├── backend-consistency.test.js  # 跨库写补偿与信号透传：①PUT /username 的用户名存在两处（index.db 的 …
@@ -169,7 +170,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），156 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），159 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
 - **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
@@ -275,7 +276,8 @@ classnest/
 | [`secure-retry.test.js`](../../../testjs/units/secure-retry.test.js) | 安全信道 401 重试的分支判定（N1-02）：凭据降级 / `auth-required` / `session-expired` 三个分支抽成纯函数后可单测，不再只靠需要 Vite + Electron 的冒烟脚本 | 纯函数 + 前端 ESM；4 条用例 |
 | [`sequenced-cache.test.js`](../../../testjs/units/sequenced-cache.test.js) | 带账号代次的进程内缓存（P0-6）：TTL 复用 + 写入前核对代次 + 失败不缓存；`invalidate()` 同时清值并作废在途，`clear()` 只清值 | 前端 ESM；4 条用例 |
 | [`session-revocation.test.js`](../../../testjs/units/session-revocation.test.js) | 凭证变更 → 全账号会话失效（A1-16）：账号维度必须是 `(userId, dbSlug)` 双键（各库 `users.id` 都可能是 1）；改密后走响应头换发新凭据，图片不裂 | 真 `sessions` + 隔离 `dataDir`；4 条用例 |
-| [`sessions-ttl.test.js`](../../../testjs/units/sessions-ttl.test.js) | 会话名单的活动时间与清理（V5-009）：`at` 改为最后一次活动时间（1 小时节流落盘），否则持续使用的会话会在下一次 prune 时被当成弃用踢掉 | 临时状态文件；4 条用例 |
+| [`auth-policy.test.js`](../../../testjs/units/auth-policy.test.js) | **登录保持天数（按账号）**：这套配置在每个鉴权请求的路径上（签发 / 续期 / 名单清理都读它），三类错必须被挡住 —— ①默认值错 → 老用户升级后行为突变；②按账号隔离失效 → 键用错维度（`dbSlug` vs `username`）时，切个班设置就丢；③派生值不自洽 → 续签窗口 ≥ 天数（每个请求都重签，慢而无报错）、名单清理期 ≤ token 寿命（活跃用户被踢下线，V5-009 同类）。另含坏文件退回默认、改名搬迁、按班级 slug 反查账号 | 临时 `dataDir`；10 条用例 |
+| [`sessions-ttl.test.js`](../../../testjs/units/sessions-ttl.test.js) | 会话名单的活动时间与清理（V5-009）：`at` 改为最后一次活动时间（1 小时节流落盘），否则持续使用的会话会在下一次 prune 时被当成弃用踢掉；另含「清理期按账号算」——1 天配置（6 天 TTL）的会话先被清，默认账号（35 天）不受影响 | 临时状态文件；8 条用例 |
 | [`single-flight.test.js`](../../../testjs/units/single-flight.test.js) | 启动单飞守卫（P0-5）：并发调用只跑一次且拿到同一 Promise，同步副作用不延后微任务，失败后可重试 | 纯 Promise；4 条用例 |
 | [`student-cascade-delete.test.js`](../../../testjs/units/student-cascade-delete.test.js) | 删除学生的级联撤销（Q2-03）：七处（学生 / 请假 / 加减分 / 小组 / 班干部 / 座位 / 值日）合成**一条**撤销，不许按七次撤、也不许留半个 | 内存库 + 真 router；4 条用例 |
 | [`student-delete-guard.test.js`](../../../testjs/units/student-delete-guard.test.js) | 删学生不许留孤儿（N2-05）：通用删除入口先算关联，有就拒并列出明细，让调用方走「一并删除」（偷偷清会绕过撤销登记） | 内存库；4 条用例 |

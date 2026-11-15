@@ -73,7 +73,7 @@ classnest/
 - **定位**：后端 HTTP 路由层（`student-backend/routes/`），负责挂载点、接口清单与每个接口的处理链。
 - **公共逻辑**：所有业务接口经 `auth(['teacher'])`（鉴权中间件，只允许教师角色）→ `JWT`（登录令牌）校验 → `dbManager.withDb`（按当前库执行回调的包装函数）绑定当前库；路由内做参数校验、`sanitize`（数据清洗）清洗、事务写库、撤销登记与统一 JSON 响应。
 - **局限**：不展开数据层加密/多库细节、安全通道握手、AI 提案与撤销执行器内部实现；这些见 [data-layer.md](./data-layer.md)、[topics/security.md](../topics/security.md)、[topics/ai.md](../topics/ai.md)。
-- **规模**：共 232 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
+- **规模**：共 238 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
 
 
 ### 处理标准的写法
@@ -147,6 +147,7 @@ flowchart TD
 | POST | `/restore-offline` | 离线恢复（v2，登录页使用） |
 | PUT | `/username` / `/password` | 改名（同步学生档案引用）/ 改密。`plain` / `nopass` 档 `users.password` 为空：改名**不校验密码**，改密即「设首个密码」；前端在这两档隐藏密码框与「修改密码」按钮，设密码只能走 `/security-level` |
 | GET / POST | `/security-level` | 读取/切换账号安全等级（`plain` / `nopass` / `password` / `privacy`） |
+| GET / POST | `/login-policy` | 读取/设置登录保持天数（按账号，1~365 天，默认 30）。POST 会按新策略**重签当前 token** 并随响应返回（`token` / `mediaToken`），使「改成 1 天」当场生效；不发吊销，其它窗口的旧 token 仍按原 `exp` 走完。存储与派生规则见 [`services/authPolicy.js`](./services.md) |
 | GET | `/privacy` | 查询超级隐私状态 |
 | POST | `/privacy/enable` / `/privacy/disable` | 开启（需密码 + 恢复词）/ 关闭超级隐私 |
 | DELETE | `/` | 删除账号（不清理共享目录） |

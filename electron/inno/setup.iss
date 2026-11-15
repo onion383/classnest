@@ -19,10 +19,20 @@
 ;     底部按钮复用向导按钮：「退出程序」（左，高亮）与「忽略」（右）。
 ;   - 一个自绘的安装页，全部元素水平/垂直居中：
 ;       1) logo（居中）
-;       2) 标题「安装 班集 测试版」（居中）
+;       2) 标题「安装 班集 预览版」（居中）
 ;       3) 「安装路径」+ 圆角输入框 + 「浏览...」按钮
 ;       4) 「我已阅读并同意《用户协议》」勾选框
 ;   - 点击勾选框弹出「用户协议」弹窗：点「同意」关闭并勾选；点「不同意」仅关闭、不勾选。
+;   - 一个自绘的卸载页（InitializeUninstall 里用 CreateCustomForm 造独立模态窗体）：
+;       1) logo（居中，从 {app}\uninstall-logo.png 读）
+;       2) 标题「班集 预览版」（居中）
+;       3) 「保留用户数据」勾选框（默认勾选 = 卸载历来「不动数据」的行为）+ 状态提示
+;       4) 「取消」/「卸载 班集」按钮
+;     取消勾选时，usPostUninstall 会删掉数据目录（含设置页搬走后的自定义 dataDir）
+;     与 %APPDATA%\classnest 用户配置目录，操作不可恢复。
+;     两条入口（开始菜单快捷方式 / 卸载注册表项 UninstallString）都带
+;     /SILENT /CUSTOMUNINSTALL：/SILENT 抑制 Inno 自带的确认框与完成提示，
+;     自定义开关表示由本脚本弹卸载页；直接双击 unins000.exe 则回退到 Inno 默认界面。
 ;
 ; 说明：
 ;   - 低版本系统提示页预览：给安装包加命令行参数 /OSWARN=1 可无条件展示该页
@@ -122,10 +132,24 @@ Source: "..\installer-assets\license.txt"; DestDir: "{tmp}"; Flags: dontcopy noc
 ; 整目录拷贝 electron-builder 的未打包产物（{#AppDir}\win-unpacked）
 ; Excludes：不把 .gitignore 装进安装目录
 Source: "..\..\{#AppDir}\win-unpacked\*"; DestDir: "{app}"; Excludes: ".gitignore"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 卸载页的 logo：上面那条 app-icon.png 是 dontcopy（只编进安装包），而卸载端
+; 不能 ExtractTemporaryFile（安装包已不在），所以额外落一份到安装目录供卸载时读。
+; 排在整目录条目之后：它不参与安装启动时的 ExtractTemporaryFile，不影响冷启动耗时。
+Source: "..\app-icon.png"; DestDir: "{app}"; DestName: "uninstall-logo.png"; Flags: ignoreversion nocompression
+
+[InstallDelete]
+; 覆盖安装前清掉旧版遗留文件。[Files] 只复制、不做目录镜像同步，新版里没有的
+; 旧文件会一直留在 {app}：最明显的是主程序改名前的 班集.exe（约 250MB），
+; 其次是整个 resources（app.asar / app.asar.unpacked / node_modules 里删掉的依赖）。
+; 三条守卫见 [Code] 的 IsClassNestUpgrade：只在确为「上一次班集安装目录」时执行。
+; 官方明确反对 {app}\* 通配（怕用户装错目录时误删），所以这里只删明确列出的两项。
+; 以后改 electron-builder.json 的 executableName，必须在这里补一行旧 exe 名。
+Type: files; Name: "{app}\班集.exe"; Check: IsClassNestUpgrade
+Type: filesandordirs; Name: "{app}\resources"; Check: IsClassNestUpgrade
 
 [Icons]
 Name: "{group}\班集"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\卸载 班集"; Filename: "{uninstallexe}"
+Name: "{group}\卸载 班集"; Filename: "{uninstallexe}"; Parameters: "/SILENT /CUSTOMUNINSTALL"
 Name: "{autodesktop}\班集"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [UninstallDelete]
@@ -141,10 +165,15 @@ Type: files; Name: "{commonappdata}\班集\SkipOsVersionWarning.flag"
 ; runhidden —— 不弹窗口；waituntilterminated —— 必须等它退出，否则用户装完立刻双击
 ; 会和预热进程抢单实例锁（后到者直接退出，表现为「点了没反应」）。
 ; 应用侧对应 electron/main/main.js 的 --warmup 分支，20 秒超时后自行退出。
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--warmup"; StatusMsg: "正在预热程序组件（让首次启动更快）..."; Flags: runhidden waituntilterminated
+; runasoriginaluser —— 用「发起安装的那个用户」的普通令牌运行，不要继承安装器的管理员令牌：
+;   预热只是把 {app} 里的文件读进缓存，普通用户对 Program Files 本来就有读/执行权限，
+;   提权跑没有额外收益，却让整套 Electron + 本地后端在管理员上下文里过一遍（攻击面放大）。
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--warmup"; StatusMsg: "正在预热程序组件（让首次启动更快）..."; Flags: runasoriginaluser runhidden waituntilterminated
 
 ; 安装完成后可选启动（静默安装时跳过）
-Filename: "{app}\{#MyAppExeName}"; Description: "启动 班集"; Flags: nowait postinstall skipifsilent
+; runasoriginaluser —— 否则这里启动的班集继承安装器的管理员令牌并整场运行；
+;   若由 IT 管理员用别人账号提权代装，数据还会落进管理员的 %APPDATA% 而不是真实使用者的。
+Filename: "{app}\{#MyAppExeName}"; Description: "启动 班集"; Flags: runasoriginaluser nowait postinstall skipifsilent
 
 [Code]
 const
@@ -165,6 +194,25 @@ const
   OS_WARN_TEXT_COLOR = $1C1CB9;
   { 「获取最新的 Windows」打开的下载页 }
   OS_DOWNLOAD_URL = 'https://www.microsoft.com/zh-cn/software-download/windows11';
+
+  { ---- 卸载侧 ---- }
+  { 自定义卸载开关：与 /SILENT 一起加进卸载快捷方式和卸载注册表项。
+    /SILENT 抑制 Inno 自带的确认框与「卸载完成」提示（进度窗仍显示），
+    带这个开关才弹自绘卸载页；直接双击 unins000.exe / 系统静默卸载则回退默认行为。 }
+  UNINSTALL_SWITCH = '/CUSTOMUNINSTALL';
+  { 用户取消勾选「保留用户数据」时写的标记。卸载是两阶段进程，用文件把选择
+    从 InitializeUninstall 传到 usPostUninstall，比全局变量更保险。 }
+  UNINSTALL_FLAG_FILE = '{tmp}\classnest-remove-data.flag';
+  { 卸载注册表键名 = [Setup] AppId 的 GUID + '_is1'，必须与 AppId 保持一致。
+    机器级安装（PrivilegesRequired=admin）→ HKLM。 }
+  UNINSTALL_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{C3F1A9B2-4D5E-4F60-8A7B-1C2D3E4F5A6B}_is1';
+  { 提示文字：中性灰 / 警示红（沿用低版本提示页的柔和红） }
+  UNINSTALL_HINT_GRAY = $5A5A5A;
+
+{ 卸载端没有 WizardForm，不能用 FlipAndCenterIfNeeded 相对向导居中，
+  直接按屏幕尺寸摆到中间。 }
+function GetSystemMetrics(nIndex: Integer): Integer;
+  external 'GetSystemMetrics@user32.dll stdcall';
 
 function GetWindowLong(hWnd: HWND; nIndex: Integer): Longint;
   external 'GetWindowLongW@user32.dll stdcall';
@@ -204,6 +252,37 @@ var
   CancelCaptionOverridden: Boolean;
   { 点「获取最新的 Windows」时置位：跳过退出确认框，直接关闭安装程序 }
   SkipExitConfirm: Boolean;
+
+  { ---- 卸载页 ---- }
+  { OnClick 回调要访问勾选框与提示文字，Pascal Script 没有闭包，只能放全局 }
+  UninstallKeepCheck: TNewCheckBox;
+  UninstallHint: TNewStaticText;
+  { 用户是否取消了「保留用户数据」：在 ShowModal 之后、Form.Free 之前取出 }
+  RemoveUserData: Boolean;
+
+{ ---- 覆盖安装前的旧文件清理守卫 -------------------------------------------
+  给 InstallDelete 的每条都挂这个 Check。Inno 的 Files 段只复制、不做目录镜像同步，
+  新版没有的旧文件会一直留在安装目录里（旧主程序 班集.exe 约 250MB 最明显），
+  安装目录会越装越大。卸载日志默认 append，最终卸载虽能删干净，但使用期间一直占着。
+  这里只删明确列出的两项，再加三层守卫，避免用户把安装路径选到盘根 / 别的目录时误删。 }
+function IsClassNestUpgrade(): Boolean;
+var
+  D: String;
+begin
+  Result := False;
+  D := ExpandConstant('{app}');
+  { 1) 不是盘根（D:\ 之类） }
+  if Length(D) <= 3 then
+    Exit;
+  { 2) 必须有上次安装留下的卸载日志：首次安装、或用户随手选的目录都没有 }
+  if not FileExists(D + '\unins000.dat') then
+    Exit;
+  { 3) 必须有班集主程序（当前名或历史名），排除同名巧合 }
+  if not (FileExists(D + '\{#MyAppExeName}') or
+          FileExists(D + '\班集.exe')) then
+    Exit;
+  Result := True;
+end;
 
 { 去掉输入框的原生边框（WS_BORDER / WS_EX_CLIENTEDGE），让它融入圆角背景图 }
 procedure MakeBorderlessEdit(const AEdit: TNewEdit);
@@ -528,7 +607,7 @@ begin
   TitleLabel.Top := Top0 + LogoSize + Gap1;
   TitleLabel.Font.Size := 15;
   TitleLabel.Font.Style := [fsBold];
-  TitleLabel.Caption := '安装 班集 测试版';
+  TitleLabel.Caption := '安装 班集 预览版';
 
   RowTop := Top0 + LogoSize + Gap1 + TitleH + Gap2;
 
@@ -719,5 +798,314 @@ begin
     end;
     { 把我们自绘的输入框内容同步给真正的安装目录控件 }
     WizardForm.DirEdit.Text := PathEdit.Text;
+  end;
+end;
+
+{ ============================================================================
+  卸载侧：自绘卸载页 + 「保留用户数据」真开关
+  ----------------------------------------------------------------------------
+  两条入口（开始菜单快捷方式、卸载注册表项 UninstallString）都带
+  /SILENT /CUSTOMUNINSTALL。/SILENT 抑制 Inno 自带的确认框与完成提示
+  （进度窗仍显示），/CUSTOMUNINSTALL 表示由本脚本弹卸载页。
+  Inno 卸载端既不支持自定义向导页，也不能 ExtractTemporaryFile，
+  所以卸载页用 CreateCustomForm 造独立模态窗体，logo 从安装目录里
+  额外落下的 uninstall-logo.png 读取。 ======================================== }
+
+function HasCustomUninstallSwitch(): Boolean;
+begin
+  Result := Pos(Uppercase(UNINSTALL_SWITCH), Uppercase(GetCmdTail())) > 0;
+end;
+
+{ 数据目录可以被设置页整体搬走，路径记在 userData 根的 app-config.json。
+  LoadStringsFromFile 支持无 BOM 的 UTF-8，中文路径不会乱码。
+  saveAppConfig 用 JSON.stringify 写盘，Windows 路径里的反斜杠会写成两个，
+  取出来要还原成单个。 }
+function ReadConfiguredDataDir(const UserDataRoot: String): String;
+var
+  Lines: TArrayOfString;
+  I, P: Integer;
+  S, V: String;
+begin
+  Result := '';
+  if not LoadStringsFromFile(UserDataRoot + '\app-config.json', Lines) then
+    Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    S := Trim(Lines[I]);
+    if Copy(S, 1, Length('"dataDir"')) = '"dataDir"' then
+    begin
+      V := Trim(Copy(S, Pos(':', S) + 1, Length(S)));
+      if Copy(V, Length(V), 1) = ',' then
+        V := Copy(V, 1, Length(V) - 1);
+      V := Trim(V);
+      if Length(V) < 2 then
+        Exit;
+      if (V[1] = '"') and (V[Length(V)] = '"') then
+        V := Copy(V, 2, Length(V) - 2);
+      while Pos('\\', V) > 0 do
+      begin
+        P := Pos('\\', V);
+        V := Copy(V, 1, P - 1) + '\' + Copy(V, P + 2, Length(V));
+      end;
+      Result := V;
+      Exit;
+    end;
+  end;
+end;
+
+{ 只认「确实是班集数据目录」的路径：core/index.db 或 core/db-master.key。
+  这两个判据与设置页数据搬迁的预检一致，也用来防止配置写坏、或提权后
+  userData 落到别的账户时误删无关目录。 }
+function LooksLikeClassNestDataDir(const Dir: String): Boolean;
+begin
+  Result := FileExists(Dir + '\core\index.db') or
+            FileExists(Dir + '\core\db-master.key');
+end;
+
+{ 再挡一层明显的系统位置：盘根、Windows、Program Files、ProgramData。
+  不挡 Users —— 默认数据目录就在用户目录下。 }
+function IsProtectedDir(const Dir: String): Boolean;
+var
+  U: String;
+begin
+  U := Uppercase(Dir);
+  Result := (Length(U) <= 3) or
+            (Pos(':\WINDOWS', U) = 2) or
+            (Pos(':\PROGRAM FILES', U) = 2) or
+            (Pos(':\PROGRAMDATA', U) = 2);
+end;
+
+{ userData 根必须真的有班集留下的东西才删 }
+function IsExpectedUserDataRoot(const Dir: String): Boolean;
+begin
+  Result := DirExists(Dir + '\data') or DirExists(Dir + '\core') or
+            FileExists(Dir + '\app-config.json') or
+            FileExists(Dir + '\setup-incomplete');
+end;
+
+{ 勾选框状态变化时更新提示文字 }
+procedure KeepDataCheckClick(Sender: TObject);
+begin
+  if UninstallKeepCheck.Checked then
+  begin
+    UninstallHint.Caption := '重装后可继续使用原有账号';
+    UninstallHint.Font.Color := UNINSTALL_HINT_GRAY;
+  end
+  else
+  begin
+    UninstallHint.Caption := '将删除账号库、上传文件与相册，不可恢复；请先退出班集';
+    UninstallHint.Font.Color := OS_WARN_TEXT_COLOR;
+  end;
+end;
+
+{ 自绘卸载页：版式照抄安装页（88px logo 居中、15pt 加粗标题、居中勾选框、
+  底部按钮，整体垂直居中）。返回 True = 用户点了「卸载 班集」。 }
+function ShowUninstallDialog(): Boolean;
+var
+  Form: TSetupForm;
+  Logo: TBitmapImage;
+  Title: TNewStaticText;
+  BtnCancel, BtnUninstall: TNewButton;
+  Measure: TNewStaticText;
+  SW, SH, LogoSize, TitleH, CheckH, HintH, BtnH: Integer;
+  Gap1, Gap2, Gap3, Gap4, BlockH, Top0, RowTop: Integer;
+  BtnW, CheckW: Integer;
+  LogoPath: String;
+begin
+  Result := False;
+  RemoveUserData := False;
+  Form := CreateCustomForm(460, 360, False, False);
+  try
+    Form.Caption := '卸载 班集';
+    Form.Left := (GetSystemMetrics(0) - Form.Width) div 2;
+    Form.Top := (GetSystemMetrics(1) - Form.Height) div 2;
+    SW := Form.ClientWidth;
+    SH := Form.ClientHeight;
+
+    LogoSize := ScaleX(88);
+    TitleH := ScaleY(32);
+    CheckH := ScaleY(20);
+    HintH := ScaleY(20);
+    BtnH := ScaleY(30);
+    Gap1 := ScaleY(16);
+    Gap2 := ScaleY(26);
+    Gap3 := ScaleY(10);
+    Gap4 := ScaleY(24);
+
+    BlockH := LogoSize + Gap1 + TitleH + Gap2 + CheckH + Gap3 + HintH + Gap4 + BtnH;
+    Top0 := (SH - BlockH) div 2;
+    if Top0 < ScaleY(10) then
+      Top0 := ScaleY(10);
+
+    Logo := TBitmapImage.Create(Form);
+    Logo.Parent := Form;
+    Logo.AutoSize := False;
+    Logo.Stretch := True;
+    Logo.Width := LogoSize;
+    Logo.Height := LogoSize;
+    Logo.Left := (SW - LogoSize) div 2;
+    Logo.Top := Top0;
+    LogoPath := ExpandConstant('{app}\uninstall-logo.png');
+    if FileExists(LogoPath) then
+      Logo.PngImage.LoadFromFile(LogoPath);
+
+    Title := TNewStaticText.Create(Form);
+    Title.Parent := Form;
+    Title.AutoSize := False;
+    Title.WordWrap := False;
+    Title.Alignment := taCenter;
+    Title.Left := 0;
+    Title.Width := SW;
+    Title.Height := TitleH;
+    Title.Top := Top0 + LogoSize + Gap1;
+    Title.Font.Size := 15;
+    Title.Font.Style := [fsBold];
+    Title.Caption := '班集 预览版';
+
+    RowTop := Top0 + LogoSize + Gap1 + TitleH + Gap2;
+
+    Measure := TNewStaticText.Create(Form);
+    Measure.Parent := Form;
+    Measure.AutoSize := True;
+    Measure.Caption := '保留用户数据';
+    CheckW := Measure.Width + ScaleX(22);
+    Measure.Free;
+
+    UninstallKeepCheck := TNewCheckBox.Create(Form);
+    UninstallKeepCheck.Parent := Form;
+    UninstallKeepCheck.Caption := '保留用户数据';
+    UninstallKeepCheck.Checked := True;
+    UninstallKeepCheck.Width := CheckW;
+    UninstallKeepCheck.Left := (SW - CheckW) div 2;
+    UninstallKeepCheck.Top := RowTop;
+    UninstallKeepCheck.OnClick := @KeepDataCheckClick;
+
+    UninstallHint := TNewStaticText.Create(Form);
+    UninstallHint.Parent := Form;
+    UninstallHint.AutoSize := False;
+    UninstallHint.WordWrap := False;
+    UninstallHint.Alignment := taCenter;
+    UninstallHint.Left := 0;
+    UninstallHint.Width := SW;
+    UninstallHint.Height := HintH;
+    UninstallHint.Top := RowTop + CheckH + Gap3;
+    UninstallHint.Font.Size := 9;
+    UninstallHint.Font.Color := UNINSTALL_HINT_GRAY;
+    UninstallHint.Caption := '重装后可继续使用原有账号';
+
+    BtnW := ScaleX(110);
+    BtnCancel := TNewButton.Create(Form);
+    BtnCancel.Parent := Form;
+    BtnCancel.Caption := '取消';
+    BtnCancel.ModalResult := mrNo;
+    BtnCancel.Width := BtnW;
+    BtnCancel.Height := BtnH;
+    BtnCancel.Left := (SW - (BtnW * 2 + ScaleX(10))) div 2;
+    BtnCancel.Top := RowTop + CheckH + Gap3 + HintH + Gap4;
+
+    BtnUninstall := TNewButton.Create(Form);
+    BtnUninstall.Parent := Form;
+    BtnUninstall.Caption := '卸载 班集';
+    BtnUninstall.ModalResult := mrYes;
+    BtnUninstall.Default := True;
+    BtnUninstall.Width := BtnW;
+    BtnUninstall.Height := BtnH;
+    BtnUninstall.Left := BtnCancel.Left + BtnW + ScaleX(10);
+    BtnUninstall.Top := BtnCancel.Top;
+    Form.ActiveControl := BtnUninstall;
+
+    Result := Form.ShowModal() = mrYes;
+    RemoveUserData := Result and (not UninstallKeepCheck.Checked);
+  finally
+    Form.Free();
+  end;
+end;
+
+{ 卸载入口：只有带自定义开关才弹自绘页。直接双击 unins000.exe、
+  系统静默卸载（/VERYSILENT）都保持 Inno 默认行为，且一律保留数据。 }
+function InitializeUninstall(): Boolean;
+var
+  FlagPath: String;
+begin
+  Result := True;
+  RemoveUserData := False;
+  FlagPath := ExpandConstant(UNINSTALL_FLAG_FILE);
+  DeleteFile(FlagPath);
+  if not HasCustomUninstallSwitch() then
+    Exit;
+  Result := ShowUninstallDialog();
+  if not Result then
+    Exit;
+  if RemoveUserData then
+    SaveStringToFile(FlagPath, '1', False);
+end;
+
+{ 真正删数据放在 usPostUninstall：程序文件已移除、卸载已基本成功，
+  不会出现「软件还在、数据没了」的半套状态。 }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  FlagPath, UserDataRoot, DataDir: String;
+begin
+  if CurUninstallStep <> usPostUninstall then
+    Exit;
+  FlagPath := ExpandConstant(UNINSTALL_FLAG_FILE);
+  if not FileExists(FlagPath) then
+    Exit;
+  DeleteFile(FlagPath);
+
+  UserDataRoot := ExpandConstant('{userappdata}') + '\classnest';
+
+  { 1) 数据目录：含设置页搬走后的自定义 dataDir }
+  DataDir := ReadConfiguredDataDir(UserDataRoot);
+  if (DataDir <> '') and (not IsProtectedDir(DataDir)) and
+     LooksLikeClassNestDataDir(DataDir) then
+  begin
+    if DelTree(DataDir, True, True, True) then
+      Log('已删除数据目录：' + DataDir)
+    else
+      Log('数据目录未能完全删除（可能有文件正被占用）：' + DataDir);
+  end
+  else
+    Log('跳过数据目录（配置缺失或安全校验未通过）：' + DataDir);
+
+  { 2) userData 根：app-config.json、日志、缩略图缓存、更新包等 }
+  if IsExpectedUserDataRoot(UserDataRoot) then
+  begin
+    if DelTree(UserDataRoot, True, True, True) then
+      Log('已删除用户配置目录：' + UserDataRoot)
+    else
+      Log('用户配置目录未能完全删除（可能有文件正被占用）：' + UserDataRoot);
+  end;
+end;
+
+{ 安装结束后把自定义开关追加到卸载注册表项，让「设置 → 应用 → 卸载」
+  也走自绘页。Inno 每次覆盖安装都会重写这两个值，所以每次 ssPostInstall
+  都要写；已带开关时跳过，避免重复追加。 }
+procedure AppendCustomUninstallSwitch(const ValueName: String);
+var
+  S: String;
+begin
+  if not RegQueryStringValue(HKEY_LOCAL_MACHINE, UNINSTALL_REG_KEY,
+                             ValueName, S) then
+  begin
+    Log('未读到卸载注册表值 ' + ValueName + '，跳过追加自定义卸载开关');
+    Exit;
+  end;
+  if Pos(Uppercase(UNINSTALL_SWITCH), Uppercase(S)) > 0 then
+    Exit;
+  if Pos('/SILENT', Uppercase(S)) = 0 then
+    S := S + ' /SILENT';
+  S := S + ' ' + UNINSTALL_SWITCH;
+  if not RegWriteStringValue(HKEY_LOCAL_MACHINE, UNINSTALL_REG_KEY,
+                             ValueName, S) then
+    Log('写入卸载注册表值 ' + ValueName + ' 失败');
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    AppendCustomUninstallSwitch('UninstallString');
+    AppendCustomUninstallSwitch('QuietUninstallString');
   end;
 end;

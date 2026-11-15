@@ -109,6 +109,7 @@ module.exports = {
   dbMasterKeyPath: base.dbMasterKeyPath,
   jwtSecretPath: base.jwtSecretPath,
   sessionsPath: base.sessionsPath,
+  authPolicyPath: base.authPolicyPath,
   lastDbPath: base.lastDbPath,
   // dbFilePath 已在上面从 backup 门面导出（backup 内部也取自 paths），不要重复声明
   uploadsDir: base.uploadsDir,

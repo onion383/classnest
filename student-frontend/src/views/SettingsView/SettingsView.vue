@@ -93,6 +93,23 @@
           </div>
           <p class="text-xs text-text-muted mt-2 ml-44">明文不加密；无密码仅免登录但仍加密；普通密码用密码登录；超级隐私模式需密码或恢复词才能解锁库密钥。</p>
         </div>
+
+        <!-- 登录保持：多久不用才需要重新登录（按账号存，同一账号下的多个班共用一套） -->
+        <div class="mt-6 pt-5 border-t border-border">
+          <div class="flex items-center gap-4">
+            <label class="text-sm font-medium text-text w-40 flex-shrink-0">登录保持</label>
+            <div class="w-80">
+              <AppSelect
+                :model-value="loginPolicyDays"
+                :options="loginPolicyOptions"
+                :disabled="loginPolicyLoading || busyLoginPolicy"
+                @change="onLoginPolicyChange"
+              />
+            </div>
+            <span class="text-xs text-text-muted">{{ loginPolicyHint }}</span>
+          </div>
+          <p class="text-xs text-text-muted mt-2 ml-44">持续使用会自动续期，连续这么久没用才需要重新登录。只影响当前账号，切换班级不改变这项设置。</p>
+        </div>
       </div>
     </div>
 
@@ -465,6 +482,13 @@
             <AppHelp text="关闭后立即隐藏工具箱并释放其窗口，下次启动也不再显示；开启立即显示" aria-label="是否启用工具箱说明" />
           </div>
           <AppSwitch :model-value="toolboxEnabled" aria-label="是否启用工具箱" @change="onToolboxChange" />
+        </div>
+        <div class="flex items-center gap-4 mt-6">
+          <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+            <label class="text-sm font-medium text-text">点名排除不在校同学</label>
+            <AppHelp text="开启后，工具箱点名器只从今天在校的同学里随机抽人；请假中且假期覆盖今天的学生会被排除。默认关闭，仍按全班名单点名。下次打开点名器生效。" aria-label="点名排除不在校同学说明" />
+          </div>
+          <AppSwitch :model-value="rollcallExcludeAbsent" aria-label="点名排除不在校同学" @change="onRollcallExcludeAbsentChange" />
         </div>
         <div class="flex items-center gap-4 mt-6">
           <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
@@ -993,6 +1017,7 @@ const settingsItems = ref([
   { label: '背景遮罩层（有自定义背景图时）', section: 'theme', py: 'bjzzc' },
   { label: '组件透明玻璃层',           section: 'theme',    py: 'zjtmlbl' },
   { label: '是否启用工具箱',           section: 'toolbox',  py: 'sfqygjx' },
+  { label: '点名排除不在校同学',       section: 'toolbox',  py: 'dmpcbzxtx' },
   { label: '本次启用工具箱',           section: 'toolbox',  py: 'bcqygjx' },
   { label: '新U盘插入自动打开',        section: 'toolbox',  py: 'xupcrzddk' },
   { label: '启用桌面小组件',           section: 'widget',   py: 'qyzmxjjs' },
@@ -1002,6 +1027,7 @@ const settingsItems = ref([
   { label: '相册缩略图缓存',           section: 'datadir',  py: 'xcsltch' },
   { label: '技能文件目录',             section: 'datadir',  py: 'jnwjml' },
   { label: '安全等级',                 section: 'account',  py: 'aqdj' },
+  { label: '登录保持',                 section: 'account',  py: 'dlbc' },
   { label: '数据导出',                 section: 'data',     py: 'sjdc' },
   { label: '导出格式',                 section: 'data',     py: 'dcgs' },
   { label: 'zip 密码',                 section: 'data',     py: 'zipmm' },
@@ -1091,6 +1117,8 @@ watch(classDialogVisible, (v) => { settingsClassDialogOpen.value = v })
 const classInfo = ref({ name: '', motto: '', mottoStyle: '', xuefeng: '' })
 // 工具箱设置
 const toolboxEnabled = ref(true)
+// 点名器排除「今天不在校」的学生：默认关，保持原有全员点名行为
+const rollcallExcludeAbsent = ref(false)
 const noteSavePath = ref('')
 const screenshotSavePath = ref('')
 const screenshotDir = ref('')
@@ -1106,6 +1134,11 @@ const busyDataDir = ref(false)
 const securityLevel = ref('')
 const securityLevelLoading = ref(true)
 const busySecurityLevel = ref(false)
+// 登录保持天数（按账号）：后端是唯一判定方，这里只放展示值 + 可选项
+const loginPolicyDays = ref(30)
+const loginPolicyOptions = ref([])
+const loginPolicyLoading = ref(true)
+const busyLoginPolicy = ref(false)
 const securityDialog = ref({ open: false, target: '', password: '', newPassword: '', confirmPassword: '', error: '' })
 const privacyPhrase = ref('')
 // 恢复词弹窗按需挂载：没切过超级隐私就不加载它的 chunk；一旦挂载则保留（关闭走 visible，留住退场动画）
@@ -1181,6 +1214,12 @@ const securityLevelHint = computed(() => {
   if (busySecurityLevel.value) return '切换中…'
   if (securityLevel.value === 'plain') return '当前为明文，可升级为加密'
   return ''
+})
+// 登录保持的右侧提示：只表达状态，天数本身已经在左侧下拉里
+const loginPolicyHint = computed(() => {
+  if (loginPolicyLoading.value) return '加载中…'
+  if (busyLoginPolicy.value) return '保存中…'
+  return '期间使用会自动顺延'
 })
 // 兼容导出弹窗：除明文外都视为加密库
 const dbEncrypted = computed(() => {
@@ -1377,7 +1416,7 @@ const ctx = {
   usernameError, busyUsername, exportPassword, exportEncrypt, exportDbPwd, busyExport, exportProgress,
   semesters, semesterId, semesterNameDraft, showRenameSemester, newSemesterName, showAddSemester,
   showDeleteSemester, busySemester, busySemesterDate, semesterStart, semesterEnd, semesterDateErrorText,
-  dialog, dialogMounted, dialogCallback, deleteTimer, classCount, classList, currentSlug, currentClassName, switchingClass, classDialogVisible, classInfo, toolboxEnabled, noteSavePath, screenshotSavePath,
+  dialog, dialogMounted, dialogCallback, deleteTimer, classCount, classList, currentSlug, currentClassName, switchingClass, classDialogVisible, classInfo, toolboxEnabled, rollcallExcludeAbsent, noteSavePath, screenshotSavePath,
   screenshotDir, usbAutoOpen, desktopWidgetEnabled, loaded, _fromMainHandler, dataDir,
   busyDataDir, securityLevel, securityLevelLoading, busySecurityLevel,
   securityDialog, privacyPhrase, undoGroups, busyUndo, selectedThemeId, mergeNotifications,
@@ -1390,6 +1429,7 @@ const ctx = {
   nightSupported, followSystem,
   // computed（ref）
   user, securityLevelOptions, securityLevelHint, dbEncrypted, hasLoginPassword, securityNeedsCurrent, securityNeedsNew,
+  loginPolicyDays, loginPolicyOptions, loginPolicyHint, loginPolicyLoading, busyLoginPolicy,
   securityDialogMessage, themeOptions, isGlassTheme, settingsSearchResults, semesterOptions, activeSemester,
   deleteSemesterMessage, semesterWeeks, semesterDateError, semesterDatesDirty, bgImagePreviewUrl,
   hasUndoRecords, _undoKeyLabels, perfAllAlive, perfRows, perfMaxKB, diskSegments,
@@ -1416,7 +1456,7 @@ const {
   exportDb, fmtBytes, fmtMem, fmtTs, goToSettingsSection, groupLabel, hideDiskTip, loadDiskUsage, moveSearchActive,
   onAnimationsChange, onBgImageFileChange, onBgMaskOpacityChange, onDesktopWidgetChange,
   onDialogCancel, onDialogConfirm, onFastStartupChange, onFollowSystemChange, onGlassOpacityChange, onIconStyleChange,
-  onMergeNotificationsChange, onPrivacyPhraseSaved, onSecurityLevelChange, onSelectMode, onSelectSemester,
+  onMergeNotificationsChange, onPrivacyPhraseSaved, onRollcallExcludeAbsentChange, onSecurityLevelChange, onLoginPolicyChange, onSelectMode, onSelectSemester,
   onSettingsSearchBlur, onSettingsSearchFocus, onThemeSelect, onToolboxChange, onTopbarColorChange,
   onUsbAutoOpenChange, openAddSemester, openClassDialog, openDeleteAccount, openDeleteClass, openDir, openModal, openRenameSemester,
   purgeThumbs, sweepThumbs, vacuumDb, cancelVacuumWait, clearLogs,
@@ -1459,6 +1499,7 @@ onMounted(() => {
   ctx.loadUsbAutoOpen()
   ctx.loadDataDirs()
   ctx.loadSecurityLevel()
+  ctx.loadLoginPolicy()
   // 班级列表：账号信息区的「当前班级」和危险区的删班入口都要用，进页面拉一次。
   // 如果是从切班 / 建班的重建中回来（弹窗原本开着），顺带把班级信息一起拉回来再重开。
   // 顺序与首页一致：先填后显 —— ClassInfoDialog 只在 visible 由 false→true 时初始化

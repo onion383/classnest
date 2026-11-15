@@ -88,12 +88,33 @@ test('revoke 后立即失效（刷新活动时间不能改变吊销语义）', (
   assert.strictEqual(sessions.has('to-revoke'), false)
 })
 
+// 按记录算清理期：登录保持天数改成按账号可配之后（services/authPolicy），
+// 同一个名单文件里要同时容纳 6 天的记录与 185 天的记录。用单一常量就会有一半账号算错。
+test('按账号算清理期：短天数账号先被清，默认账号不受影响', () => {
+  const authPolicy = require(path.join(BACKEND, 'services', 'authPolicy'))
+  const base = require(path.join(BACKEND, 'dbManager', 'dbManager.base'))
+
+  // 一个配成 1 天的账号（清理期 = 1+5 = 6 天）与一个没配过的账号（默认 30 天 → 35 天）
+  authPolicy.setDays('shortkeeper', 1)
+  base.registryUpsert('@short', 'shortkeeper', '', 1)
+
+  sessions.__test_insert('short-idle-7d', 7, Date.now() - 7 * DAY, '@short')
+  sessions.__test_insert('default-idle-7d', 8, Date.now() - 7 * DAY)
+
+  sessions.create(9) // 任意一次登录触发 prune
+
+  assert.strictEqual(sessions.has('short-idle-7d'), false, '1 天配置 → 清理期 6 天，7 天没活动应被清掉')
+  assert.strictEqual(sessions.has('default-idle-7d'), true, '默认 30 天 → 清理期 35 天，7 天没活动仍应保留')
+})
+
 test.after(() => {
   // 只写了 .sessions.json，没有打开的库连接；直接清目录
   try { fs.rmSync(DATA_DIR, { recursive: true, force: true }) } catch (_) {}
 })
 
-// 让 node:test 在所有用例结束后再退出，避免残留的模块句柄拖住进程
+// 让 node:test 在所有用例结束后再退出，避免残留的模块句柄拖住进程。
+// 注意这里锁的是**默认账号**的基线（30+5），不是 prune 实际使用的值 ——
+// 实际值是每条记录按自己账号的天数现算，见上一条用例。
 test.after(() => {
-  assert.ok(sessions.SESSION_TTL_MS === 35 * DAY, 'TTL 基线应为 35 天')
+  assert.ok(sessions.SESSION_TTL_MS === 35 * DAY, '默认账号的清理期基线应为 35 天')
 })

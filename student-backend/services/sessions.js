@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const dbManager = require('../dbManager/dbManager');
+const authPolicy = require('./authPolicy');
 
 // 有效登录会话名单（sid）：JWT 里只带一个随机 sid，服务端按这份名单校验。
 // 「不主动退出就一直有效」+「退出后原 token 立即失效」都由此实现——
@@ -10,14 +11,24 @@ const FILE = () => dbManager.sessionsPath;
 
 // 会话名单的保留期与容量上限。
 //
-// 名单里的 sid 对应的 JWT 最长活 30 天（JWT exp + 滑动续期）。但**名单本身**没人清：
-// revoke 只在「主动登出」时删一个 sid，其余 sid 会永久留在 .sessions.json 里 ——
-// 每登录一次涨一条，文件单调增长。
+// 名单里的 sid 对应的 JWT 寿命是**按账号配置**的（services/authPolicy，默认 30 天）。
+// 但**名单本身**没人清：revoke 只在「主动登出」时删一个 sid，其余 sid 会永久留在
+// .sessions.json 里 —— 每登录一次涨一条，文件单调增长。
 //
-// TTL 取 35 天（比 JWT 的 30 天略宽）。**前提是 at 必须是「最后一次活动时间」**：
-// 每次校验会话时刷新（见 has 里的 touch），否则它只是登录时间，一个持续使用 35 天的
-// 会话会在下一次 prune 时被当成弃用会话清掉（审查 v5 · V5-009）。
-const SESSION_TTL_MS = 35 * 24 * 60 * 60 * 1000;
+// 保留期取「该账号天数 + 5 天」。这个 5 天余量不是凑整：TTL 必须严格大于 token 寿命，
+// 否则活跃用户会在名单被清掉的那天被强制登出 —— token 明明没过期，服务端名单里
+// 已经没有他。**前提是 at 必须是「最后一次活动时间」**：每次校验会话时刷新
+// （见 has 里的 touch），否则它只是登录时间，一个持续使用的会话会在下一次 prune 时
+// 被当成弃用会话清掉（审查 v5 · V5-009）。
+//
+// 注意：这里是「按记录算」，不是全局一个常量。账号维度不同天数之后，同一个文件里
+// 会同时存在 6 天 TTL 与 185 天 TTL 的记录 —— 用单一常量就会有一半账号算错。
+const DAY = 24 * 60 * 60 * 1000;
+function ttlMsFor(rec) {
+  return authPolicy.sessionTtlMsForSlug(rec && rec.dbSlug);
+}
+// 默认账号的保留期（35 天）。仅供外部/测试做基线参考，prune 不再用它做判断依据。
+const SESSION_TTL_MS = (authPolicy.DEFAULT_DAYS + 5) * DAY;
 
 // 活动时间落盘节流：每个请求都写 .sessions.json 太贵，只在超过 1 小时没刷新时写一次。
 // 对 35 天 TTL 来说，1 小时的精度完全够用（最多多留 1 小时误杀窗口）。
@@ -47,7 +58,7 @@ function save() {
   } catch (_) { /* 写入失败则退化为进程内名单，重启后需重新登录 */ }
 }
 
-// 清理名单：删掉超过 TTL 的会话；再按「最久没见到」淘汰超出容量上限的。
+// 清理名单：删掉超过各自 TTL 的会话；再按「最久没见到」淘汰超出容量上限的。
 // 只在名单变长时才有意义，所以调用方（create）不必每次都调。
 function prune() {
   const list = load();
@@ -56,7 +67,12 @@ function prune() {
 
   for (const [sid, rec] of Object.entries(list)) {
     const at = rec && typeof rec.at === 'number' ? rec.at : 0;
-    if (now - at > SESSION_TTL_MS) {
+    const age = now - at;
+    // 预筛：比「最短清理期」还新的会话一定活着。省掉这一条的话，每次登录都要为名单里
+    // 每一条记录反查一次 index.db（按 slug 找账号），而名单正常情况下全是新鲜会话。
+    if (age <= authPolicy.MIN_SESSION_TTL_MS) continue;
+    // 按这条记录所属账号的天数算，不能用一个全局常量（见上方 ttlMsFor 的说明）
+    if (age > ttlMsFor(rec)) {
       delete list[sid];
       changed = true;
     }

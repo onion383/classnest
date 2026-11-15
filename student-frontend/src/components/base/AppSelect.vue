@@ -12,7 +12,9 @@
     >
       <!-- title：触发器宽度不够时文案仍会被省略号截断，悬停可看全文 -->
       <span class="av-select__value" :class="{ 'av-select__value--placeholder': !resolved || resolved.value == null }" :title="display">
-        {{ display }}
+        <!-- 外层 direction:rtl 是为了「省略号在前」，但会把「30 天」重排成「天 30」；
+             内层隔离方向，让文本自己按 LTR 排，两边互不干扰（见 styles/select.css）。 -->
+        <span class="av-select__text" dir="ltr">{{ display }}</span>
       </span>
       <span class="av-select__arrow" aria-hidden="true"><IconGlyph name="chevronDown" tint="current" glyph :size="14" :stroke-width="1.8" /></span>
     </button>

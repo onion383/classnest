@@ -55,9 +55,9 @@
         <!-- 重名提示跟着这一个入口走：班名现在只有铅笔能改，提示放别处等于看不见 -->
         <p v-if="nameDuplicate" class="mt-1.5 text-xs text-danger">已有同名班级，请换个名字</p>
         <p v-else class="mt-1.5 text-xs text-text-muted">
-          <template v-if="renaming">输入新班名，回车确认，Esc 取消</template>
+          <template v-if="renaming">输入新班名，按住回车确认，Esc 取消</template>
           <template v-else-if="switching">切换中…</template>
-          <template v-else-if="classes.length > 1">切换后页面会换成该班的数据（两个班完全独立）</template>
+          <template v-else-if="classes.length > 1">切换后页面数据会换成该班的数据，点击旁边按钮可重命名该班级</template>
           <template v-else>点右侧铅笔可修改班级名称</template>
         </p>
       </div>

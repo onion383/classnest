@@ -18,6 +18,7 @@ classnest/
         ├── api-routes-test.cjs  # 临时 DATA_DIR + 真实路由挂最小 Express，不需要完整后端
         ├── api-smoke.cjs  # 内置最小 Express，不需要真实后端
         ├── auth-smoke.js  # 默认自起隔离后端；AUTH_SMOKE_EXTERNAL=1 时连接 PORT / 3000…
+        ├── login-policy-test.cjs  # 自起隔离后端（真 HTTP）：登录保持天数按账号存、切班不丢、当场重签、非法值 400
         ├── cadre-undo-test.cjs  # 临时 DATA_DIR + 测试主密钥建真实加密库 + 真实路由挂最小 Express
         ├── collator-equiv-probe.js  # 无
         ├── font-subset-verify.mjs  # 需 pdf-subset-verify 产物
@@ -78,6 +79,7 @@ classnest/
 | [`api-smoke.cjs`](../../../testjs/smoke/api-smoke.cjs) | 内置最小 Express，不需要真实后端 | 请求体解析：JSON / 表单 / gzip / 尾部垃圾字节 / 超限拦截 |
 | [`api-routes-test.cjs`](../../../testjs/smoke/api-routes-test.cjs) | 临时 `DATA_DIR` + 真实路由挂最小 Express，不需要完整后端 | 畸形 Range、值日落盘结构、AI 密钥复用、快照后列缓存失效、SSE 尾帧、虚拟相册撤销 |
 | [`auth-smoke.js`](../../../testjs/smoke/auth-smoke.js) | 默认自起隔离后端；`AUTH_SMOKE_EXTERNAL=1` 时连接 `PORT` / `3000` 的明文后端 | 注册 → 确认 → 登录 → 改密 → 改名；隐私模式口令包裹/恢复词校验 |
+| [`login-policy-test.cjs`](../../../testjs/smoke/login-policy-test.cjs) | 自起隔离后端（真 HTTP，无安全通道） | **登录保持天数按账号存**：默认 30 天；改 7 天后返回的新 token `exp` 就是 7 天且 `sid` 不变（当场重签、不重建会话）；旧 token 不被吊销；**切到该账号的另一个班后设置仍为 7 天**（键用 `dbSlug` 就会退回 30 —— 源码判据抓不到这条）；非法值 0/-1/366/7.5/"abc" 一律 400 且不改动已存值 |
 | [`undo-batch-test.cjs`](../../../testjs/smoke/undo-batch-test.cjs) | 临时 `DATA_DIR` + 真实撤销路由，不需要完整后端 | 批次撤销：同 `origin` 一次退完/一次回完、跨表批次、无 `origin` 仍是单条、新动作清空全部 redo、按 `origin` 整批（设置页路径） |
 | [`cadre-undo-test.cjs`](../../../testjs/smoke/cadre-undo-test.cjs) | 临时 `DATA_DIR` + 测试主密钥建真实加密库 + 真实路由挂最小 Express | 班干部撤销执行器：`cadre_delete`（级联删成员 + 下级上移整批回滚 / 重做）、`cadre_order`（`parent_id` / `cadre_id` / `sort_order` 回滚）、`cadre_import`（只回滚本次新建行，重做层级正确）；走真实 `/api/undo` 中文 `key` |
 | [`collator-equiv-probe.js`](../../../testjs/smoke/collator-equiv-probe.js) | 无 | 后端 `Intl.Collator` 与前端排序一致性 |

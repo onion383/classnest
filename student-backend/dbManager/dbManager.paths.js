@@ -2,7 +2,7 @@
 // dbManager.paths.js —— 数据目录分层布局的唯一来源（v2）
 //
 // 目录模型：用户可配置的「数据目录」只有一个根 root，根下固定四层：
-//   core/     index.db、@slug.db(+wal/shm)、db-master.key、.jwt-secret、.sessions.json、.last-db
+//   core/     index.db、@slug.db(+wal/shm)、db-master.key、.jwt-secret、.sessions.json、.auth-policy.json、.last-db
 //   content/  uploads/ snapshots/ album-trash/ receipt-trash/ ai-memory/ ai-skills/
 //   cache/    album-thumbs/ ffmpeg/          （可再生）
 //   logs/     backend.log startup.log inp.log
@@ -40,6 +40,8 @@ const indexPath = path.join(coreDir, 'index.db');
 const dbMasterKeyPath = path.join(coreDir, 'db-master.key');
 const jwtSecretPath = path.join(coreDir, '.jwt-secret');
 const sessionsPath = path.join(coreDir, '.sessions.json');
+// 登录保持天数（按账号分桶）。与 .sessions.json 同层同性质：本机凭据，不进备份包。
+const authPolicyPath = path.join(coreDir, '.auth-policy.json');
 const lastDbPath = path.join(coreDir, '.last-db');
 function dbFilePath(slug) {
   return path.join(coreDir, `${slug}.db`);
@@ -82,6 +84,7 @@ module.exports = {
   dbMasterKeyPath,
   jwtSecretPath,
   sessionsPath,
+  authPolicyPath,
   lastDbPath,
   dbFilePath,
   uploadsDir,

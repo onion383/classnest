@@ -18,6 +18,7 @@ classnest/
 │   │   ├── aiConversationStore.js  # ai_conversations / ai_messages 的 SQL 出口（会话与消息分页、标题、摘要、token 记账）
 │   │   ├── aiStore.js  # AI 域（routes/ai/**）的 SQL 出口：表结构缓存、引用统计、工具所需的各业务表查询、单行 CRUD
 │   │   ├── albumStore.js  # 相册索引（albums / album_photos）的 SQL 出口；事务留在路由（夹着缩略图与扫描的 FS 副作用）
+│   │   ├── authPolicy.js  # 登录保持天数（按账号）：token 寿命、续签窗口、名单清理期、媒体凭据四个派生值的唯一来源
 │   │   ├── backupArchive.js  # 备份包 v3 写包
 │   │   ├── bcryptAsync.js  # 用户名规则
 │   │   ├── bundleRestore.js  # 备份包落盘还原
@@ -200,7 +201,13 @@ classnest/
 - **定位**：登录会话（sid）登记与失效；`.sessions.json` 全局一份，因此账号维度是 `(userId, dbSlug)` 双键（各账号库 `users.id` 都可能是 1）。
 - **导出**：`create`、`has`、`revoke`、`revokeAllByUser(userId, dbSlug)`。
 - **调用方**：`middleware/auth.js`、`routes/auth.js`（登出）、`services/credentialChange.js`。
-- **注意事项**：`has()` 会顺带刷新活动时间（有节流）并清理长期不活动的记录；`revoke` 是单点出口，`revokeAllByUser` 才是「这个账号的全部 sid」。
+- **注意事项**：`has()` 会顺带刷新活动时间（有节流）并清理长期不活动的记录；`revoke` 是单点出口，`revokeAllByUser` 才是「这个账号的全部 sid」。清理期**按记录所属账号算**（`authPolicy.sessionTtlMsForSlug`，天数 + 5），不是全局一个常量 —— 登录保持天数改成按账号可配之后，同一个名单文件里会同时存在 6 天与 185 天的记录；比「最短清理期」还新的记录直接跳过，不为它反查 index.db。
+
+#### [`services/authPolicy.js`](../../../student-backend/services/authPolicy.js) · 登录保持天数
+- **定位**：登录保持天数（按账号）的唯一来源，落 `core/.auth-policy.json`（与 `.sessions.json` 同层同性质：本机凭据，不进备份包）。键是**账号名**而不是 `dbSlug`：一个账号可以有多个班，切班只换 `dbSlug`，按 slug 存会表现为「换个班设置就被重置」。
+- **导出**：`daysFor`、`daysForSlug`、`setDays`、`renameKey`、`signOptsFor`、`slideWindowMs`、`sessionTtlMs`、`sessionTtlMsForSlug`、`mediaTtlFor`。
+- **调用方**：`middleware/auth.js`（签发 / 滑动续期 / 媒体凭据）、`services/sessions.js`（名单清理期）、`routes/auth.js` 与 `routes/account.js` 的各签发点、`routes/account.js` 的 `GET/POST /login-policy`。
+- **注意事项**：①续签窗口取天数的 1/4，**必须小于天数** —— 窗口一旦 ≥ 天数，token 从签发那一刻起就永远在「该续签」区间，每个请求都重签一次（慢而无报错）；②名单清理期取 `天数 + 5`，**必须大于 token 寿命**，否则活跃用户在名单被清掉那天被强制登出（V5-009 同类）；③不提供「永久」：省掉 `expiresIn` 能签出永不过期的 token，代价是名单清理、备份恢复、改密吊销全部失去兜底；④改小天数不会让已签出的旧 token 变短（它带着原 `exp`），只有当前窗口当场重签。
 
 #### [`services/credentialChange.js`](../../../student-backend/services/credentialChange.js) · 凭证变更动作层
 - **定位**：「凭证变更 → 会话失效」的唯一动作层（v6 · A1-16）。调用方只描述「哪个账号变了」，不自己决定吊销范围、也不自己拼 sid。

@@ -48,8 +48,11 @@ classnest/
   - `slots`（插槽）：`extraOptions`（在导出选项区插入自定义控件）
 - **内部实现**：`pickFields`（选择列）→ `packRows`（选择行）→ `runExport`（按格式分派）；`PDF` 走 `html2canvas`（网页转图片库）+ `jsPDF`（PDF 生成库），中文字体动态子集见 [`utils/pdfFont.js`](../../../../student-frontend/src/utils/pdfFont.js)；文件名校验与保存对话框走主进程 `save-file`（保存文件通道）。
 - **导出进度**：`doExport` 开始后置 `exporting=true`，「导出」按钮置灰并显示 `导出中 N%`；各格式在耗时阶段通过 `ctx.reportProgress()` 上报（如 Excel 20/70/90、PDF 20/40/60/90），结束时统一复位。
-- **HTML 导出**：生成自包含的「简易版表格组件」——样式与页面 `DynamicTable` / `GridView` 对齐（表头、行号列、走廊、讲台、休息行），并内嵌一段脚本只做拖拽换行/换列（纯前端）；让位用 `180ms cubic-bezier(.22,.61,.36,1)`，落位用 `320ms cubic-bezier(.34,1.08,.64,1)` 的 FLIP，与表格组件一致。
-- **Excel 导出**：只保留细框线、加粗与居中，不给单元格填色（标题、表头、讲台行、走廊列均为白底黑字）。
+- **HTML 导出**：生成自包含的静态表格 —— 样式与页面 `DynamicTable` / `GridView` 对齐（表头、行号列、走廊、讲台、休息行），不内嵌脚本，打开即可查看/打印，行列顺序即导出时的顺序。
+- **统一表头色**：模块顶层 `EXPORT_HEAD_*` 以 HTML 表头蓝 `#3b82f6` 为唯一口径，图片（含分组图）、PDF（`headStyles.fillColor`）、Excel / 分组 Excel（`fgColor`）全部取同一份；数据行仍白底黑字，便于打印。分组 PDF 是整表截图，只跳过 `thead` 的刷白，表头同样保留蓝色。
+- **图片导出**：html2canvas 不解析 table-cell 的 `vertical-align`（按 Range 基线画字，文字会踩底线），截图前用 `onclone` 在克隆文档里把单元格改成等高 `line-height`、清掉毛玻璃主题给表格/表头加的圆角，并把表头刷成统一蓝；只改克隆，页面本身不受影响。离屏表格也内联同一份 `SCREENSHOT_CELL` 样式。
+- **Excel 导出**：只保留细框线、加粗与居中；表头蓝底白字，标题、讲台行、走廊列仍是白底黑字。
+- **纯文本导出**：`buildTxt(headers, bodyRows, title)` 首行写标题（文件名）+ 等宽下划线，再按「显示宽度」（中文/全角记 2 宽，其余 1 宽）算每列最宽值、右侧补空格对齐，表头下画一条等宽分隔线；单元格内 Tab/换行压成空格。普通导出与分组导出都传 `filename` 作标题。改成空格对齐后不再按 Tab 分列，导入其它系统请用 CSV。
 - **使用方**：`ClassroomView`、`FeeManagement`、`LeaveManagement`、`ScoreManagement`、`ScheduleView`、`SeatView`、`DutyView`、`ActivitiesView`、`GroupManageView`、`ExportAlbumIndex`。
 - 注意：长表 `HTML`/`PDF` 会让 `html2canvas`（网页转图片库）崩溃，相册索引导出因此屏蔽图片格式；新增格式只需改 `exportFormats.js`（格式实现表）。
 

@@ -6,6 +6,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const fs = require('node:fs')
 const { pathToFileURL } = require('node:url')
 
 const loadChartHit = () => import(pathToFileURL(path.join(__dirname, '../../student-frontend/src/utils/chartHit.js')).href)
@@ -857,4 +858,215 @@ test('reportError：无 action 时退化为通用文案；脏输入不抛', asyn
     assert.equal(list.length, 1, '同文案应合并成一条')
     assert.equal(list[0].count, 3, '合并后计数应为 3')
   })
+})
+
+// =========================================================================
+// HTML 导出：静态表格，不带「拖拽调换行列」（2026-11-14 移除）
+//   产物级判据：从源码切出 exportHTMLTable 真跑一遍，断言生成的 HTML 里
+//   没有脚本 / 手柄 / 拖拽样式。只注入方法体用到的外部名，绕开
+//   saveFile.js 里 Vite 专属的 JSON import（Node 直接 import 会报
+//   ERR_IMPORT_ATTRIBUTE_MISSING）。最后两条 assert.throws 是变异反证。
+// =========================================================================
+const HTML_EXPORTERS = path.join(__dirname, '../../student-frontend/src/components/import-export/ExportExcel/ExportExcel.exporters.js')
+
+function assertStaticHtml(html) {
+  assert.match(html, /^<!DOCTYPE html>/, '仍要生成完整 HTML 文件')
+  assert.match(html, /<table class="dt">/, '表格本体不能丢')
+  assert.match(html, /<\/tbody><\/table><\/body><\/html>$/, 'HTML 必须正确收尾')
+  assert.doesNotMatch(html, /<script/i, '不许内嵌脚本')
+  assert.doesNotMatch(html, /grip|⠿|data-col-handle|data-row-handle|pointerdown|drag-src|is-dragging|class="tip"/, '不许残留拖拽手柄或提示')
+}
+
+function loadHtmlExporter() {
+  const src = fs.readFileSync(HTML_EXPORTERS, 'utf8')
+  const a = src.indexOf('    async exportHTMLTable(')
+  const b = src.indexOf('    // ==================== CSV ====================', a)
+  assert.ok(a > 0 && b > a, '必须能切出 exportHTMLTable 方法体')
+  let body = src.slice(a, b).trimEnd()
+  if (body.endsWith(',')) body = body.slice(0, -1)
+  const code = body.replace('async exportHTMLTable(', 'async function exportHTMLTable(') + '\nreturn exportHTMLTable;'
+  return (ctx, saveFile) => new Function('ctx', 'saveFile', 'Blob', code)(ctx, saveFile, Blob)
+}
+
+test('HTML 导出产物是静态表格，不含拖拽调换行列', async () => {
+  const exportHTMLTable = loadHtmlExporter()
+  let saved = null
+  const ctx = {
+    escapeHtml: (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]),
+    isAisleColumn: (h) => h === '走廊',
+    isRowNumColumn: (h) => h === '行号',
+    reportProgress: () => {},
+  }
+  const saveFile = async (name, blob) => { saved = { name, html: await blob.text() }; return name }
+  await exportHTMLTable(ctx, saveFile)(
+    [{ 姓名: '张三', 学号: '001' }, { 姓名: '李四', 学号: '002' }],
+    [{ name: '姓名' }, { name: '学号' }],
+    '测试表'
+  )
+  assert.ok(saved, '必须走到写盘出口')
+  assert.equal(saved.name, '测试表.html')
+  const html = saved.html.trim()
+  assertStaticHtml(html)
+  assert.match(html, /张三/, '数据行不能丢')
+  assert.equal((html.match(/<tr>/g) || []).length, 3, '1 行表头 + 2 行数据都要在')
+
+  // 变异反证：把脚本 / 手柄塞回产物，判据必须变红（否则这条判据是假绿）
+  assert.throws(() => assertStaticHtml(html.replace('</head>', '<script>drag()</script></head>')), /不许内嵌脚本/)
+  assert.throws(() => assertStaticHtml(html.replace('<table', '<span class="grip" data-col-handle>⠿</span><table')), /不许残留拖拽手柄/)
+})
+
+// =========================================================================
+// 导出视觉统一（2026-11-14）：表头只有一份蓝 #3b82f6；图片单元格文字垂直居中、无圆角
+//   源码判据锁「所有格式取同一常量」，产物判据真跑 buildHTMLString 看生成的样式串。
+// =========================================================================
+function assertExportVisualContract(src) {
+  assert.match(src, /const EXPORT_HEAD_BG = '#3b82f6'/, '图片 / 离屏表头必须取 HTML 表头蓝')
+  assert.match(src, /const EXPORT_HEAD_RGB = \[59, 130, 246\]/, 'PDF 填充色必须与 #3b82f6 对应')
+  assert.match(src, /fillColor: EXPORT_HEAD_RGB/, 'PDF 表头填充必须取同一常量')
+  assert.equal((src.match(/fgColor: \{ argb: EXPORT_HEAD_ARGB \}/g) || []).length, 2, '普通 + 分组 Excel 表头都要填色')
+  assert.match(src, /const SCREENSHOT_CELL = '[^']*line-height:34px[^']*border-radius:0;'/, '单元格必须等高 line-height 且清圆角')
+  assert.equal((src.match(/onclone: \(_, cloned\) => normalizeScreenshotTable\(cloned\)/g) || []).length, 4, '4 处 html2canvas 截图都要走统一预处理')
+  assert.match(src, /if \(data\.row\.section === 'head'\) return;/, 'PDF 行样式不许把表头白字改回黑字')
+  assert.doesNotMatch(src, /#4CAF50/, '不许再出现旧的绿色表头')
+  // HTML 导出：走廊列也是表头，必须跟其它 th 一样是蓝色；灰色只给数据区的走廊格
+  assert.match(src, /table\.dt thead th\.aisle \{ width: 36px; \}/, '表头走廊列要显式留宽并继承蓝色')
+  assert.doesNotMatch(src, /th\.aisle[^{]*\{[^}]*background:\s*#e5e7eb/, '走廊列表头不许染成灰色')
+  assert.match(src, /table\.dt td\.aisle \{[^}]*background: #e5e7eb/, '数据区走廊格仍保持灰色')
+}
+
+test('导出表头统一蓝、图片单元格垂直居中', () => {
+  const src = fs.readFileSync(HTML_EXPORTERS, 'utf8')
+  assertExportVisualContract(src)
+
+  // 产物级：切出 buildHTMLString 真跑，确认样式串真的进了生成的 HTML
+  const a = src.indexOf('    buildHTMLString(rows, fields, filename) {')
+  const b = src.indexOf('    // ==================== PDF ====================', a)
+  assert.ok(a > 0 && b > a, '必须能切出 buildHTMLString 方法体')
+  let body = src.slice(a, b).trimEnd()
+  if (body.endsWith(',')) body = body.slice(0, -1)
+  const code = body.replace('buildHTMLString(rows, fields, filename) {', 'function buildHTMLString(rows, fields, filename) {') + '\nreturn buildHTMLString;'
+  const mockCtx = {
+    escapeHtml: (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]),
+    isPodiumRowWithRowNum: () => false,
+  }
+  const headBg = src.match(/const EXPORT_HEAD_BG = '([^']*)'/)
+  const headFg = src.match(/const EXPORT_HEAD_FG = '([^']*)'/)
+  const cellStyle = src.match(/const SCREENSHOT_CELL = '([^']*)'/)
+  assert.ok(headBg && headFg && cellStyle, '必须能取出源码里的真实常量')
+  const build = new Function('ctx', 'EXPORT_HEAD_BG', 'EXPORT_HEAD_FG', 'SCREENSHOT_CELL', code)(
+    mockCtx, headBg[1], headFg[1], cellStyle[1]
+  )
+  const out = build([{ 姓名: '张三', 学号: '001' }], [{ name: '姓名' }, { name: '学号' }], '测试表')
+  assert.match(out, /background-color:#3b82f6/, '表头必须是导出蓝')
+  assert.match(out, /line-height:34px/, '单元格必须等高行高（文字才不会踩底线）')
+  assert.match(out, /border-radius:0/, '表格必须直角')
+  assert.match(out, /张三/, '数据不能丢')
+
+  // 变异反证：任一处退回旧做法，判据必须变红
+  assert.throws(() => assertExportVisualContract(src.replace('fillColor: EXPORT_HEAD_RGB', 'fillColor: [255, 255, 255]')), /PDF 表头填充/)
+  assert.throws(() => assertExportVisualContract(src.replace(/line-height:34px/, 'line-height:20px')), /等高 line-height/)
+  assert.throws(() => assertExportVisualContract(src + '\n// #4CAF50'), /旧的绿色表头/)
+  assert.throws(() => assertExportVisualContract(src.replace("if (data.row.section === 'head') return;", '')), /表头白字/)
+  assert.throws(() => assertExportVisualContract(src.replace('table.dt thead th.aisle { width: 36px; }', 'table.dt th.aisle { background: #e5e7eb; }')), /走廊列表头不许染成灰色|表头走廊列/)
+})
+
+// =========================================================================
+// 纯文本导出（2026-11-15）：首行标题 + 按显示宽度空格对齐，取代 Tab 分隔
+// =========================================================================
+function displayWidth(str) {
+  let n = 0
+  for (const ch of str) n += /[^\x00-\xff]/u.test(ch) ? 2 : 1
+  return n
+}
+
+function makeBuildTxt(src) {
+  const a = src.indexOf('    buildTxt(headers, bodyRows, title) {')
+  const b = src.indexOf('    async exportTXT(', a)
+  assert.ok(a > 0 && b > a, '必须能切出 buildTxt 方法体')
+  let body = src.slice(a, b).trimEnd()
+  if (body.endsWith(',')) body = body.slice(0, -1)
+  const code = body.replace('buildTxt(headers, bodyRows, title) {', 'function buildTxt(headers, bodyRows, title) {') + '\nreturn buildTxt;'
+  return new Function(code)()
+}
+
+function assertTxtContract(src) {
+  assert.equal((src.match(/buildTxt\([^\n]*filename\)/g) || []).length, 2, '普通导出与分组导出都要传标题')
+  const out = makeBuildTxt(src)(['姓名', '学号', '备注'], [
+    ['张三', '001', '第一行'],
+    ['欧阳娜娜', '002', 'A'],
+  ], '学生名单')
+  const lines = out.replace(/\r\n$/, '').split('\r\n')
+  assert.equal(lines[0], '学生名单', '首行必须是标题')
+  assert.equal(lines[1], '========', '标题下划线必须与标题等宽')
+  assert.equal(lines[2], '', '标题与表格之间空一行')
+  assert.match(lines[4], /^-+  -+  -+$/, '表头下要有等宽分隔线')
+  // 每行第一列补齐后的「第二列起点」必须一致 —— 这才是真对齐，不是看着像
+  const secondColStart = (line) => {
+    const m = line.match(/^(\S+)( +)(\S+)/)
+    assert.ok(m, '每行都要有列分隔空格（第二列起点才可比对）')
+    return displayWidth(m[1]) + m[2].length
+  }
+  const starts = [lines[3], lines[5], lines[6]].map(secondColStart)
+  assert.equal(new Set(starts).size, 1, '表头与数据行的第二列起点必须一致')
+  assert.equal(displayWidth(lines[1]), displayWidth('学生名单'), '中文按 2 宽：下划线与标题等宽')
+  assert.match(lines[5], /^张三 /, '短单元格右侧要补空格')
+}
+
+test('纯文本导出有标题且按显示宽度对齐', () => {
+  const src = fs.readFileSync(HTML_EXPORTERS, 'utf8')
+  assertTxtContract(src)
+  // 变异反证：任一处退回旧做法，判据必须变红
+  assert.throws(() => assertTxtContract(src.replace('? 2 : 1', '? 1 : 1')), /标题下划线必须与标题等宽|中文按 2 宽/)
+  assert.throws(() => assertTxtContract(src.replace('title ?', "'' ?")), /首行必须是标题/)
+  assert.throws(() => assertTxtContract(src.replace("join('  ')", "join('\\t')")), /列分隔空格/)
+  assert.throws(() => assertTxtContract(src.replace(/buildTxt\([^\n]*filename\)/, 'buildTxt(h, b)')), /都要传标题/)
+})
+
+// =========================================================================
+// 值日导出列名（2026-11-15）：内部键 d_ 不许再当表头漏进导出文件
+// =========================================================================
+const DUTY_VIEW = path.join(__dirname, '../../student-frontend/src/views/DutyView.vue')
+
+function dutyFieldsBlock(src, constName) {
+  const a = src.indexOf(`const ${constName} = computed(() => [`)
+  const b = src.indexOf('])', a)
+  assert.ok(a > 0 && b > a, `必须能切出 ${constName} 定义`)
+  return src.slice(a, b)
+}
+
+function assertDutyExportHeaders(src) {
+  assert.doesNotMatch(src, /name:\s*'d_'\s*\+/, '导出 fields 不许再拼 d_ 前缀')
+  assert.doesNotMatch(src, /row\['d_'\s*\+\s*d\]/, '导出行不许再写 d_ 键')
+  assert.match(dutyFieldsBlock(src, 'exportFields'), /map\(d => \(\{ name: d \}\)\)/, '当前值日导出列名用星期名')
+  assert.match(dutyFieldsBlock(src, 'historyExportFields'), /map\(d => \(\{ name: d \}\)\)/, '历史记录导出列名用星期名')
+  assert.equal((src.match(/row\[d\] =/g) || []).length, 3, '三处导出行（当前/模板、权重、历史）都要同步改')
+}
+
+test('值日导出表头不带 d_ 内部前缀，导入端仍兼容旧表头', async () => {
+  const src = fs.readFileSync(DUTY_VIEW, 'utf8')
+  assertDutyExportHeaders(src)
+
+  // 产物级：真跑 buildExportRows，确认行对象的键就是星期名（不是 d_周一）
+  const a = src.indexOf('function buildExportRows(cells) {')
+  const b = src.indexOf('const activeExportRows', a)
+  assert.ok(a > 0 && b > a, '必须能切出 buildExportRows')
+  const build = new Function('settingsItems', 'settingsDays', src.slice(a, b) + '\nreturn buildExportRows;')(
+    { value: [{ name: '擦黑板' }, { name: '扫地' }] },
+    { value: ['周一', '周二'] }
+  )
+  const row = build({ 擦黑板: { 周一: ['张三'], 周二: ['李四'] } })[0]
+  assert.deepEqual(Object.keys(row), ['项目', '周一', '周二'])
+  assert.equal(row['周一'], '张三')
+
+  // 历史导出的旧文件（表头带 d_）仍要能导回来
+  const { normalizeLoose } = await loadImportSheet()
+  assert.equal(normalizeLoose('d_周一'), normalizeLoose('周一'))
+
+  // 变异反证
+  const v1 = src.replace('name: d }))', "name: 'd_' + d }))")
+  assert.throws(() => assertDutyExportHeaders(v1), /不许再拼 d_ 前缀/)
+  const v2 = src.replace(/row\[d\] =/g, "row['d_' + d] =")
+  assert.throws(() => assertDutyExportHeaders(v2), /不许再写 d_ 键|三处导出行/)
+  const v3 = src.replace('name: d }))', "name: 'day_' + d }))")
+  assert.throws(() => assertDutyExportHeaders(v3), /当前值日导出列名用星期名/)
 })

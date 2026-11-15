@@ -951,9 +951,12 @@ async function doApplyActiveToMaster() {
 }
 
 // ==================== 导出（列为劳动项目 + 各星期） ====================
+// 列名直接用星期名：以前拼的 'd_周一' 是内部键，导出器拿 field.name 当表头，
+// 于是 d_ 会原样出现在表头、字段勾选框和所有导出格式里。导入端 normalizeLoose /
+// gridPreviewHeaders 仍保留剥 d_ 的逻辑，用来兼容历史导出的旧文件（旧表头照样能导回来）。
 const exportFields = computed(() => [
   { name: '项目', label: '劳动项目' },
-  ...settingsDays.value.map(d => ({ name: 'd_' + d, label: d }))
+  ...settingsDays.value.map(d => ({ name: d }))
 ])
 
 function buildExportRows(cells) {
@@ -961,7 +964,7 @@ function buildExportRows(cells) {
     const row = { 项目: it.name }
     settingsDays.value.forEach(d => {
       const names = cells[it.name]?.[d]
-      row['d_' + d] = Array.isArray(names) ? names.filter(Boolean).join('、') : (names || '')
+      row[d] = Array.isArray(names) ? names.filter(Boolean).join('、') : (names || '')
     })
     return row
   })
@@ -1340,7 +1343,7 @@ const weightExportRows = computed(() => {
     const row = { 项目: it.name }
     settingsDays.value.forEach(d => {
       const v = dutyWeights.value[it.name]?.[d]
-      row['d_' + d] = (v == null || v === '') ? '' : String(v)
+      row[d] = (v == null || v === '') ? '' : String(v)
     })
     return row
   })
@@ -1555,13 +1558,13 @@ const historyExportMounted = ref(false)
 watch(() => historyExportVisible.value, v => { if (v) historyExportMounted.value = true })
 const historyExportFields = computed(() => [
   { name: '项目', label: '劳动项目' },
-  ...historyDays.value.map(d => ({ name: 'd_' + d, label: d }))
+  ...historyDays.value.map(d => ({ name: d }))
 ])
 const historyExportRows = computed(() => historyItems.value.map(it => {
   const row = { 项目: it.name }
   historyDays.value.forEach(d => {
     const names = historyCells.value[it.name]?.[d]
-    row['d_' + d] = Array.isArray(names) ? names.filter(Boolean).join('、') : (names || '')
+    row[d] = Array.isArray(names) ? names.filter(Boolean).join('、') : (names || '')
   })
   return row
 }))

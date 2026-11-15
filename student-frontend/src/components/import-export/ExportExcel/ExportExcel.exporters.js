@@ -12,6 +12,41 @@ import { toRaw } from 'vue'
 
 const SECTION_NAMES = { morning: '上午', noon: '中午', afternoon: '下午', evening: '傍晚', night: '晚上' };
 
+// 导出表头统一色：以 HTML 导出的表头蓝 #3b82f6 为准。
+// 图片 / PDF / Excel / 分组导出都取这一份，避免各写一份色值后分叉。
+const EXPORT_HEAD_BG = '#3b82f6';
+const EXPORT_HEAD_FG = '#ffffff';
+const EXPORT_HEAD_RGB = [59, 130, 246];
+const EXPORT_HEAD_ARGB = 'FF3B82F6';
+
+// 截图用单元格基础样式。html2canvas 不解析 table-cell 的 vertical-align
+// （它按 Range 的文本基线画字），只写 vertical-align:middle 会「踩着底线」；
+// 改成固定行高 + 等高 line-height，让浏览器真实布局把字居中，Range 矩形才居中。
+const SCREENSHOT_CELL = 'border:1px solid #ccc; padding:0 12px; height:34px; line-height:34px; text-align:center; vertical-align:middle; border-radius:0;';
+
+// html2canvas 截图前在克隆文档里统一：清掉毛玻璃主题给表格/表头加的圆角、
+// 表头刷成导出蓝、单元格文字垂直居中。只改克隆，页面本身不受影响。
+function normalizeScreenshotTable(clonedEl) {
+  if (!clonedEl) return;
+  const table = clonedEl.tagName === 'TABLE' ? clonedEl : clonedEl.querySelector('table');
+  const scope = table || clonedEl;
+  scope.style.borderRadius = '0';
+  if (clonedEl !== scope) clonedEl.style.borderRadius = '0';
+  if (clonedEl.style.overflow === 'hidden') clonedEl.style.overflow = 'visible';
+  scope.querySelectorAll('th, td').forEach(cell => {
+    const h = Math.max(24, Math.round(cell.getBoundingClientRect().height || cell.offsetHeight || 34));
+    cell.style.lineHeight = `${h}px`;
+    cell.style.paddingTop = '0';
+    cell.style.paddingBottom = '0';
+    cell.style.verticalAlign = 'middle';
+    cell.style.borderRadius = '0';
+    if (cell.tagName === 'TH' && cell.closest('thead')) {
+      cell.style.backgroundColor = EXPORT_HEAD_BG;
+      cell.style.color = EXPORT_HEAD_FG;
+    }
+  });
+}
+
 export function useExportFormats(ctx) {
   // 写盘出口。默认走系统保存对话框（原有行为不变）；
   // 调用方在 ctx 上注入 saveFile 时改走注入实现 —— 设置页「数据管理」就是用它把
@@ -79,11 +114,11 @@ export function useExportFormats(ctx) {
       const head = rows[0];
       const body = rows.slice(1);
       let html = `<div style="text-align:center; font-size:20px; font-weight:bold; margin-bottom:12px;">${ctx.escapeHtml(filename)}</div>`;
-      html += '<table style="border-collapse:collapse; margin:0 auto;">';
-      html += `<thead><tr style="background-color:#4CAF50; color:white;">${head.map(h => `<th style="border:1px solid #ccc; padding:6px 12px;">${h}</th>`).join('')}</tr></thead><tbody>`;
+      html += '<table style="border-collapse:collapse; margin:0 auto; border-radius:0;">';
+      html += `<thead><tr style="background-color:${EXPORT_HEAD_BG}; color:${EXPORT_HEAD_FG};">${head.map(h => `<th style="${SCREENSHOT_CELL}">${h}</th>`).join('')}</tr></thead><tbody>`;
       for (const r of body) {
         const cells = r.map((c, i) => {
-          let style = 'border:1px solid #ccc; padding:6px 12px; text-align:center;';
+          let style = SCREENSHOT_CELL;
           if (r[0] && i === 0) style += ' font-weight:bold; background-color:#BDD7EE;';
           else if (r[3]) style += ' font-weight:bold;';
           return `<td style="${style}">${String(c ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
@@ -112,7 +147,7 @@ export function useExportFormats(ctx) {
     },
     async exportGroupTXT(idxList, filename) {
       const rows = ctx.groupFlatRows(idxList);
-      const txt = ctx.buildTxt(rows[0], rows.slice(1));
+      const txt = ctx.buildTxt(rows[0], rows.slice(1), filename);
       const blob = new Blob([txt], { type: 'text/plain;charset=utf-8;' });
       return await saveFile(`${filename}.txt`, blob);
     },
@@ -131,7 +166,7 @@ export function useExportFormats(ctx) {
       document.body.appendChild(tempDiv);
       try {
         ctx.reportProgress(20)
-        const canvas = await html2canvas(tempDiv, { scale: 2 });
+        const canvas = await html2canvas(tempDiv, { scale: 2, onclone: (_, cloned) => normalizeScreenshotTable(cloned) });
         ctx.reportProgress(60)
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
         if (!blob) return false;
@@ -148,16 +183,17 @@ export function useExportFormats(ctx) {
       tempDiv.style.left = '-9999px';
       // 分组表是整表截图进 PDF：字号调大后按页面宽度缩放，落到纸面上的字也会更大
       tempDiv.style.fontSize = '18px';
-      // PDF 走黑白版式：把分组表里的表头/分组底色与白字统一成白底黑字
-      // （只影响本次 PDF 截图，HTML / 图片导出仍保留原来的配色）
+      // 分组 PDF 是整表截图：数据行统一白底黑字便于打印，表头保留导出蓝
+      // （只影响本次 PDF 截图，HTML / 图片导出仍走 groupTableHTML 的原配色）
       tempDiv.querySelectorAll('[style]').forEach((el) => {
+        if (el.closest('thead')) return;
         el.style.backgroundColor = '#ffffff';
         el.style.color = '#000000';
       });
       document.body.appendChild(tempDiv);
       try {
         ctx.reportProgress(20)
-        const canvas = await html2canvas(tempDiv, { scale: 2 });
+        const canvas = await html2canvas(tempDiv, { scale: 2, onclone: (_, cloned) => normalizeScreenshotTable(cloned) });
         ctx.reportProgress(60)
         const img = canvas.toDataURL('image/png');
         const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
@@ -205,12 +241,13 @@ export function useExportFormats(ctx) {
         for (let col = 1; col <= headers.length; col++) sheet.getCell(r, col).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
         sheet.getRow(r).height = 20;
         r++;
-        // 表头行
+        // 表头行：与 HTML / 图片 / PDF 统一蓝底白字
         const headRow = sheet.addRow(headers);
         for (let col = 1; col <= headers.length; col++) {
           const c = sheet.getCell(headRow.number, col);
-          c.font = { bold: true };
-          c.alignment = { horizontal: 'center' };
+          c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: EXPORT_HEAD_ARGB } };
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
           c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
         }
         r++;
@@ -257,12 +294,13 @@ export function useExportFormats(ctx) {
         cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       }
 
-      // 表头行
+      // 表头行：与 HTML / 图片 / PDF 统一蓝底白字
       const headerRow = sheet.addRow(headers);
       for (let col = 1; col <= headers.length; col++) {
         const cell = sheet.getCell(headerRow.number, col);
-        cell.font = { bold: true, color: { argb: 'FF000000' } };
-        cell.alignment = { horizontal: 'center' };
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: EXPORT_HEAD_ARGB } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       }
 
@@ -423,8 +461,8 @@ export function useExportFormats(ctx) {
     },
 
     // ==================== HTML ====================
-    // 导出一个「简易版表格组件」：样式与页面上的 DynamicTable / GridView 对齐，
-    // 内嵌一段脚本只做「拖拽换行/换列」（纯前端），动画沿用组件的 FLIP 曲线。
+    // 导出一份自包含的静态表格：样式与页面上的 DynamicTable / GridView 对齐，
+    // 不内嵌任何脚本 —— 发给别人只用于查看/打印，打开即定稿。
     async exportHTMLTable(rows, fields, filename) {
       const headers = fields.map(f => f.name);
       const periodColIdx = headers.indexOf('时段');
@@ -440,37 +478,29 @@ export function useExportFormats(ctx) {
   h2 { margin: 0 0 16px; text-align: center; font-size: 20px; }
   table.dt { margin: 0 auto; border-collapse: collapse; }
   table.dt th, table.dt td { border: 1px solid #9ca3af; padding: 6px 10px; font-size: 14px; line-height: 1.5; text-align: center; vertical-align: middle; }
-  table.dt thead th { background: #3b82f6; color: #fff; font-weight: 700; white-space: nowrap; position: relative; }
-  table.dt th.row-head, table.dt td.row-head { background: #3b82f6; color: #fff; font-weight: 700; width: 110px; position: relative; }
-  table.dt th.aisle, table.dt td.aisle { width: 36px; background: #e5e7eb; }
-  table.dt td.aisle { writing-mode: vertical-lr; text-orientation: upright; letter-spacing: 2px; }
+  table.dt thead th { background: #3b82f6; color: #fff; font-weight: 700; white-space: nowrap; }
+  table.dt th.row-head, table.dt td.row-head { background: #3b82f6; color: #fff; font-weight: 700; width: 110px; }
+  /* 表头统一蓝，走廊列也不例外：灰色只给数据区的走廊格，否则 thead 里会突兀地出现一格灰。
+     原来 th.aisle / td.aisle 共用一条规则，特异性又高于 thead th，把走廊列表头染成了灰。 */
+  table.dt thead th.aisle { width: 36px; }
+  table.dt td.aisle { width: 36px; background: #e5e7eb; writing-mode: vertical-lr; text-orientation: upright; letter-spacing: 2px; }
   table.dt td.period { background: #eff6ff; font-weight: 700; }
   table.dt tr.fixed td.podium { background: #fef3c7; font-weight: 700; font-size: 18px; letter-spacing: 6px; }
   table.dt tr.fixed td.podium-tag { background: #3b82f6; color: #fff; font-weight: 700; }
   table.dt tr.fixed td.rest { background: #f3f4f6; color: #4b5563; font-weight: 600; }
-  table.dt .grip { cursor: grab; user-select: none; touch-action: none; }
-  table.dt th .grip { display: inline-block; margin-right: 4px; color: rgba(255,255,255,.75); }
-  table.dt td .grip { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); color: rgba(0,0,0,.45); }
-  table.dt td.has-grip, table.dt td.row-head { padding-left: 1.6rem; position: relative; }
-  table.dt tr { transition: background-color .15s ease; }
-  table.dt tr.drag-src { opacity: .35; }
-  table.dt tr.drop-target td, table.dt th.drop-target { outline: 2px solid #3b82f6; outline-offset: -2px; }
-  body.is-dragging { cursor: grabbing; user-select: none; }
-  .tip { margin: 14px 0 0; text-align: center; color: #6b7280; font-size: 12px; }
 </style></head><body>
 <h2>${esc(filename)}</h2>
-<table class="dt" data-row-head="${rowHeadTable ? '1' : '0'}">
+<table class="dt">
   <thead><tr>${headers.map((h, i) => {
     const isRowHead = rowHeadTable && i === 0;
     const isAisle = ctx.isAisleColumn(h);
-    const grip = (!isRowHead && !isAisle) ? '<span class="grip" data-col-handle title="按住拖动列">⠿</span>' : '';
     const cls = [isRowHead ? 'row-head' : '', isAisle ? 'aisle' : ''].filter(Boolean).join(' ');
-    return `<th${cls ? ` class="${cls}"` : ''}>${grip}${esc(h)}</th>`;
+    return `<th${cls ? ` class="${cls}"` : ''}>${esc(h)}</th>`;
   }).join('')}</tr></thead>
   <tbody>`;
 
       for (const row of rows) {
-        // ---------- 讲台行（不参与拖拽，保持跨列合并） ----------
+        // ---------- 讲台行（保持跨列合并） ----------
         if (row._isPodium) {
           html += '<tr class="fixed">';
           if (rowHeadTable) {
@@ -500,258 +530,18 @@ export function useExportFormats(ctx) {
             const isPeriod = h === '时段';
 
             if (isRowHead) {
-              html += `<td class="row-head"><span class="grip" data-row-handle title="按住拖动行">⠿</span>${esc(cellVal)}</td>`;
+              html += `<td class="row-head">${esc(cellVal)}</td>`;
               continue;
             }
-            const cls = [isAisle ? 'aisle' : '', isPeriod ? 'period' : '', (!rowHeadTable && i === 0) ? 'has-grip' : ''].filter(Boolean).join(' ');
-            const grip = (!rowHeadTable && i === 0) ? '<span class="grip" data-row-handle title="按住拖动行">⠿</span>' : '';
-            html += `<td${cls ? ` class="${cls}"` : ''}>${grip}${esc(cellVal)}</td>`;
+            const cls = [isAisle ? 'aisle' : '', isPeriod ? 'period' : ''].filter(Boolean).join(' ');
+            html += `<td${cls ? ` class="${cls}"` : ''}>${esc(cellVal)}</td>`;
           }
           html += '</tr>';
         }
       }
 
-      // 内嵌脚本：只做拖拽换行/换列（前端），动画曲线与页面组件一致
       ctx.reportProgress(70)
-      const script = `
-(function () {
-  'use strict';
-  var table = document.querySelector('table.dt');
-  if (!table) return;
-  var thead = table.querySelector('thead');
-  var tbody = table.querySelector('tbody');
-  var rowHead = table.getAttribute('data-row-head') === '1';
-  var SHIFT_EASE = '180ms cubic-bezier(0.22, 0.61, 0.36, 1)';
-  var MOVE_EASE = 'transform 320ms cubic-bezier(0.34, 1.08, 0.64, 1)';
-
-  function headerCells() { return Array.prototype.slice.call(thead.querySelectorAll('th')); }
-  function movableRows() {
-    return Array.prototype.slice.call(tbody.querySelectorAll('tr')).filter(function (tr) {
-      return !tr.classList.contains('fixed');
-    });
-  }
-  function dataCells(tr) {
-    return Array.prototype.slice.call(tr.querySelectorAll('td')).filter(function (td) {
-      return !td.classList.contains('row-head');
-    });
-  }
-  function dataIndex(hIdx) { return rowHead ? hIdx - 1 : hIdx; }
-  function draggableHeaders() {
-    var ths = headerCells();
-    return ths.map(function (th, i) { return i; }).filter(function (i) {
-      return !ths[i].classList.contains('row-head') && !ths[i].classList.contains('aisle');
-    });
-  }
-  function clearDropTargets() {
-    headerCells().forEach(function (th) { th.classList.remove('drop-target'); });
-    movableRows().forEach(function (tr) { tr.classList.remove('drop-target'); });
-  }
-  function flip(els, apply) {
-    var first = new Map();
-    els.forEach(function (el) { first.set(el, el.getBoundingClientRect()); });
-    apply();
-    els.forEach(function (el) {
-      var b = first.get(el);
-      if (!b) return;
-      var a = el.getBoundingClientRect();
-      var dx = b.left - a.left;
-      var dy = b.top - a.top;
-      if (!dx && !dy) return;
-      el.style.transition = 'none';
-      el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-      el.getBoundingClientRect();
-      el.style.transition = MOVE_EASE;
-      el.style.transform = '';
-      el.addEventListener('transitionend', function () {
-        el.style.transition = '';
-        el.style.transform = '';
-      }, { once: true });
-    });
-  }
-
-  // ---------------- 行拖拽（网格表交换两行；普通表插入移动） ----------------
-  var rowFrom = -1, rowTo = -1, rowGeom = null, rowDragging = false;
-
-  function rowPreview() {
-    var list = movableRows();
-    var h = rowGeom[rowFrom].h;
-    list.forEach(function (tr, i) {
-      var dy = 0;
-      if (rowTo > rowFrom && i > rowFrom && i <= rowTo) dy = -h;
-      if (rowTo < rowFrom && i >= rowTo && i < rowFrom) dy = h;
-      tr.style.transition = 'transform ' + SHIFT_EASE;
-      tr.style.transform = dy ? 'translateY(' + dy + 'px)' : '';
-      tr.classList.toggle('drop-target', i === rowTo && rowTo !== rowFrom);
-    });
-  }
-
-  table.addEventListener('pointerdown', function (e) {
-    var handle = e.target.closest('[data-row-handle]');
-    if (!handle || rowDragging) return;
-    var tr = handle.closest('tr');
-    var list = movableRows();
-    var idx = list.indexOf(tr);
-    if (idx < 0) return;
-    e.preventDefault();
-    rowDragging = true;
-    rowFrom = idx;
-    rowTo = idx;
-    document.body.classList.add('is-dragging');
-    tr.classList.add('drag-src');
-    rowGeom = list.map(function (r) {
-      var rect = r.getBoundingClientRect();
-      return { top: rect.top, bottom: rect.bottom, h: rect.height };
-    });
-
-    function onMove(ev) {
-      var y = ev.clientY;
-      var next = rowTo;
-      for (var i = 0; i < rowGeom.length; i++) {
-        if (y >= rowGeom[i].top && y <= rowGeom[i].bottom) { next = i; break; }
-      }
-      if (next !== rowTo) { rowTo = next; rowPreview(); }
-    }
-
-    function onUp() {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      rowDragging = false;
-      document.body.classList.remove('is-dragging');
-      tr.classList.remove('drag-src');
-      list.forEach(function (r) { r.style.transition = ''; r.style.transform = ''; });
-      clearDropTargets();
-      var from = rowFrom, to = rowTo;
-      rowFrom = rowTo = -1;
-      rowGeom = null;
-      if (from < 0 || to < 0 || from === to) return;
-      var els = movableRows();
-      var src = els[from], tgt = els[to];
-      flip(els, function () {
-        if (to > from) {
-          tgt.after(src);
-        } else {
-          tgt.before(src);
-        }
-      });
-    }
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  });
-
-  // ---------------- 列拖拽（网格表只换数据、表头固定；普通表表头一起移动） ----------------
-  var colFrom = -1, colTo = -1, colGeom = null, colDragging = false;
-
-  function colEls(hIdx) {
-    var els = [];
-    var th = headerCells()[hIdx];
-    if (!rowHead && th) els.push(th);
-    movableRows().forEach(function (tr) {
-      var td = dataCells(tr)[dataIndex(hIdx)];
-      if (td) els.push(td);
-    });
-    return els;
-  }
-  function clearColShift() {
-    headerCells().forEach(function (th) { th.style.transition = ''; th.style.transform = ''; });
-    movableRows().forEach(function (tr) {
-      dataCells(tr).forEach(function (td) { td.style.transition = ''; td.style.transform = ''; });
-    });
-  }
-  function colPreview() {
-    clearColShift();
-    var gFrom = colGeom[colFrom], gTo = colGeom[colTo];
-    if (!gFrom || !gTo) return;
-    var dxFrom = gTo.left - gFrom.left;
-    var dxTo = gFrom.left - gTo.left;
-    colEls(colFrom).forEach(function (el) {
-      el.style.transition = 'transform ' + SHIFT_EASE;
-      el.style.transform = 'translateX(' + dxFrom + 'px)';
-    });
-    colEls(colTo).forEach(function (el) {
-      el.style.transition = 'transform ' + SHIFT_EASE;
-      el.style.transform = 'translateX(' + dxTo + 'px)';
-    });
-    if (rowHead) {
-      headerCells().forEach(function (th, i) { th.classList.toggle('drop-target', i === colTo && colTo !== colFrom); });
-    }
-  }
-
-  table.addEventListener('pointerdown', function (e) {
-    var handle = e.target.closest('[data-col-handle]');
-    if (!handle || colDragging || rowDragging) return;
-    var th = handle.closest('th');
-    var ths = headerCells();
-    var idx = ths.indexOf(th);
-    var dragIds = draggableHeaders();
-    if (idx < 0 || dragIds.indexOf(idx) < 0) return;
-    e.preventDefault();
-    colDragging = true;
-    colFrom = idx;
-    colTo = idx;
-    document.body.classList.add('is-dragging');
-    th.classList.add('drag-src');
-    colGeom = {};
-    dragIds.forEach(function (i) { colGeom[i] = ths[i].getBoundingClientRect(); });
-
-    function onMove(ev) {
-      var x = ev.clientX;
-      var best = colTo, bestDist = Infinity;
-      dragIds.forEach(function (i) {
-        var g = colGeom[i];
-        var mid = g.left + g.width / 2;
-        var d = Math.abs(x - mid);
-        if (d < bestDist) { bestDist = d; best = i; }
-      });
-      if (best !== colTo) { colTo = best; colPreview(); }
-    }
-
-    function onUp() {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      colDragging = false;
-      document.body.classList.remove('is-dragging');
-      th.classList.remove('drag-src');
-      clearColShift();
-      clearDropTargets();
-      var from = colFrom, to = colTo;
-      colFrom = colTo = -1;
-      colGeom = null;
-      if (from < 0 || to < 0 || from === to) return;
-
-      var els = [];
-      draggableHeaders().forEach(function (i) {
-        colEls(i).forEach(function (el) { els.push(el); });
-      });
-
-      flip(els, function () {
-        if (!rowHead) {
-          var ths = headerCells();
-          var a = ths[from], b = ths[to];
-          var phT = document.createComment('swap');
-          a.parentNode.insertBefore(phT, a);
-          a.parentNode.replaceChild(a, b);
-          phT.parentNode.replaceChild(b, phT);
-        }
-        movableRows().forEach(function (tr) {
-          var cells = dataCells(tr);
-          var a = cells[dataIndex(from)], b = cells[dataIndex(to)];
-          if (!a || !b) return;
-          var ph = document.createComment('swap');
-          a.parentNode.insertBefore(ph, a);
-          a.parentNode.replaceChild(a, b);
-          ph.parentNode.replaceChild(b, ph);
-        });
-      });
-    }
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  });
-})();
-`;
-
-      html += '</tbody></table>';
-      html += '<p class="tip">拖动 ⠿ 可调换行列（仅前端预览，不会改动原始数据）</p>';
-      html += `<script>${script}</script></body></html>`;
+      html += '</tbody></table></body></html>';
       ctx.reportProgress(90)
       const blob = new Blob([html], { type: 'text/html' });
       return await saveFile(`${filename}.html`, blob);
@@ -850,14 +640,26 @@ export function useExportFormats(ctx) {
     },
 
     // ==================== 纯文本 (TXT) ====================
-    // Tab 分隔，去掉单元格内的 Tab/换行以免破坏列对齐
-    buildTxt(headers, bodyRows) {
-      const line = cells => cells.map(c => String(c == null ? '' : c).replace(/\t/g, ' ').replace(/\r?\n/g, ' ')).join('\t');
-      return [line(headers), ...bodyRows.map(line)].join('\r\n') + '\r\n';
+    // 首行标题 + 按「显示宽度」对齐的等宽表格：中文/全角记 2 宽，其余记 1 宽，
+    // 每列补齐空格到该列最宽值，列间留 2 空格；表头下再画一条等宽分隔线。
+    // 单元格内的 Tab/换行压成空格，避免撑破列对齐（Tab 分隔在中文列下本来也对不齐）。
+    buildTxt(headers, bodyRows, title) {
+      const clean = c => String(c == null ? '' : c).replace(/\t/g, ' ').replace(/\r?\n/g, ' ');
+      const width = s => {
+        let n = 0;
+        for (const ch of s) n += /[^\x00-\xff]/u.test(ch) ? 2 : 1;
+        return n;
+      };
+      const rows = [headers, ...bodyRows].map(r => r.map(clean));
+      const cols = headers.map((_, i) => Math.max(...rows.map(r => width(r[i] ?? ''))));
+      const line = r => r.map((c, i) => c + ' '.repeat(cols[i] - width(c))).join('  ').trimEnd();
+      const sep = cols.map(w => '-'.repeat(w)).join('  ');
+      const heading = title ? [clean(title), '='.repeat(width(clean(title))), ''] : [];
+      return [...heading, line(rows[0]), sep, ...rows.slice(1).map(line)].join('\r\n') + '\r\n';
     },
     async exportTXT(rows, fields, filename) {
       const { headers, bodyRows } = ctx.buildTableArrays(rows, fields);
-      const txt = ctx.buildTxt(headers, bodyRows);
+      const txt = ctx.buildTxt(headers, bodyRows, filename);
       const blob = new Blob([txt], { type: 'text/plain;charset=utf-8;' });
       return await saveFile(`${filename}.txt`, blob);
     },
@@ -886,7 +688,7 @@ export function useExportFormats(ctx) {
       const el = ctx.tableElement.value instanceof Element ? ctx.tableElement.value : null;
       if (el && el.offsetParent !== null) {
         try {
-          const canvas = await html2canvas(el, { scale: 2 });
+          const canvas = await html2canvas(el, { scale: 2, onclone: (_, cloned) => normalizeScreenshotTable(cloned) });
           ctx.reportProgress(60)
           const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
           if (blob) { ctx.reportProgress(90); return await saveFile(`${filename}.png`, blob); }
@@ -905,7 +707,7 @@ export function useExportFormats(ctx) {
       // 反复失败的导出会一直堆积（而且它是 -9999px 的离屏节点，肉眼看不见、也排查不到）。
       let canvas;
       try {
-        canvas = await html2canvas(tempDiv, { scale: 2 });
+        canvas = await html2canvas(tempDiv, { scale: 2, onclone: (_, cloned) => normalizeScreenshotTable(cloned) });
         ctx.reportProgress(60)
       } finally {
         document.body.removeChild(tempDiv);
@@ -925,9 +727,9 @@ export function useExportFormats(ctx) {
       const periodColIdx = headers.indexOf('时段');
 
       let html = `<div style="text-align:center; font-size:20px; font-weight:bold; margin-bottom:12px;">${ctx.escapeHtml(filename)}</div>
-        <table style="border-collapse:collapse; margin:0 auto;">
-          <thead><tr style="background-color:#4CAF50; color:white;">
-            ${headers.map(h => `<th style="border:1px solid #ccc; padding:6px 12px; text-align:center; vertical-align:middle;">${ctx.escapeHtml(h)}</th>`).join('')}
+        <table style="border-collapse:collapse; margin:0 auto; border-radius:0;">
+          <thead><tr style="background-color:${EXPORT_HEAD_BG}; color:${EXPORT_HEAD_FG};">
+            ${headers.map(h => `<th style="${SCREENSHOT_CELL}">${ctx.escapeHtml(h)}</th>`).join('')}
           </tr></thead><tbody>`;
 
       for (const row of rows) {
@@ -936,12 +738,12 @@ export function useExportFormats(ctx) {
           const isRowNumTable = ctx.isPodiumRowWithRowNum(row, headers);
           html += '<tr>';
           if (isRowNumTable) {
-            html += '<td style="border:1px solid #ccc; padding:6px 12px; text-align:center; font-weight:bold; background-color:#4CAF50; color:white;">讲台</td>';
+            html += `<td style="${SCREENSHOT_CELL} font-weight:bold; background-color:${EXPORT_HEAD_BG}; color:${EXPORT_HEAD_FG};">讲台</td>`;
             if (headers.length > 1) {
-              html += `<td colspan="${headers.length - 1}" style="border:1px solid #ccc; padding:6px 12px; text-align:center; font-weight:bold; background-color:#FFF9C4;">讲  台</td>`;
+              html += `<td colspan="${headers.length - 1}" style="${SCREENSHOT_CELL} font-weight:bold; background-color:#FFF9C4;">讲  台</td>`;
             }
           } else {
-            html += `<td colspan="${headers.length}" style="border:1px solid #ccc; padding:6px 12px; text-align:center; font-weight:bold; background-color:#FFF9C4;">讲  台</td>`;
+            html += `<td colspan="${headers.length}" style="${SCREENSHOT_CELL} font-weight:bold; background-color:#FFF9C4;">讲  台</td>`;
           }
           html += '</tr>';
           continue;
@@ -949,15 +751,15 @@ export function useExportFormats(ctx) {
 
         if (row.type === 'globalRest') {
           const displayText = row.label ? `${row.label} ${row.time}` : '';
-          html += `<tr><td colspan="${headers.length}" style="border:1px solid #ccc; padding:6px 12px; text-align:center; vertical-align:middle; font-weight:bold; background-color:#D9D9D9;">${ctx.escapeHtml(displayText)}</td></tr>`;
+          html += `<tr><td colspan="${headers.length}" style="${SCREENSHOT_CELL} font-weight:bold; background-color:#D9D9D9;">${ctx.escapeHtml(displayText)}</td></tr>`;
         } else if (row.type === 'innerRest') {
           const displayText = row.label ? `${row.label} ${row.time}` : '';
           html += '<tr>';
           if (periodColIdx >= 0) {
             const remainingCols = headers.length - periodColIdx - 1;
-            html += `<td colspan="${remainingCols}" style="border:1px solid #ccc; padding:6px 12px; text-align:center; vertical-align:middle; font-weight:bold; background-color:#D9D9D9;">${ctx.escapeHtml(displayText)}</td>`;
+            html += `<td colspan="${remainingCols}" style="${SCREENSHOT_CELL} font-weight:bold; background-color:#D9D9D9;">${ctx.escapeHtml(displayText)}</td>`;
           } else {
-            html += `<td colspan="${headers.length}" style="border:1px solid #ccc; padding:6px 12px; text-align:center; vertical-align:middle; font-weight:bold; background-color:#D9D9D9;">${ctx.escapeHtml(displayText)}</td>`;
+            html += `<td colspan="${headers.length}" style="${SCREENSHOT_CELL} font-weight:bold; background-color:#D9D9D9;">${ctx.escapeHtml(displayText)}</td>`;
           }
           html += '</tr>';
         } else {
@@ -965,9 +767,9 @@ export function useExportFormats(ctx) {
           for (let i = 0; i < headers.length; i++) {
             const h = headers[i];
             const cellVal = row[h] !== undefined ? row[h] : '';
-            let style = 'border:1px solid #ccc; padding:6px 12px; text-align:center; vertical-align:middle;';
+            let style = SCREENSHOT_CELL;
             if (h === '行号') {
-              style += ' background-color:#4CAF50; color:white; font-weight:bold;';
+              style += ` background-color:${EXPORT_HEAD_BG}; color:${EXPORT_HEAD_FG}; font-weight:bold;`;
             } else if (h === '走廊') {
               style += ' background-color:#D9D9D9;';
             }
@@ -1090,7 +892,7 @@ export function useExportFormats(ctx) {
         head: [headers],
         body: body,
         theme: 'plain',
-        // 黑白版式：只保留边框、加粗与居中，不填任何底色（打印/复印更清楚）
+        // 数据行保持白底黑字（打印/复印清楚），表头统一蓝底白字
         styles: {
           font: pdfFont,
           fontStyle: 'normal',
@@ -1104,12 +906,14 @@ export function useExportFormats(ctx) {
         headStyles: {
           font: pdfFont,
           fontStyle: 'bold',
-          fillColor: [255, 255, 255],
-          textColor: [0, 0, 0],
+          fillColor: EXPORT_HEAD_RGB,
+          textColor: [255, 255, 255],
           halign: 'center',
           lineWidth: 0.1
         },
         didParseCell: function (data) {
+          // 表头颜色交给 headStyles：下面的行样式不许把白字改回黑字
+          if (data.row.section === 'head') return;
           const rowArr = data.row.raw;
           if (!rowArr) return;
 

@@ -29,6 +29,12 @@ const EXTERNAL = [
   'mammoth',
   'xlsx',
   'yauzl',
+  // MCP SDK（方向 B）：~20MB、含 zod 与多子路径导出，内联会撑大 bundle 且
+  // 破坏子路径解析；且它只在首次 /mcp 请求才 require，留在 node_modules 按需加载。
+  '@modelcontextprotocol/server',
+  '@modelcontextprotocol/node',
+  '@modelcontextprotocol/core',
+  'zod',
 ];
 
 const result = await build({
@@ -57,11 +63,12 @@ console.log(`[bundle] app.bundle.js ${(size / 1024).toFixed(0)}KB，内联模块
 // 运行时拼出的路径上，单文件产物会静默少一个模块 —— dev 直接跑源码永远复现不了，
 // 只有打包版启动到那条路由时才 500。这里在构建期就对账，漏了直接失败。
 //
-// 按设计**不进** bundle 的两个文件：
-//   · init.js        —— 独立脚本（手动建库/修库），不被 app.js 引用
-//   · worker.scan.js —— 相册扫描的子进程入口，由 fork 拉起，必须留在磁盘上
+// 按设计**不进** bundle 的文件：
+//   · init.js           —— 独立脚本（手动建库/修库），不被 app.js 引用
+//   · worker.scan.js    —— 相册扫描的子进程入口，由 fork 拉起，必须留在磁盘上
+//   · mcp-forwarder.cjs —— 方向 B 的 stdio 转发器，由 Claude Desktop 直接拉起，留在磁盘上
 // =========================================================================
-const NOT_BUNDLED = new Set(['init.js', 'worker.scan.js']);
+const NOT_BUNDLED = new Set(['init.js', 'worker.scan.js', 'mcp-forwarder.cjs']);
 
 function listBackendSources(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

@@ -16,8 +16,10 @@
 //           （例如 seat_layout / seat_template 都落在 seat_slots）
 
 // 按 schema 文件分组，分组名与文件名一致，便于对账。
+// pending_requests 已移除（P3-1）：功能被 mcp_proposals 取代后它只剩余 DDL，业务引用为 0。
+// 老库里那张表**不主动 DROP** —— 保留无害，删它就成了一次不可逆操作。
 const PHYSICAL = {
-  core: ['students', 'table_meta', 'users', 'pending_requests'],
+  core: ['students', 'table_meta', 'users'],
   fee: ['fee_records'],
   leave: ['leave_records'],
   score: ['score_records'],
@@ -32,6 +34,8 @@ const PHYSICAL = {
   ai: ['ai_settings', 'ai_models', 'ai_conversations', 'ai_messages'],
   undo: ['undo_history'],
   widget: ['widget_settings'],
+  // 方向 B：外部 MCP 客户端提交的待确认写提案（schema.mcp.js）
+  mcp: ['mcp_proposals'],
 };
 
 const ALL_PHYSICAL = Object.freeze(Object.values(PHYSICAL).flat());

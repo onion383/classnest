@@ -2,7 +2,14 @@
   <div class="settings-view h-full">
     <!-- 顶部标题栏 -->
     <div class="w-full bg-surface shadow-md rounded-xl mb-6 px-5 py-3 border border-border min-h-[4.5rem] flex items-center justify-between gap-4">
-      <h1 class="text-2xl font-bold text-text flex items-center gap-2"><IconGlyph name="settings" /> 系统设置</h1>
+      <div class="flex items-center gap-4 flex-wrap">
+        <h1 class="text-2xl font-bold text-text flex items-center gap-2"><IconGlyph name="settings" /> 系统设置</h1>
+        <!-- 顶部快捷入口：MCP 设置（一键滚到分区），始终可见 -->
+        <button type="button" @click="goToMcpSettings"
+          class="bg-surface border border-border hover:border-primary text-text px-3 py-2 rounded-lg transition-theme text-sm flex items-center gap-1.5 flex-shrink-0">
+          <IconGlyph name="brain" :size="16" tint="current" /> MCP 设置
+        </button>
+      </div>
 
       <!-- 设置项搜索：输入即匹配，结果以悬浮弹窗形式出现在搜索框下方 -->
       <div class="relative flex-shrink-0">
@@ -492,6 +499,13 @@
         </div>
         <div class="flex items-center gap-4 mt-6">
           <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+            <label class="text-sm font-medium text-text">点名包含临时学生</label>
+            <AppHelp text="默认关闭：点名器只从正式学生里抽人。开启后，值日/座位里直接填名字自动建的临时学生也会参与点名。下次打开点名器生效。" aria-label="点名包含临时学生说明" />
+          </div>
+          <AppSwitch :model-value="rollcallIncludeProvisional" aria-label="点名包含临时学生" @change="onRollcallIncludeProvisionalChange" />
+        </div>
+        <div class="flex items-center gap-4 mt-6">
+          <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
             <label class="text-sm font-medium text-text">新U盘插入自动打开</label>
             <AppHelp text="插入新U盘时自动用文件资源管理器打开（仅Windows，即时生效）" aria-label="新U盘插入自动打开说明" />
           </div>
@@ -776,6 +790,22 @@
       <DataExportPanel />
     </div>
 
+    <!-- ========== AI 数据保护 ========== -->
+    <div class="mb-6">
+      <h2 id="settings-section-aiprivacy" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="brain" :size="20" /> AI 数据保护</h2>
+      <div class="bg-surface rounded-lg border border-border p-6">
+        <AiPrivacyPanel />
+      </div>
+    </div>
+
+    <!-- ========== MCP 服务端（方向 B） ========== -->
+    <div class="mb-6">
+      <h2 id="settings-section-mcp" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="brain" :size="20" /> MCP 服务端</h2>
+      <div class="bg-surface rounded-lg border border-border p-6">
+        <McpSettingsPanel />
+      </div>
+    </div>
+
     <!-- ========== 危险操作 ========== -->
     <div class="mb-6">
       <h2 id="settings-section-danger" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="trash" :size="20" /> 危险操作</h2>
@@ -944,6 +974,10 @@ import ClassInfoDialog from '../../components/dialogs/ClassInfoDialog.vue'
 import AppSwitch from '../../components/base/AppSwitch.vue'
 import ViewSwitch from '../../components/base/ViewSwitch.vue'
 import DataExportPanel from '../../components/data-manage/DataExportPanel.vue'
+// AI 数据保护：独立面板（总开关 / 三子项 / 按表关闭），逻辑不塞进本文件
+import AiPrivacyPanel from '../../components/data-manage/AiPrivacyPanel.vue'
+// 方向 B：MCP 服务端设置（令牌 / 外部写提案确认），独立面板，避免把逻辑塞进本文件
+import McpSettingsPanel from '../../components/data-manage/McpSettingsPanel.vue'
 import { useThemeStore } from '../../stores/theme'
 import { storeToRefs } from 'pinia'
 import { resourceUrl } from '../../utils/apiUrl'
@@ -980,6 +1014,12 @@ function pickBgImage() {
   if (el) el.click()
 }
 
+// 顶部「MCP 设置」快捷入口：复用搜索模块的跳转 + 闪动逻辑，滚到 MCP 分区。
+// 顶层函数（非 ctx 解构）在 Vapor 下模板可见，同 pickBgImage。
+function goToMcpSettings() {
+  goToSettingsSection({ key: 'mcp' })
+}
+
 // 设置项搜索：输入即匹配，结果以悬浮弹窗显示在搜索框下方，点击滚动到对应设置区
 const settingsSearch = ref('')
 const settingsSearchOpen = ref(false)
@@ -999,6 +1039,8 @@ const settingsSections = ref([
   { key: 'savepath', label: '保存路径设置',   py: 'bcljsz' },
   { key: 'datadir',  label: '数据目录设置',   py: 'sjmlsz' },
   { key: 'data',     label: '数据管理',       py: 'sjgl' },
+  { key: 'aiprivacy', label: 'AI 数据保护',   py: 'aibh' },
+  { key: 'mcp',      label: 'MCP 服务端',     py: 'mcpfwd' },
   { key: 'danger',   label: '危险操作',       py: 'wxcz' },
 ])
 // 分区内的具体设置项：命中后滚动到该设置行（py 为标签拼音首字母）
@@ -1031,6 +1073,11 @@ const settingsItems = ref([
   { label: '数据导出',                 section: 'data',     py: 'sjdc' },
   { label: '导出格式',                 section: 'data',     py: 'dcgs' },
   { label: 'zip 密码',                 section: 'data',     py: 'zipmm' },
+  { label: 'AI 数据保护总开关',        section: 'aiprivacy', py: 'aibhzkg' },
+  { label: '保护电话',                 section: 'aiprivacy', py: 'bhdhyx' },
+  { label: '按表关闭 AI 读取',         section: 'aiprivacy', py: 'abgbaiduq' },
+  { label: 'MCP 访问令牌',             section: 'mcp',      py: 'mcpfwld' },
+  { label: 'MCP 待确认提案',           section: 'mcp',      py: 'mcpdqrt' },
 ])
 // 图标样式选项：彩色图标 / Emoji
 const iconStyleOptions = [
@@ -1119,6 +1166,8 @@ const classInfo = ref({ name: '', motto: '', mottoStyle: '', xuefeng: '' })
 const toolboxEnabled = ref(true)
 // 点名器排除「今天不在校」的学生：默认关，保持原有全员点名行为
 const rollcallExcludeAbsent = ref(false)
+// 点名器是否包含临时学生：默认关（只点正式学生），与排除不在校同为设置页可选项
+const rollcallIncludeProvisional = ref(false)
 const noteSavePath = ref('')
 const screenshotSavePath = ref('')
 const screenshotDir = ref('')
@@ -1416,7 +1465,7 @@ const ctx = {
   usernameError, busyUsername, exportPassword, exportEncrypt, exportDbPwd, busyExport, exportProgress,
   semesters, semesterId, semesterNameDraft, showRenameSemester, newSemesterName, showAddSemester,
   showDeleteSemester, busySemester, busySemesterDate, semesterStart, semesterEnd, semesterDateErrorText,
-  dialog, dialogMounted, dialogCallback, deleteTimer, classCount, classList, currentSlug, currentClassName, switchingClass, classDialogVisible, classInfo, toolboxEnabled, rollcallExcludeAbsent, noteSavePath, screenshotSavePath,
+  dialog, dialogMounted, dialogCallback, deleteTimer, classCount, classList, currentSlug, currentClassName, switchingClass, classDialogVisible, classInfo, toolboxEnabled, rollcallExcludeAbsent, rollcallIncludeProvisional, noteSavePath, screenshotSavePath,
   screenshotDir, usbAutoOpen, desktopWidgetEnabled, loaded, _fromMainHandler, dataDir,
   busyDataDir, securityLevel, securityLevelLoading, busySecurityLevel,
   securityDialog, privacyPhrase, undoGroups, busyUndo, selectedThemeId, mergeNotifications,
@@ -1456,7 +1505,7 @@ const {
   exportDb, fmtBytes, fmtMem, fmtTs, goToSettingsSection, groupLabel, hideDiskTip, loadDiskUsage, moveSearchActive,
   onAnimationsChange, onBgImageFileChange, onBgMaskOpacityChange, onDesktopWidgetChange,
   onDialogCancel, onDialogConfirm, onFastStartupChange, onFollowSystemChange, onGlassOpacityChange, onIconStyleChange,
-  onMergeNotificationsChange, onPrivacyPhraseSaved, onRollcallExcludeAbsentChange, onSecurityLevelChange, onLoginPolicyChange, onSelectMode, onSelectSemester,
+  onMergeNotificationsChange, onPrivacyPhraseSaved, onRollcallExcludeAbsentChange, onRollcallIncludeProvisionalChange, onSecurityLevelChange, onLoginPolicyChange, onSelectMode, onSelectSemester,
   onSettingsSearchBlur, onSettingsSearchFocus, onThemeSelect, onToolboxChange, onTopbarColorChange,
   onUsbAutoOpenChange, openAddSemester, openClassDialog, openDeleteAccount, openDeleteClass, openDir, openModal, openRenameSemester,
   purgeThumbs, sweepThumbs, vacuumDb, cancelVacuumWait, clearLogs,

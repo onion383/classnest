@@ -148,6 +148,15 @@ app.get('/api/setup/semester-prefill', (req, res) => {
 });
 app.use('/api', authRoutes);
 app.use('/api/account', accountRoutes);
+
+// ===== 方向 B：班集作为 MCP 服务端 =====
+// /mcp 是外部 AI 客户端（Claude Desktop / Cursor）的 Streamable HTTP 端点：
+// 自带独立 token 鉴权（mcp.server 内），不走 JWT/secureChannel，故不挂 auth()。
+// SDK 懒加载（首次请求才 require），不占启动路径。生产/开发行为一致，必须挂在
+// listen 之前，避免首屏期间请求撞 404。
+app.use('/mcp', require('./routes/ai/mcp/mcp.server').router);
+// 班集侧管理接口（提案确认、token 管理）：教师身份，走标准 auth。
+app.use('/api/mcp', auth(['teacher']), require('./routes/ai/mcp/mcp.routes'));
 // 首屏聚合接口：登录页/首页最早的一条业务请求，必须在 listen 之前就挂好。
 // 原先它排在懒加载队列最后一个 loader，队列被拆成逐 tick 让路后，它可能在
 // 队列跑完前就到达 —— 路由不存在会直接 404，前端首屏就拿不到数据。
@@ -162,6 +171,10 @@ app.use('/api/dashboard', auth(['teacher']), require('./routes/dashboard'));
 app.use('/api/ai', auth(['teacher']), require('./routes/ai/ai.config'));
 app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students', {
   protectedColumns: ['学号', '姓名'],
+  // 学生管理表格只列正式学生：临时学生是「在值日/座位/分组里直接填名字」自动建的档，
+  // 混在名单里既分辨不出、也会被算进人数与导出。它们由工具栏「临时学生」入口统一转正。
+  // 其它使用方（分组/座位/值日候选、点名器、桌面小组件）不传 formal，照旧拿到全量。
+  listWhere: (req) => (String(req.query.formal) === '1' ? 'is_provisional = 0' : ''),
   extraRoutes: (router) => {
     // 姓名解析：值日/座位/小组成员里直接输入的名字 → 稳定的 students.id。
     // 正式学生唯一同名直接复用；没有就建一条临时学生（is_provisional=1）；

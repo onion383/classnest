@@ -154,8 +154,10 @@ function unbindAuth(sessionId) {
 // 响应同理——只有收到过加密请求（req.sessionId 已置位）才回包加密。这样即使
 // 前端开关键与后端不一致，也能各自正常退化为明文直通，不破坏既有功能。
 
-// 豁免路径前缀：握手、静态图片/上传、背景图
-const EXEMPT_PREFIXES = ['/api/secure', '/uploads', '/api/background'];
+// 豁免路径前缀：握手、静态图片/上传、背景图、MCP Streamable HTTP 端点（方向 B）。
+// /mcp 走独立 token 鉴权、明文 JSON-RPC，不参与 secureChannel 会话加密；
+// 不豁免的话外部客户端伪造 {session,d} 形状可能被误当成信道报文解密。
+const EXEMPT_PREFIXES = ['/api/secure', '/uploads', '/api/background', '/mcp'];
 function pathExempt(pathname) {
   return EXEMPT_PREFIXES.some(p => pathname === p || pathname.startsWith(p + '/'));
 }

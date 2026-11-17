@@ -121,7 +121,7 @@ test('上下文重建确实读 process_json，且 toolTrace 被拼进系统提�
   assert.ok(/SELECT id, role, content, process_json, attachments_json FROM ai_messages/.test(store),
     'loadConversationContext 必须 SELECT process_json')
   assert.ok(/listMessages\(conversationId\)/.test(mem), 'ai.memory.js 必须通过 aiConversationStore 读消息')
-  assert.ok(/toolTrace: buildToolTrace\(effectiveRows\)/.test(mem), '返回体必须带 toolTrace')
+  assert.ok(/toolTrace: buildToolTrace\(effectiveRows(?:, slug)?\)/.test(mem), '返回体必须带 toolTrace')
   assert.ok(/\+ \(convCtx \? convCtx\.toolTrace : ''\)/.test(conv), '系统提示必须拼接 toolTrace')
   assert.ok(/module\.exports\.buildToolTrace/.test(mem), 'buildToolTrace 必须导出')
 })
@@ -193,6 +193,6 @@ test('全链路判据：产生 → 下发 → 落库 → 重建上下文 → 发
   assert.ok(/SELECT id, role, content, process_json, attachments_json FROM ai_messages/.test(store),
     '⑥ 重建上下文必须把 process_json 读回来')
   assert.ok(/listMessages\(conversationId\)/.test(mem), '⑥ 路由必须通过 aiConversationStore 读消息')
-  assert.ok(/toolTrace: buildToolTrace\(effectiveRows\)/.test(mem)
+  assert.ok(/toolTrace: buildToolTrace\(effectiveRows(?:, slug)?\)/.test(mem)
     && /convCtx\.toolTrace/.test(conv), '⑦ 还原成记录并拼进系统提示发给模型')
 })

@@ -2,6 +2,7 @@
 // runTool 由 tools.js 门面提供；这里用惰性包装打破 tools ⇄ tools.subagent 的循环引用。
 let runTool = (...args) => require('./tools').runTool(...args);
 const { toolResultContent } = require('../ai.helpers');
+const { privacy } = require('../../../services/aiPrivacy');
 
 // ===== run_subagent 工具：启动「只读子助手」并行处理独立子任务 =====
 // 子助手在受限上下文（角色名 + 一句话任务 + 期望字段 + 口径）与受限工具子集
@@ -116,7 +117,7 @@ async function runOneSubagent(cfg, item, ctx, traceSink) {
   }
   const subTools = getSubagentTools();
   const history = [
-    { role: 'system', content: buildSubagentPrompt({ name, task, returns: item.returns, context: item.context }) },
+    { role: 'system', content: buildSubagentPrompt({ name, task, returns: item.returns, context: item.context, privacyOn: privacy.enabled(ctx && ctx.slug) }) },
     { role: 'user', content: task },
   ];
   // 独立 blocks：子助手即便用到块类工具也不污染主对话正文
@@ -136,11 +137,17 @@ async function runOneSubagent(cfg, item, ctx, traceSink) {
       return { task, result: null, basis: '', count: 0, samples: [], error: budget.note(), needs_user_decision: [], __steps: sink.steps };
     }
     // 思维链增量回调：一边逐片下发给界面，一边按轮次合并成最终落库的那一条思考步骤。
+    // 3.5：逐片反查（分片可能把代号切开），sink 里存的、sub_step 下发的是真值；
     // 上游 history 的 reasoning_content 仍用 consumeStream 返回的完整 reasoning 原样回传，
     // 展示用的 600 字截断不会破坏带 tools 的思考模式兼容性。
+    const reasonUnmask = privacy.stream(ctx && ctx.slug);
     const { text, toolCalls, reasoning, usage } = await consumeStream(
-      cfg, history, null, (d) => sink.reason(i, d), ctx && ctx.signal, subTools
+      cfg, history, null,
+      (d) => { const shown = reasonUnmask.push(d); if (shown) sink.reason(i, shown); },
+      ctx && ctx.signal, subTools
     );
+    const tailReason = reasonUnmask.flush();
+    if (tailReason) sink.reason(i, tailReason);
     // usage 记账：子助手的消耗必须计入同一本账，否则主对话的统计是残缺的
     if (usage) {
       if (budget) budget.add(usage, 'subagent');
@@ -173,7 +180,7 @@ async function runOneSubagent(cfg, item, ctx, traceSink) {
         try { result = (await runTool(tc.name, targs, subCtx)).result; }
         catch (e) { result = { error: e.message || '子助手工具执行失败' }; }
       }
-      history.push({ role: 'tool', tool_call_id: tc.id, content: toolResultContent(result) });
+      history.push({ role: 'tool', tool_call_id: tc.id, content: toolResultContent(result, ctx && ctx.slug) });
     }
   }
   return { task, result: null, basis: '', count: 0, samples: [], error: '子助手超过最大轮数仍未给出结论', needs_user_decision: [], tokens: usedTokens, __steps: sink.steps };

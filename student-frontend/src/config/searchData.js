@@ -19,6 +19,7 @@ export const SETTINGS_SECTIONS = [
   { key: 'perf',     label: '性能',           py: 'xn' },
   { key: 'savepath', label: '保存路径设置',   py: 'bcljsz' },
   { key: 'datadir',  label: '数据目录设置',   py: 'sjmlsz' },
+  { key: 'aiprivacy', label: 'AI 数据保护',   py: 'aibh' },
   { key: 'danger',   label: '危险操作',       py: 'wxcz' },
 ]
 
@@ -43,6 +44,8 @@ export const SETTINGS_ITEMS = [
   { label: '一键截屏保存位置',         section: 'savepath', py: 'yjjpbcwz' },
   { label: '数据目录',                 section: 'datadir',  py: 'sjml' },
   { label: '数据库加密',               section: 'datadir',  py: 'sjkjm' },
+  { label: 'AI 数据保护',              section: 'aiprivacy', py: 'aibh' },
+  { label: '按表关闭 AI 读取',         section: 'aiprivacy', py: 'abgbaiduq' },
 ]
 
 // 关键词匹配：文本子串 + 手写首字母 + 拼音（pinyin-match）。

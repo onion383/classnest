@@ -10,6 +10,7 @@
 //   ===== export_image 工具：课表/座位表/值日表 → 排布图规格（前端渲染成 PNG） =====
 //       → tools.executors/executors.image.js
 const dbManager = require('../../../dbManager/dbManager');
+const { privacy, hasUnrestoredToken } = require('../../../services/aiPrivacy');
 const schema = require('./tools.schema');
 const exec = require('./tools.executors/executors');
 const { subagentTool, runSubagent } = require('./tools.subagent');
@@ -21,12 +22,26 @@ const {
   runShowChart, currentTimeInfo, runWebSearch, runUndoChange, normalizeProposal,
   normalizeBatchProposal, normalizeBatchDelete, normalizeJsonProposal, normalizeFrontProposal,
   runProposeSkill, normalizeBatchUpdate, normalizeBatchOps, normalizeAsk, normalizeExport,
+  seatNameHint,
 } = exec;
 
 // 统一的工具执行入口：流式 / 非流式共用
 //   ctx.blocks 收集 record / chart 数据块；返回 { result, proposal?, ask? }
 //   async：OCR 等工具需要等待外部进程，故统一 await 调用
+// 会落库 / 落文件 / 渲染给用户的工具：代号必须全部还原，认不出就拒绝，
+// 绝不能把 P-xxxxxx 写进数据库或导出的文件里。
+const TOKEN_STRICT_TOOL_RE = /^(propose_|save_memory$|export_file$|show_chart$)/;
+
 async function runTool(name, args, ctx) {
+  // 入站还原必须在 normalizeProposal 之前：diff 的「旧值」来自库里真值，
+  // 「新值」若还是代号，确认卡片会显示「真号 → P-xxxxxx」这种荒谬对照。
+  // 只有显式带 slug 的主对话 / 子助手才还原；MCP 方向 B 不传 slug，保持原样。
+  if (ctx && ctx.slug && args && typeof args === 'object' && !Array.isArray(args)) {
+    try { args = privacy.restore(args, ctx.slug); } catch (_) { /* 保护模块故障不阻断工具 */ }
+    if (TOKEN_STRICT_TOOL_RE.test(name) && hasUnrestoredToken(args)) {
+      return { result: { ok: false, error: 'AI 数据保护：内容里有无法识别的代号（S-/P-），请按原名重新填写后再试' } };
+    }
+  }
   switch (name) {
     case 'query':
       return { result: runQuery(args) };
@@ -91,9 +106,17 @@ async function runTool(name, args, ctx) {
     case 'propose_json_write': {
       const j = normalizeJsonProposal(args);
       if (!j.ok) return { result: { ok: false, error: j.error } };
+      // 座位表的人名核对结果必须回到模型上下文：模型要在回复里说明「这些名字名册里
+      // 没有、确认后会自动建档」。不塞进去，模型就只会说「座位表已生成」。
+      const seatNote = j.seatNames ? seatNameHint(j.seatNames) : '';
       return {
         proposal: { kind: 'json', table: j.table, id: j.id, values: j.values, before: j.before, label: j.label, ...(args.source ? { originNote: String(args.source).slice(0, 80) } : {}) },
-        result: { ok: true, message: j.label, pending_user_confirmation: true },
+        result: {
+          ok: true,
+          message: j.label,
+          pending_user_confirmation: true,
+          ...(seatNote ? { note: seatNote, seat_name_check: j.seatNames } : {}),
+        },
       };
     }
     case 'propose_frontend_setting': {

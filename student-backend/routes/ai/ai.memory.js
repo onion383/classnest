@@ -1,6 +1,7 @@
 const express = require('express');
 const dbManager = require('../../dbManager/dbManager');
 const aiConversationStore = require('../../services/aiConversationStore');
+const { privacy } = require('../../services/aiPrivacy');
 const { resolveEndpoint } = require('./ai.config');
 
 const router = express.Router();
@@ -34,11 +35,14 @@ function messagesToTranscript(list) {
 }
 
 // 调用模型把「旧摘要 + 新增对话」合并成一份新摘要（不带工具）
-async function summarizeConversation(cfg, prevSummary, chunk) {
+async function summarizeConversation(cfg, prevSummary, chunk, slug) {
   const { url, model } = resolveEndpoint(cfg);
-  const transcript = messagesToTranscript(chunk).slice(0, 200000);
+  // 坑6：压缩摘要是独立 fetch，不走 3.1/3.3 任何闸门。transcript 来自 ai_messages 原文，
+  // 必须单独出站替换，否则每次压缩都把整段真名真号再外发一遍；落库的摘要仍是真值。
+  const out = (v) => privacy.substitute(v, slug);
+  const transcript = out(messagesToTranscript(chunk)).slice(0, 200000);
   const sys = '你是对话摘要助手。请把用户与助手的对话压缩成简洁的要点摘要，保留关键事实、已达成的结论、用户的偏好与约束、以及尚未完成的事项；不要编造、不要添加对话中不存在的信息。只输出摘要正文，不要标题也不要客套话。';
-  const user = (prevSummary ? `已有的摘要：\n${prevSummary}\n\n` : '')
+  const user = (prevSummary ? `已有的摘要：\n${out(prevSummary)}\n\n` : '')
     + `请把下面这段新增对话合并进摘要（保持时间顺序与要点）：\n${transcript}`;
   const r = await fetch(url, {
     method: 'POST',
@@ -54,14 +58,14 @@ async function summarizeConversation(cfg, prevSummary, chunk) {
 
 // 压缩：把「summary_upto 之后、最近 CONTEXT_KEEP_RECENT 条之前」的消息并入摘要并持久化
 //   effectiveRows 为该会话按 id 升序、且已排除更早摘要覆盖范围与空消息后的消息
-async function compressConversation(cfg, conversationId, effectiveRows, upto) {
+async function compressConversation(cfg, conversationId, effectiveRows, upto, slug) {
   if (!conversationId || !Array.isArray(effectiveRows) || effectiveRows.length <= CONTEXT_KEEP_RECENT) return false;
   const cutoff = effectiveRows[effectiveRows.length - CONTEXT_KEEP_RECENT - 1];
   if (!cutoff || cutoff.id <= (upto || 0)) return false;
   const chunk = effectiveRows.filter((r) => r.id <= cutoff.id);
   if (!chunk.length) return false;
   const conv = aiConversationStore.getSummary(conversationId);
-  const summary = await summarizeConversation(cfg, (conv && conv.summary) || '', chunk);
+  const summary = await summarizeConversation(cfg, (conv && conv.summary) || '', chunk, slug);
   if (!summary) return false;
   aiConversationStore.updateSummary(conversationId, summary, cutoff.id);
   return true;
@@ -78,7 +82,7 @@ async function compressConversation(cfg, conversationId, effectiveRows, upto) {
 // 不重放成 tool_calls：上游要求 tool_call_id 与 role:'tool' 严格配对，重放还会让模型
 // 误以为旧结果本轮仍可消费。这里只给一段明确标注为「此前轮次」的自然语言记录，
 // 追加在系统提示末尾，消息序列形状不变（不插入中间 system 消息，兼容所有上游）。
-function buildToolTrace(rows) {
+function buildToolTrace(rows, slug) {
   const lines = [];
   for (const r of rows || []) {
     if (r.role !== 'assistant' || !r.process_json) continue;
@@ -101,15 +105,18 @@ function buildToolTrace(rows) {
     lines.push(`· 消息 #${r.id}：${parts.join('、')}`.slice(0, 300));
   }
   if (!lines.length) return '';
-  return '\n\n【此前轮次的实际工具调用记录】以下是系统在此前对话中确实执行过的工具步骤，'
+  const trace = '\n\n【此前轮次的实际工具调用记录】以下是系统在此前对话中确实执行过的工具步骤，'
     + '供你回答「刚才调了什么／做过什么」。它们属于过去的轮次，不代表本轮已调用任何工具；'
     + '本轮是否调用过工具，只以本轮实际收到的工具返回结果为准。\n'
     + lines.slice(-20).join('\n');
+  // 3.2b：只在出口替换。detail 源自 toolDetailText（原始工具结果 JSON），是真值——
+  // 那份 detail 同时是给用户看的过程块内容，绝不能在源头改，否则界面显示假值。
+  return privacy.substitute(trace, slug);
 }
 
 // 依据会话 id 从数据库重建「完整上下文」：全量历史消息 + 历史附件 + 工具调用记录，并按已有摘要裁剪较早部分
 //   返回 { summary, upto, lastPromptTokens, messages, attachments, effectiveRows, toolTrace }；会话不存在返回 null
-function loadConversationContext(conversationId) {
+function loadConversationContext(conversationId, slug) {
   const conv = aiConversationStore.getMeta(conversationId);
   if (!conv) return null;
   const upto = conv.summary_upto || 0;
@@ -139,7 +146,7 @@ function loadConversationContext(conversationId) {
   }
   return {
     summary: conv.summary || '', upto, lastPromptTokens: conv.last_prompt_tokens || 0,
-    messages, attachments, effectiveRows, toolTrace: buildToolTrace(effectiveRows),
+    messages, attachments, effectiveRows, toolTrace: buildToolTrace(effectiveRows, slug),
   };
 }
 

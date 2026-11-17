@@ -1,5 +1,6 @@
 const { getFields } = require('../../db');
 const aiStore = require('../../services/aiStore');
+const { privacy } = require('../../services/aiPrivacy');
 
 // 列值归一化：对象/数组按 JSON 文本、布尔按 1/0、其余按字符串，用于「是否与当前内容相同」的比较。
 // 布尔归一为 1/0 是为了与 sqlite 里 INTEGER 列（如 toolbox_enabled / auto_apply）存的数值一致。
@@ -30,13 +31,20 @@ const { tableColumns, clearTableColumnsCache } = aiStore;
 // 回灌给模型的工具结果上限：查询/导出类工具可能返回整张大表，
 // 全量塞进 history 会撑爆上下文并让后续请求变慢甚至失败。
 const MAX_TOOL_RESULT_CHARS = 12000;
-function toolResultContent(result) {
+function toolResultContent(result, slug) {
   let text;
   try { text = JSON.stringify(result); } catch (_) { text = JSON.stringify({ error: '工具结果无法序列化' }); }
   if (typeof text !== 'string') text = String(text);
-  if (text.length <= MAX_TOOL_RESULT_CHARS) return text;
-  return text.slice(0, MAX_TOOL_RESULT_CHARS)
-    + `\n…（工具结果过长，已截断；原长度 ${text.length} 字符。需要完整数据请缩小查询范围或分页）`;
+  if (text.length > MAX_TOOL_RESULT_CHARS) {
+    text = text.slice(0, MAX_TOOL_RESULT_CHARS)
+      + `\n…（工具结果过长，已截断；原长度 ${text.length} 字符。需要完整数据请缩小查询范围或分页）`;
+  }
+  // 主闸门：主对话与子助手都传了显式 slug；MCP 方向 B 不传，保持原样（单列处理）。
+  // 替换放在截断之后：截断口径不变，只是多出的代号会占几个字符。
+  if (slug) {
+    try { text = privacy.substitute(text, slug); } catch (_) { /* 保护模块故障不能吞掉整条工具结果 */ }
+  }
+  return text;
 }
 
 // 表在列表页「实际展示的列」（与界面保持一致）：优先取 table_meta 中登记的列；

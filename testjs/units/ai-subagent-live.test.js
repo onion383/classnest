@@ -113,7 +113,7 @@ test('接线：每个子任务一个轨迹源，事件带子任务名，失败�
   assert.match(src, /emitSub\(\{ \.\.\.p, name:/, '增量事件要带子任务名，防四个子助手串组')
   assert.match(src, /runOneSubagent\(cfg, t, ctx, sinks\[i\]\)/, '轨迹源要真的传给子助手')
   assert.match(src, /:\s*sinks\[i\]\.steps/, '被 catch 接住的子任务要用同源步骤兜底')
-  assert.match(src, /\(d\) => sink\.reason\(i, d\)/, '增量回调要接上轨迹源')
+  assert.match(src, /sink\.reason\(i, shown\)/, '增量回调要接上轨迹源（隐私模式下发反查后的文本）')
   assert.match(src, /reasoning_content: reasoning/, '展示截断不能破坏上游思考模式的完整回传')
 })
 

@@ -14,6 +14,8 @@ const store = require('../../../../services/slotStore');
 const { COLUMN_RULES } = require('../../../../services/sanitize');
 const dbManager = require('../../../../dbManager/dbManager');
 const { READ_TABLES, WRITE_TABLES, JSON_WRITE_TABLES } = require('../../ai.constants');
+const { readScope } = require('../../../../services/aiReadScope');
+const { privacy: aiPrivacy, hasUnrestoredToken } = require('../../../../services/aiPrivacy');
 const { tableColumns } = require('../../ai.helpers');
 const { CHART_TYPES } = require('../tools.schema');
 const { aiParseDate, aiDateStr } = require('./executors.common');
@@ -337,6 +339,12 @@ async function runWebSearch(args, ctx) {
   }
   const query = String((args && args.query) || '').trim();
   if (!query) return { ok: false, error: '缺少搜索词 query' };
+  // §5：web_search 直发搜索服务，绕过 prompt 那条替换链。隐私模式下若搜索词里带代号，
+  // 说明模型想查某个学生——把代号还原成真名再搜等于把真名发出去，故直接拒绝、不发起 fetch。
+  // 守卫正则复用 aiPrivacy 那套（比清单的 hex 版更宽：P-zzzzzz 这类也能拦住）。
+  if (aiPrivacy.enabled(ctx && ctx.slug) && hasUnrestoredToken(query)) {
+    return { ok: false, error: '联网搜索无法使用学生代号，请改用不含学生的关键词' };
+  }
   const count = Math.min(Math.max(parseInt(args && args.count, 10) || 5, 1), 10);
   // 超时与「客户端断开」两个信号取并集：
   //   审查 v4 · B03-11 —— 原先只用固定 30s 超时，用户点「中断」后这个搜索仍会跑满 30s
@@ -382,6 +390,7 @@ async function runWebSearch(args, ctx) {
 // 直接告诉模型某张表有哪些字段、类型与枚举范围，避免「字段名写错」先试错一次再重来。
 function describeOneTable(table) {
   if (!READ_TABLES[table]) return { error: `不存在的表：${table}` };
+  if (!readScope.isTableReadable(table)) return readScope.closedError(table);
   const cols = tableColumns(table);
   const meta = getFields(table) || [];
   const typeOf = new Map(meta.map((f) => [f.name, f.type]));
@@ -525,6 +534,7 @@ module.exports = {
   normalizeFrontProposal: proposal.normalizeFrontProposal,
   normalizeBatchUpdate: proposal.normalizeBatchUpdate,
   normalizeBatchOps: proposal.normalizeBatchOps,
+  seatNameHint: proposal.seatNameHint,
   runQuery: query.runQuery,
   runAggregate: query.runAggregate,
   runResolveStudent: query.runResolveStudent,

@@ -10,7 +10,10 @@ function migrateAi(conn) {
       provider TEXT DEFAULT 'deepseek',
       base_url TEXT DEFAULT '',
       model TEXT DEFAULT '',
-      api_key TEXT DEFAULT ''
+      api_key TEXT DEFAULT '',
+      -- AI 数据保护：HMAC 种子按库走备份/恢复；开关与逐项配置跟着库迁移
+      privacy_seed TEXT DEFAULT '',
+      privacy_json TEXT DEFAULT '{}'
     );
     INSERT OR IGNORE INTO ai_settings (id) VALUES (1);
 
@@ -55,6 +58,13 @@ function migrateAi(conn) {
   const aiCols = conn.prepare('PRAGMA table_info(ai_settings)').all().map((c) => c.name);
   if (!aiCols.includes('floating_enabled')) {
     conn.exec('ALTER TABLE ai_settings ADD COLUMN floating_enabled INTEGER DEFAULT 1');
+  }
+  // 同一条迁移链补隐私两列：老库打开后必须能直接读写，不要求用户重建库。
+  if (!aiCols.includes('privacy_seed')) {
+    conn.exec("ALTER TABLE ai_settings ADD COLUMN privacy_seed TEXT DEFAULT ''");
+  }
+  if (!aiCols.includes('privacy_json')) {
+    conn.exec("ALTER TABLE ai_settings ADD COLUMN privacy_json TEXT DEFAULT '{}'");
   }
 }
 

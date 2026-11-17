@@ -1,26 +1,37 @@
 const dbManager = require('../../dbManager/dbManager');
 const { READ_TABLES, WRITE_TABLES } = require('./ai.constants');
 const { resolveEndpoint, reasoningParams } = require('./ai.config');
+const { privacy } = require('../../services/aiPrivacy');
 
 // ---------------- 长期记忆（md 文档） ----------------
 // 记忆读写由 dbManager 统一实现（dataDir/ai-memory/<slug>.md），与备份/恢复共用；
 // 此处只负责把记忆注入系统提示、并提供界面读写接口。
 // skills：本轮由用户启用的技能（md 指令文件），[{ name, content }]，内容注入提示并要求模型遵循。
 function buildSystemPrompt(slug, attachments, summary, skills) {
+  // AI 数据保护：注入的三段文本（长期记忆 / 对话摘要 / 技能 md）都来自用户库里的自由文本，
+  // 可能含真名真号。在系统提示出口统一出站替换；隐私关闭时门面零拷贝直接返回原值。
+  const out = (v) => privacy.substitute(v, slug);
   let prompt = SYSTEM_PROMPT;
-  const mem = dbManager.readMemory(slug).trim();
+  // 坑5：隐私模式下补一条措辞，覆盖 SYSTEM_PROMPT 第 4/10/19 条「按姓名填」的说法。
+  // 不改写常量本身（关闭时行为必须和以前一致），只在开关打开时追加。
+  if (privacy.enabled(slug)) {
+    prompt += '\n\n【数据保护模式已开启】学生姓名与电话在你看到的数据里一律显示为 S-xxxxxx / P-xxxxxx 代号。'
+      + '称呼学生时直接用代号，不要猜测或还原真名；写入提案时把代号原样复制到对应字段，系统会自动还原成真值，'
+      + '不要自己编造代号，也不要把代号当成姓名解释。';
+  }
+  const mem = out(dbManager.readMemory(slug).trim());
   if (mem) {
     prompt += `\n\n以下是此前记住的「用户偏好 / 长期设定」，回答时请遵循：\n<memory>\n${mem}\n</memory>`;
   }
   // 更早对话已被压缩成摘要：作为「已经发生的上下文」注入，避免模型重复追问
   if (summary && String(summary).trim()) {
-    prompt += `\n\n【此前对话摘要】以下是本次对话更早部分的要点摘要，请视为已经发生过的上下文，不要重复叙述，也不要让用户重新提供：\n<summary>\n${String(summary).trim()}\n</summary>`;
+    prompt += `\n\n【此前对话摘要】以下是本次对话更早部分的要点摘要，请视为已经发生过的上下文，不要重复叙述，也不要让用户重新提供：\n<summary>\n${out(String(summary).trim())}\n</summary>`;
   }
   // 本轮启用的技能：用户明确要按该技能办事，要求模型严格遵循其中的指令
   const skillList = (Array.isArray(skills) ? skills : []).filter((s) => s && String(s.content || '').trim());
   if (skillList.length) {
     prompt += `\n\n【本轮启用的技能】用户本轮启用了以下技能（md 指令文件），请严格按照其中的指令来完成本次任务：\n`
-      + skillList.map((s) => `<skill name="${String(s.name || '')}">\n${String(s.content).trim()}\n</skill>`).join('\n');
+      + skillList.map((s) => `<skill name="${out(String(s.name || ''))}">\n${out(String(s.content).trim())}\n</skill>`).join('\n');
   }
   // 用户上传的文件：内容不直接塞进对话，明确告知模型可用 read_document 按需读取
   const names = (Array.isArray(attachments) ? attachments : [])
@@ -53,7 +64,7 @@ ${Object.entries(READ_TABLES).map(([k, v]) => `- ${k}：${v}`).join('\n')}
 12. 用户上传了文件（文档/表格/PPT/文本）时，其解析后的文字并不在对话里；当用户希望你看该文件（如「帮我看看这份名单」「把这个表格整理一下」，含此前轮次上传的文件），或你判断必须读取文件内容才能回答时，调用 read_document 读取（无界面交互，直接返回文字）。读到内容后再据此作答，不要编造文件内容；对话里已能看到文件内容时不要重复调用。
 13. 用户上传/粘贴了图片，而你需要读取图片里的文字才能回答时（如「这张截图里写了什么」「把图片里的名单/金额提取出来」），调用 ocr_image 识别（image 默认 1，指最近一张图）。识别到的文字会返回给你，你再据此继续处理，不要凭猜测编造图片内容。
 14. 用户要求把数据导出为文件（如「导出成 Excel」「保存成表格文件」「打包下载」）时，先用 query 取数或自行整理好二维数据，再调用 export_file（format + filename + columns + rows，可选 title）。界面会弹出系统保存对话框，用户确认后保存到本地；正文用一句话说明导出了什么即可，不要编造保存路径，也不要重复调用。
-15. 课表/座位表/座位权重/值日设置/值日表/值日权重/各模板，以及系统设置（widget_settings）这类「整块 JSON 存储」的表，不能用 propose_write 按行改；要修改它们时先 query 读出该行当前内容，再基于它调用 propose_json_write（table + id + values），values 给出「该列的完整新值」（整列整体替换，不是只给增量），一次可改多列。系统设置里 toolbox_enabled 这类字段是 0/1，请用 true/false 或数字 1/0；desktop_apps 是数组、class_info 是对象，给出完整的新值。
+15. 课表/座位表/座位权重/值日设置/值日表/值日权重/各模板，以及系统设置（widget_settings）这类「整块 JSON 存储」的表，不能用 propose_write 按行改；要修改它们时先 query 读出该行当前内容，再基于它调用 propose_json_write（table + id + values），values 给出「该列的完整新值」（整列整体替换，不是只给增量），一次可改多列。系统设置里 toolbox_enabled 这类字段是 0/1，请用 true/false 或数字 1/0；desktop_apps 是数组、class_info 是对象，给出完整的新值。**写座位表时如果你是从截图里认的人名，工具结果会带 seat_name_check（名册里没有的名字 / 同名分不清的名字）。必须把这些名字逐个列在回复里问用户一句（例如「这张图里识别到 3 个名册中没有的名字：…，确认是这些人吗」），不要只说「已生成座位表」** —— 名册外的名字会被自动建成临时学生，OCR 认错一个字就会凭空多出一个人，而学生表默认不显示临时学生，用户事后极难发现。
 16. 用户想改软件的外观/行为设置（换主题、切日夜间、改图标样式、标题栏配色、开关动画、调背景遮罩或毛玻璃不透明度、提示是否合并）时，调用 propose_frontend_setting（key + value）生成提案，用户确认后立即生效且可撤销。可用 key：theme（base/glass/glass2）、mode（day/night）、iconStyle（color/emoji）、topbarColor（blue/light）、animations（true/false）、bgMaskOpacity（0~1）、glassOpacity（0~1）、mergeNotifications（true/false）；布尔与数值请用字符串传值（如 "true"、"0.5"）。背景图片、账号与密钥不在可改范围。
 17. 需要一次删除多行数据（2 条及以上同一张表）时，先调用 query 查出目标记录的 id，再调用 propose_delete_many（table + ids 数组，最多 50 条），不要反复调用 propose_write 逐条删除，也不要凭记忆编造 id。删除较重要或有风险时，可先用 ask_user 与用户确认范围。
 18. 用户要你撤销/回退/恢复你自己此前做出的数据更改时（如「撤销你刚才改的」「把我刚让你加的那几个删掉」「回退上一步」），调用 undo_change：默认回退你最近一次更改，批量新增/删除会整批回退；要一次回退最近 N 次更改时传 steps=N。不确定用户指的是哪次、或用户问你「刚才改了什么」「能退到哪一步」时，先调用 list_changes 查看你自己仍可撤销的更改（step 1 为最近一次），再据实回答或回退。不要用 propose_write 手工反向修改来充当撤销。它只能撤销你自己做过的更改，无法撤销老师手动编辑的数据（那种情况请提示用户用对应页面的撤销按钮）；此外，通过 propose_frontend_setting 改的软件设置不在其中。
@@ -112,12 +123,16 @@ function getSubagentTools() {
 
 // 子助手 system prompt：角色名 + 一句话任务 + 期望字段 + 涉及表/口径，
 // 并强约束「只读、不提问、必须按契约返回 JSON」。
-function buildSubagentPrompt({ name, task, returns, context } = {}) {
+function buildSubagentPrompt({ name, task, returns, context, privacyOn } = {}) {
   const lines = [
     `你是「${String(name || '数据核查员')}」，一名独立的数据核查子助手。`,
     '你只做查询 / 统计 / 校验，**绝不修改任何数据**（你没有写权限，工具清单里也没有任何写入工具）。',
     `本次任务：${String(task || '')}`,
   ];
+  // 坑5：隐私模式下子助手也要知道代号规则，否则不知道怎么称呼学生、会把 samples 里的代号当真名。
+  if (privacyOn) {
+    lines.push('【数据保护模式已开启】你看到的学生姓名/电话都是 S-xxxxxx / P-xxxxxx 代号，直接用代号称呼，不要猜测或还原真名。');
+  }
   if (returns) lines.push(`期望返回的字段/口径：${String(returns)}`);
   if (context) lines.push(`涉及的库表与口径：${String(context)}`);
   lines.push(

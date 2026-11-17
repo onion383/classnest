@@ -1,6 +1,43 @@
 // ==================== ai_settings / ai_models 的 SQL 出口 ====================
 // 档 C · M12-B7：AI 配置路由只做校验、联网测试与 HTTP，语句收在这里。
 const { db } = require('../db')
+const crypto = require('node:crypto')
+const { safeJson } = require('../utils/json')
+
+// AI 数据保护默认全关：开启会改变发给模型的内容，必须由用户显式选择。
+const PRIVACY_DEFAULTS = { enabled: false, hide_phone: true, hide_path: true, hide_album: true, closed_tables: [] }
+
+function readPrivacy() {
+  const row = db.prepare("SELECT privacy_json FROM ai_settings WHERE id = 1").get() || {};
+  const v = safeJson(row.privacy_json, {}, 'ai_settings.privacy_json');
+  return { ...PRIVACY_DEFAULTS, ...(v && typeof v === 'object' && !Array.isArray(v) ? v : {}) }
+}
+
+function setPrivacy(patch) {
+  const next = { ...readPrivacy(), ...(patch && typeof patch === 'object' ? patch : {}) }
+  db.prepare('UPDATE ai_settings SET privacy_json = ? WHERE id = 1').run(JSON.stringify(next))
+  return next
+}
+
+function readSeed() {
+  const row = db.prepare("SELECT privacy_seed FROM ai_settings WHERE id = 1").get() || {}
+  return String(row.privacy_seed || '')
+}
+
+// 懒生成且条件写回：并发的两个请求各自算出一个随机串时，只有第一个能落库，
+// 第二个重读拿到同一个值，避免同一库里先后两套别名。
+function ensureSeed() {
+  const existing = readSeed()
+  if (existing) return existing
+  const generated = crypto.randomBytes(32).toString('hex')
+  db.prepare("UPDATE ai_settings SET privacy_seed = ? WHERE id = 1 AND (privacy_seed IS NULL OR privacy_seed = '')").run(generated)
+  return readSeed() || generated
+}
+
+function writeSeed(seed) {
+  db.prepare("UPDATE ai_settings SET privacy_seed = ? WHERE id = 1 AND (privacy_seed IS NULL OR privacy_seed = '')").run(String(seed || ''))
+  return readSeed()
+}
 
 function readFlags() {
   return db.prepare('SELECT enabled, floating_enabled FROM ai_settings WHERE id = 1').get() || {}
@@ -84,6 +121,11 @@ function setReasoning(id, on) {
 }
 
 module.exports = {
+  readPrivacy,
+  setPrivacy,
+  readSeed,
+  ensureSeed,
+  writeSeed,
   readFlags,
   readActiveModel,
   setEnabled,

@@ -73,6 +73,6 @@ test('接线：applyDocWrite 的校验在事务内', () => {
 test('SQL 出口：ai.dataRoutes 只经 aiStore，不留裸 SQL', () => {
   const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/ai/ai.dataRoutes.js'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
-  assert.ok(!/db\.prepare\(/.test(src), 'ai.dataRoutes 不许再有裸 SQL（应走 services/aiStore）')
+  assert.ok(!/\.prepare\(/.test(src), 'ai.dataRoutes 不许再有裸 SQL（应走 services/aiStore；显式 conn 也不行）')
   assert.ok(/aiStore\.(findRow|rowsByIds|updateColumns|insertRow|deleteRow)\(/.test(src), '必须真的调用 aiStore')
 })

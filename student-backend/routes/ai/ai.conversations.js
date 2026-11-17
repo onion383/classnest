@@ -4,6 +4,7 @@ const dbManager = require('../../dbManager/dbManager');
 const { currentSettings } = require('./ai.config');
 const { buildSystemPrompt, consumeStream, getMainTools } = require('./ai.llm');
 const { toolResultContent, hasUnbackedToolClaim } = require('./ai.helpers');
+const { privacy } = require('../../services/aiPrivacy');
 // 工具执行器惰性加载：仅在执行工具/取工具信息时才 require
 const tools = () => require('./ai.tools/tools');
 const { loadConversationContext, compressConversation, CONTEXT_COMPRESS_AT, compressingConvs } = require('./ai.memory');
@@ -196,7 +197,8 @@ router.post('/chat/stream', async (req, res) => {
   // 写不回任何会话（persistMessage 对不存在的会话会 404 被吞掉），用户看到的是
   // 「这轮对话凭空消失」。这里改成显式区分两种语义。
   const conversationId = Number(req.body && req.body.conversationId) || 0;
-  let convCtx = conversationId ? loadConversationContext(conversationId) : null;
+  const slug = req.user && req.user.dbSlug;
+  let convCtx = conversationId ? loadConversationContext(conversationId, slug) : null;
   if (conversationId && !convCtx) {
     // 传了会话 id 但库里查不到 → 会话已被删除或 id 无效，明确报错而不是静默降级。
     // code 让前端能识别并自愈（清掉失效的 conversationId，下次发送自动新建会话）。
@@ -213,8 +215,8 @@ router.post('/chat/stream', async (req, res) => {
   if (convCtx && convCtx.lastPromptTokens > CONTEXT_COMPRESS_AT && !compressingConvs.has(conversationId)) {
     compressingConvs.add(conversationId);
     try {
-      if (await compressConversation(s, conversationId, convCtx.effectiveRows, convCtx.upto)) {
-        convCtx = loadConversationContext(conversationId);
+      if (await compressConversation(s, conversationId, convCtx.effectiveRows, convCtx.upto, slug)) {
+        convCtx = loadConversationContext(conversationId, slug);
         messages = convCtx.messages;
         attachments = convCtx.attachments;
       }
@@ -227,9 +229,13 @@ router.post('/chat/stream', async (req, res) => {
   // 跨轮补证据：把此前轮次实际执行过的工具步骤追加到系统提示末尾。
   // 只用一段文本，不改消息序列形状（不插入中间 system 消息、不重放 tool_calls），
   // 因此对所有上游接口都兼容；没有历史工具记录时 toolTrace 为空串，零影响。
-  const systemText = buildSystemPrompt(req.user && req.user.dbSlug, attachments, convCtx && convCtx.summary, skills)
+  const systemText = buildSystemPrompt(slug, attachments, convCtx && convCtx.summary, skills)
     + (convCtx ? convCtx.toolTrace : '');
-  const history = [{ role: 'system', content: systemText }, ...messages];
+  // 3.3：老师亲口打进来的姓名、以及落库为真值的历史消息，都要出站替换成代号，
+  // 否则「工具结果里是代号、用户话里是真名」两套并存，模型必然对不上。
+  // tools().latestUserImages 放在替换之后仍可用——替换只动字符串，不动 image_url 结构。
+  const modelMessages = privacy.substitute(messages, slug);
+  const history = [{ role: 'system', content: systemText }, ...modelMessages];
   let proposal = null;
   let ask = null;
   let exportFile = null;
@@ -281,7 +287,7 @@ router.post('/chat/stream', async (req, res) => {
     const rows = convCtx.effectiveRows;
     const upto = convCtx.upto;
     setImmediate(async () => {
-      try { await compressConversation(s, conversationId, rows, upto); }
+      try { await compressConversation(s, conversationId, rows, upto, slug); }
       catch (_) { /* 后台压缩失败忽略，下次再试 */ }
       finally { compressingConvs.delete(conversationId); }
     });
@@ -305,14 +311,25 @@ router.post('/chat/stream', async (req, res) => {
         send({ type: 'done', ...donePayload() });
         return res.end();
       }
+      // 3.5：正文与思维链各自挂一个流式反查器。模型吐出的分片可能把 S-a3f1c9 切成两半，
+      // hold-back 最多 9 字符，避免用户眼看代号闪一下再变回真名。
+      // push() 返回的是反查后的文本（发界面）；consumeStream 返回的 text/reasoning 仍是原样代号
+      // （回灌上游 + 落库过程块另走 restore，见下方 reasonStep / answerText）。
+      const textUnmask = privacy.stream(slug);
+      const reasonUnmask = privacy.stream(slug);
       const { text, toolCalls, reasoning, usage } = await consumeStream(
         s,
         history,
-        (d) => send({ type: 'delta', text: d }),
-        (d) => send({ type: 'reasoning', text: d }),
+        (d) => { const shown = textUnmask.push(d); if (shown) send({ type: 'delta', text: shown }); },
+        (d) => { const shown = reasonUnmask.push(d); if (shown) send({ type: 'reasoning', text: shown }); },
         clientGone.signal,
         getMainTools(s, webSearchOn)
       );
+      // 轮末 flush：把缓冲区里最后一个代号吐出来（否则会永远卡在缓冲里）。
+      const tailText = textUnmask.flush();
+      if (tailText) send({ type: 'delta', text: tailText });
+      const tailReason = reasonUnmask.flush();
+      if (tailReason) send({ type: 'reasoning', text: tailReason });
       if (usage) {
         maxPromptTokens = Math.max(maxPromptTokens, usage.prompt_tokens || 0);
         tokenTotal.prompt += usage.prompt_tokens || 0;
@@ -325,7 +342,9 @@ router.post('/chat/stream', async (req, res) => {
       // 思考（思维链）作为时间轴上的一个步骤：插在本轮的工具/文本步骤之前，
       // 这样前端的过程块里「思考 / 工具」会按时间交替出现，而不是把思维链堆在最上面
       if (reasoning) {
-        const reasonStep = { id: 'r' + (++stepSeq), kind: 'reason', text: reasoning, status: 'done' };
+        // 过程块是给用户看的，思维链里的代号要还原成真名；但下方 history 里回传的
+        // reasoning_content 仍是原样代号（带 tools 的上游要求原样回传，见 :344）。
+        const reasonStep = { id: 'r' + (++stepSeq), kind: 'reason', text: privacy.restore(reasoning, slug), status: 'done' };
         steps.push(reasonStep);
         send({ type: 'step', step: reasonStep });
       }
@@ -333,9 +352,11 @@ router.post('/chat/stream', async (req, res) => {
       if (toolCalls && toolCalls.length) {
         // 中间轮的草稿文本归入过程块：前端收到后清空正文，把它作为一条「过程文本」步骤
         if (text) {
-          const textStep = { id: 'p' + (++stepSeq), kind: 'text', text };
+          // commit_process 这条路的草稿文本同样含代号，下发到界面与落库都要真值。
+          const shownText = privacy.restore(text, slug);
+          const textStep = { id: 'p' + (++stepSeq), kind: 'text', text: shownText };
           steps.push(textStep);
-          send({ type: 'commit_process', text });
+          send({ type: 'commit_process', text: shownText });
         }
         history.push({
           role: 'assistant',
@@ -356,7 +377,7 @@ router.post('/chat/stream', async (req, res) => {
           if (out.proposal) proposal = out.proposal;
           if (out.ask) ask = out.ask;
           const result = out.result;
-          history.push({ role: 'tool', tool_call_id: tc.id, content: toolResultContent(result) });
+          history.push({ role: 'tool', tool_call_id: tc.id, content: toolResultContent(result, ctx && ctx.slug) });
           // 工具执行结束 → 更新同一步骤为 done/error，并附上摘要与耗时
           const step = {
             id: sid,
@@ -401,8 +422,9 @@ router.post('/chat/stream', async (req, res) => {
         continue;
       }
 
-      // 纯文本轮：本轮文本即为最终正文（已通过 delta 流式发出）
-      answerText = text || '';
+      // 纯文本轮：本轮文本即为最终正文（已通过 delta 流式发出）。
+      // done 的 reply 是前端落库的那份，必须还原成真值——库内永远是真名。
+      answerText = privacy.restore(text || '', slug);
       send({ type: 'done', ...donePayload() });
       return res.end();
     }

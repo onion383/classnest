@@ -24,7 +24,7 @@ const ROOT = path.resolve(__dirname, '../..')
 const FILE = 'student-frontend/src/components/tables/DynamicTable/DynamicTable.vue'
 
 function read() {
-  return fs.readFileSync(path.join(ROOT, FILE), 'utf8')
+  return fs.readFileSync(path.join(ROOT, FILE), 'utf8').replace(/\r\n/g, '\n')
 }
 
 function sliceFn(src, name) {

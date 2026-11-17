@@ -22,7 +22,7 @@ const FILES = {
   css: 'student-frontend/src/styles/index.css',
 }
 function read(key) {
-  return fs.readFileSync(path.join(ROOT, FILES[key]), 'utf8')
+  return fs.readFileSync(path.join(ROOT, FILES[key]), 'utf8').replace(/\r\n/g, '\n')
 }
 function sources() {
   return { sidebar: read('sidebar'), css: read('css') }

@@ -7,6 +7,7 @@ import { getToken as loadStoredToken } from './authStorage'
 import { userScopedGeneration, registerUserScopedReset } from './userScopedCache.js'
 import { installBlobErrorNormalizer } from './blobError.js'
 import { createWidgetDataChangedAnnouncer } from './widgetDataChanged.js'
+import { createTodoInvalidator, TODO_CHANGED_EVENT } from './todoInvalidator.js'
 import { markSince, phase } from './perfMark.js'
 import { createGetShare } from './getShare.js'
 import { SEND } from '../electronChannels.js'
@@ -17,6 +18,14 @@ import { SEND } from '../electronChannels.js'
 const widgetDataChanged = createWidgetDataChangedAnnouncer(
   (payload) => window.electron.send(SEND.TO_WIDGET, payload),
 )
+
+// 标题栏待办（销假 / 临时学生）的即时刷新：与挂件广播共用响应成功这一时机，
+// 但不走 IPC —— 通知中心就在本窗口，一个 window 事件就够了。
+const todoInvalidator = createTodoInvalidator(() => {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(TODO_CHANGED_EVENT))
+  }
+})
 
 // 安全通道「会话过期」不是登录态失效：加密会话 15 分钟被动过期时，后端在请求解密阶段
 // 直接回 401 且 body 为 { d:'session-expired' }（不是密文，也非登录 token 问题）。
@@ -171,6 +180,9 @@ export function setupApiClient({
       absorbRenewal(res.headers, { onTokenRenewed, generation: res.config?.__authGeneration })
       // 写成功后立刻告诉挂件「数据变了」：只在主窗口发，读请求 / 无关写不发（判定见 widgetDataChanged）
       if (announceDataChanged) widgetDataChanged.announce(res.config)
+      // 标题栏待办即时刷新：不受 announceDataChanged 限制（那是「主窗口才广播给挂件」的开关），
+      // 子窗口发出来的事件没人听也无害；判定与去重见 todoInvalidator。
+      todoInvalidator.announce(res.config)
       return res
     },
     async (error) => {

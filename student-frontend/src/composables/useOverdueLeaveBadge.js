@@ -19,6 +19,8 @@ import { formatDateTime } from '../utils/dateTime.js'
 const CHECK_INTERVAL = 10 * 60 * 1000
 
 const count = ref(0)
+// 逾期的整行记录：通知中心要列出「哪几位同学」，只给数量就还得再发一次请求
+const rows = ref([])
 let disposables = null
 let inflight = null
 // 任何一次「用现成数据直接算」都会让在途请求的回写作废，避免旧响应盖掉新数字
@@ -28,6 +30,7 @@ let revision = 0
 // 在途请求的代次也会变，回来时直接丢弃（见 refreshOverdueLeaveBadge）。
 registerUserScopedReset(() => {
   count.value = 0
+  rows.value = []
   inflight = null
   revision++
 })
@@ -36,17 +39,25 @@ export function isOverdueLeave(row, now) {
   return !!row && row.状态 === '请假中' && !!row.结束时间 && row.结束时间 <= now
 }
 
+// 数量与名单必须同一次算出：通知中心既显示「几位」又列「分别是谁」，
+// 分两次筛选会在两次之间发生销假时给出互相矛盾的两个数。
+function applyOverdue(inputRows, now) {
+  const overdue = (Array.isArray(inputRows) ? inputRows : []).filter((r) => isOverdueLeave(r, now))
+  rows.value = overdue
+  count.value = overdue.length
+  return count.value
+}
+
 /**
- * 刷新铃铛计数。
- * 传 rows 时直接用现成数据（请假页 loadAll 成功后调用，不额外发请求）；
+ * 刷新铃铛计数与名单。
+ * 传 inputRows 时直接用现成数据（请假页 loadAll 成功后调用，不额外发请求）；
  * 不传才拉 /api/leaves（全局定时 / 窗口回焦 / 登录后用）。
  */
-export function refreshOverdueLeaveBadge(rows) {
+export function refreshOverdueLeaveBadge(inputRows) {
   const now = formatDateTime(new Date())
-  if (rows !== undefined) {
+  if (inputRows !== undefined) {
     revision++
-    count.value = (Array.isArray(rows) ? rows : []).filter((r) => isOverdueLeave(r, now)).length
-    return Promise.resolve(count.value)
+    return Promise.resolve(applyOverdue(inputRows, now))
   }
   if (inflight) return inflight
   const gen = userScopedGeneration()
@@ -55,8 +66,7 @@ export function refreshOverdueLeaveBadge(rows) {
     .then((res) => {
       if (gen !== userScopedGeneration() || rev !== revision) return count.value
       const list = (res && res.data && res.data.data) || []
-      count.value = list.filter((r) => isOverdueLeave(r, now)).length
-      return count.value
+      return applyOverdue(list, now)
     })
     .catch(() => count.value) // 后端未就绪 / 网络抖动：保留上次计数，不闪成 0
     .finally(() => { inflight = null })
@@ -74,5 +84,5 @@ export function startOverdueLeaveBadge() {
 }
 
 export function useOverdueLeaveBadge() {
-  return { count }
+  return { count, rows }
 }

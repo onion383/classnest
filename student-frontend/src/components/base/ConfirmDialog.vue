@@ -46,15 +46,11 @@
 
 <script setup vapor>
 import '../../styles/dialog-transition.css'
-import { defineAsyncComponent, onMounted } from 'vue'
 import DialogShell from './DialogShell.vue'
-
-// 下拉组件只在「添加列」弹窗（type === 'columnAdd'）里用到，属业务页操作触发，
-// 与启动时的确认弹窗主路径无关。改为懒加载后不再计入首屏同步入口 chunk；
-// ConfirmDialog 在 App 挂载时就会实例化，这里 mounted 里直接触发一次加载，
-// chunk 与首屏并行下载，用户真打开该弹窗时早已就绪，观感不变。
-const loadAppSelect = () => import('./AppSelect.vue')
-const AppSelect = defineAsyncComponent(loadAppSelect)
+// AppSelect 在表格 / 设置页 / 各业务弹窗里共有 35 处静态引用，早就同步躺在主 chunk 里，
+// 这里再包 defineAsyncComponent 只是多一层包装（构建期报 INEFFECTIVE_DYNAMIC_IMPORT）。
+// 下拉确实只在「添加列」弹窗用到，但拆不出去，就不必假装懒加载。
+import AppSelect from './AppSelect.vue'
 
 defineOptions({ name: 'ConfirmDialog' })
 const props = defineProps({
@@ -78,6 +74,4 @@ const emit = defineEmits(['confirm', 'cancel', 'extra', 'update:columnName', 'up
 function handleOverlayClick() {
   if (props.showCancel) emit('cancel');
 }
-
-onMounted(() => { loadAppSelect().catch(() => {}) })
 </script>

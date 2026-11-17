@@ -112,7 +112,11 @@ test('seats 的 PATCH /cell：布局内的合法坐标必须照常写入（不�
 
   const after = readSeatLayout(conn)
   const seats = JSON.parse(after.seats)
-  assert.equal(seats[2][1], '新值', '目标格应写入新值（实际 ' + JSON.stringify(seats) + '）')
+  // 写进去的是「姓名」时，写路径会把它认成一个学生并落 id（P1-5：名册外的姓名要建档）。
+  // 这里不再断言原样字符串 —— 那正是被改掉的行为；断言的是「这一格确实被写成了这个人」。
+  const stu = conn.prepare("SELECT id FROM students WHERE 姓名 = '新值'").get()
+  assert.ok(stu, 'PATCH 写入的姓名必须建档（否则座位里留着查无此人的字符串）')
+  assert.equal(seats[2][1], stu.id, '目标格应写入该学生的 id（实际 ' + JSON.stringify(seats) + '）')
   assert.equal(seats[0][0], '甲', '其他格不能被改动')
 })
 

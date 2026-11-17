@@ -111,6 +111,7 @@ export function useSettingsAppearance(ctx) {
         if (res.data.success) {
           ctx.toolboxEnabled.value = res.data.data.toolboxEnabled
           ctx.rollcallExcludeAbsent.value = !!res.data.data.rollcallExcludeAbsent
+          ctx.rollcallIncludeProvisional.value = !!res.data.data.rollcallIncludeProvisional
           ctx.noteSavePath.value = res.data.data.noteSavePath || ''
           ctx.screenshotSavePath.value = res.data.data.screenshotSavePath || ''
         }
@@ -125,6 +126,7 @@ export function useSettingsAppearance(ctx) {
         await axios.put('/api/widget-settings', {
           toolboxEnabled: ctx.toolboxEnabled.value,
           rollcallExcludeAbsent: ctx.rollcallExcludeAbsent.value,
+          rollcallIncludeProvisional: ctx.rollcallIncludeProvisional.value,
           noteSavePath: ctx.noteSavePath.value,
           screenshotSavePath: ctx.screenshotSavePath.value
         })
@@ -147,6 +149,11 @@ export function useSettingsAppearance(ctx) {
     // 所以下一次打开点名器生效。settings-changed 由 saveWidgetSettings 统一发。
     onRollcallExcludeAbsentChange(value) {
       ctx.rollcallExcludeAbsent.value = !!value
+      if (!ctx.loaded.value) return
+      ctx.saveWidgetSettings()
+    },
+    onRollcallIncludeProvisionalChange(value) {
+      ctx.rollcallIncludeProvisional.value = !!value
       if (!ctx.loaded.value) return
       ctx.saveWidgetSettings()
     },

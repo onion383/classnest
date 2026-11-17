@@ -31,7 +31,7 @@ function codeOnly(file) {
 test('SQL 出口：undo 的 4 个文件不留裸 SQL', () => {
   for (const f of FILES) {
     const code = codeOnly(f)
-    assert.ok(!/db\.prepare\(/.test(code), `${f} 不许再有裸 SQL（应走 services/undoStore）`)
+    assert.ok(!/\.prepare\(/.test(code), `${f} 不许再有裸 SQL（应走 services/undoStore；显式 conn 也不行）`)
     assert.ok(!/const \{ db \} = require/.test(code), `${f} 不许再持有 db`)
   }
 })

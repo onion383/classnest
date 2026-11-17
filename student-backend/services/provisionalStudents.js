@@ -91,4 +91,70 @@ function ensureProvisionalStudent(rawName) {
   }
 }
 
-module.exports = { resolveOne, resolveNames, ensureProvisionalStudent };
+// ---------------------------------------------------------------------------
+// 行式表里的「学生引用」列
+//
+// 通用行式写入器（AI 批量 apply-batch）是按列名直写 SQL 的，不知道哪一列是学生姓名，
+// 于是同一件事在三条路径上有三套口径。映射放在这里，让「谁写这一列」都走同一处。
+//
+//   group_members  P2-1 起有 student_id（权威）+ member_name（快照）
+//   cadre_members  姓名是快照、student_id 才是权威（P1-1 已定）→ 认人后回填 id，姓名跟权威走
+//   score_records / leave_records
+//                  与各自路由的 POST 同口径：名册外的姓名要落临时学生，否则 AI 批量写进来的
+//                  记录只剩下一个字符串（改名、统计、删学生全对不上人）。这两张表的姓名列
+//                  叫「姓名」而不是 student_name，名字不同但语义一样，所以映射按表分开写。
+//
+// 全部口径已统一：都不许「只写姓名、id 空着」的孤儿行。
+// ---------------------------------------------------------------------------
+const ROW_STUDENT_REFS = {
+  group_members: { name: 'member_name', id: 'student_id' },
+  cadre_members: { name: 'student_name', id: 'student_id' },
+  score_records: { name: '姓名', id: 'student_id' },
+  leave_records: { name: '姓名', id: 'student_id' },
+};
+
+// 让一行行式数据里的学生引用与名册一致，**就地修改 row**。不涉及学生引用时返回 null。
+//
+//   · 只有姓名列：保证该姓名有学生记录（名册外的建临时学生）。建档失败不抛 ——
+//     与 groupDim.addMember 同口径（尽力而为，不阻断业务写入）。
+//   · 还有 id 列：
+//       - 给了有效 id → 姓名一律以 students.姓名 为准（快照不许覆盖权威）；
+//         id 指向不存在的学生 → 抛错（宁可整批失败，也不要写一行断链的快照）
+//       - 没给 id → 按姓名认人，命中/建档就把 id 回填进去；
+//         同名歧义 → id 留空、姓名照存（与 cadres 路由同口径，不替用户猜）
+function applyRowStudentRef(table, row) {
+  const spec = ROW_STUDENT_REFS[table];
+  if (!spec || !row) return null;
+  const rawName = row[spec.name] == null ? '' : row[spec.name];
+  const name = String(rawName).trim();
+  if (!spec.id) {
+    if (!name) return null;
+    return ensureProvisionalStudent(name);
+  }
+
+  const curId = Number(row[spec.id]);
+  if (Number.isInteger(curId) && curId > 0) {
+    const stu = db.prepare('SELECT id, 姓名, is_provisional FROM students WHERE id = ?').get(curId);
+    if (!stu) {
+      // 前端带了「已经被删掉的学生」的 id —— 这是用户填错/界面过期，不是服务端故障。
+      // 带上 status 让路由按 400 回，别让「学生不存在」显示成「服务器错误」。
+      const err = new Error(`学生 id=${curId} 不存在（${table}.${spec.id}）`);
+      err.status = 400;
+      throw err;
+    }
+    row[spec.name] = String(stu.姓名 == null ? '' : stu.姓名);
+    return { name: row[spec.name], id: curId, created: false, is_provisional: !!stu.is_provisional };
+  }
+  if (!name) return null;
+  const r = ensureProvisionalStudent(name);
+  if (r && r.id) row[spec.id] = r.id; // 歧义时 r.id 为 null → 保持留空
+  return r;
+}
+
+module.exports = {
+  resolveOne,
+  resolveNames,
+  ensureProvisionalStudent,
+  ROW_STUDENT_REFS,
+  applyRowStudentRef,
+};

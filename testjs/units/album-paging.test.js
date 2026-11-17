@@ -198,7 +198,7 @@ test('参数校验：days 越界 / before 格式错 → 400，不是 500', async
 test('SQL 出口：album 路由只经 albumStore，不留裸 SQL', () => {
   const code = fs.readFileSync(path.join(ROOT, 'student-backend/routes/album.js'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
-  assert.ok(!/db\.prepare\(/.test(code), 'album 路由不许再有裸 SQL（应走 services/albumStore）')
+  assert.ok(!/\.prepare\(/.test(code), 'album 路由不许再有裸 SQL（应走 services/albumStore；显式 conn 也不行）')
   assert.match(code, /albumStore\.listPhotos\(/, '整册照片必须经 albumStore 读取')
   assert.match(code, /albumStore\.copyPhotoRow\(/, '索引复制必须经 albumStore（thumb_path 置空的口径只有一份）')
 })

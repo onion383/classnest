@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../db');
 const cadreStore = require('../services/cadreStore');
+const studentLookup = require('../services/studentLookup');
+const { resolveOne } = require('../services/provisionalStudents');
 const { cleanText } = require('../services/sanitize');
 
 // ======================== 数据读写 ========================
@@ -85,16 +87,36 @@ router.delete('/:id', (req, res) => {
 });
 
 // ======================== 担任学生 ========================
-// 为职务添加担任学生（student_id 可空，用于值日输入产生的"仅姓名"学生）
+// 为职务添加担任学生。
+// 权威字段是 student_id，student_name 只是快照（导出与列表展示不必每次 join）。
+// 因此：能拿到 id 时姓名以 students 表为准，不信前端传的副本；拿不到 id 时按姓名认人，
+// 名册外的名字在这里落一条临时学生 —— 班干部不再依赖「值日先输入过这个人」这种隐式顺序。
 router.post('/:id/members', (req, res) => {
     const cadreId = Number(req.params.id);
   const cadre = cadreStore.findCadreBasic(cadreId);
   if (!cadre) {
     return res.status(404).json({ error: '职务不存在' });
   }
-  const studentId = req.body.student_id ? Number(req.body.student_id) || null : null;
-  const studentName = cleanText(req.body.student_name || '');
-  if (!studentName) return res.status(400).json({ error: '请选择担任学生' });
+  let studentId = req.body.student_id ? Number(req.body.student_id) || null : null;
+  let studentName = cleanText(req.body.student_name || '');
+
+  if (studentId) {
+    // 有 id 就以库里的姓名为准：前端传的 student_name 可能已经过时（改名后没刷新）
+    const stu = studentLookup.findById(studentId, 'base');
+    if (!stu) return res.status(404).json({ error: '学生不存在' });
+    studentName = stu.姓名;
+  } else if (studentName) {
+    const r = resolveOne(studentName, { create: true });
+    if (r.error) return res.status(400).json({ error: r.error });
+    // 名册里多个同名：不替用户挑，id 留空、姓名照存 —— 与改动前行为一致
+    // （班干部本来就允许「仅姓名」的成员；前端选人时总会带上 student_id）
+    if (!r.ambiguous) {
+      studentId = r.id;
+      studentName = r.name;
+    }
+  } else {
+    return res.status(400).json({ error: '请选择担任学生' });
+  }
   // max_count 原来只有渲染层拦（CadreManage.vue）：直接调接口能给一个 1 人职务塞任意多人，
   // 班级页会显示成「任命 5/1」。这里补上同一句判断。
   const maxCount = Math.max(1, Number(cadre.max_count) || 1);
@@ -211,6 +233,18 @@ router.post('/import', (req, res) => {
       return { rowNo, title, parentName, maxCount, students };
     });
 
+    // 按姓名认人：名册里唯一命中就用它，名册外就落一条临时学生（与单条新增同一套解析）。
+    // 重名或建人失败（姓名超长等）一律返回 null —— 导入是整批一个事务，
+    // 为了补一个 id 把已成功的行一起回滚不值得，退回「仅姓名成员」的老行为即可。
+    const resolveMember = (name) => {
+      try {
+        const r = resolveOne(name, { create: true });
+        return (r.ambiguous || r.error) ? null : r;
+      } catch (_) {
+        return null;
+      }
+    };
+
     // 本次导入真正新建的行（同名职务/成员只复用不修改）——撤销导入按这份清单精确回滚
     const created = { cadres: [], members: [] };
 
@@ -235,8 +269,8 @@ router.post('/import', (req, res) => {
           if (cadreStore.countMembers(node.id) >= node.max_count) {
             throw new Error(`第 ${item.rowNo} 行：「${node.name}」人数已达上限 ${node.max_count} 人`);
           }
-          const sameName = cadreStore.findStudentIdsByName(name);
-          const studentId = sameName.length === 1 ? sameName[0].id : null;
+          const resolved = resolveMember(name);
+          const studentId = resolved ? resolved.id : null;
           const sort = cadreStore.maxMemberSort(node.id) + 1;
           const infoMember = cadreStore.insertMember(node.id, studentId, name, sort);
           created.members.push({

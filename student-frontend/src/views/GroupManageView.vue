@@ -419,6 +419,8 @@
           @mouseenter="suggestState.index = idx"
         >
           <span class="flex-1 min-w-0 truncate">{{ s.姓名 }}</span>
+          <!-- 同名学生在列表里长得一模一样，靠学号区分；没有学号就不占位 -->
+          <span v-if="s.学号" class="shrink-0 text-[11px] leading-4 text-text/50">{{ s.学号 }}</span>
           <!-- 临时学生：与正式学生共用同一个 id，标出来便于直接选中已存在的人 -->
           <span v-if="s.is_provisional" class="shrink-0 text-[10px] leading-4 px-1 rounded bg-warning/15 text-warning">临时</span>
         </div>
@@ -667,6 +669,9 @@ function positionSuggest(el) {
 function onMemberInput(m, e) {
   const el = e.currentTarget;
   const value = e.target.value || '';
+  // 手动改字 = 不再是刚才选中的那个人，把 id 丢掉，交给后端按新姓名重新认人。
+  // 不丢的话「选了甲、又把名字改成乙」会存成「乙的名字 + 甲的 id」。
+  m._studentId = null;
   const wasShown = suggestState.visible;
   suggestState.member = m;
   suggestState.index = 0;
@@ -721,6 +726,9 @@ function fillCandidate(s) {
   const m = suggestState.member;
   if (!m) return;
   m.member_name = s.姓名 || '';
+  // 从名册选的人要带上 id：同名两人只有 id 分得清（P2-1）。
+  // 「XXX 临时」伪候选的 id 是哨兵字符串，不能当学生 id 传，留空让后端按姓名建档。
+  m._studentId = typeof s.id === 'number' ? s.id : null;
   closeSuggest();
   commitMember(m);
 }
@@ -1475,11 +1483,14 @@ async function doCommitMember(m) {
     }
     const before = buildGroupSnapshot();
     try {
+      const body = { member_name: m.member_name, remark: m.remark };
+      if (m._studentId != null) body.student_id = m._studentId;
       const data = await api(`/groups/${m._groupId}/members`, {
         method: 'POST',
-        body: JSON.stringify({ member_name: m.member_name, remark: m.remark }),
+        body: JSON.stringify(body),
       });
       m.id = data.id;
+      m._studentId = null;
       // 这里不再 selectDim 整表刷新：它会把 groups 整体替换、所有成员行 DOM 重建，
       // 用户刚点进的下一个输入框会立刻失焦 —— 连续录入变成「每输一个都要重新点一次」。
       // 新行就地「转正」即可，数据与后端一致：姓名/备注是本地值，sort_order 后端取 max+1（末尾），
@@ -1497,9 +1508,12 @@ async function doCommitMember(m) {
   const newName = m.member_name;
   const newRemark = m.remark;
   try {
+    const body = { member_name: newName, remark: newRemark };
+    // 只有「刚从名册选中的人」才带 id；手输姓名时留给后端按姓名解析。
+    if (m._studentId != null) body.student_id = m._studentId;
     await api(`/group-members/${m.id}`, {
       method: 'PUT',
-      body: JSON.stringify({ member_name: newName, remark: newRemark }),
+      body: JSON.stringify(body),
     });
     // 保存成功后才登记撤销；失败时回滚界面到旧值，避免「撤销一个没生效的修改」（B06-04）
     if (String(oldName ?? '') !== String(newName ?? '')) recordGroupUndo('group_members', m.id, 'member_name', oldName ?? '', newName);
@@ -1508,6 +1522,7 @@ async function doCommitMember(m) {
     if (String(oldName ?? '') !== String(newName ?? '')) fetchStudents();
     m._undoName = undefined;
     m._undoRemark = undefined;
+    m._studentId = null;
   } catch (e) {
     m.member_name = oldName;
     m.remark = oldRemark;

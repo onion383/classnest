@@ -5,7 +5,8 @@ const store = require('../services/slotStore');
 const { validateRow } = require('../services/businessRules');
 const { normalizeSeats, normalizeCellTypes, SEAT_MAX_ROWS, SEAT_MAX_GRID_COLS } = require('../services/sanitize');
 // 单格写入的唯一入口（坐标 / 值形状 / 可坐性 / 引用关系都在它里面）
-const { writeSeatCell, SeatWriteError } = require('../services/seatWrite');
+// resolveNameCells：座位格子里的姓名字符串 → 学生 id（名册外姓名建档），见该模块说明
+const { writeSeatCell, resolveNameCells, SeatWriteError } = require('../services/seatWrite');
 const { readDocJson } = require('../utils/json');
 // 历史快照 payload 的唯一构造点（补存 / 补录 / AI 写入前快照共用一套字段表）
 const { seatSnapshotPayload } = require('../services/seatSnapshot');
@@ -156,23 +157,29 @@ router.put('/', (req, res) => {
     const shapeError = gridShapeMismatch('seat_layout', rows, cols, !parsedTypes.skip);
     if (shapeError) return res.status(400).json({ error: shapeError });
 
-    // 依赖既有数据的一致性校验：座位里的学生 id 必须真实存在（尺寸越界也在此拦下）
-    validateRow('seat_layout', { seats: trimmed, rows, cols, types: parsedTypes.value });
+    // 解析 + 校验 + 写库同一个事务：resolveNameCells 会给名册外姓名建临时学生（写库），
+    // 若校验失败而座位没保存，名册里就凭空多出一个人（值日路径踩过同样的坑 v6 · N2-06）。
+    const save = db.transaction(() => {
+      const finalSeats = resolveNameCells(trimmed);
+      // 依赖既有数据的一致性校验：座位里的学生 id 必须真实存在（尺寸越界也在此拦下）
+      validateRow('seat_layout', { seats: finalSeats, rows, cols, types: parsedTypes.value });
 
-    const patch = {
-      mode: mode || 'single',
-      rows,
-      cols,
-      seats: JSON.stringify(trimmed),
-      aisle_cols: JSON.stringify(aisleCols || []),
-      // 桌型序列（每张桌 1/2 人，对应座位列）：元素非法就落空数组 = 按 mode 推。
-      // 不因此拒绝整次保存 —— 座位数据比桌型重要，不该被一个附属字段拖垮。
-      desk_pattern: JSON.stringify(parseDeskPattern(deskPattern) || []),
-      groups_config: JSON.stringify(groupsConfig || []),
-      settings: JSON.stringify(settings || {}),
-    };
-    if (!parsedTypes.skip) patch.types = JSON.stringify(parsedTypes.value);
-    store.setDoc('seat_layout', patch);
+      const patch = {
+        mode: mode || 'single',
+        rows,
+        cols,
+        seats: JSON.stringify(finalSeats),
+        aisle_cols: JSON.stringify(aisleCols || []),
+        // 桌型序列（每张桌 1/2 人，对应座位列）：元素非法就落空数组 = 按 mode 推。
+        // 不因此拒绝整次保存 —— 座位数据比桌型重要，不该被一个附属字段拖垮。
+        desk_pattern: JSON.stringify(parseDeskPattern(deskPattern) || []),
+        groups_config: JSON.stringify(groupsConfig || []),
+        settings: JSON.stringify(settings || {}),
+      };
+      if (!parsedTypes.skip) patch.types = JSON.stringify(parsedTypes.value);
+      store.setDoc('seat_layout', patch);
+    });
+    save();
     res.json({ message: '保存成功' });
   } catch (err) {
     // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
@@ -251,23 +258,28 @@ router.put('/master', (req, res) => {
     const shapeError = gridShapeMismatch('seat_template', rows, cols, !parsedTypes.skip);
     if (shapeError) return res.status(400).json({ error: shapeError });
 
-    // 依赖既有数据的一致性校验：座位里的学生 id 必须真实存在
-    validateRow('seat_template', { seats: trimmed, rows, cols, types: parsedTypes.value });
+    // 与当前座位表 PUT 同口径：解析姓名 + 校验 + 写库同事务
+    const save = db.transaction(() => {
+      const finalSeats = resolveNameCells(trimmed);
+      // 依赖既有数据的一致性校验：座位里的学生 id 必须真实存在
+      validateRow('seat_template', { seats: finalSeats, rows, cols, types: parsedTypes.value });
 
-    const patch = {
-      mode: mode || 'single',
-      rows,
-      cols,
-      seats: JSON.stringify(trimmed),
-      aisle_cols: JSON.stringify(aisleCols || []),
-      // 桌型序列（每张桌 1/2 人，对应座位列）：元素非法就落空数组 = 按 mode 推。
-      // 不因此拒绝整次保存 —— 座位数据比桌型重要，不该被一个附属字段拖垮。
-      desk_pattern: JSON.stringify(parseDeskPattern(deskPattern) || []),
-      groups_config: JSON.stringify(groupsConfig || []),
-      settings: JSON.stringify(settings || {}),
-    };
-    if (!parsedTypes.skip) patch.types = JSON.stringify(parsedTypes.value);
-    store.setDoc('seat_template', patch);
+      const patch = {
+        mode: mode || 'single',
+        rows,
+        cols,
+        seats: JSON.stringify(finalSeats),
+        aisle_cols: JSON.stringify(aisleCols || []),
+        // 桌型序列（每张桌 1/2 人，对应座位列）：元素非法就落空数组 = 按 mode 推。
+        // 不因此拒绝整次保存 —— 座位数据比桌型重要，不该被一个附属字段拖垮。
+        desk_pattern: JSON.stringify(parseDeskPattern(deskPattern) || []),
+        groups_config: JSON.stringify(groupsConfig || []),
+        settings: JSON.stringify(settings || {}),
+      };
+      if (!parsedTypes.skip) patch.types = JSON.stringify(parsedTypes.value);
+      store.setDoc('seat_template', patch);
+    });
+    save();
     res.json({ message: '模板保存成功' });
   } catch (err) {
     // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
@@ -283,17 +295,27 @@ router.put('/master', (req, res) => {
 router.post('/apply-master', (req, res) => {
     const template = store.getDoc('seat_template');
   if (!template) return res.status(400).json({ error: '模板为空' });
-  store.setDoc('seat_layout', {
-    mode: template.mode,
-    rows: template.rows,
-    cols: template.cols,
-    seats: template.seats,
-    // 格子类型必须跟着一起搬：只抄 seats 不抄 types，抄过来的走廊会变成座位格
-    types: template.types,
-    aisle_cols: template.aisle_cols,
-    groups_config: template.groups_config,
-    settings: template.settings,
+  const run = db.transaction(() => {
+    // 模板里如果还留着「姓名字符串」格子（老数据），搬过来时顺便认人换成 id。
+    // 模板数据畸形（解析失败）就**原样搬运**，保持既有行为 —— 不能因为解析失败写一个空表进去。
+    let seats = template.seats;
+    try {
+      const parsed = JSON.parse(template.seats || '[]');
+      if (Array.isArray(parsed)) seats = JSON.stringify(resolveNameCells(parsed));
+    } catch (_) { /* 畸形模板：原样搬 */ }
+    store.setDoc('seat_layout', {
+      mode: template.mode,
+      rows: template.rows,
+      cols: template.cols,
+      seats,
+      // 格子类型必须跟着一起搬：只抄 seats 不抄 types，抄过来的走廊会变成座位格
+      types: template.types,
+      aisle_cols: template.aisle_cols,
+      groups_config: template.groups_config,
+      settings: template.settings,
+    });
   });
+  run();
   res.json({ message: '已应用模板' });
 });
 

@@ -189,7 +189,7 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
     // 参与人数与总槽位的差额（> 0 表示有人排不进表）。
     // 确认框文案与 needsSlotWarning 都读它，别再各写一遍筛选条件。
     shortageCount() {
-      return Math.max(0, ctx.poolNames.value.length - ctx.totalSlots())
+      return Math.max(0, ctx.poolKeys.value.length - ctx.totalSlots())
     },
     needsSlotWarning() {
       const total = ctx.totalSlots()
@@ -210,7 +210,7 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
     },
     doStart() {
       // 「现有排表表格」但表里没人 → 没有可排的人：直接说明原因，不弹人数确认框
-      if (ctx.dataSource.value === 'table' && !ctx.poolNames.value.length) {
+      if (ctx.dataSource.value === 'table' && !ctx.poolKeys.value.length) {
         ctx.rejectText.value = '当前值日表里没有学生，无法排表；请改选「全部同学」'
         ctx.showReject()
         return
@@ -247,11 +247,12 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
       ctx.resetPreview()
     },
     confirm() {
-      ctx.emit('confirm', { cells: ctx.previewCells.value })
+      // previewCells 内部是 key（id:16 / name:张三），写回业务表必须是格子值（数字 id / 姓名）
+      ctx.emit('confirm', { cells: ctx.toValueCells(ctx.previewCells.value) })
     },
     onSaveDraft() {
       ctx.emit('save-draft', {
-        cells: ctx.previewCells.value,
+        cells: ctx.toValueCells(ctx.previewCells.value),
         conditions: ctx.conditions.value.map(c => {
           const copy = { ...c }
           delete copy.uid

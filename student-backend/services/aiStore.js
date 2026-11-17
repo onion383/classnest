@@ -30,6 +30,14 @@ function studentIdNameMap() {
   return map
 }
 
+// ---------- AI 数据保护：建匿名映射所需的最小列集 ----------
+function listPrivacyStudents() {
+  return db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students').all()
+}
+function listPrivacyLeaves() {
+  return db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM leave_records').all()
+}
+
 // ---------- 教学周：倒计时里名称含「期末 / 考试」的项 ----------
 function listCountdowns() {
   return db.prepare('SELECT 名称, 截止日 FROM countdowns').all()
@@ -84,16 +92,23 @@ function listStudentsForChecks() {
   return db.prepare('SELECT id, 学号, 姓名 FROM students').all()
 }
 function listStudentCandidates() {
-  return db.prepare('SELECT id, 学号, 姓名, 年级, 班级 FROM students').all()
+  // 带 is_provisional：找人/检索的结果要能标出临时学生，避免被当正式学生点名或统计
+  return db.prepare('SELECT id, 学号, 姓名, 年级, 班级, is_provisional FROM students').all()
 }
 function listCadreMembers() {
   return db.prepare('SELECT id, cadre_id, student_id, student_name FROM cadre_members').all()
 }
 function listGroupMembers() {
-  return db.prepare('SELECT id, group_id, member_name FROM group_members').all()
+  // 带上 student_id：P2-1 之后它才是权威引用，只按 member_name 判「人还在不在」
+  // 会把「id 悬空但姓名刚好撞上另一个人」的孤儿判成正常。
+  return db.prepare('SELECT id, group_id, student_id, member_name FROM group_members').all()
 }
 function listLeaveRecordsForChecks() {
-  return db.prepare('SELECT id, 姓名, 开始时间, 结束时间 FROM leave_records').all()
+  return db.prepare('SELECT id, student_id, 姓名, 开始时间, 结束时间 FROM leave_records').all()
+}
+// 加减分：只取体检需要的三列，不整表搬（可能有几千行）
+function listScoreRecordsForChecks() {
+  return db.prepare('SELECT id, student_id, 姓名, 学号 FROM score_records').all()
 }
 function listFeeRecords() {
   return db.prepare('SELECT id, 收支类型, 收支金额, 收支时间, 备注 FROM fee_records').all()
@@ -163,6 +178,8 @@ module.exports = {
   tableColumns,
   clearTableColumnsCache,
   studentIdNameMap,
+  listPrivacyStudents,
+  listPrivacyLeaves,
   listCountdowns,
   readScheduleDoc,
   readSeatDoc,
@@ -180,6 +197,7 @@ module.exports = {
   listCadreMembers,
   listGroupMembers,
   listLeaveRecordsForChecks,
+  listScoreRecordsForChecks,
   listFeeRecords,
   listCountdownsForChecks,
   listScoresForSearch,

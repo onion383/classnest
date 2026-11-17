@@ -4,7 +4,7 @@
 // 这一步只做一件事：把「谁引用谁、父行删了子行怎么办」写进表结构。
 // **不开 PRAGMA foreign_keys** —— 声明对已存在的库是空操作，对新建库也只是元数据，
 // 所以现有行为必须一模一样。这个测试就守这两条：
-//   ① 9 处声明在、且 ON DELETE 语义正确（少了 = 约定丢了，多了/错了 = 以后开 PRAGMA 会出事）
+//   ① 10 处声明在、且 ON DELETE 语义正确（少了 = 约定丢了，多了/错了 = 以后开 PRAGMA 会出事）
 //   ② PRAGMA 仍是关的、且不合法的引用照样写得进去（证明「行为不变」）
 // =========================================================================
 const test = require('node:test')
@@ -16,19 +16,9 @@ const ROOT = path.resolve(__dirname, '../..')
 const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
 const Database = backendRequire('better-sqlite3-multiple-ciphers')
 const { initSchema } = require('../../student-backend/schema/schema')
-
-// 期望的声明清单：[子表, 子列, 父表, 删除策略]
-const EXPECTED = [
-  ['score_records', 'student_id', 'students', 'CASCADE'],
-  ['leave_records', 'student_id', 'students', 'CASCADE'],
-  ['cadre_members', 'cadre_id', 'cadres', 'CASCADE'],
-  ['cadre_members', 'student_id', 'students', 'CASCADE'],
-  ['groups', 'dimension_id', 'group_dimensions', 'CASCADE'],
-  ['group_members', 'group_id', 'groups', 'CASCADE'],
-  ['album_photos', 'album_id', 'albums', 'CASCADE'],
-  ['album_scan_tasks', 'album_id', 'albums', 'CASCADE'],
-  ['ai_messages', 'conversation_id', 'ai_conversations', 'CASCADE'],
-]
+// 清单不再写在本文件里：DDL 一改、这里忘改，就会出现「库里多了一条、测试还说 9 条齐」。
+// 单源在 schema/foreignKeySpec.js，探测模块与这里共用同一份（对账见 fk-probe.test.js）。
+const { FK_DECLARATIONS } = require('../../student-backend/schema/foreignKeySpec')
 
 function fresh() {
   const db = new Database(':memory:')
@@ -37,28 +27,28 @@ function fresh() {
 }
 const fkList = (db, table) => db.pragma(`foreign_key_list(${JSON.stringify(table)})`)
 
-test('9 处外键声明都在，且父表/列/删除策略正确', () => {
+test('10 处外键声明都在，且父表/列/删除策略正确', () => {
   const db = fresh()
   try {
-    for (const [table, column, parent, onDelete] of EXPECTED) {
-      const fk = fkList(db, table).find((r) => r.from === column)
-      assert.ok(fk, `${table}.${column} 缺少外键声明 —— 这条约定又变回「应用层自觉」了`)
-      assert.equal(fk.table, parent, `${table}.${column} 指向的父表不对`)
-      assert.equal(fk.to, 'id', `${table}.${column} 应指向父表主键 id`)
-      assert.equal(fk.on_delete, onDelete, `${table}.${column} 的 ON DELETE 应为 ${onDelete}`)
+    // 清单本身被删减也要红：下面只验证「登记过的都在」，不会发现「少登记了」
+    assert.equal(FK_DECLARATIONS.length, 10, '契约清单条数变了 —— 是新增了外键还是误删了一条？')
+    for (const spec of FK_DECLARATIONS) {
+      const fk = fkList(db, spec.table).find((r) => r.from === spec.column)
+      assert.ok(fk, `${spec.table}.${spec.column} 缺少外键声明 —— 这条约定又变回「应用层自觉」了`)
+      assert.equal(fk.table, spec.parent, `${spec.table}.${spec.column} 指向的父表不对`)
+      assert.equal(fk.to, 'id', `${spec.table}.${spec.column} 应指向父表主键 id`)
+      assert.equal(fk.on_delete, spec.onDelete, `${spec.table}.${spec.column} 的 ON DELETE 应为 ${spec.onDelete}`)
     }
   } finally { db.close() }
 })
 
-test('故意不加外键的三处保持不加（加了会误伤）', () => {
+test('故意不加外键的两处保持不加（加了会误伤）', () => {
   const db = fresh()
   try {
     // 0 是「没有上级」的哨兵值，不是 cadres.id
     assert.equal(fkList(db, 'cadres').find((r) => r.from === 'parent_id'), undefined)
     // 按姓名引用，students.姓名 不唯一，SQLite 外键要求父列 PK/UNIQUE
     assert.equal(fkList(db, 'group_members').find((r) => r.from === 'member_name'), undefined)
-    // 多态引用（target_table + target_id），没法指向单一父表
-    assert.equal(fkList(db, 'pending_requests').find((r) => r.from === 'target_id'), undefined)
   } finally { db.close() }
 })
 

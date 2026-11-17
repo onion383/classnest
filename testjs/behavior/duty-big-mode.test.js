@@ -91,10 +91,15 @@ test('前后端：大扫除的列名派生规则一致（任务分组 + 数量 �
 })
 
 test('后端：大扫除补存只在命中日（次数随周期变少）', () => {
-  const s = read(`${BE}/routes/duty.js`)
+  // 补存循环已下沉到 services/dutyWrite.js（SQL/事务收尾），判据跟着实现走，
+  // 否则这条守的就变成了路由里的一句注释。
+  const s = read(`${BE}/services/dutyWrite.js`)
   assert.ok(/dutyCycle\.isHitDate/.test(s), 'backfill 应按命中日过滤')
   // 日常值日仍逐日补（大扫除才受周期约束）
   assert.ok(/isHit\(cur\)/.test(s), 'backfill 循环应跳过非命中日')
+  // 反向守卫：路由不许把循环抄回来
+  const route = read(`${BE}/routes/duty.js`)
+  assert.ok(!/isHit\(cur\)/.test(route), 'duty 路由不许再有补存循环（应走 dutyWrite.backfillHistory）')
 })
 
 test('后端：命中日计算在 dutyCycle.js 单源（前端不再各算一份）', () => {

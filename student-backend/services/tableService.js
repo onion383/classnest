@@ -42,9 +42,12 @@ function fieldTypeMap(tableName) {
   return map;
 }
 
-function queryAll(tableName) {
+// whereSql 只接受**服务端代码里的常量**（如 'is_provisional = 0'），不接用户输入，
+// 因此不需要参数化；调用方是 createDynamicTableRouter 的 listWhere 选项。
+function queryAll(tableName, whereSql = '') {
   assertValidTable(tableName);
-  const results = db.prepare(`SELECT * FROM ${tableName} ORDER BY position ASC`).all();
+  const where = whereSql ? ` WHERE ${whereSql}` : '';
+  const results = db.prepare(`SELECT * FROM ${tableName}${where} ORDER BY position ASC`).all();
   let fields = getFields(tableName);
   if (fields.length === 0 && results.length > 0) {
     fields = Object.keys(results[0]).filter(k => k !== 'id' && k !== 'position').map(k => ({ name: k, type: '文字' }));
@@ -128,7 +131,8 @@ function updateRowWithRename(tableName, id, data) {
     if (before && data && data['姓名'] != null) {
       const after = studentNameById(id);
       if (after && before['姓名'] !== after['姓名']) {
-        renamed = renameStudentRefs(before['姓名'], after['姓名']);
+        // 带上 id：同名两人各自改名时才不会互相踩（按姓名改会连另一个人一起改掉）
+        renamed = renameStudentRefs(before['姓名'], after['姓名'], id);
       }
     }
   })();

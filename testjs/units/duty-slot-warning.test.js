@@ -31,8 +31,8 @@ async function makeOpts(over = {}) {
   const ctx = {
     daysArr: { value: DAYS },
     itemsArr: { value: ITEMS },
-    poolNames: { value: names(14) },
-    studentNames: { value: names(14) },
+    poolKeys: { value: names(14) },
+    studentKeys: { value: names(14) },
     dataSource: { value: 'all' },
     tableFilled: { value: 12 },
     ...over,
@@ -47,9 +47,9 @@ test('人数不足 · X = 参与人数 − 总槽位，单源可复算', async (
   const ctx = await makeOpts()
   assert.equal(ctx.totalSlots(), 12)
   assert.equal(ctx.shortageCount(), 2, '14 人 / 12 槽 → 2 人排不进表')
-  const ok = await makeOpts({ poolNames: { value: names(12) }, studentNames: { value: names(12) } })
+  const ok = await makeOpts({ poolKeys: { value: names(12) }, studentKeys: { value: names(12) } })
   assert.equal(ok.shortageCount(), 0, '人数正好等于槽位时不报不足')
-  const few = await makeOpts({ poolNames: { value: names(8) }, studentNames: { value: names(8) } })
+  const few = await makeOpts({ poolKeys: { value: names(8) }, studentKeys: { value: names(8) } })
   assert.equal(few.shortageCount(), 0, '人数少于槽位时差额为 0，不报不足')
 })
 
@@ -62,13 +62,13 @@ test('人数不足 · 确认判定与文案共用同一个 X', async () => {
   assert.equal(tableShort.needsSlotWarning(), true)
   // 人数够、槽位多 → 走「重复值日」那一支，仍要提示
   const repeat = await makeOpts({
-    poolNames: { value: names(8) }, studentNames: { value: names(8) },
+    poolKeys: { value: names(8) }, studentKeys: { value: names(8) },
     dataSource: { value: 'table' }, tableFilled: { value: 6 },
   })
   assert.equal(repeat.shortageCount(), 0)
   assert.equal(repeat.needsSlotWarning(), true, '重复值日的提示不能被吞掉')
   // 全部同学且人数够 → 不需要任何确认
-  const allOk = await makeOpts({ poolNames: { value: names(8) }, studentNames: { value: names(8) } })
+  const allOk = await makeOpts({ poolKeys: { value: names(8) }, studentKeys: { value: names(8) } })
   assert.equal(allOk.needsSlotWarning(), false)
 })
 
@@ -84,6 +84,6 @@ test('文案 · 新提示带数字、旧提示仍在、X 取自单源', async ()
   // minCount：定义 + 判据 + 文案，三处都要用同一个方法
   const uses = (options.match(/shortageCount\(\)/g) || []).length
   assert.ok(uses >= 2, `options 里 shortageCount 的调用点应 ≥2 处，实际 ${uses}`)
-  assert.ok(options.includes('ctx.poolNames.value.length - ctx.totalSlots()'),
+  assert.ok(options.includes('ctx.poolKeys.value.length - ctx.totalSlots()'),
     '差额口径必须是参与人数与总槽位之差')
 })

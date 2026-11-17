@@ -16,8 +16,10 @@
 //     types 是后加的列，老库/老客户端留下的畸形值不该让用户连拖动都做不了；
 //     洞的守卫在数据正常时生效，数据损坏时由读路径的降级暴露给用户。
 const store = require('./slotStore');
+const { db } = require('../db');
 const { normalizeCellTypes, assertSeatCell, SEAT_MAX_ROWS, SEAT_MAX_GRID_COLS } = require('./sanitize');
 const { assertSeatCellWritable } = require('./businessRules');
+const { resolveNames } = require('./provisionalStudents');
 const { SEAT_CURRENT_SLOTS } = require('../schema/tableRegistry');
 
 // 只有这两张表有「当前座位」语义。做成白名单而不是直接拼表名：
@@ -99,6 +101,95 @@ function assertCellInLayout(doc, row, col) {
 }
 
 /**
+ * 座位格子里的「姓名字符串」→ 学生 id。
+ *
+ * 为什么必须在写路径做：前端只有在名册里查得到学生时才存 id，名册外的名字会一直
+ * 以字符串形式留在库里 —— 它既不是 students 记录、也不参与任何按 id 的统计
+ * （座位指数、点名器、智能排表的「已入座」判定都看不见这个人）。
+ * 这里一次补两件事：
+ *   ① 给名册外的姓名建档（= 把「一个名字」变成「一个人」，与值日/分组/加减分同口径）；
+ *   ② 能解析出唯一 id 的格子直接改写成 id，之后读出来与手动点选的结果一致。
+ *
+ * 歧义（名册里多个同名）与建档失败一律**保持原字符串**：宁可认不出，也不能认错人。
+ * 这个函数不抛业务错 —— 建档失败不该让整张座位表存不进去（座位是主流程）。
+ *
+ * ⚠️ 调用方必须把它和后续校验/写库放在同一个事务里：它写库（建临时学生），
+ *    校验失败时不能留下「人建了、座位没存」（值日那边踩过同样的坑 v6 · N2-06）。
+ */
+// 收集座位格里的所有非空姓名（去重）。两处解析共用，避免「谁算姓名」有两套口径。
+function collectSeatNames(seats) {
+  const names = new Set();
+  if (!Array.isArray(seats)) return names;
+  seats.forEach((row) => {
+    if (!Array.isArray(row)) return;
+    row.forEach((cell) => {
+      if (typeof cell !== 'string') return;
+      const n = cell.trim();
+      if (n) names.add(n);
+    });
+  });
+  return names;
+}
+
+/**
+ * 干跑：只查名册，**绝不建人**。
+ *
+ * 给「AI 写座位表」的提案阶段用。提案这时还没被用户确认，凭空建出一批临时学生
+ * 比让用户多点一次严重得多 —— 而且 OCR 错一个字就会多一个人，从座位表上完全看不出来。
+ * 所以提案阶段只回答「哪些名字名册里没有 / 哪些是同名分不清」，由 AI 在回复里问一句。
+ *
+ * 返回 { missing: [{name}], ambiguous: [{name, candidates}] }
+ */
+function previewSeatNames(seats) {
+  const names = collectSeatNames(seats);
+  const missing = [];
+  const ambiguous = [];
+  if (!names.size) return { missing, ambiguous };
+  resolveNames([...names], { create: false }).forEach((r) => {
+    if (!r) return;
+    if (r.ambiguous) ambiguous.push({ name: r.name, candidates: r.candidates || [] });
+    else if (!r.id) missing.push({ name: r.name });
+  });
+  return { missing, ambiguous };
+}
+
+/**
+ * resolveNameCells 的详细版：除了改写后的格子，还回传「这次新建了谁」「谁因为同名认不出」。
+ *
+ * 调用方（AI 整块写入）需要把新建名单告诉用户：截图识别错一个字就会静默多一个临时学生，
+ * 而学生表默认只列正式学生，用户在界面上根本发现不了。
+ */
+function resolveNameCellsDetailed(seats) {
+  if (!Array.isArray(seats)) return { seats, created: [], ambiguous: [] };
+  const names = collectSeatNames(seats);
+  if (!names.size) return { seats, created: [], ambiguous: [] };
+
+  const idOf = new Map();
+  const created = [];
+  const ambiguous = [];
+  resolveNames([...names], { create: true }).forEach((r) => {
+    if (!r) return;
+    if (r.id) idOf.set(r.name, Number(r.id));
+    if (r.created && r.id) created.push({ id: Number(r.id), name: r.name });
+    if (r.ambiguous) ambiguous.push({ name: r.name, candidates: r.candidates || [] });
+  });
+  if (!idOf.size) return { seats, created, ambiguous };
+
+  const next = seats.map((row) => (Array.isArray(row)
+    ? row.map((cell) => {
+      if (typeof cell !== 'string') return cell;
+      const id = idOf.get(cell.trim());
+      return id == null ? cell : id;
+    })
+    : row));
+  return { seats: next, created, ambiguous };
+}
+
+function resolveNameCells(seats) {
+  return resolveNameCellsDetailed(seats).seats;
+}
+
+/**
  * 写一个座位格（唯一入口）。
  * 成功返回写入后的格子值；失败抛 SeatWriteError（400 = 参数/业务不允许，500 = 库内数据损坏）。
  */
@@ -118,20 +209,34 @@ function writeSeatCell(table, row, col, value) {
     throw new SeatWriteError(err.message);
   }
 
-  // 业务不变量：这一格能不能坐人（洞里/走廊里不行，id 得存在，不能一人两座）
-  try {
-    assertSeatCellWritable(doc.seats, doc.types, row, col, value);
-  } catch (err) {
-    throw new SeatWriteError(err.message);
-  }
+  // 解析 + 校验 + 写库同一个事务（见 resolveNameCells 的 ⚠️）
+  const tx = db.transaction(() => {
+    const cell = resolveNameCells([[value]])[0][0];
 
-  const seats = doc.seats;
-  if (!Array.isArray(seats[row])) seats[row] = [];
-  seats[row][col] = value == null ? null : value;
-  store.setDoc(table, { seats: JSON.stringify(seats) });
-  return seats[row][col];
+    // 业务不变量：这一格能不能坐人（洞里/走廊里不行，id 得存在，不能一人两座）。
+    // 放在解析之后 —— 姓名解析成 id 后这些检查才有对象；一个名字现在也是「一个人」了。
+    try {
+      assertSeatCellWritable(doc.seats, doc.types, row, col, cell);
+    } catch (err) {
+      throw new SeatWriteError(err.message);
+    }
+
+    const seats = doc.seats;
+    if (!Array.isArray(seats[row])) seats[row] = [];
+    seats[row][col] = cell == null ? null : cell;
+    store.setDoc(table, { seats: JSON.stringify(seats) });
+    return seats[row][col];
+  });
+  return tx();
 }
 
-// 只导出对外真正需要的两个：写入入口与错误类型（路由靠 instanceof 分流 400/500）。
-// readSeatDoc 等内部函数不导出 —— 让「读布局」只有一个消费点，避免又长出第二套读口径。
-module.exports = { writeSeatCell, SeatWriteError };
+// 只导出对外真正需要的三个：两个写入入口（单格 / 姓名解析）与错误类型
+// （路由靠 instanceof 分流 400/500）。readSeatDoc 等内部函数不导出 ——
+// 让「读布局」只有一个消费点，避免又长出第二套读口径。
+module.exports = {
+  writeSeatCell,
+  resolveNameCells,
+  resolveNameCellsDetailed,
+  previewSeatNames,
+  SeatWriteError,
+};

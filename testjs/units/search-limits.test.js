@@ -285,7 +285,7 @@ test('接线：后端每个结果源都走分页，SQL 与内存 JSON 都不例�
   // M12-B5：路由只剩 HTTP 形状，查询实现下沉到 service（SQL 不许回到路由层）
   const routeSrc = read('student-backend/routes/search.js')
   assert.match(routeSrc, /runSearch\(req\.query\)/)
-  assert.ok(!/db\.prepare\(/.test(routeSrc), 'search 路由不许再有裸 SQL')
+  assert.ok(!/\.prepare\(/.test(routeSrc), 'search 路由不许再有裸 SQL（显式 conn 也不行）')
 })
 
 test('接线：前端按页追加，不再放大上限重查', () => {

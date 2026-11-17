@@ -36,7 +36,17 @@ function makeCtx(groups, conditions, rng, opts = {}) {
   return {
     daysArr: { value: DAYS },
     itemsArr: { value: opts.items || ITEMS },
-    poolNames: { value: NAMES },
+    poolKeys: { value: NAMES },
+    // 这两个用例只验算法：人标识用「恒等 key」（key 就是名字本身，不带前缀），
+    // 这样断言可以继续按人名读。key 的转换规则由 duty-person-key 的用例单独覆盖，
+    // pipeline 只依赖「key 是个稳定字符串」这一点。
+    keyOfValue: (v) => String(v == null ? '' : v).trim(),
+    valueOfKey: (k) => k,
+    nameOfKey: (k) => k,
+    toKeyCells: (cells) => cells,
+    toValueCells: (cells) => cells,
+    ledgerByName: { value: {} },
+
     baseCells: { value: {} },
     weights: { value: {} },
     ledger: { value: {} },

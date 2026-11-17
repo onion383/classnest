@@ -7,6 +7,7 @@ const { validateRow } = require('../services/businessRules');
 const { reorderRows } = require('../services/tableService');
 const { readRowsByIds } = require('../services/createdRows');
 const leaveStore = require('../services/leaveStore');
+const { resolveOne } = require('../services/provisionalStudents');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['姓名', '类型', '开始时间', '结束时间', '家长联系电话', '学生联系电话', '状态', '返校时间', '备注'];
@@ -63,10 +64,34 @@ router.post('/', (req, res) => {
     data.家长联系电话 = sanitizeField(body.家长联系电话 !== undefined ? body.家长联系电话 : (stu.家长联系电话 || null), 'leave_records', '家长联系电话');
     data.学生联系电话 = sanitizeField(body.学生联系电话 !== undefined ? body.学生联系电话 : (stu.学生联系电话 || null), 'leave_records', '学生联系电话');
   } else {
-    data.student_id = null;
-    data.姓名 = sanitizeField(body.姓名, 'leave_records', '姓名');
-    data.家长联系电话 = sanitizeField(body.家长联系电话, 'leave_records', '家长联系电话');
-    data.学生联系电话 = sanitizeField(body.学生联系电话, 'leave_records', '学生联系电话');
+    // 没传 studentId：姓名可能是名册外的人（转学生 / 借读 / 别班临时参加）。
+    // 走与加减分（routes/scores.js POST）同一套 provisionalStudents 解析：建一条
+    // is_provisional=1 的学生并回填 student_id，请假记录才有稳定身份 ——
+    // 统计不会把同名两人混成一条，转正时只改状态位、记录不用重指。
+    // 空姓名仍按原行为（student_id 留空）落库，不能被解析器拦成 400。
+    const rawName = String(body.姓名 == null ? '' : body.姓名).trim();
+    if (!rawName) {
+      data.student_id = null;
+      data.姓名 = sanitizeField(body.姓名, 'leave_records', '姓名');
+      data.家长联系电话 = sanitizeField(body.家长联系电话, 'leave_records', '家长联系电话');
+      data.学生联系电话 = sanitizeField(body.学生联系电话, 'leave_records', '学生联系电话');
+    } else {
+      const r = resolveOne(rawName, { create: true });
+      if (r.error) return res.status(400).json({ error: r.error });
+      // 名册里有多个同名：这里**刻意不**回 409（与加减分不同）。
+      // 加减分有候选选择弹窗接得住 409；请假还能从「表格内直接新增一行」进来
+      // （LeaveManagement.saveNewRow），那条路没有选人步骤 —— 回 409 等于把一条
+      // 原本能落的记录直接丢掉。所以歧义时退回「只存姓名、student_id 留空」的老行为：
+      // 不在没有选择 UI 的地方制造新错误。
+      // resolveOne 在歧义时本身返回 id: null，这里的三元只是把意图写明白：
+      // 「歧义 → 不回填」，不依赖下游实现的空值约定。
+      data.student_id = r.ambiguous ? null : r.id;
+      data.姓名 = sanitizeField(r.ambiguous ? rawName : r.name, 'leave_records', '姓名');
+      // 手输姓名时联系方式只认请求体：临时学生本来就没有电话，正式学生的电话
+      // 也要等用户显式传才带 —— 不在这里凭空补，避免「同一条记录两种来源」。
+      data.家长联系电话 = sanitizeField(body.家长联系电话, 'leave_records', '家长联系电话');
+      data.学生联系电话 = sanitizeField(body.学生联系电话, 'leave_records', '学生联系电话');
+    }
   }
 
   data.类型 = body.类型 ? sanitizeField(body.类型, 'leave_records', '类型', '文字') : null;
@@ -88,6 +113,7 @@ router.post('/', (req, res) => {
 
 // PUT /api/leaves/:id 编辑
 router.put('/:id', (req, res) => {
+  try {
     const row = cleanUp(req.body || {}, EDITABLE, 'leave_records');
   if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
   // cleanUp 的跨字段校验只能看到本次请求带的列：只改「结束时间」时「开始时间」为空，
@@ -104,8 +130,34 @@ router.put('/:id', (req, res) => {
       return res.status(400).json({ error: err.message });
     }
   }
+
+  // 改姓名 = 换成另一个人（或名册外的人），必须重新认人 —— 否则记录显示新名字、
+  // student_id 还指着旧学生，统计按 id 归集时会算到旧人头上，且不报任何错。
+  // 只在姓名**真的变了**时才重认：前端表格 PUT 会带整行，无条件重认会让「只改状态」
+  // 也去跑一次认人（同名歧义时还会把已有 id 冲成 null）。
+  if (row.姓名 !== undefined) {
+    const old = leaveStore.findRowById(req.params.id);
+    if (!old) return res.status(404).json({ error: '记录不存在' });
+    const nextName = String(row.姓名 == null ? '' : row.姓名).trim();
+    const prevName = String(old.姓名 == null ? '' : old.姓名).trim();
+    if (nextName !== prevName) {
+      if (!nextName) {
+        row.student_id = null;
+      } else {
+        const r = resolveOne(nextName, { create: true });
+        if (r.error) return res.status(400).json({ error: r.error });
+        // 同名歧义：不替用户猜，id 留空、姓名照存（与新增/导入同口径）
+        row.student_id = r.ambiguous ? null : r.id;
+        row.姓名 = r.ambiguous ? nextName : r.name;
+      }
+    }
+  }
+
   buildUpdate('leave_records', row, req.params.id);
-  res.json({ message: '修改成功' });
+    res.json({ message: '修改成功' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // POST /api/leaves/reorder 保存整表行顺序（前端传全量 id 顺序）
@@ -161,6 +213,17 @@ router.post('/import', (req, res) => {
       return '';
     };
 
+    // 建临时学生可能因列级校验失败（超长姓名等）；导入是整批一个事务，
+    // 不能为了一行补 id 把整批废掉 —— 失败就退回「student_id 留空」，与改动前一致。
+    const tryResolve = (name) => {
+      try {
+        const r = resolveOne(name, { create: true });
+        return (r.ambiguous || r.error) ? null : r;
+      } catch (_) {
+        return null;
+      }
+    };
+
     const startPos = maxPosition('leave_records');
 
     const list = rows.map((row, idx) => {
@@ -168,10 +231,25 @@ router.post('/import', (req, res) => {
       const name = cell(row, ['姓名']);
       const xuehao = cell(row, ['学号']);
       let student = null;
-      if (xuehao) student = leaveStore.findStudentByXuehao(xuehao) || null;
+      if (xuehao) {
+        // 学号不唯一（可空、可重复）：只有「恰好 1 条」才能定人。
+        // 撞到 2 条就退回按姓名认人，绝不静默取第一条 —— 那会把整张表记到同一个学生头上。
+        const byXuehao = leaveStore.findStudentsByXuehao(xuehao);
+        if (byXuehao.length === 1) student = byXuehao[0];
+      }
       if (!student && name) {
-        const sameName = leaveStore.findStudentsByName(name);
-        if (sameName.length === 1) student = sameName[0];
+        // 学号没命中就按姓名认人；名册里查不到的名字在这里落一条临时学生（与新增请假、
+        // 加减分同一套解析）。否则这条记录只剩下一个字符串，后续改名、统计都会对不上人。
+        //
+        // 重名（名册里 ≥2 个同名）刻意不抛错：导入整批一个事务，抛错会让整批失败，
+        // 而原行为只是「这一行 student_id 留空」。不为了补 id 把能导的行一起废掉 ——
+        // 需要用户决策的同名歧义交给「选人」那条路（AddLeaveDialog 直接传 studentId），
+        // 不让批量导入替用户猜。
+        const r = tryResolve(name);
+        if (r && r.id) {
+          // 命中后按 id 重查一次：正式学生带得出联系方式，临时学生这两列是 null
+          student = leaveStore.findStudentById(r.id) || { id: r.id, 姓名: r.name };
+        }
       }
 
       const finalName = name || (student && student.姓名) || '';

@@ -34,13 +34,14 @@ const W = { 扫地: { 周一: 2, 周二: 5 }, 拖地: { 周一: 3 } }
 
 test('累加 · 逐日逐项目逐格把权重记到人名下', async () => {
   const { accumulateDutyIndex } = await loadIndex()
-  assert.deepEqual(accumulateDutyIndex(DAILY, W), { 张三: 10, 李四: 2 })
+  // 现在返回双账本；这几条用例里的人名在名册里不存在，全部落在按姓名那份
+  assert.deepEqual(accumulateDutyIndex(DAILY, W).byName, { 张三: 10, 李四: 2 })
 })
 
 test('累加 · 非数字 / 缺失权重整格跳过，不产生脏值', async () => {
   const { accumulateDutyIndex } = await loadIndex()
   const weights = { 扫地: { 周一: '2', 周二: 5 }, 拖地: { 周一: 3 } }
-  const out = accumulateDutyIndex(DAILY, weights)
+  const out = accumulateDutyIndex(DAILY, weights).byName
   assert.deepEqual(out, { 张三: 8 }, '周一扫地权重不是数字，整格跳过')
   assert.ok(!Object.values(out).some(v => typeof v !== 'number' || Number.isNaN(v)))
 })
@@ -48,16 +49,17 @@ test('累加 · 非数字 / 缺失权重整格跳过，不产生脏值', async (
 test('累加 · 空姓名与非数组名单跳过且不抛错', async () => {
   const { accumulateDutyIndex } = await loadIndex()
   const daily = [{ cells: { 扫地: { 周一: ['张三', '', null, undefined] }, 拖地: { 周二: 'oops' } } }]
-  assert.deepEqual(accumulateDutyIndex(daily, { 扫地: { 周一: 2 }, 拖地: { 周二: 4 } }), { 张三: 2 })
+  assert.deepEqual(accumulateDutyIndex(daily, { 扫地: { 周一: 2 }, 拖地: { 周二: 4 } }).byName, { 张三: 2 })
 })
 
 test('累加 · 空输入安全，且每次返回新对象（无共享可变状态）', async () => {
   const { accumulateDutyIndex } = await loadIndex()
-  assert.deepEqual(accumulateDutyIndex([], W), {})
-  assert.deepEqual(accumulateDutyIndex(null, null), {})
-  assert.deepEqual(accumulateDutyIndex([null, {}, { cells: null }], W), {})
-  const a = accumulateDutyIndex(DAILY, W)
-  const b = accumulateDutyIndex(DAILY, W)
+  const empty = { byId: {}, byName: {}, unresolved: {} }
+  assert.deepEqual(accumulateDutyIndex([], W), empty)
+  assert.deepEqual(accumulateDutyIndex(null, null), empty)
+  assert.deepEqual(accumulateDutyIndex([null, {}, { cells: null }], W), empty)
+  const a = accumulateDutyIndex(DAILY, W).byName
+  const b = accumulateDutyIndex(DAILY, W).byName
   assert.deepEqual(a, b)
   assert.notEqual(a, b)
 })

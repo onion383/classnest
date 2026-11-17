@@ -1,6 +1,6 @@
 // 可「读」的表及其中文说明（模型据此生成查询意图）
 const READ_TABLES = {
-  students: '学生列表（学号/姓名/年级/班级/年龄/家长联系电话/学生联系电话/备注）',
+  students: '学生列表（学号/姓名/年级/班级/年龄/家长联系电话/学生联系电话/备注/is_provisional 是否临时学生：1=在值日/座位里填名字自动建的临时学生，0=正式名单学生。统计人数或点名如需只算正式学生，用 where:{is_provisional:0} 过滤）',
   leave_records: '请假记录（姓名/类型/开始时间/结束时间/状态/返校时间/家长联系电话/备注）',
   fee_records: '班费收支（收支编码/收支类型/收支金额/收支时间/备注/收据）',
   score_records: '加分扣分记录（姓名/类型/项目/分值/原因/加分时间/group_name/成员数）',
@@ -12,7 +12,7 @@ const READ_TABLES = {
   cadres: '班干部职务（name 职务名/parent_id 上级职务id（0=顶级）/max_count 可任职人数/sort_order 排序）',
   cadre_members: '班干部任职（cadre_id 职务id/student_id 学生id/student_name 姓名/sort_order 排序）',
   semesters: '学期列表（name 学期名/start_date 开始日/end_date 结束日/is_current 是否当前学期（1 是））',
-  widget_settings: '系统设置（toolbox_enabled 是否启用桌面悬浮小组件（1 启用/0 关闭）/rollcall_exclude_absent 点名器是否排除今天不在校的学生（1 排除/0 全员）/note_save_path 随手记保存目录/screenshot_save_path 截图保存目录/desktop_apps JSON 数组：桌面软件列表，元素形如 {id,name,path,icon}/class_info JSON 对象：首页班级信息 {name 班名,motto 班级口号,mottoStyle 班风,xuefeng 学风}）',
+  widget_settings: '系统设置（toolbox_enabled 是否启用桌面悬浮小组件（1 启用/0 关闭）/rollcall_exclude_absent 点名器是否排除今天不在校的学生（1 排除/0 全员）/rollcall_include_provisional 点名器是否包含临时学生（1 包含/0 只点正式学生）/note_save_path 随手记保存目录/screenshot_save_path 截图保存目录/desktop_apps JSON 数组：桌面软件列表，元素形如 {id,name,path,icon}/class_info JSON 对象：首页班级信息 {name 班名,motto 班级口号,mottoStyle 班风,xuefeng 学风}）',
   master_schedule: '主课表模板（cells 为 JSON 课程数据、settings 为 JSON 配置）',
   schedule: '当前课表（cells 为 JSON 课程数据、settings 为 JSON 配置）',
   schedule_history: '历史课表快照（week_start 周一起始日/cells JSON 课程数据/settings JSON/created_at 时间）',
@@ -69,5 +69,17 @@ const DOC_UNDO_KEY = {
   widget_settings: '系统设置',
 };
 
-module.exports = { READ_TABLES, WRITE_TABLES, JSON_WRITE_TABLES, DOC_UNDO_KEY };
+// AI 数据保护 §4：在 READ_TABLES 之上加一层「有效集」过滤，原常量不动（其它地方仍在用）。
+// 纯函数：closedTables 为被用户显式关闭的表名数组；返回仍可读的表（键→说明）。
+// 放在这里（纯数据模块）而不是读取 DB 的 service，便于单测直接加载、零 DB 依赖。
+function filterReadTables(allTables, closedTables) {
+  const closed = new Set(Array.isArray(closedTables) ? closedTables.map(String) : []);
+  const out = {};
+  for (const [key, desc] of Object.entries(allTables || {})) {
+    if (!closed.has(key)) out[key] = desc;
+  }
+  return out;
+}
+
+module.exports = { READ_TABLES, WRITE_TABLES, JSON_WRITE_TABLES, DOC_UNDO_KEY, filterReadTables };
 

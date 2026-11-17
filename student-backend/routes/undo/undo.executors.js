@@ -32,7 +32,10 @@ function renameRefsIfStudent(table, fromRow, toRow) {
   const a = fromRow['姓名']
   const b = toRow['姓名']
   if (a == null || b == null || a === b) return
-  renameStudentRefs(a, b)
+  // 带上 id：撤销改名同样按 id 精确反向改，同名两人各撤各的。
+  // 两个快照指向同一行，id 取哪个都一样（都缺就退回按姓名，由服务层判同名保护）。
+  const sid = fromRow.id != null ? fromRow.id : toRow.id
+  renameStudentRefs(a, b, sid == null ? null : Number(sid))
 }
 
 // 职务/成员的前后态回写与行槽位回写都在 undoStore：
@@ -58,6 +61,13 @@ const GRID_SOURCES = {
 // ===================== 命令执行器 =====================
 // 指令描述存库，执行逻辑在此注册。重启后读记录仍可执行。
 // payload 各动作字段在下方 executors 定义。
+// 成员姓名是快照、student_id 才是引用：单独回写姓名之后必须把引用拉回一致，
+// 否则撤销一次「分组页改名」会留下「姓名旧、id 指着新名那个人」的分叉。
+function setCellValueKeepingRef(table, field, value, rowId) {
+  undoStore.setCellValue(table, field, value, rowId)
+  if (table === 'group_members' && field === 'member_name') undoStore.resyncGroupMemberRef(rowId)
+}
+
 const executors = {
   // 单元格编辑：payload { table, rowId, field, oldValue, newValue }
   cell_update: {
@@ -67,8 +77,8 @@ const executors = {
       if (!cols.includes(field)) return '字段无效'
       return null
     },
-    undo({ table, rowId, field, oldValue }) { undoStore.setCellValue(table, field, oldValue, rowId) },
-    redo({ table, rowId, field, newValue }) { undoStore.setCellValue(table, field, newValue, rowId) },
+    undo({ table, rowId, field, oldValue }) { setCellValueKeepingRef(table, field, oldValue, rowId) },
+    redo({ table, rowId, field, newValue }) { setCellValueKeepingRef(table, field, newValue, rowId) },
     // 生成展示文案：撤销时反向（new→old），重做时正向（old→new）
     describe({ field, oldValue, newValue }, mode) {
       const old = oldValue == null ? '' : oldValue

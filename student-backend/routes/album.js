@@ -1327,9 +1327,7 @@ router.post('/thumbs/sweep', async (req, res) => {
         .then(() => true).catch(() => false);
       if (!rec) return dbExists ? undefined : null;
       try {
-        return dbManager.withDb(slug, () => new Set(
-          dbManager.current().prepare('SELECT id FROM album_photos').all().map(r => r.id)
-        ));
+        return dbManager.withDb(slug, () => new Set(albumStore.listPhotoIds()));
       } catch (_) {
         return undefined;
       }

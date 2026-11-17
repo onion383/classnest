@@ -172,6 +172,30 @@ function setCellValue(table, field, value, rowId) {
   db.prepare(`UPDATE "${table}" SET "${field}" = ? WHERE id = ?`).run(value, rowId)
 }
 
+// 成员姓名（快照）被单独回写后，把权威引用拉回一致。
+//
+// 什么时候会分叉：分组页里把成员「张三」改成「李四」，updateMember 会为李四建临时学生
+// 并把 student_id 指过去；用户再撤销，撤销记录里只有 member_name 这一列，
+// 于是姓名回到「张三」、student_id 还指着「李四」那个人。界面上完全看不出来，
+// 但导出、按 id 统计、以及之后每次「只改备注」（会保留原 id）都会沿用这个错的引用。
+//
+// 认人复用 provisionalStudents 的单源实现（create:false —— 撤销不该凭空造学生）。
+// 延迟 require：本文件是很多 store 的底层，避免加载期成环。
+function resyncGroupMemberRef(rowId) {
+  const { resolveOne } = require('./provisionalStudents')
+  const row = db.prepare('SELECT student_id, member_name FROM group_members WHERE id = ?').get(rowId)
+  if (!row) return
+  const name = String(row.member_name == null ? '' : row.member_name).trim()
+  let nextId = null
+  if (name) {
+    const r = resolveOne(name, { create: false })
+    nextId = r && r.id ? Number(r.id) : null
+  }
+  const cur = row.student_id == null ? null : Number(row.student_id)
+  if (nextId === cur) return
+  db.prepare('UPDATE group_members SET student_id = ? WHERE id = ?').run(nextId, rowId)
+}
+
 // 整块覆盖「非行式」表的若干列（对象/数组按 JSON 文本落库，布尔按 1/0）
 function writeDocCols(table, id, obj) {
   if (store.isDoc(table)) { store.setDoc(table, obj); return }
@@ -492,6 +516,7 @@ module.exports = {
   deleteRowById,
   updateRowById,
   setCellValue,
+  resyncGroupMemberRef,
   writeDocCols,
   batchDelete,
   batchInsert,

@@ -20,7 +20,10 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     protectedColumns = [],
     enableRenameColumn = false,
     customValidate = null,
-    undoTableKey = null
+    undoTableKey = null,
+    // 附加查询参数（对象，或返回对象的函数——参数依赖响应式状态时用函数）。
+    // 学生管理用它传 { formal: 1 } 只取正式学生，其它使用方不传即保持全量。
+    query = null
   } = options
 
   // ==================== 状态 ====================
@@ -184,7 +187,12 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   async function fetchRows() {
     const token = fetchGuard.begin()
     try {
-      const res = await axios.get(`${apiBase}?_t=${Date.now()}`)
+      // _t 破缓存（后端不设短时缓存，这里只为让 GET 不被中间层合并）；
+      // query 里的键值由页面决定，值统一字符串化，避免布尔/数字被序列化成怪样子。
+      const params = new URLSearchParams({ _t: String(Date.now()) })
+      const extra = typeof query === 'function' ? query() : query
+      if (extra) for (const [k, v] of Object.entries(extra)) params.set(k, String(v))
+      const res = await axios.get(`${apiBase}?${params}`)
       const result = res.data
       // 已被更新的请求取代 → 丢弃本次结果（否则旧表会覆盖新表）。
       // 返回 true 而非 false：这次刷新动作已由更新的一次接管，调用方不该弹「刷新失败」。

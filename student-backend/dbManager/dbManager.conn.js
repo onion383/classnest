@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const { initSchema } = require('../schema/schema');
+const { probeForeignKeys, describeForeignKeys } = require('../schema/foreignKeyProbe');
 const {
   dbFilePath, lastDbPath, als, connCache, touchConn, setCachedConn, ensureIndex,
   openFile, registryFindBySlug, unwrapKey, getUnlockedKey, clearUnlockedKey,
@@ -28,6 +29,7 @@ function getConn(slug, passphrase, encrypted = true) {
     if (process.env.PERF_STARTUP === '1') {
       try { console.log(`[boot] 首次打开账号库 ${_t1 - _t0}ms（openFile）+ ${Date.now() - _t1}ms（initSchema）`); } catch (_) { /* 静默 */ }
     }
+    reportForeignKeyStatus(slug, conn);
     setCachedConn(slug, conn);
   } catch (err) {
     // 硬顶拒绝或 initSchema 失败：新建的连接不能留在内存里
@@ -35,6 +37,31 @@ function getConn(slug, passphrase, encrypted = true) {
     throw err;
   }
   return conn;
+}
+
+// 开库后探一次外键，把「这个库受不受外键保护」写进日志。
+//
+// 为什么值得专门打一行：外键声明只对**新建的表**生效（`CREATE TABLE IF NOT EXISTS`
+// 不会给已存在的表补约束），所以同一版本的程序在老库上「删学生不级联」、
+// 在新库上「级联」。这个差异完全隐形 —— 用户只会觉得「有时候删完学生加分记录还在」。
+// 打出来以后，排查任何「删了学生数据还残留」的问题，第一眼就有结论。
+//
+// 探测本身只读 PRAGMA，开销 <1ms，且每个连接只算一次（缓存见 foreignKeyProbe）；
+// 失败不抛出：探测是诊断，不是开库的前置条件。
+function reportForeignKeyStatus(slug, conn) {
+  try {
+    const r = probeForeignKeys(conn);
+    const brief = describeForeignKeys(r);
+    if (r.complete) {
+      console.log(`[db] 外键约束 ${slug}: ${brief} 完整`);
+    } else {
+      const missing = r.missing.map((m) => `${m.table}.${m.column}`).join(', ');
+      console.warn(
+        `[db] 外键约束 ${slug}: ${brief} —— 该库的表现在建于外键声明之前，`
+        + `删学生不会自动级联，依赖应用层清理（缺: ${missing}）`
+      );
+    }
+  } catch (_) { /* 诊断失败不影响开库 */ }
 }
 
 // 关闭并移出某库的缓存连接。

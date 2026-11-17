@@ -62,6 +62,7 @@
                 :candidate-items="allStudents"
                 :candidate-exclude-ids="[]"
                 candidate-label-field="姓名"
+                candidate-id-field="id"
                 candidate-placeholder="输入姓名"
                 :min-table-height="200"
                 :empty-ready="activeLoaded"
@@ -106,6 +107,7 @@
                 :candidate-items="allStudents"
                 :candidate-exclude-ids="[]"
                 candidate-label-field="姓名"
+                candidate-id-field="id"
                 candidate-placeholder="输入姓名"
                 :min-table-height="200"
                 :empty-ready="masterLoaded"
@@ -191,7 +193,7 @@
               <button @click="openIndexExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
             </div>
             <div class="bg-surface rounded-lg border border-border p-6">
-              <StatBarList :rows="dutyIndexRows" :bar-width="dutyIndexBarWidth" :value-text="(row) => row.value.toFixed(2)" empty-text="暂无值日指数数据" />
+              <StatBarList :rows="dutyIndexRows" name-key="label" :row-key="(row) => row.key" :bar-width="dutyIndexBarWidth" :value-text="(row) => row.value.toFixed(2)" empty-text="暂无值日指数数据" />
             </div>
             <ExportExcel v-if="indexExportMounted" :is-visible="indexExportVisible" :rows="indexExportRows" :fields="indexExportFields" defaultFilename="值日指数" @update:is-visible="indexExportVisible = $event" />
           </div>
@@ -300,6 +302,7 @@
       :students="allStudents"
       :weights="dutyWeights"
       :ledger="dutyLedger"
+      :ledger-by-name="dutyLedgerByName"
       :big-cleanup="dutyMode === 'big'"
       :draft="arrangeDraft"
       :base-cells="arrangeTarget === 'master' ? masterCells : activeCells"
@@ -492,6 +495,87 @@ const settingsEmptyText = computed(() => (settingsDays.value.length ? '还没有
 // 学生名单（用于网格候选选择姓名）
 const allStudents = ref([])
 
+// id → {姓名, 学号}。值日格存的是学生 id（新数据）时，靠它把 id 换成人名显示；
+// 指数列表还要用学号把两个同名学生区分开（否则两行一模一样的名字，看不出谁是谁）。
+// 直接按 id 建 Map 而不是每次 find：值日表可能有几十行 × 五列，遍历名册会变 O(n²)。
+const studentInfoById = computed(() => {
+  const m = new Map()
+  for (const s of allStudents.value || []) {
+    if (s && s.id != null) {
+      m.set(Number(s.id), {
+        姓名: String(s.姓名 == null ? '' : s.姓名),
+        学号: String(s.学号 == null ? '' : s.学号),
+      })
+    }
+  }
+  return m
+})
+const studentNameById = computed(() => {
+  const m = new Map()
+  for (const [id, s] of studentInfoById.value) m.set(id, s.姓名)
+  return m
+})
+
+// 姓名 → 学生 id，**只放唯一命中的名字**。
+// 指数要按身份归集，而历史快照里的格子存的是姓名字符串（老数据）；要把它们折算成 id，
+// 就得知道「这个名字对应哪一个人」。同名两人时无法判断，宁可不放（→ 归到 unresolved），
+// 也不能随便挑一个 —— 挑错等于把 A 的值日记到 B 头上，数字还看着很正常。
+const studentIdByName = computed(() => {
+  const m = new Map()
+  const dup = new Set()
+  for (const [id, s] of studentInfoById.value) {
+    const n = s.姓名.trim()
+    if (!n) continue
+    if (m.has(n)) dup.add(n)
+    else m.set(n, id)
+  }
+  for (const n of dup) m.delete(n)
+  return m
+})
+
+// 名册里每个姓名出现几次（指数榜判断「要不要补学号区分」用）
+const rosterNameCount = computed(() => {
+  const m = new Map()
+  for (const s of studentInfoById.value.values()) {
+    const n = s.姓名.trim()
+    if (n) m.set(n, (m.get(n) || 0) + 1)
+  }
+  return m
+})
+
+// 把格子里的值统一成「显示用姓名」：id 查名册，字符串原样。
+// 查不到姓名（学生已删/名册还没加载）时就显示 id 本身 —— 宁可界面上出现一个数字，
+// 也不要静默变成空格：空格看起来像「这里本来没人」，用户会重新填一遍，把真实引用覆盖掉。
+function cellDisplayName(v) {
+  if (typeof v === 'number') return studentNameById.value.get(v) ?? String(v)
+  return String(v == null ? '' : v)
+}
+
+// 格子值 → 学生 id（指数按身份归集用）：数字直接用，姓名按唯一命中折算，认不出返回 null。
+function cellStudentId(v) {
+  if (typeof v === 'number') return v
+  const s = String(v == null ? '' : v).trim()
+  if (!s) return null
+  return studentIdByName.value.get(s) ?? null
+}
+
+// 库里的一个格子 → GridView 的单元格对象。
+// 三种形态都要认：空、学生 id（新写入）、姓名字符串（老数据与名册外的人）。
+function dutyCell(v) {
+  if (v === undefined || v === null || v === '') return { course: '' }
+  if (typeof v === 'number') return { course: cellDisplayName(v), _studentId: v }
+  if (typeof v === 'object') {
+    // 历史对象格（{student_id,name} / {id,姓名}）：有 id 就带上，没有就只显示名字
+    const id = Number(v.student_id ?? v.id)
+    const nm = v.name ?? v['姓名']
+    if (Number.isInteger(id) && id > 0) {
+      return { course: nm != null ? String(nm) : cellDisplayName(id), _studentId: id }
+    }
+    return { course: String(nm == null ? '' : nm) }
+  }
+  return { course: String(v) }
+}
+
 // 构建网状表格的 rows：每个劳动项目按「人数」拆成多行（每行一个人），首列跨行合并居中显示项目名，单元格存单个姓名
 function buildGridRows(cells, items, days, readonly = false) {
   const list = items && items.length ? items : settingsItems.value
@@ -507,7 +591,11 @@ function buildGridRows(cells, items, days, readonly = false) {
         label: it.name,
         _isReadonly: readonly,
         _rowHeaderRowSpan: k === 0 ? n : 0, // 首子行跨行合并，其余隐藏占位
-        cells: dayList.map(day => ({ course: cells[it.name]?.[day]?.[k] || '' }))
+        // 格子值可能是学生 id（新数据）或姓名（老数据）。
+        // 显示一律用姓名，但 id 必须留在 _studentId 上 —— 保存时靠它写回 id，
+        // 否则「加载时 id→姓名、保存时姓名→id」这一来一回又会按姓名猜一遍，
+        // 同名两人当场退化成分不清。
+        cells: dayList.map(day => dutyCell(cells[it.name]?.[day]?.[k]))
       })
     }
   })
@@ -528,7 +616,16 @@ function reconstructCells(newRows, dayList) {
   Object.keys(groups).forEach(label => {
     cells[label] = {}
     const arr = groups[label]
-    days.forEach((day, i) => { cells[label][day] = arr.map(c => (c[i] && c[i].course) || '') })
+    days.forEach((day, i) => {
+      cells[label][day] = arr.map(c => {
+        const cell = c[i]
+        if (!cell) return ''
+        // 从候选里选中过学生 → 写 id（改名不用再动值日表、删学生能精确到人）；
+        // 手输的姓名没有 _studentId，仍然写字符串，交给后端按姓名解析建档。
+        if (cell._studentId != null) return Number(cell._studentId)
+        return cell.course || ''
+      })
+    })
   })
   return cells
 }
@@ -1385,12 +1482,34 @@ async function loadDutyIndex() {
   } catch (e) { console.error(e) }
 }
 const dutyIndexRows = computed(() => {
-  const acc = accumulateDutyIndex(dutyIndexDaily.value, dutyWeights.value)
-  const rows = Object.keys(acc).map(name => ({ name, value: acc[name] })).filter(r => r.value !== 0)
-  rows.sort((a, b) => b.value - a.value)
-  const max = Math.max(...rows.map(r => Math.abs(r.value)), 0)
-  rows.forEach(r => { r._max = max || 1 })
-  return rows
+  // 按**学生 id** 归集：两个同名的人各算各的（此前按姓名归集，两人的次数会合并成一个数，
+  // 谁都分不清自己做了几次）。历史快照里的姓名字符串按「唯一命中」折算成 id；
+  // 折算不了（名册外 / 同名歧义）的归到 unresolved，单独列出来而不是丢掉。
+  const { byId, unresolved } = accumulateDutyIndex(dutyIndexDaily.value, dutyWeights.value, {
+    resolveName: cellDisplayName,
+    resolveId: cellStudentId,
+  })
+  const info = studentInfoById.value
+  const rows = []
+  for (const key of Object.keys(byId)) {
+    const id = Number(key)
+    const s = info.get(id)
+    const name = s ? s.姓名 : `#${id}`
+    // 名册里有同名时补学号，否则指数榜上会出现两行一模一样的名字
+    const dup = (rosterNameCount.value.get(name) || 0) > 1
+    let label = name
+    if (dup) label = s && s.学号 ? `${name}（${s.学号}）` : `${name}（#${id}）`
+    rows.push({ key: `id:${id}`, id, name, 学号: s ? s.学号 : '', label, value: byId[key] })
+  }
+  for (const name of Object.keys(unresolved)) {
+    // 认不出是谁的格子：值照算，但标出来源，别让它看起来像某个具体学生的成绩
+    rows.push({ key: `name:${name}`, id: null, name, 学号: '', label: `${name}（历史）`, value: unresolved[name] })
+  }
+  const out = rows.filter(r => r.value !== 0)
+  out.sort((a, b) => b.value - a.value)
+  const max = Math.max(...out.map(r => Math.abs(r.value)), 0)
+  out.forEach(r => { r._max = max || 1 })
+  return out
 })
 function dutyIndexBarWidth(row) {
   return Math.round((Math.abs(row.value) / row._max) * 100)
@@ -1409,10 +1528,12 @@ const indexExportMounted = ref(false)
 watch(() => indexExportVisible.value, v => { if (v) indexExportMounted.value = true })
 const indexExportFields = [
   { name: '姓名' },
+  // 指数按学生 id 归集后，两个同名的人会各占一行 —— 没有学号就分不清哪行是谁
+  { name: '学号' },
   { name: '值日指数' }
 ]
 const indexExportRows = computed(() =>
-  dutyIndexRows.value.map(r => ({ 姓名: r.name, 值日指数: Number(r.value.toFixed(2)) }))
+  dutyIndexRows.value.map(r => ({ 姓名: r.name, 学号: r.学号, 值日指数: Number(r.value.toFixed(2)) }))
 )
 function openIndexExport() {
   if (!dutyIndexRows.value.length) return useNotification().info('暂无值日指数可导出')
@@ -1421,6 +1542,8 @@ function openIndexExport() {
 
 // 载入「权重公平」所需账本：统计学期范围内、截至昨日每人累计的值日权重
 const dutyLedger = ref({})
+// 认不出身份的那份账本（名册外的人 / 历史快照里同名分不清的字符串），排表时按姓名兜底
+const dutyLedgerByName = ref({})
 async function loadDutyLedger() {
   try {
     const y = new Date(); y.setDate(y.getDate() - 1)
@@ -1432,7 +1555,20 @@ async function loadDutyLedger() {
     const params = { mode: dutyMode.value, to }
     if (from) params.from = from
     const res = await axios.get(`${API_BASE}/duty/daily`, { params })
-    dutyLedger.value = accumulateDutyIndex(res.data || [], dutyWeights.value)
+    // 排表算法内部一律以**姓名**标识人（participants / assigned / cells 全是姓名，
+    // 见 DutyArrangementDialog.pipeline.js），所以这里取 byName 那份账本。
+    // 同名两人在这里只能合并计算 —— 合并账本会把「合计做得很多」同时算给两人，
+    // 结果是两人都被少排（对其他人略不公平，但不会把已做很多的人又排上去）；
+    // 反过来按 id 硬拆、姓名映射不到就给 0，会让同名的人被误当成「一次没做过」而被过量安排。
+    // 要真正按身份排表，得先把 pipeline 的人标识换成 id（连带 cells 存 id），另立一项。
+    const { byId, unresolved } = accumulateDutyIndex(res.data || [], dutyWeights.value, {
+      resolveName: cellDisplayName,
+      resolveId: cellStudentId,
+    })
+    // 账本按**学生身份**给排表用：两个同名的人各算各的，不会再出现「一人做两次、
+    // 两人都被少排」。认不出身份的那部分单独给一份姓名账本兜底。
+    dutyLedger.value = byId
+    dutyLedgerByName.value = unresolved
   } catch (e) { console.error(e) }
 }
 

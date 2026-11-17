@@ -160,14 +160,14 @@ const codeOnly = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
 test('SQL 出口：schedule 路由只经 semesterStore / slotStore', () => {
   const code = codeOnly('student-backend/routes/schedule.js')
-  assert.ok(!/db\.prepare\(/.test(code), 'schedule 路由不许再有裸 SQL')
+  assert.ok(!/\.prepare\(/.test(code), 'schedule 路由不许再有裸 SQL（显式 conn 也不行）')
   assert.match(code, /semesterStore\.(list|findCurrent|create|setCurrent|update|updateRange|remove)\(/, '学期读写必须走 semesterStore')
   assert.match(code, /store\.getDoc\('schedule'\)/, '实行课表必须经 slotStore 读取')
 })
 
 test('SQL 出口：duty 路由的槽位读统一走 slotStore', () => {
   const code = codeOnly('student-backend/routes/duty.js')
-  assert.ok(!/db\.prepare\(/.test(code), 'duty 路由不许再有裸 SQL')
+  assert.ok(!/\.prepare\(/.test(code), 'duty 路由不许再有裸 SQL（显式 conn 也不行）')
   for (const name of ['duty_settings', 'duty_layout', 'duty_template', 'duty_weight', 'duty_draft']) {
     assert.match(code, new RegExp(`store\\.getDoc\\('${name}'\\)`), `${name} 必须经 store.getDoc 读取`)
   }

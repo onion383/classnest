@@ -228,6 +228,6 @@ test('接线：seatWrite 真的调用了校验层（不是自己重写一套）'
 // M12-B6：座位路由的语句已收进 slotStore（读）/ seatWrite（写），不留裸 SQL。
 test('SQL 出口：seats 路由不留裸 SQL，槽位统一走 slotStore', () => {
   const code = codeOnly(read('student-backend/routes/seats.js'))
-  assert.ok(!/db\.prepare\(/.test(code), 'seats 路由不许再有裸 SQL（读走 store.getDoc，写走 seatWrite）')
+  assert.ok(!/\.prepare\(/.test(code), 'seats 路由不许再有裸 SQL（读走 store.getDoc，写走 seatWrite；显式 conn 也不行）')
   assert.match(code, /store\.getDoc\('seat_layout'\)/, '当前座位必须经 store.getDoc 读取')
 })

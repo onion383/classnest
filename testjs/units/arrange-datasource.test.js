@@ -30,6 +30,9 @@ const loadGroup = () => import(pathToFileURL(path.join(
 const loadArrangeOptions = () => import(pathToFileURL(path.join(
   __dirname, '../../student-frontend/src/components/dialogs/SmartArrangementDialog/SmartArrangementDialog.options.js',
 )).href)
+const loadPersonKey = () => import(pathToFileURL(path.join(
+  __dirname, '../../student-frontend/src/utils/dutyPersonKey.js',
+)).href)
 
 // ==================== 座位排表 ====================
 // 名册 4 人，座位表只坐了 2 人（第 1 行两人，第 2 行空着）
@@ -155,15 +158,29 @@ test('座位排表 · 全部同学：startArrange 仍弹新人确认', async () 
 const DUTY_STUDENTS = ['张三', '李四', '王五', '赵六']
 const DUTY_CELLS = { 扫地: { 周一: ['张三', '李四'] } }
 
+// 值日排表内部用 key（`id:<id>` / `name:<姓名>`）标识人。这里的学生没有 id，
+// 所以池子里的人一律是 name: 形态 —— 与真实代码走同一份转换实现，不另写一套。
+const K = (name) => `name:${name}`
+let PK = null
+test.before(async () => { PK = await loadPersonKey() })
+
 function dutyCtx(dataSource, pool) {
+  const nameById = PK.buildNameById([])
+  const idByName = PK.buildIdByName(nameById)
   return {
     daysArr: { value: ['周一'] },
     itemsArr: { value: [{ name: '扫地', count: 3 }] },
     weights: { value: {} },
     ledger: { value: {} },
+    ledgerByName: { value: {} },
     baseCells: { value: DUTY_CELLS },
-    studentNames: { value: DUTY_STUDENTS },
-    poolNames: { value: pool },
+    studentKeys: { value: DUTY_STUDENTS.map(K) },
+    poolKeys: { value: pool },
+    keyOfValue: (v) => PK.keyOfValue(v, idByName),
+    valueOfKey: PK.valueOfKey,
+    nameOfKey: (k) => PK.nameOfKey(k, nameById),
+    toKeyCells: (c) => PK.toKeyCells(c, idByName),
+    toValueCells: PK.toValueCells,
     dataSource: { value: dataSource },
     seat: { value: { seats: [] } },
     satisfaction: { value: {} },
@@ -173,43 +190,43 @@ function dutyCtx(dataSource, pool) {
 
 test('值日排表 · 现有排表表格：空槽由表里的人轮转补，不引入名册里没上表的人', async () => {
   const { useDutyArrangementPipeline } = await loadDuty()
-  const pool = ['张三', '李四']
+  const pool = [K('张三'), K('李四')]
   const ctx = dutyCtx('table', pool)
   const pipeline = useDutyArrangementPipeline(ctx, {})
   const slots = pipeline.buildSlots()
   const assigned = pipeline.buildBaseAssignment(slots)
   assert.equal(assigned.length, 3, '3 个槽位都要填上')
-  assert.deepEqual(assigned.slice(0, 2), ['张三', '李四'], '原有两人留在原槽位')
+  assert.deepEqual(assigned.slice(0, 2), [K('张三'), K('李四')], '原有两人留在原槽位')
   assert.ok(pool.includes(assigned[2]), `补槽的人必须来自表里的人，实际是「${assigned[2]}」`)
-  assert.ok(!DUTY_STUDENTS.includes(assigned[2]) || DUTY_CELLS.扫地.周一.includes(assigned[2]),
+  assert.ok(!DUTY_STUDENTS.map(K).includes(assigned[2]) || DUTY_CELLS.扫地.周一.map(K).includes(assigned[2]),
     '不能把名册里没上表的人塞进来')
 })
 
 test('值日排表 · 全部同学：空槽优先补名册里没上表的人', async () => {
   const { useDutyArrangementPipeline } = await loadDuty()
-  const ctx = dutyCtx('all', DUTY_STUDENTS)
+  const ctx = dutyCtx('all', DUTY_STUDENTS.map(K))
   const pipeline = useDutyArrangementPipeline(ctx, {})
   const slots = pipeline.buildSlots()
   const assigned = pipeline.buildBaseAssignment(slots)
-  assert.deepEqual(assigned.slice(0, 2), ['张三', '李四'], '原有两人留在原槽位')
-  assert.ok(['王五', '赵六'].includes(assigned[2]), `补槽的人应来自名册里没上表的，实际是「${assigned[2]}」`)
+  assert.deepEqual(assigned.slice(0, 2), [K('张三'), K('李四')], '原有两人留在原槽位')
+  assert.ok(['王五', '赵六'].map(K).includes(assigned[2]), `补槽的人应来自名册里没上表的，实际是「${assigned[2]}」`)
 })
 
 test('值日排表 · 作用域「全部」的参与者 = 当前数据源的学生池', async () => {
   const { useDutyArrangementPipeline } = await loadDuty()
-  const tableCtx = dutyCtx('table', ['张三', '李四'])
+  const tableCtx = dutyCtx('table', ['张三', '李四'].map(K))
   const tablePipeline = useDutyArrangementPipeline(tableCtx, {})
   const slots = tablePipeline.buildSlots()
   const assigned = tablePipeline.buildBaseAssignment(slots)
   const tableParticipants = [...tablePipeline.scopeContexts('all', slots, assigned)[0].participants].sort()
-  assert.deepEqual(tableParticipants, ['张三', '李四'], '现有排表表格：只有表里的人参与')
+  assert.deepEqual(tableParticipants, ['张三', '李四'].map(K).sort(), '现有排表表格：只有表里的人参与')
 
-  const allCtx = dutyCtx('all', DUTY_STUDENTS)
+  const allCtx = dutyCtx('all', DUTY_STUDENTS.map(K))
   const allPipeline = useDutyArrangementPipeline(allCtx, {})
   const allSlots = allPipeline.buildSlots()
   const allAssigned = allPipeline.buildBaseAssignment(allSlots)
   const allParticipants = [...allPipeline.scopeContexts('all', allSlots, allAssigned)[0].participants].sort()
-  assert.deepEqual(allParticipants, ['张三', '李四', '王五', '赵六'], '全部同学：名册 4 人参与')
+  assert.deepEqual(allParticipants, DUTY_STUDENTS.map(K).sort(), '全部同学：名册 4 人参与')
 })
 
 // ==================== 智能分组 ====================

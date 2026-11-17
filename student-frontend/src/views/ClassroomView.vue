@@ -33,6 +33,10 @@
       >
         <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
       </button>
+      <!-- 临时学生：值日/座位/分组里直接填名字自动建的档，从这里统一转正 -->
+      <button @click="provisionalOpen = true" class="btn-search px-4 py-2 rounded flex items-center gap-1.5" title="管理临时学生">
+        <IconGlyph name="students" :size="14" tint="current" /> 临时学生
+      </button>
       <!-- 低频/危险操作收进「更多」：批量删除、去除重复数据 -->
       <MoreMenu :items="moreItems" @select="onMoreSelect" @hover="onMoreHover" />
     </div>
@@ -70,6 +74,9 @@
       :items="contextMenu.items"
       @close="hideContextMenu"
     />
+
+    <!-- 临时学生转正：转完刷新名单（转正后他们才出现在这张表里） -->
+    <ProvisionalStudentsDialog v-model:visible="provisionalOpen" @converted="refreshStudents" />
 
     <DynamicTable
       ref="dynamicTable"
@@ -160,6 +167,7 @@ import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import SearchBar from '../components/base/SearchBar.vue'
 import MoreMenu from '../components/base/MoreMenu.vue'
+import ProvisionalStudentsDialog from '../components/dialogs/ProvisionalStudentsDialog.vue'
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import Tabs from '../components/base/Tabs.vue'
 import { useTableCRUD } from '../composables/useTableCRUD.js'
@@ -203,6 +211,8 @@ const dedupeMounted = ref(false)
 const dialogMounted = ref(false)
 const contextMenuMounted = ref(false)
 const addMounted = ref(false)
+// 临时学生弹窗：不常开，用 v-model 控制显隐，内部自己拉列表（打开即刷新）
+const provisionalOpen = ref(false)
 
 const API_BASE = '/api'
 const DEFAULT_FIELDS = [
@@ -221,7 +231,10 @@ const dynamicTable = ref(null)
 const table = useTableCRUD(`${API_BASE}/students`, DEFAULT_FIELDS, {
   requiredField: '姓名',
   protectedColumns: ['学号', '姓名'],
-  undoTableKey: 'students'
+  undoTableKey: 'students',
+  // 只取正式学生：临时学生（在值日/座位/分组里直接填名字自动建档的）不进这张名单，
+  // 否则看不出谁是临时、也会被算进人数和导出。它们走工具栏「临时学生」入口统一转正。
+  query: { formal: 1 }
 })
 
 // 跨页定位：标题栏全局搜索点「学生」结果跳转 /students?focus=<id> 时，
@@ -245,6 +258,11 @@ const applyFocus = () => {
 onMounted(applyFocus)
 onActivated(applyFocus)
 watch(() => route.query.focus, applyFocus)
+// 标题栏通知中心「临时学生提醒 → 去处理」：跳过来就直接开弹窗。
+// 本页被 KeepAlive 缓存，复用实例时 onMounted 不会重跑，所以必须 watch query。
+watch(() => route.query.provisional, (v) => {
+  if (v === '1') provisionalOpen.value = true
+}, { immediate: true })
 
 // 为了兼容原有模板，创建别名
 const students = table.rows

@@ -65,13 +65,59 @@ test('写入中途失败：值日表回滚，临时学生也不能留下', async
   assert.equal(cells, '{}', '值日表本身也要回到原样')
 })
 
-test('接线：/save 的校验已经挪进事务里', () => {
+test('写入中途失败：设置表 / 模板表也一起回滚', async () => {
+  fresh()
+  const readSettings = () => fx.conn.prepare("SELECT items, settings FROM duty_slots WHERE kind = 'settings'").get()
+  const before = readSettings()
+  // 让最后一步（写模板）失败：前面的设置表与当前表都必须一起回滚
+  const orig = store.setDoc
+  store.setDoc = function patched(name, patch) {
+    if (name === 'duty_template') throw new Error('模拟写模板失败')
+    return orig.call(this, name, patch)
+  }
+  try {
+    const r = await callApi({
+      ...BODY,
+      items: [{ name: '扫地', count: 2, difficulty: 9 }], // difficulty 变了，好判断有没有写进去
+      // 「扫地」在 schema 里 count=2，模板也必须排满 2 人，否则校验会先拦下来，
+      // 用例就测不到「设置表已写、模板失败」的回滚场景。「新同学」由 active 的校验建档。
+      master: { 扫地: { 周一: ['张三', '新同学'] } },
+    })
+    assert.ok(r.status >= 400, `应失败，实际 ${r.status}`)
+    // 必须失败在「写模板」这一步：若提前在校验阶段就抛错，本用例根本没走到写入，
+    // 回滚断言会假绿（前两步没写、后面自然也没有半截数据）。
+    // 注意 /save 没有局部 try/catch（既有现状），异常会走 Express 默认错误页，
+    // 所以判据看 r.text 而不是 r.json.error。
+    assert.match(r.text, /模拟写模板失败/,
+      '失败点不对，这条用例测不到「设置表已写、模板失败」的回滚场景')
+  } finally {
+    store.setDoc = orig
+  }
+  const after = readSettings()
+  assert.equal(after.items, before.items, '设置表（劳动项目）不能只写一半')
+  assert.equal(after.settings, before.settings, '模式配置不能只写一半')
+  const cells = fx.conn.prepare("SELECT cells FROM duty_slots WHERE kind = 'current'").get().cells
+  assert.equal(cells, '{}', '当前值日表也不该落库')
+  const tpl = fx.conn.prepare("SELECT cells FROM duty_slots WHERE kind = 'template'").get()
+  assert.ok(!tpl || tpl.cells === '{}', '模板表不该落库')
+})
+
+test('接线：/save 的校验在 dutyWrite 的事务里', () => {
   const fs = require('node:fs')
-  const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/duty.js'), 'utf8')
+  const strip = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
-  const saveAt = src.indexOf("router.put('/save'")
-  const txAt = src.indexOf('db.transaction(', saveAt)
-  const vActive = src.indexOf("validateRow('duty_layout', { cells: active })", saveAt)
-  const vMaster = src.indexOf("validateRow('duty_template', { cells: master })", saveAt)
-  assert.ok(vActive > txAt && vMaster > txAt, '/save 的两处校验必须在 db.transaction 之后出现（即事务内）')
+  // 事务边界已下沉到 services/dutyWrite.js（M12 收尾）：判据跟着实现走，
+  // 否则「校验在事务内」这件事会变成路由层一句注释，没人守。
+  const svc = strip('student-backend/services/dutyWrite.js')
+  const fnAt = svc.indexOf('function saveAll(')
+  const txAt = svc.indexOf('db.transaction(', fnAt)
+  const vActive = svc.indexOf("validateRow('duty_layout', { cells: active })", fnAt)
+  const vMaster = svc.indexOf("validateRow('duty_template', { cells: master })", fnAt)
+  assert.ok(fnAt > 0, '没找到 saveAll')
+  assert.ok(vActive > txAt && vMaster > txAt, 'saveAll 的两处校验必须在 db.transaction 之后出现（即事务内）')
+
+  // 反向守卫：路由不许把事务再开回来（一旦回退，上面那条判据就守错了文件）
+  const route = strip('student-backend/routes/duty.js')
+  assert.ok(!/db\.transaction\(/.test(route), 'duty 路由不许再有事务（应走 services/dutyWrite）')
+  assert.ok(/dutyWrite\.saveAll\(/.test(route), '/save 必须真的走 dutyWrite.saveAll')
 })

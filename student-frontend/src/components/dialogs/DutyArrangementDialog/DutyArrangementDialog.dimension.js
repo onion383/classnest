@@ -35,9 +35,16 @@ export function useDutyArrangementDimension(ctx) {
         ctx.arranged.value = false
       } catch (e) { console.error(e) }
     },
-    // 当前选中维度各组成员（姓名数组）
+    // 当前选中维度各组成员（**key 数组**：`id:<学生id>` 或 `name:<姓名>`）。
+    // 排表内部一律用 key 标识人，这样两个同名成员才能各自被排到不同的天；
+    // 早先只取 member_name，同名两人在这里就合成了一个人。
     groupBuckets() {
-      return ctx.groups.value.map(g => (g.members || []).map(m => String(m.member_name || '').trim()).filter(Boolean))
+      return ctx.groups.value.map(g => (g.members || []).map(m => {
+        const id = Number(m.student_id)
+        if (Number.isInteger(id) && id > 0) return `id:${id}`
+        const nm = String(m.member_name || '').trim()
+        return nm ? `name:${nm}` : ''
+      }).filter(Boolean))
     },
   }
 }

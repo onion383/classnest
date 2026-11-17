@@ -12,12 +12,16 @@ function createDynamicTableRouter(tableName, options = {}) {
     minCount = 0,
     protectedColumns = [],
     fieldTypeOverrides = {},
-    extraRoutes = null
+    extraRoutes = null,
+    // 列表过滤：返回 WHERE 片段（只放服务端常量，别拼用户输入）。给「同一张表在不同
+    // 使用方需要不同子集」的场景用，比如学生表在学生管理只列正式学生、在候选源则全量。
+    listWhere = null
   } = options;
 
   // GET /
   router.get('/', (req, res) => {
-        const result = queryAll(tableName);
+    const where = typeof listWhere === 'function' ? listWhere(req) || '' : '';
+    const result = queryAll(tableName, where);
     if (fieldTypeOverrides && result.fields) {
       result.fields.forEach(f => {
         if (fieldTypeOverrides[f.name]) {

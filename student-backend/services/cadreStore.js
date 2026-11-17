@@ -115,12 +115,12 @@ function findCadreByNameAndParent(name, parentId) {
   return db.prepare('SELECT id, name, max_count FROM cadres WHERE name = ? AND parent_id = ? ORDER BY id LIMIT 1').get(name, parentId)
 }
 
+// 导入查重专用：**这里按姓名比较是刻意的，不要改成 student_id**。
+// 理由：Excel 导入只有「担任学生」一列姓名文本，同一职务下两个同名学生本来就无法区分；
+// 而按姓名去重才能拦住「重复导入同一张表」这种最常见的操作（否则每导一次就多一批成员）。
+// 单条新增走的是 routes/cadres.js POST /:id/members，那里有 student_id，按 id 定人。
 function findMemberByName(cadreId, name) {
   return db.prepare('SELECT id FROM cadre_members WHERE cadre_id = ? AND student_name = ?').get(cadreId, name)
-}
-
-function findStudentIdsByName(name) {
-  return db.prepare('SELECT id FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2').all(name)
 }
 
 module.exports = {
@@ -146,5 +146,4 @@ module.exports = {
   findCadresByName,
   findCadreByNameAndParent,
   findMemberByName,
-  findStudentIdsByName,
 }

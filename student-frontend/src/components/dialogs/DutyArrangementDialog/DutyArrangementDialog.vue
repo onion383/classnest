@@ -138,6 +138,11 @@ import IconGlyph from '../../base/IconGlyph.vue'
 import DialogShell from '../../base/DialogShell.vue'
 import ConfirmDialog from '../../base/ConfirmDialog.vue'
 import '../../../styles/dialog-transition.css'
+import {
+  buildNameById, buildIdByName,
+  keyOfValue as keyOfValueRaw, valueOfKey as valueOfKeyRaw, nameOfKey as nameOfKeyRaw,
+  toKeyCells as toKeyCellsRaw, toValueCells as toValueCellsRaw,
+} from '../../../utils/dutyPersonKey.js'
 import { useRowSortDrag } from '../../../composables/useRowSortDrag.js'
 import { useDutyArrangementPipeline } from './DutyArrangementDialog.pipeline.js'
 import { useDutyArrangementOptions } from './DutyArrangementDialog.options.js'
@@ -153,8 +158,10 @@ const props = defineProps({
   students: { type: Array, default: () => [] },
   // 值日项目权重表：{ 项目名: { 星期: 权重值 } }
   weights: { type: Object, default: () => ({}) },
-  // 公平账本：{ 学生姓名: 累计权重值 }
+  // 公平账本（按学生身份）：{ 学生id: 累计权重值 }
   ledger: { type: Object, default: () => ({}) },
+  // 认不出身份那份账本：{ 姓名: 累计权重值 } —— 名册外的人与历史快照里同名分不清的字符串
+  ledgerByName: { type: Object, default: () => ({}) },
   // 草稿：{ exists, cells, settings, conditions, savedAt }
   draft: { type: Object, default: () => ({ exists: false }) },
   // 当前值日表：{ 项目: { 星期: [姓名,...] } }
@@ -295,9 +302,30 @@ const baseCells = computed(() => draftCells.value || props.baseCells)
 
 const daysArr = computed(() => (props.days && props.days.length) ? props.days : ['周一', '周二', '周三', '周四', '周五'])
 const itemsArr = computed(() => props.items || [])
-const studentNames = computed(() => props.students.map(s => String(s.姓名 || '').trim()).filter(Boolean))
-// 现有值日表里的人（按出现顺序去重）：数据源选「现有排表表格」时的参与者
-const tableNames = computed(() => {
+
+// ===== 「人」的统一标识：key = `id:<学生id>` 或 `name:<姓名>` =====
+// 为什么不再直接用姓名当标识：排表的公平账本要按**身份**统计，两个同名的人必须各算各的；
+// 而格子里的历史数据、名册外临时输入的名字只有姓名。
+// 所以内部一律用 key 字符串（pipeline 只做 Set / 数组 / 相等比较，换内容不影响逻辑），
+// 只在三个边界转换：读格子 keyOfValue、写回格子 valueOfKey、显示 nameOfKey。
+// 实现放在 utils/dutyPersonKey.js —— 单测要从同一份实现构造上下文，
+// 在测试里另写一份等于自己测自己（永远绿）。
+const nameById = computed(() => buildNameById(props.students))
+const idByName = computed(() => buildIdByName(nameById.value))
+const keyOfValue = (v) => keyOfValueRaw(v, idByName.value)
+const valueOfKey = valueOfKeyRaw
+const nameOfKey = (k) => nameOfKeyRaw(k, nameById.value)
+// 整张表在两个值域之间转换：草稿、当前值日表存的是「格子值」，预览与确认内部是 key。
+// 转换只允许发生在这两个函数里 —— 散落在各处的 JSON.parse/stringify 会让两套值域混用。
+const toKeyCells = (cells) => toKeyCellsRaw(cells, idByName.value)
+const toValueCells = toValueCellsRaw
+
+const studentKeys = computed(() => (props.students || [])
+  .filter(s => s && s.id != null)
+  .map(s => `id:${Number(s.id)}`))
+// 现有值日表里的人（按出现顺序去重）：数据源选「现有排表表格」时的参与者。
+// 这里读的是格子原值（数字 id 或姓名），统一折算成 key 后才能和名册里的人对上。
+const tableKeys = computed(() => {
   const out = []
   const seen = new Set()
   const cells = baseCells.value || {}
@@ -306,16 +334,16 @@ const tableNames = computed(() => {
     for (const day of Object.keys(byDay)) {
       const arr = byDay[day]
       if (!Array.isArray(arr)) continue
-      for (const n of arr) {
-        const t = String(n || '').trim()
-        if (t && !seen.has(t)) { seen.add(t); out.push(t) }
+      for (const v of arr) {
+        const k = keyOfValue(v)
+        if (k && !seen.has(k)) { seen.add(k); out.push(k) }
       }
     }
   }
   return out
 })
 // 参与排表的学生池：随数据源切换（全部同学 = 学生表名册；现有排表表格 = 表里的人）
-const poolNames = computed(() => (dataSource.value === 'all' ? studentNames.value : tableNames.value))
+const poolKeys = computed(() => (dataSource.value === 'all' ? studentKeys.value : tableKeys.value))
 // 现有值日表里已排的人次（含重复：同一人排了多天算多次），用于「槽位够不够」的判断
 const tableFilled = computed(() => {
   let n = 0
@@ -332,11 +360,12 @@ const tableFilled = computed(() => {
 })
 const dataSourceHint = computed(() => {
   if (dataSource.value === 'all') return '按学生表里的全班同学排'
-  if (!tableNames.value.length) return '当前值日表里没有人，改选「全部同学」才能排表'
-  return `只排当前值日表里已有的 ${tableNames.value.length} 人`
+  if (!tableKeys.value.length) return '当前值日表里没有人，改选「全部同学」才能排表'
+  return `只排当前值日表里已有的 ${tableKeys.value.length} 人`
 })
 // 条件里的学生下拉：只列当前数据源里能参与排表的人（否则选中的人也调不动）
-const studentOptions = computed(() => poolNames.value.map(n => ({ value: n, label: n })))
+// 条件里的学生下拉：value 是 key（排表内部标识），label 必须是显示名
+const studentOptions = computed(() => poolKeys.value.map(k => ({ value: k, label: nameOfKey(k) })))
 const itemOptions = computed(() => itemsArr.value.map(it => ({ value: it.name, label: it.name })))
 const previewKey = computed(() => {
   const sig = conditions.value.map(c => c.key + ':' + c.uid).join('-') || 'empty'
@@ -350,8 +379,10 @@ const ctx = {
   conditions, nextUid, previewCells, previewVersion, arranged, satisfaction,
   dragIdx, dragOverIdx, rejectText, slotWarningVisible,
   dimensions, groups, selectedDimId,
-  daysArr, itemsArr, studentNames, studentOptions, itemOptions,
-  dataSource, poolNames, tableNames, tableFilled,
+  daysArr, itemsArr, studentKeys, studentOptions, itemOptions,
+  dataSource, poolKeys, tableKeys, tableFilled,
+  /* 「人」的标识转换：pipeline / options 只认 key，显示与写回时才转 */
+  nameById, idByName, keyOfValue, valueOfKey, nameOfKey, toKeyCells, toValueCells,
   // 大扫除：整张表是一次活动 → 一个人不能同时出现在两个组
   dedupeWholeTable: computed(() => props.bigCleanup),
   // 大扫除以列/行/格分桶，桶标签不等价，装箱后不做整桶随机映射
@@ -359,6 +390,7 @@ const ctx = {
   students: toRef(props, 'students'),
   weights: toRef(props, 'weights'),
   ledger: toRef(props, 'ledger'),
+  ledgerByName: toRef(props, 'ledgerByName'),
   baseCells,
   seat: toRef(props, 'seat'),
   // 恢复草稿时暂缓 watch
@@ -415,6 +447,14 @@ function restoreConditions(list) {
     delete merged.children
     // 旧草稿的「特殊关系」只有「不在同一天值日」，缺字段时按旧语义恢复
     if (c.key === 'relation' && !c.relationType) merged.relationType = 'different'
+    // 条件里指定的人：旧草稿存的是姓名，现在内部一律用 key。不折算的话老草稿会
+    // 「条件还在、却一个人都匹配不到」—— 用户只会觉得"这个条件没用"，看不出原因。
+    for (const f of ['a', 'b', 'student']) {
+      if (merged[f]) {
+        const v = String(merged[f])
+        merged[f] = (v.startsWith('id:') || v.startsWith('name:')) ? v : keyOfValue(v)
+      }
+    }
     merged.uid = nextUid.value++
     merged.label = reg.label
     return merged
@@ -442,7 +482,8 @@ watch(() => props.visible, async (v) => {
     ctx._restoringDraft = false
     if (draft.cells && Object.keys(draft.cells).length) {
       draftCells.value = JSON.parse(JSON.stringify(draft.cells))
-      previewCells.value = JSON.parse(JSON.stringify(draft.cells))
+      // 草稿存的是格子值，预览内部是 key
+      previewCells.value = toKeyCells(draft.cells)
       arranged.value = true
       previewVersion.value++
     } else {

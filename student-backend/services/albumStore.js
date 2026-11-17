@@ -98,6 +98,13 @@ function photoCount(albumId) {
   return db.prepare('SELECT COUNT(*) AS c FROM album_photos WHERE album_id = ?').get(albumId).c
 }
 
+// 缩略图对账用：本库当前还有哪些 photoId（全表，只取 id）。
+// 调用方在 dbManager.withDb(slug, ...) 内部，故走 db 代理即可 —— 与 dbManager.current()
+// 是同一个连接；不要给它加 conn 参数，那会逼出一个多余的显式切库。
+function listPhotoIds() {
+  return db.prepare('SELECT id FROM album_photos').all().map((r) => r.id)
+}
+
 // 整册照片（网格列，不含 album_id）
 function listPhotos(albumId) {
   return db.prepare(`SELECT ${PHOTO_COLS} FROM album_photos WHERE album_id = ? ${PHOTO_ORDER}`).all(albumId)
@@ -214,6 +221,7 @@ module.exports = {
   photoById,
   photosOfAlbum,
   photoCount,
+  listPhotoIds,
   listPhotos,
   listPhotosInDates,
   listUnknownDatePhotos,

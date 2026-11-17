@@ -442,11 +442,11 @@ const runChecksTool = {
   type: 'function',
   function: {
     name: 'run_checks',
-    description: '按 checks 入参逐条执行「数据体检」校验规则，可只跑其中若干条（不传则全部）。可用规则：cadre_dangling=班干部任职指向不存在的学生、group_dangling=分组名册成员不在学生名单里、leave_reversed=请假结束早于开始、fee_negative=班费金额为负、sno_duplicate=学号重复。用于「帮我检查一下数据」「有没有脏数据」「改动前先自检」。',
+    description: '按 checks 入参逐条执行「数据体检」校验规则，可只跑其中若干条（不传则全部）。可用规则：cadre_dangling=班干部任职指向不存在的学生、group_dangling=分组名册成员不在学生名单里、score_dangling=加减分记录指向不存在的学生、leave_dangling=请假记录指向不存在的学生、seat_dangling=座位格指向不存在的学生、duty_dangling=值日格指向不存在的学生、leave_reversed=请假结束早于开始、fee_negative=班费金额为负、sno_duplicate=学号重复。用于「帮我检查一下数据」「有没有脏数据」「有没有孤立数据」「改动前先自检」。注意：本工具只**报告**，不会删除任何数据；要清理请把发现的 id 交给 propose_delete_many 让用户确认。',
     parameters: {
       type: 'object',
       properties: {
-        checks: { type: 'array', items: { type: 'string', enum: ['cadre_dangling', 'group_dangling', 'leave_reversed', 'fee_negative', 'sno_duplicate'] }, description: '可选：只跑其中的某几条规则；不传则跑全部' },
+        checks: { type: 'array', items: { type: 'string', enum: ['cadre_dangling', 'group_dangling', 'score_dangling', 'leave_dangling', 'seat_dangling', 'duty_dangling', 'leave_reversed', 'fee_negative', 'sno_duplicate'] }, description: '可选：只跑其中的某几条规则；不传则跑全部' },
       },
     },
   },

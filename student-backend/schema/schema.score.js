@@ -9,6 +9,8 @@ function migrateScore(conn) {
     CREATE TABLE IF NOT EXISTS score_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
+      -- 姓名/学号是**快照**，不是引用：导出、检索、AI 描述直接用它们，不必每次 join students。
+      -- 关联依据永远是 student_id；改学生姓名不会回写这里（历史记录就该记当时的名字）。
       姓名 TEXT,
       学号 TEXT,
       类型 TEXT,

@@ -74,7 +74,10 @@ async function fetchStudents() {
   } catch (_) {
     throw new Error('无法读取工具箱设置，本次点名已取消')
   }
-  const res = await axios.get('/api/students')
+  // 默认只点正式学生（formal=1）；只有设置里显式开了「点名包含临时学生」才取全量。
+  // 开关读不到时按默认（过滤）处理，不静默把临时学生放进来。
+  const includeProvisional = !!settings?.data?.data?.rollcallIncludeProvisional
+  const res = await axios.get(includeProvisional ? '/api/students' : '/api/students?formal=1')
   const all = res.data.data || []
   if (!settings?.data?.data?.rollcallExcludeAbsent) return { list: all, excludedCount: 0 }
 

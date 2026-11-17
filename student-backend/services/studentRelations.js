@@ -50,8 +50,9 @@ function studentRelations(student) {
   const seat = seatRefCells(student).hits.length;
 
   const cells = readDutyCells();
-  // cells 是 {daily,big} 打包结构，统计交给 dutyCells 逐模式遍历
-  const duty = countDutyRefs(cells, name);
+  // cells 是 {daily,big} 打包结构，统计交给 dutyCells 逐模式遍历。
+  // 传 id 一起统计：新数据存的是 id 格，只按姓名数会显示「影响 0 处」而实际有引用。
+  const duty = countDutyRefs(cells, name, id);
   return { leave, score, seat, duty, group, cadre, total: leave + score + seat + duty + group + cadre };
 }
 
@@ -92,14 +93,20 @@ function purgeSeatRelation(student) {
   return { removed: hits.length, cells: hits };
 }
 
-// 移除值日表里该生的姓名，返回 { removed, slots }
+// 移除值日表里该生的引用，返回 { removed, slots }
 // slots 是「被清掉的位置与原值」，供撤销时精确插回。
+//
+// 同时按 id 和姓名清：值日格可能是学生 id（新数据）或姓名（老数据）。
+// 只按姓名清的话，同名两人会一起被清掉，而且 id 格根本匹配不上 ——
+// 删了人、值日表还挂着一个编号，界面显示空白，看起来像正常空格。
 function purgeDutyRelation(student) {
   const cells = readDutyCells();
-  const slots = collectDutyRefs(cells, student['姓名']);
+  const name = student['姓名'];
+  const sid = student.id == null ? null : Number(student.id);
+  const slots = collectDutyRefs(cells, name, sid);
   if (!slots.length) return { removed: 0, slots: [] };
   // daily/big 两个模式都清；只在真的清掉时才回写
-  const removed = removeDutyName(cells, student['姓名']);
+  const removed = removeDutyName(cells, name, sid);
   if (removed) store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
   return { removed, slots };
 }
@@ -156,13 +163,14 @@ function restoreDutySlots(slots) {
   store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
 }
 
-// 重做「删除学生」时按姓名再清一次值日：
-// 不用记下的 index —— 撤销/重做之间用户可能改过值日表，索引会位移，姓名才是稳定锚点。
+// 重做「删除学生」时按 id + 姓名再清一次值日：
+// 不用记下的 index —— 撤销/重做之间用户可能改过值日表，索引会位移，值本身才是稳定锚点。
 function clearDutySlots(student) {
   const name = student && student['姓名'];
-  if (!name) return;
+  const sid = student && student.id != null ? Number(student.id) : null;
+  if (!name && sid == null) return;
   const cells = readDutyCells();
-  if (removeDutyName(cells, name)) store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
+  if (removeDutyName(cells, name, sid)) store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
 }
 
 // 按勾选清理关联；返回清理计数 + 撤销所需的完整快照：

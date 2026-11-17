@@ -154,7 +154,7 @@ router.post('/groups/:groupId/members', (req, res) => {
     const groupId = Number(req.params.groupId);
     const g = groupDim.groupById(groupId);
     if (!g) return res.status(404).json({ error: '小组不存在' });
-    const { member_name = '', remark = '' } = req.body;
+    const { member_name = '', remark = '', student_id = null } = req.body;
     const name = String(member_name).trim();
     if (!name) return res.status(400).json({ error: '成员姓名不能为空' });
     const dim = groupDim.dimensionById(g.dimension_id);
@@ -163,25 +163,32 @@ router.post('/groups/:groupId/members', (req, res) => {
     if (groupDim.memberCount(groupId) >= effectiveLimit) {
       return res.status(400).json({ error: `该组人数已达上限 ${effectiveLimit} 人` });
     }
-    const { id, student } = groupDim.addMember(groupId, name, remark);
+    // student_id 是前端从名册选人时带上的权威引用；同名两人靠它区分，姓名只是快照。
+    const { id, student } = groupDim.addMember(groupId, name, remark, student_id);
     res.json({
       id,
-      // 回传解析结果，供前端以后把成员绑定到 student_id；现在先只用于提示/调试
-      student: student && student.id ? { id: student.id, 姓名: name, is_provisional: !!student.is_provisional } : null,
+      student: student && student.id ? { id: student.id, 姓名: student.name, is_provisional: !!student.is_provisional } : null,
       message: '添加成功',
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // 「student_id 指向已删除的学生」这类是用户填错/界面过期（err.status = 400），
+    // 不是服务端故障；其余真异常仍按 500 报，别把两种混成一个状态码。
+    res.status(err && err.status ? err.status : 500).json({ error: err.message });
   }
 });
 
 // PUT /api/group-manage/group-members/:id —— 修改成员
 router.put('/group-members/:id', (req, res) => {
     const id = Number(req.params.id);
-  const { member_name, remark } = req.body;
+  const { member_name, remark, student_id } = req.body;
   if (!groupDim.memberById(id)) return res.status(404).json({ error: '成员不存在' });
-  groupDim.updateMember(id, { memberName: member_name, remark });
-  res.json({ message: '保存成功' });
+  let name = null;
+  try {
+    name = groupDim.updateMember(id, { memberName: member_name, remark, studentId: student_id });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  res.json({ message: '保存成功', member_name: name });
 });
 
 // DELETE /api/group-manage/group-members/:id —— 删除成员

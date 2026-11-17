@@ -25,7 +25,7 @@ async function makePipeline({ wholeTable, pool = ['甲', '乙', '丙'] }) {
   const { useDutyArrangementPipeline } = await import(PIPELINE)
   // 只提供 fillEmptySlots 需要的 ctx 字段；形状必须与真实调用点一致（都是 ref）
   const ctx = {
-    poolNames: { value: pool },
+    poolKeys: { value: pool },
     dedupeWholeTable: { value: wholeTable },
   }
   return useDutyArrangementPipeline(ctx, {})
@@ -66,7 +66,7 @@ test('日常：同一天内仍然不重复', async () => {
 
 test('缺 dedupeWholeTable 开关的旧 ctx：按日常去重，且不能抛错', async () => {
   const { useDutyArrangementPipeline } = await import(PIPELINE)
-  const ctx = { poolNames: { value: ['甲', '乙'] } }
+  const ctx = { poolKeys: { value: ['甲', '乙'] } }
   const p = useDutyArrangementPipeline(ctx, {})
   const assigned = ['甲', null, null]
   assert.doesNotThrow(() => p.fillEmptySlots(slots(['周一', '周二', '周三']), assigned, []))

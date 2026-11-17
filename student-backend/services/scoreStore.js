@@ -2,6 +2,7 @@
 // 档 C · M12-B5：路由只做 HTTP 与字段清洗，裸 SQL 全部收在这里。
 // 这样「成绩表怎么查/怎么写」只有一处实现，新增调用方不会各抄一条 SQL。
 const { db } = require('../db')
+const studentLookup = require('./studentLookup')
 
 const ORDER_BY = ' ORDER BY 加分时间 DESC, id DESC'
 
@@ -38,18 +39,26 @@ function list({ source, date, limit, offset } = {}) {
   return { data: hasMore ? rows.slice(0, limit) : rows, hasMore }
 }
 
+// 单行（编辑时要判断「姓名是否真的改了」、以及这行是不是小组加分）
+function findRowById(id) {
+  return db.prepare(
+    'SELECT id, student_id, 姓名, source FROM score_records WHERE id = ?'
+  ).get(Number(id)) || null
+}
+
+// 学生信息带出（按 id / 学号 / 姓名）：语句收在 services/studentLookup.js，
+// 这里只按「加减分要学号」点单转发 —— 保留旧函数名是为了不动 routes 的调用点。
 function findStudentById(id) {
-  return db.prepare('SELECT id, 姓名, 学号 FROM students WHERE id = ?').get(id)
+  return studentLookup.findById(id, 'score')
 }
 
-function findStudentByXuehao(xuehao) {
-  return db.prepare('SELECT id, 姓名, 学号 FROM students WHERE 学号 = ?').get(xuehao) || null
+// 按学号：返回**数组**（学号可空可重，不唯一）。0 条 = 没这个人，1 条 = 唯一命中，
+// 2 条 = 学号重复。调用方必须自己处理「重复」，不能像以前那样 .get() 静默取第一条。
+function findStudentsByXuehao(xuehao) {
+  return studentLookup.findStudentsByXuehao(xuehao, 'score')
 }
-
-// 同名最多取两条：调用方据此区分「唯一命中」与「重名歧义」。
-function findStudentsByName(name) {
-  return db.prepare('SELECT id, 姓名, 学号 FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2').all(name)
-}
+// 没有 findStudentsByName：导入的重名判定改由 provisionalStudents.resolveOne 统一做
+// （它要区分正式/临时，只看「同名几条」不够）。留着转发也没人调，就成了死代码。
 
 // 批量导入：整批一个事务，返回新建 id（供路由回传 created 完整行）。
 function insertMany(items) {
@@ -90,9 +99,9 @@ function dashboardSummary(today) {
 module.exports = {
   readAll,
   list,
+  findRowById,
   findStudentById,
-  findStudentByXuehao,
-  findStudentsByName,
+  findStudentsByXuehao,
   insertMany,
   dashboardSummary,
 }

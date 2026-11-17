@@ -150,9 +150,10 @@ test('接线：每一处写入登录密码的 handler 都接了统一动作层�
   let checked = 0
   for (const rel of ['student-backend/routes/auth.js', 'student-backend/routes/account.js']) {
     for (const h of handlersOf(read(rel))) {
-      // 密码写入可能在路由里直接写，也可能已下沉到 services/userStore.js（M12）；
-      // 两种写法都要被本断言覆盖，否则「新增路径漏网」的守卫就失效了。
-      if (!/UPDATE users SET password|userStore\.updatePassword\(/.test(h)) continue
+      // 密码写入可能直接写 SQL，也可能已下沉到 services/userStore.js（M12）；
+      // 两条下沉路径的写法不同 —— 登录前（无 ALS）走 setPasswordByName(conn, ...)，
+      // 已登录走 updatePassword(id, ...)。三种都必须覆盖，否则「新增路径漏网」的守卫就失效。
+      if (!/UPDATE users SET password|userStore\.updatePassword\(|userStore\.setPasswordByName\(/.test(h)) continue
       checked += 1
       assert.match(h, /revokeAccountSessions\(|rotateLoginAfterCredentialChange\(/,
         `${rel} 有一段改密 handler 没接统一动作层：${h.slice(0, 90)}`)

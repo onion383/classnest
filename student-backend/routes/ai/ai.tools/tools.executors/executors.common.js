@@ -39,8 +39,18 @@ function aiLooksMultiCourse(text) {
   return parts.length >= 2;
 }
 
+// 学生行的「临时学生」标记单源：找人 / 跨表检索的结果据此把名册外自动建档的学生标出来，
+// 让模型与老师都能区分「正式学生」和「值日/座位里填名字临时建的人」——
+// 两者共用 students 表，只靠 is_provisional 一位区分，不显式标出就会被当同一类人统计或点名。
+function isProvisional(row) {
+  if (!row) return false;
+  const v = row.is_provisional;
+  return v === 1 || v === '1' || v === true;
+}
+
 module.exports = {
   pinyinMatch,
   aiPad2, aiDateStr, aiTodayStr, aiParseDate, aiParseJson,
   DUTY_MODE_LABELS, dutyModeLabel, unpackDutyModeCol, studentIdNameMap, aiLooksMultiCourse,
+  isProvisional,
 };

@@ -1,8 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db');
 const store = require('../services/slotStore');
-const { validateRow } = require('../services/businessRules');
 const { readDocJson, safeJson } = require('../utils/json');
 const { isDateStr } = require('../utils/sql');
 // 日期口径统一走 utils/date（本地时区）。此前本文件自己复制了一份
@@ -23,6 +21,8 @@ const { unpackMode, packMode, normalizeMode } = require('../services/dutyMode');
 const dutyConfig = require('../services/dutyConfig');
 // 周期命中日的唯一计算实现（见 services/dutyCycle.js）
 const dutyCycle = require('../services/dutyCycle');
+// 「哪几张表必须一起成功」的写事务唯一出口（见 services/dutyWrite.js）
+const dutyWrite = require('../services/dutyWrite');
 
 // ======================== 全局设置（时间 + 劳动项目） ========================
 // 列名按模式分键存储：日常值日是「周一…周五」，大扫除是「分组名 + 全部」。
@@ -45,14 +45,8 @@ router.put('/settings', (req, res) => {
     if (!Array.isArray(items) || (mode === 'daily' && !Array.isArray(days))) {
         return res.status(400).json({ error: '参数格式错误' });
     }
-    const row = store.getDoc('duty_settings');
-    const mergedItems = packMode(row ? row.items : null, mode, items);
-    // 列名与项目必须同事务写入：只写一半会出现「列头是组名、项目还是旧列表」的错位状态
-    db.transaction(() => {
-      dutyConfig.writeDays(mode, days);
-      store.setDoc('duty_settings', { items: JSON.stringify(mergedItems) });
-      if (req.body.config) dutyConfig.writeConfig(mode, req.body.config);
-    })();
+    // 列名、项目、模式配置三张表同事务写入（见 services/dutyWrite）
+    dutyWrite.saveSettings(mode, { days, items, config: req.body.config });
     res.json({ message: '设置已保存' });
 });
 
@@ -101,25 +95,8 @@ router.put('/', (req, res) => {
     return res.status(400).json({ error: '参数格式错误' });
   }
   // 依赖既有数据的一致性校验：项目/星期须已配置、名单里的姓名须是班级学生
-  //
-  // ⚠️ 校验 + 写入必须在**同一个事务**里：validateRow → assertDutyRefs 会把
-  // 「名册外的姓名」直接建档（写库，这是有意的副作用 —— 值日表存的是姓名而不是 id，
-  // 建了档值日指数、候选框、改名级联才认得到这个人）。
-  // 而 resolveNames 自带事务、无外层事务时**提前提交** → 后续 setDoc 失败（磁盘满/
-  // 库忙）时，值日表没存进去、名册里却凭空多出一个学生（孤儿，用户在名册里看得见）。
-  //
-  // better-sqlite3 的嵌套事务用 SAVEPOINT：内层 resolveNames 的事务在这里自动降级，
-  // 外层失败时一并回滚 → 建档与写值日表同生共死。
-  db.transaction(() => {
-    validateRow('duty_layout', { cells });
-    const row = store.getDoc('duty_layout');
-    const mergedCells = packMode(row ? row.cells : null, mode, cells);
-    const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
-    store.setDoc('duty_layout', {
-      cells: JSON.stringify(mergedCells),
-      settings: JSON.stringify(mergedSettings),
-    });
-  })();
+  // 校验与写入同事务（validateRow 会建档，见 services/dutyWrite.js 文件头）
+  dutyWrite.saveLayout(mode, { cells, settings });
   res.json({ message: '保存成功' });
 });
 
@@ -141,16 +118,7 @@ router.put('/template', (req, res) => {
     return res.status(400).json({ error: '参数格式错误' });
   }
   // 依赖既有数据的一致性校验（同 PUT / ：校验阶段的建档副作用必须与写入同事务）
-  db.transaction(() => {
-    validateRow('duty_template', { cells });
-    const row = store.getDoc('duty_template');
-    const mergedCells = packMode(row ? row.cells : null, mode, cells);
-    const mergedSettings = packMode(row ? row.settings : null, mode, settings || {});
-    store.setDoc('duty_template', {
-      cells: JSON.stringify(mergedCells),
-      settings: JSON.stringify(mergedSettings),
-    });
-  })();
+  dutyWrite.saveTemplate(mode, { cells, settings });
   res.json({ message: '模板保存成功' });
 });
 
@@ -173,45 +141,8 @@ router.put('/save', (req, res) => {
         return res.status(400).json({ error: '参数格式错误' });
     }
     // 依赖既有数据的一致性校验（当前表 / 模板各自校验）
-    //
-    // ⚠️ 校验必须放在事务**里面**：validateRow → assertDutyRefs 会把名册外的姓名
-    // 直接建档（写库，有意的副作用 —— 值日表存姓名，不建档值日指数就漏人）。
-    // 放在事务外时，只要后面任何一步失败（磁盘满/库忙/写模板抛错），值日表回滚了、
-    // 临时学生却已经提交 —— 用户在名册里看到一个凭空多出来、也没排进值日的人
-    // （审查 v6 · N2-06）。放进来之后建档与写入同生共死。
-    db.transaction(() => {
-        if (active !== undefined) validateRow('duty_layout', { cells: active });
-        if (master !== undefined) validateRow('duty_template', { cells: master });
-
-        // ① 全局设置（时间 + 劳动项目）
-        const s = store.getDoc('duty_settings');
-        const mergedItems = packMode(s ? s.items : null, mode, items);
-        dutyConfig.writeDays(mode, days);
-        store.setDoc('duty_settings', { items: JSON.stringify(mergedItems) });
-        if (req.body.config) dutyConfig.writeConfig(mode, req.body.config);
-
-    // ② 当前值日表（仅当显式传入 active 时）
-    if (active !== undefined) {
-      const row = store.getDoc('duty_layout');
-      const mergedCells = packMode(row ? row.cells : null, mode, active);
-      const mergedSettings = packMode(row ? row.settings : null, mode, {});
-      store.setDoc('duty_layout', {
-        cells: JSON.stringify(mergedCells),
-        settings: JSON.stringify(mergedSettings),
-      });
-    }
-
-    // ③ 值日模板（仅当显式传入 master 时）
-    if (master !== undefined) {
-      const row = store.getDoc('duty_template');
-      const mergedCells = packMode(row ? row.cells : null, mode, master);
-      const mergedSettings = packMode(row ? row.settings : null, mode, {});
-      store.setDoc('duty_template', {
-        cells: JSON.stringify(mergedCells),
-        settings: JSON.stringify(mergedSettings),
-      });
-    }
-  })();
+    // 校验必须在事务**里面**（validateRow 建档副作用与写入同生共死，见 services/dutyWrite.js）
+    dutyWrite.saveAll(mode, { days, items, config: req.body.config, active, master });
 
   res.json({ message: '保存成功' });
 });
@@ -396,48 +327,9 @@ router.post('/snapshot/backfill', (req, res) => {
     if (end && upper > end) upper = end;
     if (upper < start) return res.json({ message: '学期范围外', inserted: 0 });
 
-    const layout = store.getDoc('duty_layout');
-    const layoutPayload = {
-      cells: layout ? unpackMode(layout.cells, mode) : {},
-      settings: layout ? unpackMode(layout.settings, mode) : {},
-    };
-
-    // 大扫除的命中日判定：基准周一 = 学期开始日所在周的周一
-    const hitConfig = mode === 'big' ? dutyConfig.readConfig('big') : null;
-    const baseMonday = mondayOf(start);
-    const isHit = (dateStr) => (hitConfig ? dutyCycle.isHitDate(dateStr, hitConfig, baseMonday) : true);
-
-    // 写循环整体放进一个事务：逐日 INSERT 各自提交时，中途失败会留下半截快照
-    // （前几天已落库、后几天没有），用户看到的是「补了 37 天」这种半吊子结果，
-    // 而且得再点一次才知道到底补了哪些。整批要么全成、要么全不成。
-    // 循环体全是同步调用（没有 await），可以安全地放进 better-sqlite3 的同步事务。
-    let inserted = 0;
-    const tx = db.transaction(() => {
-      let cur = start;
-      while (cur <= upper) {
-        const isToday = cur === today;
-        const exists = store.histFind('duty', cur, mode);
-        // 大扫除：非命中日一律不补（今天例外：今天是大扫除日就该有记录）
-        if (!(isToday && includeToday) && !isHit(cur)) {
-          cur = shiftDateStr(cur, 1);
-          continue;
-        }
-        if (isToday && includeToday) {
-          // 今天：总是覆盖为当前值日表
-          if (exists) store.histUpdateByDate('duty', cur, mode, layoutPayload);
-          else store.histInsert('duty', { weekStart: mondayOf(cur), snapDate: cur, mode, payload: layoutPayload });
-          inserted++;
-        } else if (!exists) {
-          // 过去日期：缺失才补，沿用最近一天该模式的值日表；没有更早快照则用当前值日表
-          const src = store.histPrev('duty', cur, mode);
-          const payload = src ? { cells: src.payload.cells || {}, settings: src.payload.settings || {} } : layoutPayload;
-          store.histInsert('duty', { weekStart: mondayOf(cur), snapDate: cur, mode, payload });
-          inserted++;
-        }
-        cur = shiftDateStr(cur, 1);
-      }
-    });
-    tx();
+    // 逐日补快照的整体事务在 services/dutyWrite（含大扫除命中日判定）：
+    // 逐日 INSERT 各自提交时中途失败会留下半截快照，整批要么全成、要么全不成。
+    const { inserted } = dutyWrite.backfillHistory({ mode, start, upper, today, includeToday });
     res.json({ message: `已补存 ${inserted} 天`, inserted });
   } catch (err) {
     res.status(500).json({ error: err.message });

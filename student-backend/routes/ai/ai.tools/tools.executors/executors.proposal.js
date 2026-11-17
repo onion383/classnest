@@ -6,6 +6,7 @@ const { tableColumns, normColVal } = require('../../ai.helpers');
 const { WRITE_TABLES, JSON_WRITE_TABLES } = require('../../ai.constants');
 const { FRONT_SETTINGS, BATCH_ROW_TABLES, MAX_BATCH_OPS } = require('../tools.schema');
 const { sanitizeField } = require('../../../../services/sanitize');
+const { previewSeatNames } = require('../../../../services/seatWrite');
 
 // 提案里的「新值」必须与最终落库值一致：确认页给用户看的若是 LLM 原值，
 // 而落库时又被列级规则 clamp/改写（数值越界、日期格式化等），
@@ -121,7 +122,15 @@ function normalizeJsonProposal({ table, id, values, label }) {
   const changed = keys.filter((k) => normColVal(before[k]) !== normColVal(next[k]));
   if (!changed.length) return { error: '提案内容与当前数据完全相同，无需修改' };
   const lbl = String(label || '').trim().slice(0, 60) || `修改${tname}`;
-  return { ok: true, table, id: rid, values: next, before, label: lbl };
+  // 座位表：提案阶段先干跑一遍「这些名字名册里到底有没有」。**这里绝不建人** ——
+  // 提案还没被确认，而且 AI 多是从截图 OCR 认字，错一个字就会凭空多一个临时学生；
+  // 学生表默认只列正式学生，用户从座位表上完全看不出来。只把结果带回去让模型说一句。
+  let seatNames = null;
+  if ((table === 'seat_layout' || table === 'seat_template') && Array.isArray(next.seats)) {
+    const p = previewSeatNames(next.seats);
+    if (p.missing.length || p.ambiguous.length) seatNames = p;
+  }
+  return { ok: true, table, id: rid, values: next, before, label: lbl, seatNames };
 }
 
 function normalizeFrontProposal({ key, value, label }) {
@@ -327,8 +336,24 @@ function normalizeProposal({ operation, table, data }) {
   return { ok: true, operation, table, data: addData, label, diff };
 }
 
+// 把座位表的「人名核对」结果变成给模型看的一句话。
+// 这句话会作为工具结果回到模型上下文，它据此在回复里提醒用户 —— 用户点确认之前
+// 就该知道「这 3 个名字名册里没有，确认后会自动建临时学生」，而不是事后去发现。
+function seatNameHint({ missing = [], ambiguous = [] } = {}) {
+  const parts = [];
+  if (missing.length) {
+    parts.push(`名册里没有：${missing.map((m) => m.name).join('、')}（用户确认后会自动建成临时学生）`);
+  }
+  if (ambiguous.length) {
+    parts.push(`同名分不清：${ambiguous.map((a) => `${a.name}（${(a.candidates || []).length} 个同名）`).join('、')}（会保留姓名、不建档，需要用户手动指定是谁）`);
+  }
+  if (!parts.length) return '';
+  return `座位表人名核对：${parts.join('；')}。请在回复里向用户说明这些名字的处理方式，不要静默确认。`;
+}
+
 module.exports = {
   normalizeProposal,
   normalizeBatchProposal, normalizeBatchDelete, normalizeJsonProposal, normalizeFrontProposal,
   normalizeBatchUpdate, normalizeBatchOps,
+  seatNameHint,
 };

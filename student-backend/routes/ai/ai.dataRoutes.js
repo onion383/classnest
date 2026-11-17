@@ -7,6 +7,8 @@ const store = require('../../services/slotStore');
 const { sanitizeField } = require('../../services/sanitize');
 const { validateRow } = require('../../services/businessRules');
 const { purgeStudentRelations } = require('../../services/studentRelations');
+const { applyRowStudentRef } = require('../../services/provisionalStudents');
+const { resolveNameCellsDetailed } = require('../../services/seatWrite');
 const dbManager = require('../../dbManager/dbManager');
 const { READ_TABLES, JSON_WRITE_TABLES } = require('./ai.constants');
 const { tableColumns, displayColumns, serializeColVal, clearTableColumnsCache } = require('./ai.helpers');
@@ -127,6 +129,10 @@ function applyDocWrite(table, id, values) {
   const before = {};
   const after = {};
   keys.forEach((k) => { before[k] = row[k]; after[k] = cleaned[k]; });
+  // 座位解析实际发生在事务里，这里先把变量备好：新建了谁 / 谁同名认不出，
+  // 都要回到调用方（确认结果页与 AI 回复），否则多出来的临时学生没人看得见。
+  let createdStudents = [];
+  let ambiguousNames = [];
 
   // ② 校验 + 快照 + 写入放进**同一个事务**。
   // 校验（validateRow → assertDutyRefs）会把值日名单里的新名字建档，这是有意的副作用；
@@ -134,6 +140,20 @@ function applyDocWrite(table, id, values) {
   // （审查 v6 · Q4-01）。放进事务后，抛错即整体回滚，建档不会留下残骸。
   try {
     return db.transaction(() => {
+      // 座位表里的姓名字符串要有人认领：与 routes/seats.js 同口径（resolveNameCells 给
+      // 名册外姓名建临时学生）。不在这里解析的话，AI 写进来的名字只是一段字符串 ——
+      // 名册里查不到这个人，改名、删学生、统计全都对不上，而界面看不出任何异常。
+      // 顺序：必须在 validateRow **之前**。解析成 id 之后，「id 是否真实存在」
+      // 「洞里/走廊里能不能坐人」这些依赖既有数据的校验才有对象。
+      if ((table === 'seat_layout' || table === 'seat_template') && Array.isArray(cleaned.seats)) {
+        const parsed = resolveNameCellsDetailed(cleaned.seats);
+        cleaned.seats = parsed.seats;
+        createdStudents = parsed.created;
+        ambiguousNames = parsed.ambiguous;
+        // after 是在解析前填的，仍指向「姓名数组」；落库的是 id 数组。
+        // 不同步的话确认页给用户看的是一份假 after。
+        after.seats = cleaned.seats;
+      }
       // ②-1 依赖既有数据的一致性校验（座位引用的学生是否真实存在、值日项目/星期/姓名是否合法等）
       validateRow(table, cleaned, row);
       // ②-2 整块写入是「整体替换」，先把旧值快照进历史表（课表/座位），留一颗后悔药
@@ -148,7 +168,7 @@ function applyDocWrite(table, id, values) {
       } else {
         aiStore.updateColumns(table, rid, keys, keys.map((k) => serializeColVal(cleaned[k])));
       }
-      return { ok: true, table, id: rid, before, after };
+      return { ok: true, table, id: rid, before, after, createdStudents, ambiguousNames };
     })();
   } catch (e) {
     return { error: e.message };
@@ -164,7 +184,11 @@ router.post('/doc', (req, res) => {
     const { table, id, values } = req.body || {};
   const r = applyDocWrite(table, id, values);
   if (r.error) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, table: r.table, id: r.id, before: r.before, after: r.after });
+  res.json({
+    ok: true, table: r.table, id: r.id, before: r.before, after: r.after,
+    // 座位表里的名册外姓名会自动建临时学生，必须回传让前端/AI 说清楚
+    createdStudents: r.createdStudents, ambiguousNames: r.ambiguousNames,
+  });
 });
 
 // 当前请求所属班主任库的 slug（取自鉴权中间件写入 token 的 dbSlug，与 AI 工具 ctx.slug 口径一致）
@@ -190,7 +214,10 @@ router.post('/apply-batch', (req, res) => {
         if (action === 'doc') {
           const r = applyDocWrite(table, op.id, op.values);
           if (r.error) throw new Error(`${at}：${r.error}`);
-          results.push({ action: 'doc', table: r.table, id: r.id, before: r.before, after: r.after });
+          results.push({
+            action: 'doc', table: r.table, id: r.id, before: r.before, after: r.after,
+            createdStudents: r.createdStudents, ambiguousNames: r.ambiguousNames,
+          });
           continue;
         }
         if (!tools().BATCH_ROW_TABLES[table]) throw new Error(`${at}：该表不支持按行写入（${table || '未指定表'}）`);
@@ -202,13 +229,17 @@ router.post('/apply-batch', (req, res) => {
             if (k === 'id' || !cols.includes(k)) continue;
             row[k] = sanitizeField(data[k], table, k, colType(table, k));
           }
-          const keys = Object.keys(row);
-          if (!keys.length) throw new Error(`${at}：新增缺少字段数据`);
+          if (!Object.keys(row).length) throw new Error(`${at}：新增缺少字段数据`);
           // 行式表若有 position 列且未提供，补为当前最大值 +1（与各业务路由的排序接续一致）
           if (cols.includes('position') && row.position === undefined) {
             row.position = aiStore.maxPosition(table) + 1;
           }
           validateRow(table, row);
+          // 行式表里的学生引用（group_members.member_name / cadre_members.student_id）：
+          // 与业务路由同口径认人。它会**就地补/改字段**（cadre_members 回填 student_id），
+          // 所以 keys 必须在它之后重算，否则补出来的 id 不会进 INSERT。
+          applyRowStudentRef(table, row);
+          const keys = Object.keys(row);
           const info = aiStore.insertRow(table, keys, keys.map((k) => serializeColVal(row[k])));
           const full = aiStore.findRow(table, info.lastInsertRowid);
           results.push({ action: 'add', table, id: info.lastInsertRowid, row: full });
@@ -223,9 +254,11 @@ router.post('/apply-batch', (req, res) => {
             if (k === 'id' || !cols.includes(k)) continue;
             row[k] = sanitizeField(changes[k], table, k, colType(table, k));
           }
-          const keys = Object.keys(row);
-          if (!keys.length) throw new Error(`${at}：没有可修改的字段`);
+          if (!Object.keys(row).length) throw new Error(`${at}：没有可修改的字段`);
           validateRow(table, row, old);
+          // 改名同样要认人；给了 student_id 时姓名以名册为准（这里会改写 row 里的姓名）
+          applyRowStudentRef(table, row);
+          const keys = Object.keys(row);
           aiStore.updateColumns(table, id, keys, keys.map((k) => serializeColVal(row[k])));
           const after = aiStore.findRow(table, id);
           results.push({ action: 'update', table, id, before: old, after });

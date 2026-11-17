@@ -2,6 +2,7 @@
 // 档 C · M12-B6：请假路由只做 HTTP 形状与字段清洗，语句收在这里。
 // 分页的 hasMore 用「多取一条」判定、不跑 COUNT（与 services/searchLimits 同一口径）。
 const { db } = require('../db')
+const studentLookup = require('./studentLookup')
 
 // 全量列表（GET /api/leaves 不带 limit 时；挂件、导出、AI 工具都依赖这个语义）
 function readAll() {
@@ -41,19 +42,23 @@ function findWindow(id) {
 }
 
 // ---------- 学生信息带出（新增请假 / 导入按学号、姓名匹配） ----------
-// 只取请假表要用的四列：姓名 + 双方联系电话。
+// 语句收在 services/studentLookup.js，这里按「请假要双方联系电话」点单转发。
 function findStudentById(id) {
-  return db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE id = ?').get(id)
+  return studentLookup.findById(id, 'leave')
 }
-function findStudentByXuehao(xuehao) {
-  return db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE 学号 = ?').get(xuehao)
+// 按学号返回**数组**（学号可空可重，不唯一）：0 条没这个人、1 条唯一命中、2 条学号重复。
+// 重复时不能静默取第一条 —— 那是替用户挑人，挑错了导入表里也看不出来。
+function findStudentsByXuehao(xuehao) {
+  return studentLookup.findStudentsByXuehao(xuehao, 'leave')
 }
-// 重名判断：只看前两条，够判断「唯一匹配」即可
-function findStudentsByName(name) {
-  return db.prepare('SELECT id, 姓名, 家长联系电话, 学生联系电话 FROM students WHERE 姓名 = ? ORDER BY id LIMIT 2').all(name)
-}
+// 没有 findStudentsByName：导入的重名判定改由 provisionalStudents.resolveOne 统一做
+// （它要区分正式/临时，只看「同名几条」不够）。留着转发也没人调，就成了死代码。
 
 // ---------- 单行写入 ----------
+// 单行（编辑时要判断「姓名是否真的改了」）
+function findRowById(id) {
+  return db.prepare('SELECT id, student_id, 姓名 FROM leave_records WHERE id = ?').get(Number(id)) || null
+}
 function removeById(id) {
   return db.prepare('DELETE FROM leave_records WHERE id = ?').run(id)
 }
@@ -109,8 +114,8 @@ module.exports = {
   readList,
   findWindow,
   findStudentById,
-  findStudentByXuehao,
-  findStudentsByName,
+  findStudentsByXuehao,
+  findRowById,
   removeById,
   markReturned,
   markUnreturned,

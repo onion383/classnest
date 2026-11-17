@@ -6,7 +6,7 @@
 // 成员移动、导入的合并追加），整条搬进来 —— 事务边界跟着数据操作走，路由只收结果。
 // 反过来，能由路由先算出来的判断（维度存不存在、是不是内置、组数/人数上限）仍留在路由。
 const { db } = require('../db')
-const { ensureProvisionalStudent } = require('./provisionalStudents')
+const { ensureProvisionalStudent, applyRowStudentRef } = require('./provisionalStudents')
 
 // ============ 维度 ============
 
@@ -44,7 +44,7 @@ function loadDimension(dimId) {
   const dim = dimensionById(dimId)
   if (!dim) return null
   const groups = db.prepare('SELECT id, name, gender, sort_order FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId)
-  const membersStmt = db.prepare('SELECT id, group_id, member_name, remark FROM group_members WHERE group_id = ? ORDER BY sort_order, id')
+  const membersStmt = db.prepare('SELECT id, group_id, student_id, member_name, remark FROM group_members WHERE group_id = ? ORDER BY sort_order, id')
   const data = groups.map(g => ({ ...g, members: membersStmt.all(g.id) }))
   return { dimension: dim, groups: data }
 }
@@ -243,6 +243,23 @@ function renumberGroups(dimId) {
 
 // ============ 组成员 ============
 
+// 成员这一行最终存哪个人：`{ student_id, member_name }` 两个值一起定。
+//
+// 优先用调用方给的 student_id（前端从名册选的人）—— 这是同名两人能各自独立的关键：
+// 按姓名永远分不出「1 号张子涵」和「31 号张子涵」，只有 id 能。
+// 没给 id 时退回按姓名认人（手输姓名 / Excel 导入 / AI 提案都走这条）。
+// id 指向不存在的学生 → 抛错：那是调用方的 bug，静默留空会让成员悄悄脱离名册。
+function resolveMemberRef(name, studentId) {
+  const row = { member_name: String(name == null ? '' : name).trim(), student_id: studentId }
+  const r = applyRowStudentRef('group_members', row)
+  return {
+    name: row.member_name,
+    studentId: row.student_id == null ? null : Number(row.student_id),
+    is_provisional: !!(r && r.is_provisional),
+    created: !!(r && r.created),
+  }
+}
+
 function memberById(id) {
   return db.prepare('SELECT * FROM group_members WHERE id = ?').get(id)
 }
@@ -253,34 +270,58 @@ function memberCount(groupId) {
 
 // 新增成员：新名字也要有稳定身份 —— 解析/建档与写成员在同一个事务里，
 // 避免「建了临时学生但成员没插进去」的半截状态。
-function addMember(groupId, name, remark) {
+// student_id 是权威引用，member_name 只是快照；同名歧义时 id 留空、姓名照存
+// （不替用户猜，与 cadres / leaves 同口径）。
+function addMember(groupId, name, remark, studentId = null) {
   const maxSort = db.prepare('SELECT MAX(sort_order) AS max FROM group_members WHERE group_id = ?').get(groupId).max || 0
   let result
-  let student = null
+  let ref = null
   db.transaction(() => {
-    student = ensureProvisionalStudent(name)
+    ref = resolveMemberRef(name, studentId)
     result = db.prepare(
-      `INSERT INTO group_members (group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?)`
-    ).run(groupId, name, String(remark).trim(), maxSort + 1)
+      `INSERT INTO group_members (group_id, student_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?, ?)`
+    ).run(groupId, ref.studentId, ref.name, String(remark).trim(), maxSort + 1)
   })()
-  return { id: result.lastInsertRowid, student }
+  return {
+    id: result.lastInsertRowid,
+    student: { name: ref.name, id: ref.studentId, is_provisional: ref.is_provisional, created: ref.created },
+  }
 }
 
-// 修改成员：改成新名字时同样解析/建档（与名册保持一致），与更新同事务。
-// member_name 传 undefined 表示本次不改名。
-function updateMember(id, { memberName, remark }) {
+// 修改成员。三种情况分开处理，别把「只改备注」也当成换人：
+//   ① 给了 student_id     → 换人：姓名字以 students.姓名 为准（快照不能覆盖权威）
+//   ② 姓名真的变了        → 重新认人；认不出（空名 / 同名歧义）就清空 id，
+//                           留着旧 id 会把「改名前那个人」的引用错挂到新名字上
+//   ③ 只改备注 / 姓名没变 → **保留原 student_id**（重认会让原本绑对的人被歧义冲成 null，
+//                           这是实际会踩的退化：前端 PUT 永远把 member_name 一起带上）
+function updateMember(id, { memberName, remark, studentId }) {
   const m = memberById(id)
   if (!m) return null
   const nextName = memberName !== undefined ? String(memberName).trim() : m.member_name
+  let finalName = nextName
   db.transaction(() => {
-    if (memberName !== undefined && nextName) ensureProvisionalStudent(nextName)
-    db.prepare('UPDATE group_members SET member_name = ?, remark = ? WHERE id = ?').run(
-      nextName,
+    let nextStudentId = m.student_id
+    if (studentId !== undefined && studentId !== null) {
+      const ref = resolveMemberRef(nextName, studentId)
+      finalName = ref.name
+      nextStudentId = ref.studentId
+    } else if (memberName !== undefined && nextName !== m.member_name) {
+      const ref = resolveMemberRef(nextName, null)
+      finalName = ref.name
+      nextStudentId = ref.studentId
+    } else if (nextStudentId == null && nextName) {
+      // 历史行（student_id 为空）顺便补绑；认不出就继续留空，不阻塞保存
+      const ref = resolveMemberRef(nextName, null)
+      nextStudentId = ref.studentId
+    }
+    db.prepare('UPDATE group_members SET student_id = ?, member_name = ?, remark = ? WHERE id = ?').run(
+      nextStudentId,
+      finalName,
       remark !== undefined ? String(remark).trim() : m.remark,
       id
     )
   })()
-  return nextName
+  return finalName
 }
 
 // 删除成员并重排同组
@@ -328,18 +369,21 @@ function moveMember(memberId, sourceGroupId, targetGroupId, targetIndex) {
 }
 
 // 智能分组写回：清空该维度下所有小组成员，再按顺序把姓名写回对应（第 i 组 → groups[i]）
+// 与单条新增同口径：写回的姓名也要有学生记录（智能分组的结果理论上全来自名册，
+// 但接口允许传任意姓名，漏了这一步就会留下「成员存在、名册查无此人」的孤儿）。
 function replaceGroupMembers(dimId, groupsInput) {
   const groups = db.prepare('SELECT id FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId)
   const tx = db.transaction(() => {
     const delMembers = db.prepare('DELETE FROM group_members WHERE group_id = ?')
-    const insert = db.prepare('INSERT INTO group_members (group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?)')
+    const insert = db.prepare('INSERT INTO group_members (group_id, student_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?, ?)')
     groups.forEach((g, gi) => {
       delMembers.run(g.id)
       const names = groupsInput[gi] || []
       names.forEach((name, i) => {
         const n = String(name || '').trim()
         if (!n) return
-        insert.run(g.id, n, '', i + 1)
+        const stu = ensureProvisionalStudent(n)
+        insert.run(g.id, stu && stu.id ? stu.id : null, n, '', i + 1)
       })
     })
   })
@@ -361,7 +405,7 @@ function importMembers({ dimId, entries, allowCreateGroups, perGroupLimit, maxGr
     const findGroup = db.prepare('SELECT id, name FROM groups WHERE dimension_id = ? AND name = ? ORDER BY sort_order, id LIMIT 1')
     const insertGroup = db.prepare('INSERT INTO groups (dimension_id, name, sort_order) VALUES (?, ?, ?)')
     const findMember = db.prepare('SELECT id FROM group_members WHERE group_id = ? AND member_name = ?')
-    const insertMember = db.prepare('INSERT INTO group_members (group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?)')
+    const insertMember = db.prepare('INSERT INTO group_members (group_id, student_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?, ?)')
     const countMembers = db.prepare('SELECT COUNT(*) AS n FROM group_members WHERE group_id = ?')
     const maxGroupSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM groups WHERE dimension_id = ?')
     const maxMemberSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM group_members WHERE group_id = ?')
@@ -391,8 +435,8 @@ function importMembers({ dimId, entries, allowCreateGroups, perGroupLimit, maxGr
         throw new Error(`第 ${rowNo} 行：「${group.name}」人数已达上限 ${perGroupLimit} 人`)
       }
       const sort = (maxMemberSort.get(group.id).m || 0) + 1
-      ensureProvisionalStudent(memberName)
-      insertMember.run(group.id, memberName, remark, sort)
+      const stu = ensureProvisionalStudent(memberName)
+      insertMember.run(group.id, stu && stu.id ? stu.id : null, memberName, remark, sort)
       addedMembers += 1
     }
   })

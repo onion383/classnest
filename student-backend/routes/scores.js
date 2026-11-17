@@ -103,6 +103,7 @@ router.post('/', (req, res) => {
 
 // PUT /api/scores/:id 编辑
 router.put('/:id', (req, res) => {
+  try {
     const row = cleanUp(req.body || {}, EDITABLE, 'score_records');
   // 「分值」已由 cleanUp 按列级规则清洗（数字 + 范围），这里不再二次 Number()。
   // 「成员数」没有列级规则，cleanUp 可能原样留下字符串；Number('abc') = NaN，
@@ -111,8 +112,36 @@ router.put('/:id', (req, res) => {
     row['成员数'] = normNumber(row['成员数'], '成员数');
   }
   if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
+
+  // 改姓名 = 换成另一个人（或换成名册外的人），必须重新认人。
+  // 不重认的话：记录显示新名字，student_id 还指着旧学生 —— 值日指数、加分统计都是按 id
+  // 归集的，分数会算到旧人头上，而界面不报任何错，事后也查不出是哪一步错的。
+  // 只在这一列**真的变了**时才重认：前端表格 PUT 会带整行，姓名没变也照样传，
+  // 无条件重认会让「只改分值」也去跑一次认人（同名歧义时还会把已有 id 冲成 null）。
+  if (row.姓名 !== undefined) {
+    const old = scoreStore.findRowById(req.params.id);
+    if (!old) return res.status(404).json({ error: '记录不存在' });
+    const nextName = String(row.姓名 == null ? '' : row.姓名).trim();
+    const prevName = String(old.姓名 == null ? '' : old.姓名).trim();
+    // 小组加分没有个人归属（student_id 本来就是 null），改姓名不涉及重认
+    if (nextName !== prevName && old.source !== 'group') {
+      if (!nextName) {
+        row.student_id = null;
+      } else {
+        const r = resolveOne(nextName, { create: true });
+        if (r.error) return res.status(400).json({ error: r.error });
+        // 同名歧义：不替用户猜，id 留空、姓名照存（与请假导入同口径）
+        row.student_id = r.ambiguous ? null : r.id;
+        row.姓名 = r.ambiguous ? nextName : r.name;
+      }
+    }
+  }
+
   buildUpdate('score_records', row, req.params.id);
-  res.json({ message: '修改成功' });
+    res.json({ message: '修改成功' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // POST /api/scores/import —— 从 Excel 导入加分/扣分记录
@@ -136,6 +165,17 @@ router.post('/import', (req, res) => {
       return '';
     };
 
+    // 与请假导入同一套解析：名册里查不到的名字落一条临时学生，让这条成绩有稳定身份。
+    // 不能为了一行补 id 把整批废掉 —— 失败就退回「student_id 留空」，与改动前一致。
+    const tryResolve = (name) => {
+      try {
+        const r = resolveOne(name, { create: true });
+        return (r.ambiguous || r.error) ? null : r;
+      } catch (_) {
+        return null;
+      }
+    };
+
     const list = rows.map((row, idx) => {
       const rowNo = idx + 1;
       const groupName = cell(row, ['小组', '小组名', 'group_name']);
@@ -147,10 +187,18 @@ router.post('/import', (req, res) => {
 
       let student = null;
       if (!isGroup) {
-        if (xuehao) student = scoreStore.findStudentByXuehao(xuehao);
+        // 学号不唯一（可空、可重复）：只有「恰好 1 条」才能定人。
+        // 撞到 2 条就退回按姓名认人，绝不静默取第一条。
+        if (xuehao) {
+          const byXuehao = scoreStore.findStudentsByXuehao(xuehao);
+          if (byXuehao.length === 1) student = byXuehao[0];
+        }
         if (!student && name) {
-          const sameName = scoreStore.findStudentsByName(name);
-          if (sameName.length === 1) student = sameName[0];
+          // 重名（正式名单 ≥2 个同名）刻意不抛错：导入是整批一个事务，抛错会让整批失败，
+          // 而原行为只是「这一行 student_id 留空」。需要用户决策的歧义交给选人那条路，
+          // 不让批量导入替用户猜。
+          const r = tryResolve(name);
+          if (r && r.id) student = scoreStore.findStudentById(r.id) || { id: r.id, 姓名: r.name };
         }
       }
 

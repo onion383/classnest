@@ -31,17 +31,6 @@ function migrateCore(conn) {
       db_slug TEXT DEFAULT '',
       recovery_hash TEXT DEFAULT ''
     );
-
-    CREATE TABLE IF NOT EXISTS pending_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      from_user TEXT NOT NULL,
-      target_table TEXT NOT NULL,
-      target_id INTEGER,
-      action_type TEXT NOT NULL,
-      data TEXT,
-      status TEXT DEFAULT 'pending',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
   `);
 
   // ======================== 元数据默认列 ========================

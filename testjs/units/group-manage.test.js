@@ -303,7 +303,7 @@ test('导入：合并追加、同组重名跳过、内置宿舍组不许新建�
 test('SQL 出口：groupManage 路由只经 groupDim', () => {
   const code = fs.readFileSync(path.join(ROOT, 'student-backend/routes/groupManage.js'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
-  assert.ok(!/db\.prepare\(/.test(code), 'groupManage 路由不许再有裸 SQL')
+  assert.ok(!/\.prepare\(/.test(code), 'groupManage 路由不许再有裸 SQL（显式 conn 也不行）')
   assert.match(code, /groupDim\.loadDimension\(/, '读取维度必须经 groupDim')
   assert.match(code, /groupDim\.importMembers\(/, '导入必须经 groupDim')
 })

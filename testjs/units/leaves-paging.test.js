@@ -93,6 +93,6 @@ test('非法 date 不生效（不抛错、不返回空）', async () => {
 test('SQL 出口：leaves 路由只经 leaveStore，不留裸 SQL', () => {
   const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/leaves.js'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
-  assert.ok(!/db\.prepare\(/.test(src), 'leaves 路由不许再有裸 SQL（应走 services/leaveStore）')
+  assert.ok(!/\.prepare\(/.test(src), 'leaves 路由不许再有裸 SQL（应走 services/leaveStore；显式 conn 也不行）')
   assert.ok(/leaveStore\.readList\(/.test(src), '列表必须真的走 leaveStore.readList')
 })

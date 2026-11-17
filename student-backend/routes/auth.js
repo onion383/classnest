@@ -22,6 +22,9 @@ const { normalizeUsername, usernameError } = require('../services/usernameRules'
 // 未确认的草稿不会占用账号，TTL 后自动失效；容量与淘汰策略见 services/pendingRegs.js。
 const pendingRegs = require('../services/pendingRegs');
 const dbManager = require('../dbManager/dbManager');
+// users 表的唯一 SQL 出口。登录前没有登录态（ALS 里没有 slug），所以这里用的是
+// userStore 的「显式传 conn」那组函数，连接由 dbManager.resolveByUsername() 解析后传入。
+const userStore = require('../services/userStore');
 const { resolveSecurityLevel } = require('../utils/securityLevel');
 const slugScopes = require('../utils/slugScopes');
 const albumThumbs = require('../albumThumbs');
@@ -125,7 +128,7 @@ router.post('/db-recover', (req, res) => {
     const r = dbManager.resolveByDbFile(file);
     const resolved = dbManager.resolveByUsername(r.username);
     if (!resolved) return res.status(400).json({ error: '数据库内没有可用账号' });
-    const user = resolved.conn.prepare('SELECT id, username, role, db_slug, password FROM users WHERE username = ?').get(r.username);
+    const user = userStore.findByUsername(resolved.conn, r.username);
     if (!user) return res.status(400).json({ error: '数据库内没有可用账号' });
     if (wantedUsername && user.username !== wantedUsername) {
       return res.status(400).json({ error: '该数据库中没有这个账号' });
@@ -188,10 +191,8 @@ router.post('/login', async (req, res) => {
   // （挨个开库改名要 N 次 KDF，代价与收益不匹配）。所以按新名查不到时退回「库里第一条」：
   // 能打开这个库本身就说明密钥正确，身份本来也不是靠 users.username 建立的
   // （一个库里只有一个班主任账号，id 恒为 1）。
-  const pickUser = () => resolved.conn
-    .prepare('SELECT id, username, role, db_slug, password FROM users WHERE username = ?').get(username)
-    || resolved.conn
-      .prepare('SELECT id, username, role, db_slug, password FROM users ORDER BY id LIMIT 1').get();
+  const pickUser = () => userStore.findByUsername(resolved.conn, username)
+    || userStore.findFirstUser(resolved.conn);
   const user = pickUser();
   if (!user) {
     console.warn('[login] 库内查无此账号:', username, 'slug:', resolved.slug);
@@ -390,7 +391,7 @@ router.post('/register/confirm', async (req, res) => {
     const { slug } = dbManager.createTeacher(draft.username, draft.passwordHash, draft.role, draft.encrypted !== false, draft.className || '');
     const resolved = dbManager.resolveByUsername(draft.username);
     if (resolved && draft.restoreHash) {
-      resolved.conn.prepare('UPDATE users SET recovery_hash = ? WHERE username = ?').run(draft.restoreHash, draft.username);
+      userStore.setRecoveryHashByName(resolved.conn, draft.username, draft.restoreHash);
     }
     // 建库后立刻开启超级隐私模式：主密钥包裹被抹掉，钥匙只留给密码与恢复词
     if (draft.privacy) {
@@ -405,7 +406,7 @@ router.post('/register/confirm', async (req, res) => {
     pendingRegs.remove(draftId);
     console.log('[register/confirm] 确认注册成功:', draft.username, 'slug:', slug, 'privacy:', !!draft.privacy, 'encrypted:', draft.encrypted !== false);
     // 签发登录态，注册成功即自动进入系统，无需再回登录页手动登录
-    const userRow = resolved.conn.prepare('SELECT id, username, role FROM users WHERE username = ?').get(draft.username);
+    const userRow = userStore.findByUsername(resolved.conn, draft.username);
     const { token, mediaToken } = issueSession(req, {
       userId: userRow.id, username: userRow.username, role: userRow.role, dbSlug: slug,
     });
@@ -442,7 +443,7 @@ function findAccountsByPhrase(phrase) {
       }
       const resolved = dbManager.resolveByUsername(rec.username);
       if (!resolved) continue;
-      const row = resolved.conn.prepare('SELECT recovery_hash FROM users WHERE username = ?').get(rec.username);
+      const row = userStore.findByUsername(resolved.conn, rec.username);
       if (row && row.recovery_hash && verifyRestoreHash(normalized, row.recovery_hash)) hits.push(rec.username);
     } catch (_) { /* 打不开 / 词不匹配：跳过 */ }
   }
@@ -478,13 +479,12 @@ router.post('/recover-password', async (req, res) => {
       dbManager.rewrapPassword(name, { newPassword: String(newPassword), useMemoryKey: true });
       // 哈希是异步的：先算完再写库，避免把 Promise 对象写进 password 列
       const newHash = await bcryptHash(String(newPassword), 10);
-      resolved.conn.prepare('UPDATE users SET password = ? WHERE username = ?')
-        .run(newHash, name);
+      userStore.setPasswordByName(resolved.conn, name, newHash);
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
     // 密码已重置：该账号在其它窗口的旧 token 立即失效，要求重新登录
-    const row = resolved.conn.prepare('SELECT id FROM users WHERE username = ?').get(name);
+    const row = userStore.findByUsername(resolved.conn, name);
     revokeAccountSessions(row && row.id, resolved.slug);
     return res.json({ message: '密码已重置，可用新密码登录', username: name });
   }
@@ -497,7 +497,7 @@ router.post('/recover-password', async (req, res) => {
   }
   if (!resolved) return res.status(404).json({ error: '账号不存在' });
 
-  const user = resolved.conn.prepare('SELECT id, username, recovery_hash FROM users WHERE username = ?').get(name);
+  const user = userStore.findByUsername(resolved.conn, name);
   if (!user || !user.recovery_hash) return res.status(404).json({ error: '该账号未设置恢复密钥' });
 
   // 归一化输入：仅保留汉字，兼容用户粘贴带序号（1.水 …）或带空格的格式
@@ -506,7 +506,7 @@ router.post('/recover-password', async (req, res) => {
   }
 
   const passwordHash = await bcryptHash(String(newPassword), 10);
-  resolved.conn.prepare('UPDATE users SET password = ? WHERE username = ?').run(passwordHash, user.username);
+  userStore.setPasswordByName(resolved.conn, user.username, passwordHash);
   // 「请重新登录」以前只是一句提示：改完密码旧 token 的 sid 仍在名单里，30 天内照用。
   // 这里真正吊销该账号全部会话，提示才与服务端状态一致。
   revokeAccountSessions(user.id, resolved.slug);

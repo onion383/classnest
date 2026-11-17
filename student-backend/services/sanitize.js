@@ -23,6 +23,12 @@ const CONTROL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 const PATH_RE = /^(?:[A-Za-z]:[\\/])?[^<>:"|?*\u0000-\u001f]{0,255}$/;
 // 宽松日期（仅归一，不拒绝）：YYYY-M-D，可选带时间
 const LOOSE_DATE_RE = /^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+// 电话号码允许的字符集：数字 + 国际冠码 + / 座机分隔 - 、空格、括号。
+// 刻意【不】用 ^1[3-9]\d{9}$ 严格手机号：AI 数据保护清单 §5 统计发现库里存在
+// 「家长联系电话='1'」这类历史脏数据，严格校验会把它们拒在写库门外（连带历史编辑也失败）。
+// 这里只拦「绝不可能的电话」——字母 / 汉字 / emoji / 其它符号 / 超长；纯数字无论长短都放行。
+const PHONE_ALLOWED_RE = /^[0-9+\-()\s]+$/;
+const PHONE_MAX_LEN = 25;
 // 年份合理区间：显式声明的日期列超出该区间视为不合理日期（拒 1900 / 2099 这类离谱年份）
 const MIN_YEAR = 2000;
 const MAX_YEAR = 2100;
@@ -178,6 +184,21 @@ function cleanDocValue(value, name) {
   return value;
 }
 
+// 电话宽松校验：空 → null；纯数字/座机符号放行（含历史短串 '1'、座机、11 位手机）；
+// 含字母/汉字/emoji/其它符号或超长 → 拒绝。只做字符白名单，不强制位数。
+function cleanPhone(value, name) {
+  // null/undefined 必须先归一为 null：cleanText 会把 undefined 变成字符串 'undefined'，
+  // 那样会被当成「含字母的非法电话」拒掉，误伤所有「没填电话」的请假/学生写入。
+  if (value == null) return null;
+  const s = cleanText(value);
+  if (!s) return null;
+  if (s.length > PHONE_MAX_LEN) throw new Error(`字段「${name}」电话号码过长（最多 ${PHONE_MAX_LEN} 字符）`);
+  if (!PHONE_ALLOWED_RE.test(s)) {
+    throw new Error(`字段「${name}」不是合法电话号码（只能含数字、空格、+、-、括号，收到：${s}）`);
+  }
+  return s;
+}
+
 // 路径清洗：文本清洗 → 拒绝「..」上跳 → 校验路径字符合法与长度
 function cleanPath(value, name) {
   const s = cleanText(value);
@@ -196,6 +217,7 @@ function cleanPath(value, name) {
 //         'date'     严格日期校验        {}
 //         'bool'     布尔（落库 0/1）    {}
 //         'path'     路径（禁 .. 与非法字符）
+//         'phone'    电话宽松校验（放行一切纯数字含历史短串，只拦字母/符号/超长）
 //         'json'     JSON 列形状         { shape: 'array' | 'object', each?: 'slot' | 'int' | 'path' }
 //         'apps'     软件列表数组        {}
 //         'classinfo' 班级信息对象       {}
@@ -209,6 +231,8 @@ const COLUMN_RULES = {
     // 而种子把 年龄 写成了「文字」→ 任何字符串都能存进 INTEGER 列（SQLite 亲和只保证
     // 存储类，不做约束）。这里显式声明，不再依赖元数据播得对不对。
     年龄: { kind: 'number', min: 0, max: 150, integer: true },
+    家长联系电话: { kind: 'phone' },
+    学生联系电话: { kind: 'phone' },
   },
   // —— 班费记录 ——
   fee_records: {
@@ -226,6 +250,8 @@ const COLUMN_RULES = {
     状态: { kind: 'enum', values: ['请假中', '已返校', '已取消'] },
     开始时间: { kind: 'date' },
     结束时间: { kind: 'date' },
+    家长联系电话: { kind: 'phone' },
+    学生联系电话: { kind: 'phone' },
   },
   // —— 加分/扣分记录（分值恒为正，加扣由「类型」区分）——
   score_records: {
@@ -241,6 +267,7 @@ const COLUMN_RULES = {
   widget_settings: {
     toolbox_enabled: { kind: 'bool' },
     rollcall_exclude_absent: { kind: 'bool' },
+    rollcall_include_provisional: { kind: 'bool' },
     note_save_path: { kind: 'path' },
     screenshot_save_path: { kind: 'path' },
     desktop_apps: { kind: 'apps' },
@@ -487,8 +514,13 @@ function cleanDutyModeMap(value, name) {
   return obj;
 }
 
-// 值日名单结构校验：{ 项目名: { 星期: [姓名,...] } }
-// 项目值必须是对象、星期值必须是数组、数组元素必须是姓名文本（拒 null/数字/对象）
+// 值日名单结构校验：{ 项目名: { 星期: [成员,...] } }
+// 项目值必须是对象、星期值必须是数组、数组元素必须是「姓名文本」或「学生 id」。
+//
+// 两种元素形态（P2-2）：
+//   · 正整数 —— 学生 id，表格里从候选选中学生时写入。改名不用再动值日表，删学生也能精确到人；
+//   · 字符串 —— 姓名，老数据，以及手输但名册里认不出是谁的人。
+// null / 对象 / 小数 / 0 仍然拒绝：它们既不是 id 也不是姓名，放进去只会在读取时变成空格。
 function assertDutyCellShape(cells, name) {
   if (!cells || typeof cells !== 'object' || Array.isArray(cells)) {
     throw new Error(`字段「${name}」必须是「项目 → 星期 → 名单」的对象`);
@@ -504,8 +536,9 @@ function assertDutyCellShape(cells, name) {
         throw new Error(`字段「${name}」的项目「${item}」的「${day}」需要是名单数组`);
       }
       list.forEach((el) => {
-        if (typeof el !== 'string') {
-          throw new Error(`字段「${name}」的项目「${item}」的「${day}」名单里只能放姓名文本，收到：${JSON.stringify(el)}`);
+        const isStudentId = typeof el === 'number' && Number.isInteger(el) && el > 0;
+        if (!isStudentId && typeof el !== 'string') {
+          throw new Error(`字段「${name}」的项目「${item}」的「${day}」名单里只能放姓名或学生 id，收到：${JSON.stringify(el)}`);
         }
       });
     });
@@ -593,6 +626,8 @@ function applyRule(value, rule, name) {
       return normBool(value, name);
     case 'path':
       return cleanPath(value, name);
+    case 'phone':
+      return cleanPhone(value, name);
     case 'json': {
       let v = parseJsonShape(value, rule.shape, name);
       if (Array.isArray(v)) {
@@ -636,6 +671,7 @@ module.exports = {
   cleanByType,
   cleanDocValue,
   cleanPath,
+  cleanPhone,
   normBool,
   normNumber,
   normInt,

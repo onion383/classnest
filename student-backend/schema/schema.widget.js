@@ -13,7 +13,9 @@ function migrateWidget(conn) {
       -- class_info：首页班级信息（班名/口号/班风/学风，JSON 文本）
       class_info TEXT DEFAULT '{}',
       -- 点名器是否排除「今天不在校」的学生；默认关，保持原有全员点名行为
-      rollcall_exclude_absent INTEGER NOT NULL DEFAULT 0
+      rollcall_exclude_absent INTEGER NOT NULL DEFAULT 0,
+      -- 点名器是否把临时学生也算进候选；默认关（只点正式学生），开启后不过滤临时学生
+      rollcall_include_provisional INTEGER NOT NULL DEFAULT 0
     );
     INSERT OR IGNORE INTO widget_settings (id) VALUES (1);
   `);
@@ -23,6 +25,9 @@ function migrateWidget(conn) {
   const cols = conn.prepare('PRAGMA table_info(widget_settings)').all().map((c) => c.name);
   if (!cols.includes('rollcall_exclude_absent')) {
     conn.exec('ALTER TABLE widget_settings ADD COLUMN rollcall_exclude_absent INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!cols.includes('rollcall_include_provisional')) {
+    conn.exec('ALTER TABLE widget_settings ADD COLUMN rollcall_include_provisional INTEGER NOT NULL DEFAULT 0');
   }
 }
 

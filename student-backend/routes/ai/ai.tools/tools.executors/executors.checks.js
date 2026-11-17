@@ -13,6 +13,10 @@ const {
 const CHECK_LABELS = {
   cadre_dangling: '班干部任职指向了不存在的学生',
   group_dangling: '分组名册成员不在学生名单里',
+  score_dangling: '加减分记录指向了不存在的学生',
+  leave_dangling: '请假记录指向了不存在的学生',
+  seat_dangling: '座位表里有格子指向了不存在的学生',
+  duty_dangling: '值日表里有格子指向了不存在的学生',
   leave_reversed: '请假结束时间早于开始时间',
   fee_negative: '班费金额为负',
   sno_duplicate: '学号重复',
@@ -23,10 +27,66 @@ const CHECK_RULES = {
     if (r.student_id != null && Number(r.student_id) > 0) return !ctx.idSet.has(Number(r.student_id));
     return !ctx.nameSet.has(String(r.student_name || ''));
   }).map((r) => ({ id: r.id, cadre_id: r.cadre_id, student_id: r.student_id, student_name: r.student_name })),
-  // 分组名册成员不在学生名单里
-  group_dangling: (ctx) => aiStore.listGroupMembers()
-    .filter((r) => String(r.member_name || '').trim() && !ctx.nameSet.has(String(r.member_name)))
-    .map((r) => ({ id: r.id, group_id: r.group_id, member_name: r.member_name })),
+  // 分组名册成员不在学生名单里。
+  // P2-1 之后 student_id 才是权威：有 id 就按 id 判，只在没有 id 时才退回按姓名 ——
+  // 否则「id 指向已删的人、但姓名刚好和另一个同名学生重合」会被判成正常。
+  group_dangling: (ctx) => aiStore.listGroupMembers().filter((r) => {
+    if (r.student_id != null && Number(r.student_id) > 0) return !ctx.idSet.has(Number(r.student_id));
+    const nm = String(r.member_name || '').trim();
+    return !!nm && !ctx.nameSet.has(nm);
+  }).map((r) => ({ id: r.id, group_id: r.group_id, student_id: r.student_id, member_name: r.member_name })),
+  // 加减分 / 请假：只报「有 id 但 id 已经不存在」的行。
+  // id 为空的不算孤儿 —— 那是「只存姓名」的历史行，它没有断链，删掉反而丢数据。
+  score_dangling: (ctx) => aiStore.listScoreRecordsForChecks()
+    .filter((r) => r.student_id != null && Number(r.student_id) > 0 && !ctx.idSet.has(Number(r.student_id)))
+    .map((r) => ({ id: r.id, student_id: r.student_id, 姓名: r['姓名'], 学号: r['学号'] })),
+  leave_dangling: (ctx) => aiStore.listLeaveRecordsForChecks()
+    .filter((r) => r.student_id != null && Number(r.student_id) > 0 && !ctx.idSet.has(Number(r.student_id)))
+    .map((r) => ({ id: r.id, student_id: r.student_id, 姓名: r['姓名'], 开始时间: r['开始时间'], 结束时间: r['结束时间'] })),
+  // 座位 / 值日：格子可能是学生 id（新数据）或姓名（老数据）。只报数字且查不到的，
+  // 字符串格归 group_dangling 那一类的「按姓名判」管，这里不重复报。
+  // 列号按「座位列序号」报（网格下标把走廊列也算进去），与 seat_duplicate 同一口径。
+  seat_dangling: (ctx) => {
+    const row = aiStore.readSeatDoc();
+    if (!row) return [];
+    const seats = aiParseJson(row.seats, []) || [];
+    const types = aiParseJson(row.types, []) || [];
+    const out = [];
+    for (let r = 0; r < seats.length; r++) {
+      const line = Array.isArray(seats[r]) ? seats[r] : [];
+      const dense = gridToDenseCols(Math.max(line.length, Number(row.cols) || 0), types);
+      for (let c = 0; c < line.length; c++) {
+        const v = line[c];
+        if (typeof v !== 'number') continue;
+        if (!ctx.idSet.has(Number(v))) {
+          // 座位列号取 dense 映射后的序号；types 缺失/异常时退回网格下标，别报出 NaN
+          const col = Number.isInteger(dense[c]) && dense[c] >= 0 ? dense[c] + 1 : c + 1;
+          out.push({ 排: r + 1, 列: col, student_id: v });
+        }
+      }
+    }
+    return out;
+  },
+  duty_dangling: (ctx) => {
+    const row = aiStore.readDutyDoc();
+    if (!row) return [];
+    const out = [];
+    for (const m of ['daily', 'big']) {
+      const cells = unpackDutyModeCol(row.cells, m);
+      for (const item of Object.keys(cells || {})) {
+        const daysMap = cells[item] || {};
+        for (const day of Object.keys(daysMap)) {
+          const raw = daysMap[day];
+          const list = Array.isArray(raw) ? raw : (raw == null ? [] : [raw]);
+          list.forEach((v, i) => {
+            if (typeof v !== 'number') return;
+            if (!ctx.idSet.has(Number(v))) out.push({ 模式: dutyModeLabel(m), 项目: item, 星期: day, 第几个人: i + 1, student_id: v });
+          });
+        }
+      }
+    }
+    return out;
+  },
   // 请假结束时间早于开始时间
   leave_reversed: () => {
     const out = [];

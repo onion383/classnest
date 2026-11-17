@@ -6,6 +6,9 @@ function migrateLeave(conn) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       position INTEGER DEFAULT 1,
       student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
+      -- 姓名是**快照**，不是引用：请假表格直接展示它，不必 join students。
+      -- 关联依据是 student_id；手输的名单外姓名会通过 resolveOne 建临时学生再回填 id，
+      -- 同名歧义时 id 留空、姓名照存（不替用户猜）。
       姓名 TEXT,
       类型 TEXT,
       开始时间 TEXT,

@@ -43,9 +43,25 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
       })
       return n ? sum / n : 0
     },
-    ledgerOf(name) {
-      const v = ctx.ledger.value?.[name]
-      return typeof v === 'number' ? v : 0
+    // 账本按**学生身份**统计：key 是 id:16 就查 byId（两个同名的人各算各的），
+    // 是 name:张三（名册外的人 / 历史快照里同名分不清的字符串）就查 unresolved 那一份。
+    // 不带前缀的值（旧草稿、外部直接给姓名）两份都试一次，保持向后兼容。
+    ledgerOf(key) {
+      const k = String(key == null ? '' : key)
+      const byId = ctx.ledger.value || {}
+      const byName = ctx.ledgerByName.value || {}
+      if (k.startsWith('id:')) {
+        const v = byId[k.slice(3)]
+        return typeof v === 'number' ? v : 0
+      }
+      if (k.startsWith('name:')) {
+        const v = byName[k.slice(5)]
+        return typeof v === 'number' ? v : 0
+      }
+      const a = byId[k]
+      if (typeof a === 'number') return a
+      const b = byName[k]
+      return typeof b === 'number' ? b : 0
     },
 
     // ==================== 基准：从当前值日表开始 ====================
@@ -54,13 +70,16 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
       const cells = ctx.baseCells.value || {}
       for (let i = 0; i < slots.length; i++) {
         const s = slots[i]
-        const name = cells[s.item]?.[s.day]?.[s.k]
-        if (typeof name === 'string' && name.trim()) assigned[i] = name.trim()
+        // 格子值可能是学生 id（新数据）、姓名（老数据/名册外）或历史对象，统一折算成 key。
+        // 原来只认字符串，于是「已经按 id 存好的值日表」在这里被当成空格，重排会把用户
+        // 已经排好的安排覆盖掉 —— 而且界面上看不出是重排造成的。
+        const key = ctx.keyOfValue(cells[s.item]?.[s.day]?.[s.k])
+        if (key) assigned[i] = key
       }
       // 当前表里有空槽时，用还没上表的学生补齐；不够再轮转学生池
       // 学生池随数据源切换：全部同学 = 学生表名册；现有排表表格 = 表里的人
       const used = new Set(assigned.filter(Boolean))
-      const rest = ctx.poolNames.value.filter(n => !used.has(n))
+      const rest = ctx.poolKeys.value.filter(n => !used.has(n))
       this.fillEmptySlots(slots, assigned, rest)
       return assigned
     },
@@ -69,7 +88,7 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     //   日常值日 → 按「星期」去重（同一天不重复同一人）
     //   大扫除   → 整张表就是「一次活动」，一个人只能出现一次（不能同时扫第1大组和第2大组）
     fillEmptySlots(slots, assigned, extraPool) {
-      const all = ctx.poolNames.value
+      const all = ctx.poolKeys.value
       if (!all.length) return
       // 大扫除时列是「组」而不是「星期」→ 去重范围是整张表。
       // ctx 里的状态一律是 ref/computed（见文件头「ctx 契约」），漏掉 .value 比较的是
@@ -105,15 +124,12 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     // 返回 [{ r, c, name }]，只保留有人的格子
     seatCellNames() {
       const seats = ctx.seat.value?.seats || []
-      const idToName = new Map((ctx.students.value || []).map(s => [s.id, String(s.姓名 || '').trim()]))
       const cells = []
       seats.forEach((row, r) => {
         (row || []).forEach((val, c) => {
-          let name = ''
-          if (typeof val === 'number') name = idToName.get(val) || ''
-          else if (typeof val === 'string') name = val.trim()
-          else if (val && typeof val === 'object') name = String(val.姓名 || '').trim()
-          if (name) cells.push({ r, c, name })
+          // 座位格可能是 id / 姓名 / 历史对象；统一折算成 key，才能和池子里的人对上
+          const key = ctx.keyOfValue(val)
+          if (key) cells.push({ r, c, key })
         })
       })
       return cells
@@ -122,22 +138,22 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     seatGroups(shape) {
       const cells = this.seatCellNames()
       if (!cells.length) return []
-      if (shape === 'student') return cells.map(c => [c.name])
-      if (shape === 'bigroup') return [cells.map(c => c.name)]
+      if (shape === 'student') return cells.map(c => [c.key])
+      if (shape === 'bigroup') return [cells.map(c => c.key)]
       if (shape === 'column') {
         const map = new Map()
         cells.forEach(c => {
           if (!map.has(c.c)) map.set(c.c, [])
-          map.get(c.c).push(c.name)
+          map.get(c.c).push(c.key)
         })
-        return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([, names]) => names)
+        return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([, keys]) => keys)
       }
       if (shape === 'deskmate') {
         const map = new Map()
         cells.forEach(c => {
-          const key = c.r + ',' + Math.floor(c.c / 2)
-          if (!map.has(key)) map.set(key, [])
-          map.get(key).push(c.name)
+          const bucket = c.r + ',' + Math.floor(c.c / 2)
+          if (!map.has(bucket)) map.set(bucket, [])
+          map.get(bucket).push(c.key)
         })
         return [...map.values()]
       }
@@ -145,9 +161,9 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
       const rSpan = shape === 'six' ? 3 : 2
       const map = new Map()
       cells.forEach(c => {
-        const key = Math.floor(c.r / rSpan) + ',' + Math.floor(c.c / 2)
-        if (!map.has(key)) map.set(key, [])
-        map.get(key).push(c.name)
+        const bucket = Math.floor(c.r / rSpan) + ',' + Math.floor(c.c / 2)
+        if (!map.has(bucket)) map.set(bucket, [])
+        map.get(bucket).push(c.key)
       })
       return [...map.values()]
     },
@@ -155,7 +171,7 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     dormGroups() {
       const buckets = typeof ctx.groupBuckets === 'function' ? ctx.groupBuckets() : []
       return buckets
-        .map(g => g.filter(n => ctx.poolNames.value.includes(n)))
+        .map(g => g.filter(n => ctx.poolKeys.value.includes(n)))
         .filter(g => g.length)
     },
 
@@ -192,7 +208,7 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
       slots.forEach((s, i) => {
         if (assigned[i] && daySets.has(s.day)) daySets.get(s.day).add(assigned[i])
       })
-      const allNames = new Set(ctx.poolNames.value)
+      const allNames = new Set(ctx.poolKeys.value)
       if (scope === 'all') return [{ days: allDays, participants: allNames, key: 'all' }]
       if (scope === 'bigroup') {
         const seated = new Set(this.seatCellNames().map(c => c.name).filter(n => allNames.has(n)))
@@ -354,7 +370,7 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     applyPackedRandom(slots, assigned, node) {
       if (!slots.length) return
       const days = ctx.daysArr.value
-      const participants = new Set(ctx.poolNames.value)
+      const participants = new Set(ctx.poolKeys.value)
       const units = this.unitGroups(node.unit, { days, participants }, slots, assigned)
       const bucketIdxs = this.bucketIdxs(slots, node.axis)
       const caps = bucketIdxs.map(idxs => idxs.length)
@@ -410,7 +426,7 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     applyOrdered(slots, assigned, node) {
       if (!slots.length) return { placed: 0, dropped: 0 }
       const days = ctx.daysArr.value
-      const participants = new Set(ctx.poolNames.value)
+      const participants = new Set(ctx.poolKeys.value)
       const units = this.unitGroups(node.unit, { days, participants }, slots, assigned)
       const path = this.orderedPath(slots, node.direction)
       assigned.fill('')
@@ -432,8 +448,7 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
     // 保留为独立工具（历史单测与后续跨模式公平可复用）。
     fairFill(slots) {
       const w = ctx.weights.value || {}
-      const led = ctx.ledger.value || {}
-      const students = ctx.poolNames.value.map(name => ({ name, led: led[name] || 0 }))
+      const students = ctx.poolKeys.value.map(key => ({ name: key, led: this.ledgerOf(key) }))
       students.sort((a, b) => b.led - a.led)
       const order = slots.map((s, i) => ({ i, w: w[s.item]?.[s.day] ?? 0.5 }))
       order.sort((a, b) => a.w - b.w)
@@ -617,7 +632,9 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
       ctx.previewVersion.value++
     },
     resetPreview() {
-      ctx.previewCells.value = JSON.parse(JSON.stringify(ctx.baseCells.value || {}))
+      // 预览内部统一存 key：直接拷 baseCells 会把「数字 id / 姓名字符串」混进来，
+      // 预览与确认就走两套值域，显示与写回都会错位
+      ctx.previewCells.value = ctx.toKeyCells(ctx.baseCells.value || {})
       ctx.previewVersion.value++
     },
     buildCells(slots, assigned) {
@@ -650,7 +667,7 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
             label: it.name,
             _isReadonly: true,
             _rowHeaderRowSpan: k === 0 ? n : 0,
-            cells: days.map(day => ({ course: cells[it.name]?.[day]?.[k] || '' }))
+            cells: days.map(day => ({ course: ctx.nameOfKey(cells[it.name]?.[day]?.[k]) }))
           })
         }
       })

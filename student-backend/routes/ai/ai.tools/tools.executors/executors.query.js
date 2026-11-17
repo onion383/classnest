@@ -2,15 +2,18 @@
 // 纯代码搬运自 ../executors.js，行为不变。门面装配见 tools.js。
 const aiStore = require('../../../../services/aiStore');
 const { READ_TABLES } = require('../../ai.constants');
+const { readScope } = require('../../../../services/aiReadScope');
 const { tableColumns } = require('../../ai.helpers');
 const { AGG_FNS } = require('../tools.schema');
 const { gridToDenseCols } = require('../../../../services/seatGrid');
 const {
-  pinyinMatch, aiParseJson, unpackDutyModeCol, dutyModeLabel, studentIdNameMap,
+  pinyinMatch, aiParseJson, unpackDutyModeCol, dutyModeLabel, studentIdNameMap, isProvisional,
 } = require('./executors.common');
 
 function runQuery({ table, where, order_by, order_dir, limit }) {
   if (!READ_TABLES[table]) return { error: `不支持的查询表：${table}` };
+  // §4：表在 READ_TABLES 里但被用户显式关闭时，明确报错（不返回空结果）
+  if (!readScope.isTableReadable(table)) return readScope.closedError(table);
   const cols = tableColumns(table);
   let sql = `SELECT * FROM "${table}"`;
   const params = [];
@@ -68,6 +71,7 @@ function safeAlias(name) {
 
 function runAggregate({ table, metrics, group_by, where, where_range, where_ranges, order_by, order_dir, limit }) {
   if (!READ_TABLES[table]) return { error: `不支持的查询表：${table}` };
+  if (!readScope.isTableReadable(table)) return readScope.closedError(table);
   const cols = tableColumns(table);
   const colSet = new Set(cols);
   const avail = cols.filter((c) => c !== 'id').join('、');
@@ -149,12 +153,18 @@ function runAggregate({ table, metrics, group_by, where, where_range, where_rang
   sql += orderSql;
   sql += ` LIMIT ${lim}`;
   const rows = aiStore.queryAll(sql, params);
+  // students 表混着临时学生：提醒模型这批数据默认含临时建档的人，统计正式人数要显式过滤。
+  // 不改变聚合结果本身（group_by 是模型指定的），只补一句口径说明，避免把临时学生算进正式名单。
+  let note = '以上是数据库直接聚合后的结果，可直接据此作答，无需再取原始记录';
+  if (table === 'students') {
+    note += '；注意：学生表含 is_provisional=1 的临时学生（值日/座位里填名字自动建的档），若要统计正式学生请在 where 里加 is_provisional:0';
+  }
   return {
     count: rows.length,
     rows,
     group_by: groups,
     metrics: aliases,
-    note: '以上是数据库直接聚合后的结果，可直接据此作答，无需再取原始记录',
+    note,
   };
 }
 
@@ -165,7 +175,8 @@ function runResolveStudent({ query, limit }) {
   const q = String(query == null ? '' : query).trim();
   if (!q) return { error: '缺少要匹配的内容（query），请给出学生姓名、拼音或学号片段' };
   const cols = tableColumns('students');
-  const pick = ['id', '学号', '姓名', '年级', '班级'].filter((c) => cols.includes(c));
+  // 带出 is_provisional：找人候选要标出临时学生，避免把名册外填名字建的人当正式学生
+  const pick = ['id', '学号', '姓名', '年级', '班级', 'is_provisional'].filter((c) => cols.includes(c));
   const rows = aiStore.queryAll(`SELECT ${pick.map((c) => `"${c}"`).join(', ')} FROM students`);
   const lq = q.toLowerCase();
   // 匹配优先级：学号/姓名精确 > 姓名包含 > 学号包含 > 姓名拼音
@@ -192,16 +203,18 @@ function runResolveStudent({ query, limit }) {
   }
   const total = scored.length;
   if (!total) return { ok: true, count: 0, total: 0, candidates: [], note: `没有匹配到「${q}」的学生，请核对姓名/拼音/学号` };
-  const candidates = scored.slice(0, lim).map(({ r }) => r);
-  return {
-    ok: true,
-    count: candidates.length,
-    total,
-    candidates,
-    note: total > 1
-      ? `匹配到 ${total} 名学生（存在重名或同拼音风险），请先把候选展示给老师确认，再按确认的学生写入`
-      : '唯一匹配',
-  };
+  // 每条候选显式带 is_provisional（归一为 0/1）+ 中文标记，模型据此区分正式学生与临时建档的学生
+  const candidates = scored.slice(0, lim).map(({ r }) => ({
+    ...r,
+    is_provisional: isProvisional(r) ? 1 : 0,
+    标记: isProvisional(r) ? '临时学生' : '',
+  }));
+  const provisionalTotal = scored.filter(({ r }) => isProvisional(r)).length;
+  let note = total > 1
+    ? `匹配到 ${total} 名学生（存在重名或同拼音风险），请先把候选展示给老师确认，再按确认的学生写入`
+    : '唯一匹配';
+  if (provisionalTotal) note += `；其中 ${provisionalTotal} 名是「临时学生」（在值日/座位里填名字自动建的档，不是正式名单学生），点名或正式统计前请留意`;
+  return { ok: true, count: candidates.length, total, candidates, note };
 }
 
 // ===== list_changes 工具：撤销栈可见（列出 AI 自己仍可撤销的更改）=====
@@ -230,7 +243,11 @@ const SEARCH_TABLE_LABELS = {
   duty_layout: '值日表',
 };
 const SEARCH_TABLE_SEARCHERS = {
-  students: (ctx) => ctx.matched.map((s) => ({ id: s.id, 学号: s['学号'], 姓名: s['姓名'], 年级: s['年级'], 班级: s['班级'] })),
+  students: (ctx) => ctx.matched.map((s) => ({
+    id: s.id, 学号: s['学号'], 姓名: s['姓名'], 年级: s['年级'], 班级: s['班级'],
+    is_provisional: isProvisional(s) ? 1 : 0,
+    标记: isProvisional(s) ? '临时学生' : '',
+  })),
   score_records: (ctx) => aiStore.listScoresForSearch().filter((r) => ctx.hit(r['姓名'], r.student_id)),
   leave_records: (ctx) => aiStore.listLeaveRecordsForSearch().filter((r) => ctx.hit(r['姓名'], r.student_id)),
   cadre_members: (ctx) => aiStore.listCadreMembersForSearch().filter((r) => ctx.hit(r.student_name, r.student_id)),
@@ -303,11 +320,20 @@ function runSearchAll({ query, limit, tables } = {}) {
   }
   // 查哪几张表：由 tables 入参决定，不传则全部
   let want = Object.keys(SEARCH_TABLE_SEARCHERS);
-  if (tables != null) {
+  const explicit = tables != null;
+  if (explicit) {
     const arr = Array.isArray(tables) ? tables : [tables];
     want = arr.map((t) => String(t).trim()).filter((t) => SEARCH_TABLE_SEARCHERS[t]);
     if (!want.length) return { error: `tables 只能是 ${Object.keys(SEARCH_TABLE_SEARCHERS).join('/')} 中的若干项` };
   }
+  // §4：按表关闭——显式指定的表里若有被关的，明确报错（判据 §4.3：不能返回空结果）；
+  // 默认全查时静默剔除被关的表。学生档案（matched）不属任何被关表，不在剔除范围。
+  const allowed = readScope.readableOnly(want);
+  if (explicit && allowed.length !== want.length) {
+    return readScope.closedError(want.find((t) => !allowed.includes(t)));
+  }
+  if (!allowed.length) return readScope.closedError(want[0]);
+  want = allowed;
   const ctx = { q, matched, names, ids, idName, hit };
   const sections = [];
   for (const t of want) {

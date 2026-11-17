@@ -16,6 +16,9 @@ function migrateCadre(conn) {
     CREATE TABLE IF NOT EXISTS cadre_members (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       cadre_id INTEGER NOT NULL REFERENCES cadres(id) ON DELETE CASCADE,
+      -- student_id 是**权威引用**，student_name 只是快照（导出与列表展示不必每次 join students）。
+      -- 写入侧由 routes/cadres.js POST /:id/members 保证一致：有 id 时姓名一律以 students.姓名 为准。
+      -- 仍允许为空：名册里有多个同名时不替用户挑人，只落姓名（这类成员靠 studentRelations 清理）。
       student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
       student_name TEXT NOT NULL,
       sort_order INTEGER NOT NULL DEFAULT 0

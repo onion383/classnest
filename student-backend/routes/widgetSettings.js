@@ -60,6 +60,7 @@ router.get('/', (req, res) => {
     data: {
       toolboxEnabled: !!settings.toolbox_enabled,
       rollcallExcludeAbsent: !!settings.rollcall_exclude_absent,
+      rollcallIncludeProvisional: !!settings.rollcall_include_provisional,
       noteSavePath: settings.note_save_path || '',
       screenshotSavePath: settings.screenshot_save_path || '',
       desktopApps
@@ -73,7 +74,7 @@ router.get('/', (req, res) => {
 // （只改截屏目录 → 工具箱开关被写成 0、笔记目录被清空）。
 router.put('/', (req, res) => {
   try {
-    const { toolboxEnabled, rollcallExcludeAbsent, noteSavePath, screenshotSavePath, desktopApps } = req.body || {};
+    const { toolboxEnabled, rollcallExcludeAbsent, rollcallIncludeProvisional, noteSavePath, screenshotSavePath, desktopApps } = req.body || {};
 
     const sets = [];
     const vals = [];
@@ -87,6 +88,12 @@ router.put('/', (req, res) => {
     if (rollcallExcludeAbsent !== undefined) {
       sets.push('rollcall_exclude_absent = ?');
       vals.push(rollcallExcludeAbsent ? 1 : 0);
+    }
+
+    // 点名器是否包含临时学生：默认关（只点正式学生），与排除不在校同为补丁式写入
+    if (rollcallIncludeProvisional !== undefined) {
+      sets.push('rollcall_include_provisional = ?');
+      vals.push(rollcallIncludeProvisional ? 1 : 0);
     }
 
     // 保存目录同样禁止「..」上跳与非法字符，避免桌面挂件把文件写到预期之外的位置

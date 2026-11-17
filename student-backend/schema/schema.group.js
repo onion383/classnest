@@ -27,19 +27,31 @@ function migrateGroup(conn) {
     CREATE TABLE IF NOT EXISTS group_members (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-      -- member_name 故意**不加外键**：按姓名引用，而 students.姓名 不唯一（同名学生合法），
-      -- SQLite 的外键要求父列是 PRIMARY KEY 或 UNIQUE。这条只能靠应用层校验（见 businessRules）。
+      -- student_id 是**权威引用**（同名两人靠它区分）；member_name 是快照，只用于显示/导出。
+      -- 姓名列故意不加外键：students.姓名 不唯一，SQLite 外键要求父列是 PK 或 UNIQUE。
+      student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
       member_name TEXT DEFAULT '',
       remark TEXT DEFAULT '',
       sort_order INTEGER DEFAULT 0
     );
   `);
 
+  // 老库补列：CREATE TABLE IF NOT EXISTS 对已存在的表是空操作，不会补新列。
+  // 补列**保留 REFERENCES**：SQLite 允许 ADD COLUMN 带外键（默认值必须为 NULL），
+  // 补完立刻生效，新老库的「删学生 → 成员级联消失」行为因此一致，
+  // 不会重演 P0-1 里那个「老库没有外键」的分叉。
+  const gmCols = conn.prepare('PRAGMA table_info(group_members)').all().map((c) => c.name);
+  if (!gmCols.includes('student_id')) {
+    conn.exec(`ALTER TABLE group_members ADD COLUMN student_id INTEGER REFERENCES students(id) ON DELETE CASCADE`);
+  }
+
   // 优化：分组/班干部列表是「先查父级，再按父级 id 逐个查成员」的形态，
   // 没索引时每个父级一次全表扫。按外键列建索引（幂等，存量库下次打开自动补建）。
   // 注：cadre_members 的表在本文件末尾才创建，它的索引放在建表处（见下方）。
   conn.exec(`CREATE INDEX IF NOT EXISTS idx_groups_dimension ON groups (dimension_id, sort_order, id);`);
   conn.exec(`CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members (group_id, sort_order, id);`);
+  // 按学生反查「他在哪些组」：删除学生、改名联动、学生详情面板都要走这个方向。
+  conn.exec(`CREATE INDEX IF NOT EXISTS idx_group_members_student ON group_members (student_id);`);
 }
 
 module.exports = { migrateGroup };

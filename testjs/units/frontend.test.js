@@ -664,16 +664,24 @@ const loadDutyPipeline = () => import(pathToFileURL(path.join(
 )).href)
 
 function fairCtx(overrides) {
-  // ctx 契约：状态为 ref（.value 访问），跨模块方法经 Object.assign 回填
+  // ctx 契约：状态为 ref（.value 访问），跨模块方法经 Object.assign 回填。
+  // 这里的用例只测「公平分配算法」本身，人标识用恒等 key（key 就是名字），
+  // key 的转换规则由 duty-ledger-by-id 的用例单独覆盖。
   const ctx = {
-    studentNames: { value: [] },
+    studentKeys: { value: [] },
     weights: { value: {} },
     ledger: { value: {} },
+    ledgerByName: { value: {} },
+    keyOfValue: (v) => String(v == null ? '' : v).trim(),
+    valueOfKey: (k) => k,
+    nameOfKey: (k) => k,
+    toKeyCells: (cells) => cells,
+    toValueCells: (cells) => cells,
     satisfaction: { value: {} },
     ...overrides,
   }
-  // 数据源决定参与排表的学生池（poolNames）：本用例只测公平分配本身，池与名册保持一致
-  if (!overrides || !overrides.poolNames) ctx.poolNames = { value: ctx.studentNames.value }
+  // 数据源决定参与排表的学生池（poolKeys）：本用例只测公平分配本身，池与名册保持一致
+  if (!overrides || !overrides.poolKeys) ctx.poolKeys = { value: ctx.studentKeys.value }
   return ctx
 }
 
@@ -688,7 +696,7 @@ test('fairFill：学生名单为空时返回全空槽位，不因取模 0 崩溃
 
 test('fairFill：名单非空时按账本降序轮询，槽位不足则循环使用学生', async () => {
   const { useDutyArrangementPipeline } = await loadDutyPipeline()
-  const ctx = fairCtx({ studentNames: { value: ['甲', '乙'] }, ledger: { value: { 甲: 5, 乙: 1 } } })
+  const ctx = fairCtx({ studentKeys: { value: ['甲', '乙'] }, ledger: { value: { 甲: 5, 乙: 1 } } })
   const m = useDutyArrangementPipeline(ctx, [])
   Object.assign(ctx, m)
   const slots = [

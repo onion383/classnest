@@ -36,15 +36,6 @@ function migrateGroup(conn) {
     );
   `);
 
-  // 老库补列：CREATE TABLE IF NOT EXISTS 对已存在的表是空操作，不会补新列。
-  // 补列**保留 REFERENCES**：SQLite 允许 ADD COLUMN 带外键（默认值必须为 NULL），
-  // 补完立刻生效，新老库的「删学生 → 成员级联消失」行为因此一致，
-  // 不会重演 P0-1 里那个「老库没有外键」的分叉。
-  const gmCols = conn.prepare('PRAGMA table_info(group_members)').all().map((c) => c.name);
-  if (!gmCols.includes('student_id')) {
-    conn.exec(`ALTER TABLE group_members ADD COLUMN student_id INTEGER REFERENCES students(id) ON DELETE CASCADE`);
-  }
-
   // 优化：分组/班干部列表是「先查父级，再按父级 id 逐个查成员」的形态，
   // 没索引时每个父级一次全表扫。按外键列建索引（幂等，存量库下次打开自动补建）。
   // 注：cadre_members 的表在本文件末尾才创建，它的索引放在建表处（见下方）。

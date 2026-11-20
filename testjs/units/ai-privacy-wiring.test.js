@@ -48,7 +48,7 @@ test.before(async () => {
 
 test.after(() => fx.close())
 
-test('§1 旧库升级后两列齐全，种子懒生成且单飞，坏 JSON 回退默认', () => {
+test('§1 建库即有两列，种子懒生成且单飞，坏 JSON 回退默认', () => {
   const cols = conn.prepare('PRAGMA table_info(ai_settings)').all().map((c) => c.name)
   assert.ok(cols.includes('privacy_seed') && cols.includes('privacy_json'))
   assert.match(savedSeed, /^[0-9a-f]{64}$/)

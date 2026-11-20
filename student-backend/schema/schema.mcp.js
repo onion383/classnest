@@ -42,11 +42,6 @@ function migrateMcp(conn) {
     );
     CREATE INDEX IF NOT EXISTS idx_mcp_tokens_slug ON mcp_tokens(slug);
   `);
-  // 旧库升级：mcp_tokens 建表时还没有 expires_at，补列。NULL = 永不过期，老令牌不受影响。
-  const tokenCols = conn.prepare('PRAGMA table_info(mcp_tokens)').all().map((c) => c.name);
-  if (!tokenCols.includes('expires_at')) {
-    conn.exec('ALTER TABLE mcp_tokens ADD COLUMN expires_at TEXT');
-  }
 }
 
 module.exports = { migrateMcp };

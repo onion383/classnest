@@ -85,8 +85,6 @@ test('全员不在校 → 名单为空且人数如实回报；空名单/脏数�
 
 function schemaOk(src) {
   return /rollcall_exclude_absent INTEGER NOT NULL DEFAULT 0/.test(src)
-    && /PRAGMA table_info\(widget_settings\)/.test(src)
-    && /ALTER TABLE widget_settings ADD COLUMN rollcall_exclude_absent/.test(src)
 }
 
 function routeOk(src) {
@@ -133,7 +131,7 @@ function rollCallOk(src) {
     && /excludedCount/.test(src.slice(0, src.indexOf('<script setup')))
 }
 
-test('库列：新列有默认值，且旧库能补列（否则旧库 PUT 直接 no such column）', () => {
+test('库列：新建库即带该列，默认 0', () => {
   assert.equal(schemaOk(read(SCHEMA)), true, 'schema.widget.js 缺新列或补列逻辑')
 })
 
@@ -161,10 +159,10 @@ test('清单对账：sanitize / AI 表描述 / 数据导出都认得新列', () 
 
 // ---------------- 变异反证：判据必须能抓到改坏的版本 ----------------
 
-test('反证：漏掉旧库补列 / 补丁式守卫 / ctx 解构 / 开关门，判据都要报红', () => {
+test('反证：漏掉建库列 / 补丁式守卫 / ctx 解构 / 开关门，判据都要报红', () => {
   const schema = read(SCHEMA)
-  assert.equal(schemaOk(schema.replace(/ALTER TABLE widget_settings ADD COLUMN rollcall_exclude_absent[^\n]*/, '')), false,
-    '删了 ALTER TABLE 还判绿 = schema 判据失效')
+  assert.equal(schemaOk(schema.replace(/rollcall_exclude_absent INTEGER NOT NULL DEFAULT 0/, '')), false,
+    'CREATE 里删了该列还判绿 = schema 判据失效')
 
   const route = read(ROUTE)
   assert.equal(routeOk(route.replace('if (rollcallExcludeAbsent !== undefined)', 'if (rollcallExcludeAbsent)')), false,

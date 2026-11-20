@@ -2,7 +2,7 @@
 // 档 C · M12-B7：AI 配置路由只做校验、联网测试与 HTTP，语句收在这里。
 const { db } = require('../db')
 const crypto = require('node:crypto')
-const { safeJson } = require('../utils/json')
+const { safeJson, packJson } = require('../utils/json')
 
 // AI 数据保护默认全关：开启会改变发给模型的内容，必须由用户显式选择。
 // closed_tables：完全禁止 AI 读取；readonly_tables：可读但禁止 AI 写入（「只读」档）。
@@ -21,7 +21,7 @@ function readPrivacyCol(col) {
 
 function writePrivacyCol(col, patch) {
   const next = { ...readPrivacyCol(col), ...(patch && typeof patch === 'object' ? patch : {}) }
-  db.prepare(`UPDATE ai_settings SET ${col} = ? WHERE id = 1`).run(JSON.stringify(next))
+  db.prepare(`UPDATE ai_settings SET ${col} = ? WHERE id = 1`).run(packJson(next, col))
   return next
 }
 
@@ -113,7 +113,7 @@ function setMcpPrefs(patch) {
   const next = readMcpPrefs()
   if (patch && patch.proposal_keep != null) next.proposal_keep = clampProposalKeep(patch.proposal_keep)
   if (patch && patch.auto_confirm !== undefined) next.auto_confirm = patch.auto_confirm === true
-  db.prepare('UPDATE ai_settings SET mcp_prefs_json = ? WHERE id = 1').run(JSON.stringify(next))
+  db.prepare('UPDATE ai_settings SET mcp_prefs_json = ? WHERE id = 1').run(packJson(next, 'mcp_prefs_json'))
   return next
 }
 
@@ -152,7 +152,7 @@ function setLogConfig(patch) {
   const next = readLogConfig()
   if (patch && patch.keep != null) next.keep = clampKeep(patch.keep)
   if (patch && patch.granularity) next.granularity = patch.granularity === 'per_day' ? 'per_day' : 'per_call'
-  db.prepare('UPDATE ai_settings SET log_json = ? WHERE id = 1').run(JSON.stringify(next))
+  db.prepare('UPDATE ai_settings SET log_json = ? WHERE id = 1').run(packJson(next, 'log_json'))
   return next
 }
 

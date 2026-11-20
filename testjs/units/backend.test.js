@@ -113,7 +113,7 @@ test('播种：槽位行数与默认配置正确', () => {
 
   const seat = conn.prepare('SELECT mode, rows, cols FROM seat_layout').get()
   // 默认仍是「6 行 × 7 个座位列」，但 cols 现在的口径是**网格列数**（含走廊列）：
-  // 单人桌布局下 7 个座位列展开成 7 + 6 条走廊 = 13 列。见 schema/seatGridMigration.js。
+  // 单人桌布局下 7 个座位列展开成 7 + 6 条走廊 = 13 列。见 schema/schema.seat.js 的 CREATE。
   assert.deepEqual({ ...seat }, { mode: 'single', rows: 6, cols: 13 })
 
   const draft = conn.prepare('SELECT saved_at FROM duty_draft').get()

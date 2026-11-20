@@ -29,20 +29,27 @@ function migrateSeat(conn) {
       conditions TEXT NOT NULL DEFAULT '[]',
       saved_at TEXT NOT NULL DEFAULT ''
     );
-    INSERT OR IGNORE INTO seat_slots (kind) VALUES ('current'), ('template'), ('draft'), ('weight');
   `);
 
-  // 老库补列：CREATE TABLE IF NOT EXISTS 对已存在的表是空操作，不会补新列。
-  // 不加这一步，下面的视图会因为引用不存在的列而在查询时抛 "no such column: types"。
-  const slotCols = conn.prepare('PRAGMA table_info(seat_slots)').all().map((c) => c.name);
-  if (!slotCols.includes('types')) {
-    conn.exec(`ALTER TABLE seat_slots ADD COLUMN types TEXT NOT NULL DEFAULT '[]'`);
+  // 默认几何直接写成网格口径：单人桌 6 行 × 7 个座位列，走廊作为真实列展开 → 13 列。
+  // seats / types 必须是满矩阵 —— 前后端所有读取都按下标 seats[r][c] 取，
+  // 存空数组会在第一次打开座位页时就 index 出错。走廊格 seats 一律 null，
+  // 「这格是走廊」由 types 单独承担（0 座位 / 1 走廊 / 2 空位，同 services/sanitize 的 SEAT_CELL）。
+  // weight 行不存 seats / weights（它的数据在 weights 列），只写 types 作为几何标记。
+  const SEAT_COLS = 7;
+  const DEFAULT_ROWS = 6;
+  const GRID_COLS = SEAT_COLS * 2 - 1;
+  const seatRow = Array(GRID_COLS).fill(null);
+  const typeRow = Array.from({ length: GRID_COLS }, (_, c) => (c % 2 === 1 ? 1 : 0));
+  const seatsJson = JSON.stringify(Array.from({ length: DEFAULT_ROWS }, () => [...seatRow]));
+  const typesJson = JSON.stringify(Array.from({ length: DEFAULT_ROWS }, () => [...typeRow]));
+  const seedSlot = conn.prepare(
+    `INSERT OR IGNORE INTO seat_slots (kind, rows, cols, seats, types, weights) VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  for (const kind of ['current', 'template', 'draft']) {
+    seedSlot.run(kind, DEFAULT_ROWS, GRID_COLS, seatsJson, typesJson, '[]');
   }
-  // 桌型序列（每张桌坐几人，1/2 组成的数组，对应「座位列」而不是网格列）。
-  // 空数组 = 按 mode 推（single 全 1 / double 全 2），老库补列后行为完全不变。
-  if (!slotCols.includes('desk_pattern')) {
-    conn.exec(`ALTER TABLE seat_slots ADD COLUMN desk_pattern TEXT NOT NULL DEFAULT '[]'`);
-  }
+  seedSlot.run('weight', DEFAULT_ROWS, GRID_COLS, '[]', typesJson, '[]');
 
   conn.exec(`
     -- 只读逻辑视图：保持既有 SELECT 的写法与结果形状不变（写统一走 services/slotStore.js）

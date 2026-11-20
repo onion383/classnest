@@ -13,6 +13,7 @@
 // DOC_TABLES / GRID_SOURCES），本文件只拼语句与绑定，不再重复校验。
 const { db } = require('../db')
 const store = require('./slotStore')
+const { packJson } = require('../utils/json')
 const { SEAT_CURRENT_SLOTS } = require('../schema/tableRegistry')
 
 const GEOMETRY_COUNT_TABLES = new Set(SEAT_CURRENT_SLOTS)
@@ -63,7 +64,7 @@ function push({ key, type, label, payload, origin, source }) {
     db.prepare('DELETE FROM undo_history WHERE dir = 0').run()
     const info = db.prepare(
       'INSERT INTO undo_history (key, type, label, payload, dir, origin, source, ts) VALUES (?, ?, ?, ?, 1, ?, ?, ?)'
-    ).run(key, type, label, JSON.stringify(payload), origin || '', src, ts)
+    ).run(key, type, label, packJson(payload, 'undo_payload'), origin || '', src, ts)
     const over = db.prepare('SELECT id FROM undo_history WHERE key = ? ORDER BY id DESC LIMIT -1 OFFSET ?').all(key, MAX_KEYS)
     if (over.length) {
       const del = db.prepare('DELETE FROM undo_history WHERE id = ?')

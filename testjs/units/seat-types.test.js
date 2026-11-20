@@ -15,10 +15,9 @@ const path = require('node:path')
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { createBackendDb, Database } = require('./_db-express-fixture.cjs')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
 const fx = createBackendDb({ label: 'seat-types' })
-const { migrateSeat } = require('../../student-backend/schema/schema.seat')
 
 test.before(() => fx.mount('/api/seats', 'student-backend/routes/seats.js'))
 test.after(() => fx.close())
@@ -217,43 +216,6 @@ test('草稿（draft）存取 types：恢复草稿后走廊/空位还在', async
 // ---------------------------------------------------------------------------
 // 老库迁移：这是本批最关键的一条 —— 用户的库里 seat_slots 已经存在，
 // CREATE TABLE IF NOT EXISTS 不会补列，必须靠 ALTER，否则视图一查就 no such column。
-test('老库（无 types 列）能被迁移补列，且原有数据不丢', () => {
-  const conn = new Database(':memory:')
-  // 还原「改造前」的表结构：没有 types
-  conn.exec(`
-    CREATE TABLE seat_slots (
-      kind TEXT PRIMARY KEY CHECK (kind IN ('current','template','draft','weight')),
-      mode TEXT NOT NULL DEFAULT 'single',
-      rows INTEGER NOT NULL DEFAULT 6,
-      cols INTEGER NOT NULL DEFAULT 7,
-      seats TEXT NOT NULL DEFAULT '[]',
-      aisle_cols TEXT NOT NULL DEFAULT '[]',
-      groups_config TEXT NOT NULL DEFAULT '[]',
-      weights TEXT NOT NULL DEFAULT '[]',
-      settings TEXT NOT NULL DEFAULT '{}',
-      conditions TEXT NOT NULL DEFAULT '[]',
-      saved_at TEXT NOT NULL DEFAULT ''
-    );
-    INSERT INTO seat_slots (kind, mode, rows, cols, seats) VALUES ('current', 'double', 2, 3, '[[1,2,3],[4,5,6]]');
-  `)
-
-  migrateSeat(conn)
-
-  const cols = conn.prepare('PRAGMA table_info(seat_slots)').all().map((c) => c.name)
-  assert.ok(cols.includes('types'), '迁移后 seat_slots 必须有 types 列')
-
-  // 视图能查（引用不存在的列会在 SELECT 时报 no such column）
-  const rec = conn.prepare('SELECT mode, rows, cols, seats, types FROM seat_layout').get()
-  assert.ok(rec, '迁移后 seat_layout 必须可查')
-  assert.equal(rec.seats, '[[1,2,3],[4,5,6]]', '原有座位数据不能丢')
-  assert.equal(rec.types, '[]', '新列默认空数组（前端按「全是座位」处理）')
-
-  // 幂等：再跑一次不报错、不重复加列
-  migrateSeat(conn)
-  const again = conn.prepare('PRAGMA table_info(seat_slots)').all().filter((c) => c.name === 'types')
-  assert.equal(again.length, 1, '重复迁移不能加出第二列 types')
-})
-
 // ---------------------------------------------------------------------------
 // 历史快照：types 必须跟着 payload 一起持久化
 // 座位指数是「按天快照 × 权重」逐日累加出来的，快照里缺 types 就等于把走廊列

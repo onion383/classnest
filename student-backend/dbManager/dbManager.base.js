@@ -313,7 +313,12 @@ function ensureIndex() {
       mnemonic_salt TEXT NOT NULL DEFAULT '',
       kdf_params_password TEXT NOT NULL DEFAULT '',
       kdf_params_mnemonic TEXT NOT NULL DEFAULT '',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      -- 多班级：稳定账号标识（accounts.id）与班级名。
+      -- 追加在末尾而不是插在 username 旁边：SELECT * 的列顺序就是建表顺序，
+      -- 老列位置保持不动，任何按位置取值的调用都不会错位。
+      account_id INTEGER NOT NULL DEFAULT 0,
+      class_name TEXT NOT NULL DEFAULT ''
     );
   `);
   ensureAccountsSchema(indexDb);
@@ -327,9 +332,7 @@ function ensureIndex() {
 //   accounts.id            —— 稳定主键，改用户名不影响班级归属
 //   accounts.password_hash —— 登录校验的唯一依据（各库 users 表降级为「该库属于谁」的标记）
 // registry.account_id 指向它；registry.class_name 供登录时列班级（那时还没开库）。
-//
-// 幂等：表用 IF NOT EXISTS，列用 PRAGMA 探测后补（SQLite 的 ADD COLUMN 不支持 IF NOT EXISTS）。
-// 全内存操作，实测亚毫秒，放在启动关键路径上无影响。
+// 两列都直接建在 registry 的 CREATE 里，不做补列探测。
 function ensureAccountsSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
@@ -340,13 +343,6 @@ function ensureAccountsSchema(db) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
   `);
-  const cols = new Set(db.prepare('PRAGMA table_info(registry)').all().map((r) => r.name));
-  if (!cols.has('account_id')) {
-    db.exec('ALTER TABLE registry ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0');
-  }
-  if (!cols.has('class_name')) {
-    db.exec("ALTER TABLE registry ADD COLUMN class_name TEXT NOT NULL DEFAULT ''");
-  }
 }
 
 // ---------- index.db 操作 ----------

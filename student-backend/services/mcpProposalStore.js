@@ -9,7 +9,7 @@
 
 const crypto = require('crypto');
 const { db } = require('../db');
-const { safeJson } = require('../utils/json');
+const { safeJson, packJson } = require('../utils/json');
 const aiConfigStore = require('./aiConfigStore');
 
 // 四种「已定稿」状态。界面把它们合并成一栏「已处理」，
@@ -38,7 +38,7 @@ function create({ kind, label, table, operation, payload, requestedBy }) {
       String(label || '').slice(0, 200),
       String(table || '').slice(0, 60),
       String(operation || '').slice(0, 40),
-      JSON.stringify(payload == null ? {} : payload),
+      packJson(payload == null ? {} : payload, 'proposal_payload'),
       String(requestedBy || 'mcp').slice(0, 80),
       now.toISOString()
     );

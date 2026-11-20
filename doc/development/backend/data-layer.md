@@ -111,14 +111,13 @@ flowchart LR
 | [`schema.undo.js`](../../../student-backend/schema/schema.undo.js) | `undo_history`（撤销历史） |
 | [`schema.widget.js`](../../../student-backend/schema/schema.widget.js) | `widget_settings`（含 `desktop_apps` / `class_info`） |
 
-迁移方式：`PRAGMA table_info` → 缺列时 `ALTER TABLE ADD COLUMN`；表级差异用 `ensureTableWithMigration`；索引 `CREATE INDEX IF NOT EXISTS` 幂等。
+迁移方式：**没有**。建表语句直接写最终形态（新库一次建到位），不再有「探测缺列 → `ALTER TABLE`」的补丁链 —— 第一版尚未发布，没有需要兼容的存量库。版本化迁移的零件已预置在 [`student-backend/migrations/`](../../../student-backend/migrations/README.md)（运行器 / 账本 / 结构清单与对账），**尚未接入启动路径**，第一版发布前接线。
 
-#### [`schema/seatGridMigration.js`](../../../student-backend/schema/seatGridMigration.js) · 座位网格一次性数据迁移
+#### 座位几何的默认值 · 建表即网格形态
 
-- **定位**：把老库的「dense 座位矩阵 + 渲染期虚拟插入的走廊列」搬成「网格矩阵 + `types` 格子类型矩阵」，并把 `cols` 从座位列数改成网格总列数。
-- **必做原因**：座位指数是跨天把 `domain_history` 里每天的 `seats[r][c]` 与权重矩阵**按同一下标**累加出来的；`seats` 变网格而历史 payload 仍是 dense，会从第一天起整体错位且不报错。库与模板可以直接重建，**历史快照不能**。
-- **幂等判据**：迁完的记录 `types` 必为非空满矩阵（`weight` 记录也写一份作几何标记），老数据 `types` 恒为 `'[]'`；按数据本身判断，不建「已迁移」标记表（标记与数据可能不一致，中途崩溃会迁一半）。
-- **注意事项**：文件内冻结的 `legacy*` 公式描述的是「老数据的具体形状」，**不得**与将来「按 types 渲染」的代码合并复用，否则已迁库与未迁库会按不同公式解读。
+- **现在的做法**：`schema.seat.js` 建库时直接写入 6×13 的满矩阵（`seats[r][c]` 按网格下标），走廊列 `types=1`、`seats=null`，`weight` 行也写一份 `types` 作为几何标记。**没有**一次性搬运脚本。
+- **为什么必须在建表时写对**：座位指数是跨天把 `domain_history` 里每天的 `seats[r][c]` 与权重矩阵**按同一下标**累加出来的。`seats` 是网格而下标按 dense 读（或反之），会从第一天起整体错位，且不报错、界面正常。库与模板可以重建，**历史快照不能**。
+- **将来真要改几何**：走 `migrations/` 的一条 `data()` 步骤，幂等判据是「`types` 是否为非空满矩阵」，按数据本身判断，不建「已迁移」标记表（标记与数据可能不一致，中途崩溃会迁一半）。
 
 #### [`schema/tableRegistry.js`](../../../student-backend/schema/tableRegistry.js) · 表名的唯一名单
 

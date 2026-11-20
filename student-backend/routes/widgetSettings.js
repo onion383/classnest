@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { cleanPath } = require('../services/sanitize');
 const widgetSettingsStore = require('../services/widgetSettingsStore');
+const { packJson } = require('../utils/json');
 const dbManager = require('../dbManager/dbManager');
 
 // 桌面小组件「常用软件」最多 8 个（4 列 × 2 行）。
@@ -175,7 +176,7 @@ router.put('/class-info', (req, res) => {
       return res.status(409).json({ error: `已有同名班级「${clean.name}」，请换个名字` });
     }
   }
-  widgetSettingsStore.writeClassInfo(JSON.stringify(clean));
+  widgetSettingsStore.writeClassInfo(packJson(clean, 'class_info'));
   // 多班级：班名要同步一份到 index.db —— 登录时要列班级，而那时还没开库，读不到
   // widget_settings.class_info。库内这份仍是真相（进库后显示的永远是它），
   // registry.class_name 只是「目录索引」，所以同步失败不影响保存结果。

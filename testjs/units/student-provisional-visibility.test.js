@@ -65,7 +65,6 @@ test('点名器：默认取正式学生名单，只有开关打开才取全量',
 test('设置链路：schema / 接口 / 设置页 / 清单对账四处都接了新开关', () => {
   const schema = read('student-backend/schema/schema.widget.js')
   assert.match(schema, /rollcall_include_provisional INTEGER NOT NULL DEFAULT 0/)
-  assert.match(schema, /ALTER TABLE widget_settings ADD COLUMN rollcall_include_provisional/)
 
   const route = read('student-backend/routes/widgetSettings.js')
   assert.match(route, /rollcallIncludeProvisional:\s*!!settings\.rollcall_include_provisional/)

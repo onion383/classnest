@@ -71,6 +71,8 @@ classnest/
 | [`gen-icon-shapes.mjs`](../../../testjs/tools/gen-icon-shapes.mjs) | 生成图标形状数据（`IconGlyph.shapes.js`） | 直接运行 |
 | [`album-sql-args.js`](../../../testjs/tools/album-sql-args.js) | 相册 SQL 参数构造核对 | 直接运行 |
 | [`electron-page-probe.cjs`](../../../testjs/tools/electron-page-probe.cjs) | 用 Electron 打开指定页面并跑探针（供 secure-channel-retry 等复用） | 需 Vite 开发服务器 |
+| [`schema-snapshot-gen.cjs`](../../../testjs/tools/schema-snapshot-gen.cjs) | 从空库跑一遍真实建表，重新生成 `student-backend/migrations/snapshot.js`（结构清单）；改了 `schema/` 之后必跑 | 直接运行 |
+| [`schema-drift-check.cjs`](../../../testjs/tools/schema-drift-check.cjs) | 结构清单与建库结果对账，有差异退出码 1。迁移体系的体检，**不在 CI 里**（清单过期时应当重生成，而不是为了变绿改断言） | 直接运行 |
 
 ---
 

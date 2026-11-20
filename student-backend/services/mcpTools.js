@@ -12,6 +12,7 @@ const { db } = require('../db');
 const aiStore = require('./aiStore');
 const store = require('./slotStore');
 const { runSearch } = require('./searchQuery');
+const { stripVersionDeep } = require('../utils/json');
 const { READ_TABLES, WRITE_TABLES } = require('../routes/ai/ai.constants');
 // MCP 侧用自己的那一份权限（mcp_privacy_json）：给外部客户端关掉的表
 // 不该连带锁住老师自己的 AI 助手，反之亦然。
@@ -36,8 +37,10 @@ function fail(error) { return { ok: false, error: String(error) }; }
 // ---- 数据保护：外部 AI 读写也要走同一套混淆 ----
 // 出站：把真名/真号换成代号再交给外部 AI（开关关时 privacy 零拷贝直接返回）。
 // 失败不阻断读——保护模块故障不该让整个 MCP 读表挂掉。
+// 进 substitute 之前先剥掉 JSON 版本标记（__v）：那是库内部记账用的键，
+// 外部模型看到会当成真实列照抄回写。所有 MCP 出站结果都过这个函数，收口在这里一处即可。
 function maskResult(result, slug) {
-  try { return privacy.substitute(result, slug, 'mcp'); }
+  try { return privacy.substitute(stripVersionDeep(result), slug, 'mcp'); }
   catch (_) { return result; }
 }
 // 入站：外部 AI 从读接口看到的是代号，写回时先还原成真值；认不出的 S-/P- 代号必须拒绝，

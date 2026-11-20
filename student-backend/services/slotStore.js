@@ -14,6 +14,7 @@
 
 const { db } = require('../db');
 const semesterStore = require('./semesterStore');
+const { packJson, stripVersion } = require('../utils/json');
 
 // 逻辑表名 → { 物理表, kind, 该 kind 允许读写的列 }
 const SPEC = {
@@ -54,8 +55,9 @@ function getDoc(name) {
   return out;
 }
 
-function serialize(v) {
-  if (v != null && typeof v === 'object') return JSON.stringify(v);
+// 对象形态的列写入时补上结构版本（数组形态原样序列化，见 utils/json 的 packJson）
+function serialize(v, col) {
+  if (v != null && typeof v === 'object') return packJson(v, col);
   if (typeof v === 'boolean') return v ? 1 : 0;
   return v;
 }
@@ -68,7 +70,7 @@ function setDoc(name, patch) {
   if (!keys.length) return;
   const set = keys.map((k) => `${k} = ?`).join(', ');
   db.prepare(`UPDATE ${s.table} SET ${set} WHERE kind = ?`)
-    .run(...keys.map((k) => serialize(patch[k])), s.kind);
+    .run(...keys.map((k) => serialize(patch[k], k)), s.kind);
 }
 
 // ======================== 学期范围 ========================
@@ -88,7 +90,7 @@ function semesterRange() {
 function parsePayload(text) {
   try {
     const p = JSON.parse(text || '{}');
-    return p && typeof p === 'object' ? p : {};
+    return p && typeof p === 'object' ? stripVersion(p) : {};
   } catch (_) { return {}; }
 }
 
@@ -152,7 +154,7 @@ function histDaily(domain, { from, to, mode } = {}) {
 
 function histInsert(domain, { weekStart = '', snapDate = '', mode = '', payload = {} } = {}) {
   const info = db.prepare('INSERT INTO domain_history (domain, week_start, snap_date, mode, payload) VALUES (?,?,?,?,?)')
-    .run(domain, weekStart, snapDate, mode, JSON.stringify(payload));
+    .run(domain, weekStart, snapDate, mode, packJson(payload, 'payload'));
   return Number(info.lastInsertRowid);
 }
 
@@ -169,7 +171,7 @@ function histUpsert(domain, rec = {}) {
   }
   if (row) {
     db.prepare('UPDATE domain_history SET week_start = ?, mode = ?, payload = ? WHERE id = ?')
-      .run(weekStart, mode, JSON.stringify(payload), row.id);
+      .run(weekStart, mode, packJson(payload, 'payload'), row.id);
     return row.id;
   }
   return histInsert(domain, { weekStart, snapDate, mode, payload });
@@ -182,7 +184,7 @@ function histUpdateByDate(domain, snapDate, mode, patch = {}) {
     : db.prepare('SELECT id, payload FROM domain_history WHERE domain = ? AND snap_date = ?').get(domain, snapDate);
   if (!row) return false;
   const next = { ...parsePayload(row.payload), ...patch };
-  db.prepare('UPDATE domain_history SET payload = ? WHERE id = ?').run(JSON.stringify(next), row.id);
+  db.prepare('UPDATE domain_history SET payload = ? WHERE id = ?').run(packJson(next, 'payload'), row.id);
   return true;
 }
 

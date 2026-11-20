@@ -8,7 +8,7 @@
 // 同时守住三条容易退化的边界：
 //   ① 只改备注不能把已绑好的 id 冲成 null（前端 PUT 永远把 member_name 一起带上）
 //   ② 同名歧义且没给 id → id 留空、姓名照存（不替用户猜）
-//   ③ 老库补列必须幂等，且补完的外键真的生效（不能重演 P0-1 的分叉）
+//   ③ 新建库的 student_id 外键真的生效（删学生带走成员行，不能重演 P0-1 的分叉）
 // =========================================================================
 const test = require('node:test')
 const assert = require('node:assert/strict')
@@ -297,46 +297,27 @@ test('撤销改名：名字在名册里已找不到时清空引用，不瞎指�
   assert.equal(member(mid).student_id, null, '认不出就留空，不能继续挂在李四身上')
 })
 
-test('老库：没有 student_id 的表补列后可用，老行保留、外键生效、幂等', () => {
+test('新建库：student_id 外键生效，删学生带走成员行', () => {
   const db = new Database(':memory:')
   try {
-    // 完全按 P2-1 之前的 DDL 造老库（group_members 没有 student_id）
-    db.exec(`
-      CREATE TABLE students (id INTEGER PRIMARY KEY AUTOINCREMENT, 姓名 TEXT, is_provisional INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE group_dimensions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, leader_title TEXT,
-        members_per_group INTEGER, group_count INTEGER, is_default INTEGER,
-        male_group_count INTEGER, female_group_count INTEGER, sort_order INTEGER);
-      CREATE TABLE groups (id INTEGER PRIMARY KEY AUTOINCREMENT,
-        dimension_id INTEGER REFERENCES group_dimensions(id) ON DELETE CASCADE, name TEXT, gender INTEGER, sort_order INTEGER);
-      CREATE TABLE group_members (id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE, member_name TEXT, remark TEXT, sort_order INTEGER);
-    `)
+    initSchema(db)
     db.prepare('INSERT INTO group_dimensions (name, is_default) VALUES (?, 1)').run('宿舍组')
     db.prepare('INSERT INTO groups (dimension_id, name) VALUES (1, ?)').run('302')
-    db.prepare('INSERT INTO group_members (group_id, member_name) VALUES (1, ?)').run('老成员')
+    const stu = db.prepare('INSERT INTO students (姓名) VALUES (?)').run('有主的人')
+    db.prepare('INSERT INTO group_members (group_id, student_id, member_name) VALUES (1, ?, ?)')
+      .run(Number(stu.lastInsertRowid), '有主的人')
 
-    initSchema(db)
-
-    const cols = db.prepare('PRAGMA table_info(group_members)').all().map((c) => c.name)
-    assert.ok(cols.includes('student_id'), '老库必须补出 student_id 列，否则读写一碰就报 no such column')
-
-    const old = db.prepare('SELECT student_id, member_name FROM group_members').get()
-    assert.equal(old.member_name, '老成员', '补列不能动老数据')
-    assert.equal(old.student_id, null, '没迁过的老行 id 为空是预期的，由一次性回填脚本处理')
-
-    // 补出来的外键必须真的生效：删学生 → 成员行跟着走。
-    // 如果这里的 ADD COLUMN 没带 REFERENCES，老库就又一次「看起来一样、其实没保护」。
+    // 外键必须真的挂在 students 上：删学生 → 成员行跟着走。
+    // 只写 REFERENCES 但没生效（历史上 P0-1 就是这样），「看起来一样、其实没保护」。
     const fk = db.pragma('foreign_key_list(group_members)').find((f) => f.from === 'student_id')
-    assert.ok(fk, '补列必须带外键，否则老库删学生会留下悬空引用')
+    assert.ok(fk, 'student_id 必须带外键')
     assert.equal(fk.table, 'students')
     assert.equal(fk.on_delete, 'CASCADE')
 
-    const stu = db.prepare('INSERT INTO students (姓名) VALUES (?)').run('有主的人')
-    db.prepare('UPDATE group_members SET student_id = ? WHERE id = 1').run(Number(stu.lastInsertRowid))
     db.prepare('DELETE FROM students WHERE id = ?').run(Number(stu.lastInsertRowid))
     assert.equal(db.prepare('SELECT COUNT(*) c FROM group_members').get().c, 0, '删学生必须带走成员行')
 
-    // 幂等：再跑一次不重复加列、不报错
+    // 幂等：重复建表不报错、不重复加列
     assert.doesNotThrow(() => initSchema(db))
     assert.equal(db.prepare('PRAGMA table_info(group_members)').all().filter((c) => c.name === 'student_id').length, 1)
   } finally { db.close() }

@@ -62,10 +62,6 @@ function migrateCore(conn) {
   // is_provisional 是「成员状态」，不是第二套身份：临时学生与正式学生共用 students.id，
   // 转正只是把这一位从 1 改成 0，所有引用（座位/值日/小组…）都不需要重指。
   // 刻意不写进 table_meta：普通学生表格不展示、也不允许直接改它，入口只在「数据管理」。
-  const studentCols = conn.prepare('PRAGMA table_info(students)').all().map((c) => c.name);
-  if (!studentCols.includes('is_provisional')) {
-    conn.exec(`ALTER TABLE students ADD COLUMN is_provisional INTEGER NOT NULL DEFAULT 0`);
-  }
   // 临时学生按姓名唯一：同一个名字反复输入只建一条，不会越积越多；
   // 正式学生允许重名，所以只对 is_provisional = 1 建部分唯一索引。
   conn.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_students_provisional_name

@@ -54,30 +54,6 @@ test('push 缺省 source 由 origin 推断；list 带 source 列', () => {
   assert.ok('source' in undoStore.latestByKey('students', 1, true), 'latestByKey(full) 必须带 source')
 })
 
-test('旧库迁移：无 source 列 → 补列 + 按 origin 回填 + 二次执行不改写', () => {
-  const c = new Database(':memory:')
-  const { initSchema } = require('../../student-backend/schema/schema')
-  c.exec(`CREATE TABLE undo_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, type TEXT NOT NULL,
-    label TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '{}',
-    dir INTEGER NOT NULL DEFAULT 1, ts TEXT NOT NULL DEFAULT '',
-    origin TEXT NOT NULL DEFAULT '');`)
-  const ins = c.prepare("INSERT INTO undo_history (key,type,origin,ts) VALUES ('k','row_update',?,?)")
-  ins.run('', 'a')
-  ins.run('c'.repeat(32), 'b')
-  ins.run('ai-1730000000000-ab12cd', 'c')
-  initSchema(c)
-  assert.deepEqual(
-    c.prepare('SELECT source FROM undo_history ORDER BY id').all().map((r) => r.source),
-    ['manual', 'mcp', 'ai_assistant']
-  )
-  assert.ok(c.prepare('PRAGMA table_info(undo_history)').all().some((x) => x.name === 'source'))
-  c.prepare("UPDATE undo_history SET source='manual' WHERE id=2").run()
-  initSchema(c)
-  assert.equal(c.prepare('SELECT source FROM undo_history WHERE id=2').get().source, 'manual', '二次迁移不覆盖已归类数据')
-  c.close()
-})
-
 // ---------------------------------------------------------------------------
 // B2 · flip 的 expected 校验（真走 flip）
 // ---------------------------------------------------------------------------

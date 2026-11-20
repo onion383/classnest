@@ -44,6 +44,27 @@ function clearCurrentUser() {
   try { localStorage.removeItem(USER_KEY) } catch (_) {}
 }
 
+// ---- 主动登出的「静默窗口」----
+// 登出是**用户主动**的动作：那一刻前后必然有在途请求（仪表盘刷新、通知中心轮询、
+// 媒体凭据续期……），它们的 token 刚被吊销，一定 401。若不认这个窗口，每次正常登出
+// 都会在登录页弹一条红色「操作失败 · 登录已过期，请重新登录」——把「我点了退出」
+// 说成「你出错了」。
+// 只影响提示与跳转，不影响鉴权：token 该失效还是失效。
+// 窗口只在这「已登出、还没重新登录」的区间内起作用：setAuth 一登录就把它关掉，
+// 所以放宽一点没有副作用 —— 反而能盖住响应很慢的在途请求（相册扫描这类）。
+const LOGOUT_QUIET_MS = 15000
+let loggedOutAt = 0
+
+function markLoggingOut() {
+  loggedOutAt = Date.now()
+}
+function isLoggingOut(ms = LOGOUT_QUIET_MS) {
+  return loggedOutAt > 0 && Date.now() - loggedOutAt < ms
+}
+function clearLoggingOut() {
+  loggedOutAt = 0
+}
+
 // ---- 组合操作（登录成功写全套 / 登出清全套）----
 // 换「登录主体」时用户作用域代次会在 clearAuth 里 +1（见 utils/userScopedCache.js）：
 // 在途请求的续期凭据、模块级缓存都靠它判断「这份结果还属于当前这个用户吗」。
@@ -52,6 +73,8 @@ function clearCurrentUser() {
 function setAuth(token, user) {
   setToken(token)
   setCurrentUser(user)
+  // 重新登录成功：静默窗口立即结束，否则新会话初期的真实 401 会被一起吞掉
+  clearLoggingOut()
 }
 function clearAuth() {
   clearToken()
@@ -67,4 +90,5 @@ export {
   getToken, setToken, clearToken,
   getCurrentUser, setCurrentUser, clearCurrentUser,
   setAuth, clearAuth,
+  markLoggingOut, isLoggingOut, clearLoggingOut,
 }

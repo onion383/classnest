@@ -40,13 +40,14 @@
 </template>
 
 <script setup vapor>
-import { getCurrentUser, clearAuth } from '../../utils/authStorage.js'
+import { getCurrentUser, clearAuth, markLoggingOut } from '../../utils/authStorage.js'
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { clearMediaToken } from '../../utils/apiUrl'
 import { AUTH_API } from '../../utils/apiPaths.js'
+import { useNotification } from '../../composables/useNotification.js'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
@@ -75,6 +76,9 @@ let loggingOut = false
 function doLogout() {
   if (loggingOut) return
   loggingOut = true
+  // 先标记「正在主动登出」：这一瞬间在途请求会 401（token 就要被吊销），
+  // 让全局 401 处理静默，不要把已退出说成「登录已过期」。
+  markLoggingOut()
   // 通知后端吊销本次会话（原 token 立即失效），再清本地登录态
   axios.post(AUTH_API.logout).catch(() => {})
   clearAuth()
@@ -82,5 +86,7 @@ function doLogout() {
   confirmOpen.value = false
   emit('close')
   router.push('/login')
+  // 主动登出给一句确认，而不是只剩一个静默跳转
+  useNotification().success('已退出登录')
 }
 </script>

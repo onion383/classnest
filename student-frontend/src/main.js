@@ -1,4 +1,4 @@
-import { getToken, clearToken } from './utils/authStorage.js'
+import { getToken, clearToken, isLoggingOut } from './utils/authStorage.js'
 // 跨窗口登录态同步：别的窗口登出/换号时，本窗口的登录代次与用户级缓存要一起作废
 import { installAuthSync } from './utils/authSync.js'
 import { createApp } from 'vue'
@@ -50,6 +50,9 @@ setupApiClient({
   baseURL: backendBaseUrl(),
   announceDataChanged: true,
   onAuthExpired: (error, config) => {
+    // 刚点了「退出登录」：在途请求的 token 是我们自己吊销的，401 是预期结果，
+    // 不能再弹「登录已过期」——那会把用户主动的动作说成出错，也会把「已退出登录」盖掉。
+    if (isLoggingOut()) return
     const url = (config?.url || '')
     const isAuthReq = /(login|register|restore|recover)/i.test(url)
     if (!config?.__skipAuth && !isAuthReq && Date.now() - lastAuthPrompt > 2000) {
@@ -132,7 +135,7 @@ const startupBgUrl = () => {
   return savedMode === 'night' ? DEFAULT_GLASS_BG_NIGHT : DEFAULT_GLASS_BG
 }
 const startupBg = startupBgUrl()
-// 仅「glass + 夜间 + 无自选图」时标记夜间内置底图，供 theme-night.css 配更轻遮罩
+// 仅「glass + 夜间 + 无自选图」时标记夜间内置底图，供玻璃夜间层（theme-glass-night / theme-glass2-night）配更轻遮罩
 document.documentElement.classList.toggle(
   'bg-night-default',
   !customBg && savedTheme === 'glass' && savedMode === 'night'

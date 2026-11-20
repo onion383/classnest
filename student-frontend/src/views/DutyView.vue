@@ -364,7 +364,7 @@ import WeekSwitcher from '../components/base/WeekSwitcher.vue'
 import AppSelect from '../components/base/AppSelect.vue'
 import StatBarList from '../components/base/StatBarList.vue'
 import { useNotification } from '../composables/useNotification.js'
-import { useUndoShortcut, recordGridSnapshotUndo } from '../composables/useUndo.js'
+import { useUndoShortcut, recordGridSnapshotUndo, recordDutyCellUndo, newUndoBatchId, flushUndoStatus } from '../composables/useUndo.js'
 import { syncStudentNamesFromRows, syncStudentNames } from '../composables/useSyncStudentNames.js'
 import { createRowReuseCache } from '../utils/rowReuse.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
@@ -792,22 +792,28 @@ const dutyMasterRows = computed(() => reuseMasterRows(buildGridRows(masterCells.
 
 // ==================== 网格编辑回写 ====================
 // 值日 cells 是 {项目:{星期:[人名]}} 对象，无法按行/列坐标拆格，因此用整块快照撤销：
-// 每次编辑记录前后整块 cells，并附第一条差异的可读文案作通知条详情。
-function diffCellsLabel(prev, next) {
-  const items = new Set([...Object.keys(prev), ...Object.keys(next)])
-  for (const it of items) {
-    const pd = prev[it] || {}, nd = next[it] || {}
+// 逐个列出这次保存动过的格子：{ item, day, index, oldValue, newValue }。
+// 记到「格」是刻意的 —— 一次改三格就落三条记录（同一批次），更改审查里才能单独撤其中一格。
+// 快照记录只用于整块操作（智能排表 / 导入 / 权重），那些改动没有「一格」的语义。
+function diffCellPatches(prev, next) {
+  const out = []
+  const items = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})])
+  for (const item of items) {
+    const pd = (prev || {})[item] || {}
+    const nd = (next || {})[item] || {}
     const days = new Set([...Object.keys(pd), ...Object.keys(nd)])
     for (const day of days) {
-      const pa = pd[day] || [], na = nd[day] || []
+      const pa = pd[day] || []
+      const na = nd[day] || []
       const len = Math.max(pa.length, na.length)
-      for (let k = 0; k < len; k++) {
-        const a = pa[k] || '', b = na[k] || ''
-        if (a !== b) return `${it}·${day}：「${a}」→「${b}」`
+      for (let i = 0; i < len; i += 1) {
+        const a = pa[i] == null ? '' : pa[i]
+        const b = na[i] == null ? '' : na[i]
+        if (String(a) !== String(b)) out.push({ item, day, index: i, oldValue: a, newValue: b })
       }
     }
   }
-  return ''
+  return out
 }
 // 值日表格中出现的人名，若不在学生管理中，交给后端解析/建档（临时学生），复用共享工具
 function syncNewNamesFromRows(newRows) {
@@ -823,12 +829,18 @@ function makeCellsUpdate(cellsRef, persist, table) {
   return async (newRows) => {
     // 先等解析/建档完成：候选人名要先进 allStudents，后续候选框和值日指数才认得到它
     await syncNewNamesFromRows(newRows)
-    // 旧值会被整体替换为新对象，无需深拷贝即可作为撤销快照（recordGridSnapshotUndo 同步序列化，不受后续就地修改影响）
+    // 旧值会被整体替换为新对象，无需深拷贝即可作为撤销快照（登记时同步序列化，不受后续就地修改影响）
     const prev = cellsRef.value
     const next = reconstructCells(newRows, settingsDays.value)
     cellsRef.value = next
-    const label = diffCellsLabel(prev, next)
-    if (label) recordGridSnapshotUndo('值日表', table, prev, next, label)
+    // 逐格登记（同一批次）：一次改三格 = 三条记录 + 一个批次，
+    // 既能整批退（Ctrl+Z / 退回到此），也能在更改审查里挑一格单独退。
+    const patches = diffCellPatches(prev, next)
+    if (patches.length) {
+      const batch = newUndoBatchId()
+      for (const p of patches) recordDutyCellUndo(table, p, batch, dutyMode.value)
+      flushUndoStatus()
+    }
     persist()
   }
 }

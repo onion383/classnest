@@ -6,6 +6,7 @@
 
 const undoStore = require('../../services/undoStore')
 const { executors } = require('./undo.executors')
+const expected = require('./undo.expected')
 const { safeJson } = require('../../utils/json')
 
 // parse payload 安全包裹
@@ -38,6 +39,12 @@ async function flip(id, fromDir, toDir, mode) {
   if (!ex) return { error: `不支持的记录类型: ${rec.type}` }
   const validation = ex.validate ? ex.validate(rec.payload) : null
   if (validation) return { error: validation }
+  // expected 快照校验：当前行必须仍是这条记录写入后留下的样子，否则拒绝——
+  // 跳过中间记录撤旧记录会盲写覆盖手改（A 新增→B 改名→手改→C 再改，直接撤 B 吞手改）。
+  // 放在抢占方向之前：失败不翻 dir、不执行补偿，记录仍可原样重试。
+  // 用 expected.checkExpected 而非解构，便于测试替换实现做变异反证。
+  const expectedErr = expected.checkExpected(rec, mode)
+  if (expectedErr) return { error: expectedErr }
   // 先 CAS 抢占方向，再执行副作用：原先「执行成功后才切 dir」在 UPDATE 失败时会允许同向重放。
   // 执行失败则把 dir 改回去，记录仍可重试；极端崩溃只会少一次可撤销，不会重复执行。
   const claim = undoStore.claimDir(id, toDir, fromDir)
@@ -67,29 +74,105 @@ async function flip(id, fromDir, toDir, mode) {
   return { ok: true, label, change }
 }
 
-// 回退某一批次（origin 相同）的全部记录。origin 为 AI 一次更改的批次标识。
-async function undoOriginBatch(origin) {
-  const rows = undoStore.idsByOrigin(origin, 1, 'DESC')
+// ========== 批量补偿的统一内核 ==========
+// 所有批量入口（全局 rewind、origin 批次、AI 工具）共用这一套补偿语义，
+// 避免「有的入口原子、有的裸循环」的两套行为。
+//
+// 原子性用 SAVEPOINT 而非 db.transaction()：后者是同步包装器，执行器一旦 await
+// 就会把事务边界撕开。SAVEPOINT 是连接级状态，能跨 await 保持开启。
+// 但它是**连接级**的：两个并发批次的 SAVEPOINT 会互相嵌套，ROLLBACK TO 会滚掉
+// 对方的写。所以统一在这里用 Promise 链把调用串行化（单连接本来也只能串行写）。
+let rewindTail = Promise.resolve()
+
+// records：已按执行顺序排好的完整记录对象（undo 逆序 / redo 正序）。
+// 预检（只读，不开事务）：拒绝未知类型与异步文件类型、提前跑 validate。
+// expected 校验故意不在这里做：链式记录只有前一条撤完后，当前状态才等于下一条的
+// newRow（A 新增→B 改名→手改→C 再改，撤 C 后才是手改的 newRow）。它必须在 flip
+// 里逐条查，按序执行时自然满足。
+function prepareBatch(records) {
+  const prepared = []
+  for (const rec of records) {
+    const ex = executors[rec.type]
+    if (!ex) return { error: `不支持的记录类型: ${rec.type}` }
+    if (ex.undo?.constructor.name === 'AsyncFunction' || ex.redo?.constructor.name === 'AsyncFunction') {
+      return { error: `「${rec.label || rec.type}」包含文件操作，无法整批回退，请逐条撤销` }
+    }
+    const v = ex.validate ? ex.validate(rec.payload) : null
+    if (v) return { error: v }
+    prepared.push(rec)
+  }
+  return { prepared }
+}
+
+// 串行 + 原子执行。fromDir/toDir 由调用方按 mode 给定。
+function runAtomicBatch(records, mode, fromDir, toDir) {
+  const run = rewindTail.then(() => runAtomicBatchImpl(records, mode, fromDir, toDir))
+  // 失败不能让锁链断掉，否则后续回退永远排队
+  rewindTail = run.then(() => {}, () => {})
+  return run
+}
+
+async function runAtomicBatchImpl(records, mode, fromDir, toDir) {
+  const pre = prepareBatch(records)
+  if (pre.error) return { ok: false, error: pre.error }
+
+  const sp = undoStore.beginRewind()
   const labels = []
-  for (const r of rows) {
-    const res = await flip(r.id, 1, 0, 'undo')
-    if (res.error) return { ok: false, error: res.error, count: labels.length, labels }
-    if (res.label) labels.push(res.label)
+  try {
+    for (const rec of pre.prepared) {
+      const res = await flip(rec.id, fromDir, toDir, mode)
+      if (res.error) throw new Error(res.error)
+      if (res.label) labels.push(res.label)
+    }
+    undoStore.commitRewind(sp)
+  } catch (err) {
+    try {
+      undoStore.rollbackRewind(sp)
+    } catch (rbErr) {
+      console.error('[undo] 批量回退回滚失败:', rbErr.message)
+    }
+    return { ok: false, error: err.message, count: labels.length, labels }
   }
   return { ok: true, count: labels.length, labels }
+}
+
+// ========== 回退到指定记录之前（全局时间线，跨表 / 跨来源） ==========
+// 语义：选中时间线上第 R 条 → 撤销 R 及之后所有 dir=1 记录，逆序执行；
+// 重做对称：重做 R 及之前所有 dir=0 记录，正序执行。表格只是视图筛选，不是回退边界。
+function rewindTo(targetId, mode = 'undo') {
+  const fromDir = mode === 'undo' ? 1 : 0
+  const toDir = mode === 'undo' ? 0 : 1
+  const target = getRecord(targetId)
+  if (!target) return Promise.resolve({ ok: false, error: '记录不存在' })
+  if (target.dir !== fromDir) {
+    return Promise.resolve({ ok: false, error: mode === 'undo' ? '该条已无可撤销' : '该条已无可重做' })
+  }
+  // undo 逆序（>= R，后做的先退）；redo 正序（<= R，先做的先回）
+  const rows = undoStore.idsFromBoundary(
+    targetId, fromDir,
+    mode === 'undo' ? '>=' : '<=',
+    mode === 'undo' ? 'DESC' : 'ASC'
+  )
+  if (!rows.length) return Promise.resolve({ ok: true, count: 0, labels: [] })
+  // 只读选行在锁外，真正改写的 SAVEPOINT 段由 runAtomicBatch 串行化。
+  // 并发下第二个 rewind 选到相同 rows 也无妨：执行到已翻 dir 的记录会被 flip 拒绝并整批回滚。
+  return runAtomicBatch(rows.map((r) => getRecord(r.id)), mode, fromDir, toDir)
+}
+
+// 回退某一批次（origin 相同）的全部记录。origin 为 AI 一次更改的批次标识。
+// 与全局 rewind 共用同一原子内核，差别只在「选哪些记录」——这里选同 origin 的。
+async function undoOriginBatch(origin) {
+  const rows = undoStore.idsByOrigin(origin, 1, 'DESC')
+  if (!rows.length) return { ok: true, count: 0, labels: [] }
+  return runAtomicBatch(rows.map((r) => getRecord(r.id)), 'undo', 1, 0)
 }
 
 // 重做某一批次的全部记录（origin 相同、当前在 redo 侧）。
 // 顺序与 undoOriginBatch 相反：撤销是逆序退（后做的先退），重做必须正序上（先做的先回）。
 async function redoOriginBatch(origin) {
   const rows = undoStore.idsByOrigin(origin, 0, 'ASC')
-  const labels = []
-  for (const r of rows) {
-    const res = await flip(r.id, 0, 1, 'redo')
-    if (res.error) return { ok: false, error: res.error, count: labels.length, labels }
-    if (res.label) labels.push(res.label)
-  }
-  return { ok: true, count: labels.length, labels }
+  if (!rows.length) return { ok: true, count: 0, labels: [] }
+  return runAtomicBatch(rows.map((r) => getRecord(r.id)), 'redo', 0, 1)
 }
 
 // 撤销「AI 助手」此前做出的最近一次数据更改（同一批次整批回退）。
@@ -147,10 +230,64 @@ async function undoAiChanges(steps) {
   return { ok: true, count: labels.length, labels, batches: undone }
 }
 
+// ========== 只撤「这一条」（格子级） ==========
+// 时间线回退是「回到某一刻」，做不了「跳过最新的、只退中间那一条」。而值日/座位这类
+// 单格记录本身只写一格，单独退是安全的 —— 前提是**这一格后来没被再改过**，
+// 否则会把后面的改动无声吞掉。所以：
+//   · 只认带 currentValue 的执行器（格子级），整块快照类型一律拒绝；
+//   · 当前值必须仍等于这条记录写入的值，否则提示从最新一条开始退。
+// 执行仍走 flip：沿用同一套 validate / CAS 抢占 / 失败回滚。
+const norm = (v) => (v == null ? '' : String(v))
+
+async function undoCellOnly(id) {
+  const rec = getRecord(id)
+  if (!rec) return { error: '记录不存在' }
+  if (rec.dir !== 1) return { error: '该条已无可撤销' }
+  const ex = executors[rec.type]
+  if (!ex) return { error: `不支持的记录类型: ${rec.type}` }
+  if (typeof ex.currentValue !== 'function') {
+    return { error: '这类改动只能整步回退，不能只退其中一条' }
+  }
+  const v = ex.validate ? ex.validate(rec.payload) : null
+  if (v) return { error: v }
+  let cur
+  try { cur = ex.currentValue(rec.payload) } catch (_) { cur = undefined }
+  if (norm(cur) !== norm(rec.payload.newValue)) {
+    return { error: '这一格后来又被改过，请从最新的一条开始退' }
+  }
+  return flip(id, 1, 0, 'undo')
+}
+
+// 这条记录「现在还撤得动吗」。只读，不改任何状态：'' = 可用，否则是失效原因。
+// 必须现算，不能存库 —— 数据被别的路径改回去之后（比如把那次备份恢复撤了），
+// 同一条记录会重新变回可用，存下来的标记会立刻过期。
+// 判定口径与真正执行前的校验同一套（行级 expected 快照 / 格子级 currentValue），
+// 所以这里说「可用」的记录，点下去不会因为冲突被拒。
+function staleReason(rec) {
+  if (!rec || rec.dir !== 1) return ''
+  const ex = executors[rec.type]
+  if (!ex) return ''
+  const p = rec.payload || {}
+  // 判定失败（表被删、payload 畸形）一律当「没失效」：这里只是面板打标/快捷提示，
+  // 不能因为一条坏记录把整个撤销列表 500 掉。
+  let rowErr = ''
+  try { rowErr = expected.checkExpected(rec, 'undo') || '' } catch { rowErr = '' }
+  if (rowErr) return rowErr
+  if (typeof ex.currentValue === 'function') {
+    let cur
+    try { cur = ex.currentValue(p) } catch { return '' }
+    return norm(cur) === norm(p.newValue) ? '' : '这一条写入的值已经被改动'
+  }
+  return ''
+}
+
 module.exports = {
   getRecord,
   pushRecord,
   flip,
+  rewindTo,
+  undoCellOnly,
+  staleReason,
   undoOriginBatch,
   redoOriginBatch,
   undoAiChange,

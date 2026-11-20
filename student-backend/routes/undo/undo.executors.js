@@ -18,6 +18,7 @@ const {
   applyAlbumOrder, applyGroupSnapshot,
 } = require('./undo.helpers')
 const { UNDO_WRITE_TABLES, UNDO_DOC_TABLES } = require('../../schema/tableRegistry')
+const { unpackMode, packMode, normalizeMode } = require('../../services/dutyMode')
 
 // 允许记录的动态表名（防注入）。含 cadre_members：跨表批量写入（propose_batch）可能写入职务成员，需可撤销。
 // 名单在 schema/tableRegistry.js —— 白名单散在多处时，新增可撤销表必然漏一处。
@@ -87,6 +88,11 @@ const executors = {
     },
     change(p, mode) {
       return { type: 'cell_update', table: p.table, rowId: p.rowId, field: p.field, value: mode === 'undo' ? p.oldValue : p.newValue }
+    },
+    // 「只撤这一条」的冲突判据：这个字段当前是否仍是它写入后的值
+    currentValue({ table, rowId, field }) {
+      const row = undoStore.findRowById(table, rowId)
+      return row ? row[field] : undefined
     }
   },
 
@@ -266,6 +272,58 @@ const executors = {
     },
     change(p, mode) {
       return { type: 'grid_cell', table: p.table, row: p.row, col: p.col, value: mode === 'undo' ? p.oldValue : p.newValue }
+    },
+    // 「只撤这一条」的冲突判据：这一格当前是否仍是它写入后的值
+    currentValue({ table, row, col }) {
+      const arr = readGridArray(table, GRID_SOURCES[table])
+      return arr[row] ? arr[row][col] : undefined
+    }
+  },
+
+  // 键路径单值（值日表：cells = {项目: {星期: [值]}}）：
+  // payload { table, item, day, index, oldValue, newValue }
+  // 为什么不复用 grid_cell：那条按 [row][col] 写二维数组，而值日的 cells 是两层对象，
+  // 硬套会写成 {"0": {...}} 这种结构 —— 撤销「成功」但数据错位，且不会报错。
+  // 记到「格」的粒度是为了能单独退一格（见 undoCellOnly 的冲突判定）。
+  duty_cell: {
+    validate({ table, mode, item, day, index }) {
+      if (table !== 'duty_layout' && table !== 'duty_template') return '表无效'
+      if (mode != null && mode !== 'daily' && mode !== 'big') return '模式无效'
+      if (typeof item !== 'string' || !item) return '参数不完整'
+      if (typeof day !== 'string' || !day) return '参数不完整'
+      if (!Number.isInteger(index) || index < 0 || index > 60) return '参数不完整'
+      return null
+    },
+    apply({ table, mode, item, day, index, value }) {
+      const packed = readGridArray(table, 'cells')
+      const m = normalizeMode(mode)
+      // cells 列存的是「按模式分键」的结构 { daily: {...}, big: {...} }（见 services/dutyMode）。
+      // 直接当 cells 用会在顶层多出一个「扫地」键：撤销「成功」但数据写错层，且读页面看不见。
+      const cells = unpackMode(packed, m)
+      // 项目/星期可能已被设置改掉：这里按路径重建，撤销的意图是「把这一格恢复」，
+      // 重建出来的键若不再渲染就不会显示，不构成脏数据。
+      if (!cells[item] || typeof cells[item] !== 'object') cells[item] = {}
+      const arr = Array.isArray(cells[item][day]) ? cells[item][day].slice() : []
+      while (arr.length < index) arr.push('')
+      arr[index] = value == null ? '' : value
+      cells[item][day] = arr
+      writeGridArray(table, 'cells', packMode(packed, m, cells))
+    },
+    undo(p) { this.apply({ ...p, value: p.oldValue }) },
+    redo(p) { this.apply({ ...p, value: p.newValue }) },
+    describe(p, mode) {
+      if (p.label) return p.label
+      const a = cellText(p.oldValue)
+      const b = cellText(p.newValue)
+      return mode === 'undo' ? `${p.item}·${p.day}：「${b}」→「${a}」` : `${p.item}·${p.day}：「${a}」→「${b}」`
+    },
+    change() { return { type: 'full_reload' } },
+    // 「只撤这一条」的冲突判据：这一格当前是否仍是它写入后的值。
+    // 同样要先解包 —— 直接读打包结构取到的是 undefined，会让每条记录都被判成「后来又被改过」。
+    currentValue({ table, mode, item, day, index }) {
+      const cells = unpackMode(readGridArray(table, 'cells'), normalizeMode(mode))
+      const arr = (cells[item] && cells[item][day]) || []
+      return arr[index]
     }
   },
 

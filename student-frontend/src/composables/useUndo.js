@@ -1,9 +1,20 @@
 import { onMounted, onUnmounted, onActivated, onDeactivated, reactive, watch } from 'vue'
 import { pushUndo, undoStatus, applyUndo } from '../api/undo'
 import { reportError } from '../utils/reportError.js'
+import { useNotification } from './useNotification.js'
 import {
   recordUndo, configureUndoRecorder, warnUndoFailed,
 } from '../utils/undoRecorder.js'
+
+// Ctrl+Z 的「已失效跳过」名单：只活在这一次会话里。
+// 失效是**现算**的（把那次改动撤回去，这条就会重新可用），所以既不能落库，
+// 也不能一直记着 —— 成功撤了一步、或又登记了新记录，立刻清空。
+const undoSkips = { key: '', ids: new Set(), origins: new Set() }
+export function resetUndoSkips() {
+  undoSkips.key = ''
+  undoSkips.ids.clear()
+  undoSkips.origins.clear()
+}
 
 // 对外保持原 API：其它页面一直从本文件 import 这两个名字。
 // 实现已下沉到 utils/undoRecorder.js —— 登记入口只能有一处，失败反馈不能各写一份。
@@ -14,7 +25,7 @@ export { warnUndoFailed, newUndoBatchId } from '../utils/undoRecorder.js'
 configureUndoRecorder({
   transport: pushUndo,
   notifyFailure: warnUndoFailed,
-  onRegistered: () => refreshUndoStatus(true),
+  onRegistered: () => { resetUndoSkips(); refreshUndoStatus(true) },
 })
 
 // ==================== 记录一条单元格编辑撤销 ====================
@@ -55,6 +66,23 @@ export function recordGridCellUndo(key, table, row, col, oldVal, newVal, label, 
   if (label) payload.label = label
   const text = label || `格子(${row + 1},${col + 1})：「${cellText(oldVal)}」→「${cellText(newVal)}」`
   return recordUndo({ key, type: 'grid_cell', label: text, payload, origin: origin || '' })
+}
+
+// ==================== 记录一条值日单格撤销 ====================
+// 值日 cells 是 {项目: {星期: [值]}} 的两层对象，不是二维数组 —— 用 grid_cell 会写成
+// {"0": {...}} 的错结构（撤销"成功"但数据错位）。所以单列一个类型。
+// mode 必须带上：库里存的是按模式分键的结构 { daily: {...}, big: {...} }，
+// 不带模式就会写错一层（页面读不到，撤销还报"成功"）。
+// 记到「一格」而不是整块快照，是为了更改审查里能「只撤这一格」（后端 duty_cell）。
+export function recordDutyCellUndo(table, { item, day, index, oldValue, newValue }, origin, mode) {
+  const text = `${item}·${day}：「${cellText(oldValue)}」→「${cellText(newValue)}」`
+  return recordUndo({
+    key: '值日表',
+    type: 'duty_cell',
+    label: text,
+    payload: { table, mode: mode || 'daily', item, day, index, oldValue, newValue },
+    origin: origin || '',
+  })
 }
 
 // ==================== 记录一条网格整块覆盖撤销 ====================
@@ -249,14 +277,29 @@ export function performUndo(redo = false) {
   if (!ctx || undoState.busy) return Promise.resolve(false)
   const key = ctx.resolveKey()
   if (!key) return Promise.resolve(false)
+  // 换表就作废跳过名单：那是上一张表的判断，不能带到新表
+  if (!redo && undoSkips.key !== key) { resetUndoSkips(); undoSkips.key = key }
+  const skip = redo ? null : { ids: undoSkips.ids, origins: undoSkips.origins }
   undoState.busy = true
-  return applyUndo(key, redo)
+  return applyUndo(key, redo, skip)
     .then(({ data }) => {
       if (data.ok) {
+        resetUndoSkips()
         if (redo) { if (ctx.onAfterRedo) ctx.onAfterRedo(data.label, data.change) }
         else if (ctx.onAfterUndo) ctx.onAfterUndo(data.label, data.change)
         refreshUndoStatus(true)
         return true
+      }
+      // 失效：记录还在，只是执行条件不满足了（数据被别的路径改过）。
+      // 第一次**不跳**，把原因说清楚；用户再按一次才把这条记进跳过名单往前找。
+      if (data.stale) {
+        if (data.origin) undoSkips.origins.add(data.origin)
+        else if (Number.isInteger(data.id)) undoSkips.ids.add(data.id)
+        const name = data.label ? `「${data.label}」` : '最近一步'
+        const reason = data.error ? String(data.error) : '数据之后被改过'
+        useNotification().warning(`${name}已失效：${reason}。再按一次快捷键跳过它，退到更早的一步。`)
+        refreshUndoStatus(true)
+        return false
       }
       // 后端明确回绝（没记录可撤 / 记录已被占用）：必须给反馈。
       // 原样返回 false 的话，用户按 Ctrl+Z 或点按钮后界面毫无变化（审查 v4 · B10-05）。

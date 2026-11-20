@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const store = require('../services/slotStore');
-const { readDocJson, safeJson } = require('../utils/json');
+const { safeJson } = require('../utils/json');
 const { isDateStr } = require('../utils/sql');
 // 日期口径统一走 utils/date（本地时区）。此前本文件自己复制了一份
 // localDateStr/parseDateStr/shiftDateStr/mondayOf，与 seats.js 逐字重复 ——

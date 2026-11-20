@@ -6,11 +6,12 @@
 // =========================================================================
 
 const express = require('express')
-const { safeJson } = require('../../utils/json');
 const undoStore = require('../../services/undoStore')
 const { executors } = require('./undo.executors')
+const { withGridCache } = require('./undo.helpers')
 const {
-  pushRecord, flip, undoOriginBatch, redoOriginBatch, undoAiChange, undoAiChanges, listAiChanges,
+  pushRecord, flip, rewindTo, undoCellOnly, undoOriginBatch, redoOriginBatch, undoAiChange, undoAiChanges, listAiChanges,
+  staleReason, getRecord,
 } = require('./undo.records')
 
 const router = express.Router()
@@ -22,6 +23,8 @@ function batchLabel(b) {
 }
 
 // 按 key 分组返回（含每组计数与记录）
+// 这里**不算失效**：列表要快、要能立刻开面板；失效判定要读数据表逐条比对，
+// 拆到 GET /stale（面板一次只看一张表，也就只算那一张）。
 router.get('/', (req, res) => {
   const rows = undoStore.listAll()
   const groups = []
@@ -39,12 +42,37 @@ router.get('/', (req, res) => {
       ts: r.ts,
       // origin 交给前端折叠：同一次动作的多条记录合成一行（一次动作一步）
       origin: r.origin,
-      // 裸 JSON.parse：一条畸形记录就让整个撤销面板 500（列表都打不开，用户也就没法撤别的）。
-      // 读取侧用项目统一的 safeJson 兜底，坏的按 {} 处理（审查 v4 · C03-01）。
-      payload: safeJson(r.payload, {})
+      // 来源分类（manual/ai_assistant/mcp）：审查面板按它筛选、给每条打标签。
+      // 不能用 origin<>'' 在前端猜——AI 和 MCP 的 origin 都非空。
+      source: r.source,
+      // 不回 payload：列表只需要 label/时间/来源，而整块快照类记录的 payload
+      // 是整张座位表/值日表的前后副本（单条上百 KB）—— 几十条就是几 MB 的无用响应。
+      // 需要具体前后值时按 id 取单条（getRecord），不在列表里传。
     })
   }
   res.json({ groups })
+})
+
+// 某张表里「现在还撤得动吗」：只返回**失效的那几条**（id → 原因），可撤的不占字节。
+// 现算不落库：数据被别的路径改回去之后，同一条记录会重新变可用，存标记立刻过期。
+// 只算 dir=1（已撤销的没有失效概念）；不传 key 才算全部（导出/排查用）。
+router.get('/stale', (req, res) => {
+  try {
+    const key = typeof req.query.key === 'string' ? req.query.key : ''
+    const rows = key ? undoStore.idsByKey(key, 1, 'DESC') : undoStore.listAll().filter((r) => r.dir === 1)
+    const stale = {}
+    // 一次请求内复用同一份网格 JSON（helpers.withGridCache）：同表 50 条记录
+    // 不必把同一块 seats/duty cells 解析 50 遍。
+    withGridCache(() => {
+      for (const row of rows) {
+        const rec = getRecord(row.id)
+        if (!rec || rec.dir !== 1) continue
+        const why = staleReason(rec)
+        if (why) stale[rec.id] = why
+      }
+    })
+    res.json({ key, stale })
+  } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 // 新增记录
@@ -67,17 +95,47 @@ router.get('/table/:key/status', (req, res) => {
 // 按 key 撤销最近一条（dir 1 -> 0），供 Ctrl+Z 使用
 // 最近一条带 origin 时按「批次」整批回退：一次用户动作（拖一次座位、AI 一次提案）可能登记多条记录，
 // Ctrl+Z 应该退回一步，而不是让用户按 N 次。无 origin 的普通记录仍是单条行为，与旧版一致。
+//
+// 失效处理（skipIds / skipOrigins）：记录还生效、但执行条件已不满足（数据被别的路径改过）。
+// 第一次撞上**不跳**，回 { stale:true, ... } 让前端说清原因；用户再按一次才把这条加进
+// skip 列表重发，逐条往回找下一个还能撤的。失效是现算的：把那次改动撤回去之后，
+// 同一条会重新变可用，所以 skip 只存在于前端这一次会话里，不落库。
 router.post('/table/:key/undo', async (req, res) => {
-  const rec = undoStore.latestByKey(req.params.key, 1, true)
-  if (!rec) return res.json({ ok: false, error: '当前表没有可撤销的记录' })
-  if (rec.origin) {
-    const b = await undoOriginBatch(rec.origin)
-    if (!b.ok) return res.status(400).json({ error: b.error })
-    return res.json({ ok: true, label: batchLabel(b), change: { type: 'full_reload' }, batch: b.count })
+  const key = req.params.key
+  const skipIds = new Set((Array.isArray(req.body?.skipIds) ? req.body.skipIds : []).map(Number).filter(Number.isInteger))
+  const skipOrigins = new Set((Array.isArray(req.body?.skipOrigins) ? req.body.skipOrigins : []).map(String).filter(Boolean))
+
+  for (const row of undoStore.idsByKey(key, 1, 'DESC')) {
+    const rec = getRecord(row.id)
+    if (!rec) continue
+    if (skipIds.has(rec.id)) continue
+    if (rec.origin && skipOrigins.has(rec.origin)) continue
+
+    const why = staleReason(rec)
+    if (why) {
+      return res.json({ ok: false, stale: true, id: rec.id, origin: rec.origin || '', label: rec.label, error: why })
+    }
+
+    if (rec.origin) {
+      // 批次是原子的：成员里只要有一条被改过，整批都退不了。先逐条验，
+      // 才能把「哪一条失效」说清楚（否则只能拿到 batch 里的一句模糊报错）。
+      for (const m of undoStore.idsByOrigin(rec.origin, 1, 'DESC')) {
+        const member = getRecord(m.id)
+        const memberWhy = staleReason(member)
+        if (memberWhy) {
+          return res.json({ ok: false, stale: true, id: member.id, origin: rec.origin, label: member.label, error: memberWhy })
+        }
+      }
+      const b = await undoOriginBatch(rec.origin)
+      if (!b.ok) return res.status(400).json({ error: b.error })
+      return res.json({ ok: true, label: batchLabel(b), change: { type: 'full_reload' }, batch: b.count })
+    }
+
+    const r = await flip(rec.id, 1, 0, 'undo')
+    if (r.error) return res.status(400).json({ error: r.error })
+    return res.json({ ok: true, label: r.label, change: r.change })
   }
-  const r = await flip(rec.id, 1, 0, 'undo')
-  if (r.error) return res.status(400).json({ error: r.error })
-  res.json({ ok: true, label: r.label, change: r.change })
+  return res.json({ ok: false, error: '当前表没有可撤销的记录' })
 })
 
 // 按 key 重做最近一条（dir 0 -> 1），供 Ctrl+Shift+Z / Ctrl+Y 使用
@@ -131,6 +189,17 @@ router.post('/:id/undo', async (req, res) => {
   res.json({ ok: true, label: r.label, change: r.change })
 })
 
+// 只撤这一条（跳过它后面的记录）：仅限「格子级」记录，且这一格后来没被再改过。
+// 与 /:id/undo 的区别：那条是「翻一条」的底层接口、不做冲突判定；这条是给人点的，
+// 带着「后面改过这一格就拒绝」的判据（见 undoCellOnly）。
+router.post('/:id/only', async (req, res) => {
+  const id = parseUndoId(req.params.id)
+  if (id == null) return res.status(400).json({ error: '记录 id 无效' })
+  const r = await undoCellOnly(id)
+  if (r.error) return res.status(400).json({ error: r.error })
+  res.json({ ok: true, label: r.label, change: r.change })
+})
+
 // 重做某条（dir 0 -> 1）
 router.post('/:id/redo', async (req, res) => {
   const id = parseUndoId(req.params.id)
@@ -138,6 +207,25 @@ router.post('/:id/redo', async (req, res) => {
   const r = await flip(id, 0, 1, 'redo')
   if (r.error) return res.status(400).json({ error: r.error })
   res.json({ ok: true, label: r.label, change: r.change })
+})
+
+// 回退到这条记录之前（全局时间线，跨表跨来源整批）：撤销 R 及之后所有可撤销记录。
+// 与 /:id/undo 的区别：后者只退单条，前者退「这条 + 它后面的全部」，且整批原子。
+router.post('/:id/rewind', async (req, res) => {
+  const id = parseUndoId(req.params.id)
+  if (id == null) return res.status(400).json({ error: '记录 id 无效' })
+  const b = await rewindTo(id, 'undo')
+  if (!b.ok) return res.status(400).json({ error: b.error })
+  res.json({ ok: true, label: b.count > 1 ? `已回退 ${b.count} 项改动` : (b.labels[0] || ''), batch: b.count, change: { type: 'full_reload' } })
+})
+
+// 重做到这条记录（全局时间线对称操作）：重做 R 及之前所有可重做记录
+router.post('/:id/replay', async (req, res) => {
+  const id = parseUndoId(req.params.id)
+  if (id == null) return res.status(400).json({ error: '记录 id 无效' })
+  const b = await rewindTo(id, 'redo')
+  if (!b.ok) return res.status(400).json({ error: b.error })
+  res.json({ ok: true, label: b.count > 1 ? `已重做 ${b.count} 项改动` : (b.labels[0] || ''), batch: b.count, change: { type: 'full_reload' } })
 })
 
 // 删除单条

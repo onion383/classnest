@@ -6,6 +6,11 @@
       <div class="flex items-center gap-3">
         <span v-if="!enabled" class="text-xs text-text-muted">{{ enabled ? '' : '未启用' }}</span>
         <button
+          @click="openPrivacy"
+          class="bg-surface-hover hover:bg-primary hover:text-text-inverse text-text px-4 py-2 rounded-sm transition-theme flex items-center gap-1.5"
+          title="发给第三方模型前的脱敏与按表关闭"
+        ><IconGlyph name="shieldCheck" tint="current" glyph :size="14" :stroke-width="1.8" /> 数据保护</button>
+        <button
           @click="openDataManage"
           class="bg-surface-hover hover:bg-primary hover:text-text-inverse text-text px-4 py-2 rounded-sm transition-theme flex items-center gap-1.5"
           title="管理聊天记录与 Markdown 技能文件"
@@ -259,6 +264,9 @@
 
     <!-- AI 助手设置弹窗 -->
     <AiSettingsDialog :show="showSettings" @close="showSettings = false" @saved="onSettingsSaved" />
+
+    <!-- 数据保护弹窗（标题栏「数据管理」左侧的按钮启动）：首次打开才异步加载 -->
+    <AiPrivacyDialog v-if="privacyOpened" :show="privacyOpen" @close="privacyOpen = false" />
 
     <!-- 数据管理弹窗（标题栏「设置」旁的按钮启动）：首次打开才异步加载 -->
     <DataManageDialog v-if="dataManageOpened" v-model:visible="dataManageOpen" />
@@ -518,6 +526,8 @@ function lazyDialog(loader) {
 const AiSettingsDialog = lazyDialog(() => import('../components/dialogs/AiSettingsDialog.vue'))
 // 数据管理弹窗异步化：只在首次点「数据管理」时加载，避免进入 AI 助手就带上这份代码
 const DataManageDialog = lazyDialog(() => import('../components/data-manage/DataManageDialog.vue'))
+// 数据保护弹窗异步化：同上，只在首次点「数据保护」时加载
+const AiPrivacyDialog = lazyDialog(() => import('../components/dialogs/AiPrivacyDialog.vue'))
 
 defineOptions({ name: 'AiAssistant' })
 
@@ -547,6 +557,8 @@ const conversationList = ref([]) // 会话列表
 const showSettings = ref(false) // AI 设置弹窗
 const dataManageOpen = ref(false) // 数据管理弹窗是否显示
 const dataManageOpened = ref(false) // 是否已首次打开过（首次打开才异步加载弹窗代码）
+const privacyOpen = ref(false) // 数据保护弹窗是否显示
+const privacyOpened = ref(false) // 同上：首次打开才异步加载
 const confirmDeleteShow = ref(false) // 删除确认弹窗
 const confirmDeleteId = ref(null) // 待删除的会话 id
 const rollbackConfirmShow = ref(false) // 回退确认弹窗
@@ -614,6 +626,7 @@ const ctx = {
   // 状态 ref（.value 访问）
   _unmounted, enabled, busy, messages, hasEarlier, loadingEarlier, earliestMsgId, input,
   conversationId, conversationList, showSettings, dataManageOpen, dataManageOpened,
+  privacyOpen, privacyOpened,
   confirmDeleteShow, confirmDeleteId, rollbackConfirmShow, rollbackTarget, rollbackSnapshot, rollbackUndone,
   attachedFile, capturing, abortCtrl, queuedMessages, streamDepth,
   regionShot, regionRect, regionDragging, regionStart, models, activeModelId, convDrawerOpen,
@@ -668,6 +681,11 @@ function onRemoveSkill(name) {
 function openDataManage() {
   dataManageOpened.value = true
   dataManageOpen.value = true
+}
+// 打开数据保护弹窗（标题栏「数据管理」左侧）：同一套懒加载口径
+function openPrivacy() {
+  privacyOpened.value = true
+  privacyOpen.value = true
 }
 // ===== 写入权限挡位（输入框工具行左下的「全部审批 / 完全权限」）=====
 // 选挡位：切到完全权限前先弹风险确认（高风险，必须显式确认）；切回全部审批立即生效

@@ -20,6 +20,22 @@ const GEOMETRY_COUNT_TABLES = new Set(SEAT_CURRENT_SLOTS)
 // 每 key 保留条数：撤销面板不分页，完全建立在这个上限上（见 undo-retention 判据）。
 const MAX_KEYS = 50
 
+// 批量回退的 savepoint 序号：名字每次不同，避免重入时撞名（SQLite 同名 savepoint 会嵌套，
+// RELEASE 只释放最近一层，撞名会让外层提交落空）。
+let rewindSeq = 0
+
+// 统一来源分类：与 origin 正交。origin 保留批次语义（整批回退靠它），source 只做面板筛选。
+// 不能只看 origin<>'' 分类——那会把 AI 助手和 MCP 混在一起（两者的 origin 都非空）。
+function sourceOfOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return 'manual'
+  if (/^[0-9a-f]{32}$/.test(origin)) return 'mcp' // MCP 提案 id = randomBytes(16).toString('hex')
+  // 助手批次只有两种词形：ai-<ts>-<rand> / 子agent:<备注>-<ts>-<rand>。
+  // 其余（op-<ts>-<rand>，老师一次动作的批次）是手改 —— 以前「非 hex 即助手」
+  // 会把「一次改三格」这种手改批次整批标成 AI。
+  if (/^ai-/.test(origin) || origin.startsWith('子agent')) return 'ai_assistant'
+  return 'manual'
+}
+
 // ============================ 撤销记录表 ============================
 
 // 全量（面板列表用）；调用方按 key 自行分组
@@ -34,19 +50,20 @@ function findById(id) {
 // 某 key 在某方向的最近一条（'undo' 侧 dir=1 / 'redo' 侧 dir=0）。
 // full=true 取整行（撤销要 origin），false 只取 label（按钮态文案）。
 function latestByKey(key, dir, full = false) {
-  const cols = full ? 'id, origin' : 'label'
+  const cols = full ? 'id, origin, source' : 'label'
   return db.prepare(`SELECT ${cols} FROM undo_history WHERE key = ? AND dir = ? ORDER BY id DESC LIMIT 1`).get(key, dir)
 }
 
 // 新增记录：**清空全部 redo → 插入 → 每 key 超限淘汰最旧**，三步必须同事务。
 // 只清本 key 会在跨 key 批次里留下「另一半还能重做」的残尾；淘汰不是原子则可能多删/漏删。
-function push({ key, type, label, payload, origin }) {
+function push({ key, type, label, payload, origin, source }) {
   const ts = new Date().toISOString()
+  const src = source || sourceOfOrigin(origin)
   return db.transaction(() => {
     db.prepare('DELETE FROM undo_history WHERE dir = 0').run()
     const info = db.prepare(
-      'INSERT INTO undo_history (key, type, label, payload, dir, origin, ts) VALUES (?, ?, ?, ?, 1, ?, ?)'
-    ).run(key, type, label, JSON.stringify(payload), origin || '', ts)
+      'INSERT INTO undo_history (key, type, label, payload, dir, origin, source, ts) VALUES (?, ?, ?, ?, 1, ?, ?, ?)'
+    ).run(key, type, label, JSON.stringify(payload), origin || '', src, ts)
     const over = db.prepare('SELECT id FROM undo_history WHERE key = ? ORDER BY id DESC LIMIT -1 OFFSET ?').all(key, MAX_KEYS)
     if (over.length) {
       const del = db.prepare('DELETE FROM undo_history WHERE id = ?')
@@ -66,24 +83,67 @@ function releaseDir(id, fromDir, toDir) {
   return db.prepare('UPDATE undo_history SET dir = ? WHERE id = ? AND dir = ?').run(fromDir, id, toDir)
 }
 
+// ========== 批量回退的原子边界（SAVEPOINT） ==========
+// 为什么不用 db.transaction()：它是同步包装器，函数里一旦 await（执行器含异步文件操作）
+// 就会在 await 前提交、await 后落库，事务边界被撕开。SAVEPOINT 是连接级状态，可以跨 await
+// 保持开启，把所有同步 DB 写（含嵌套执行器自己的 db.transaction）收进同一边界。
+function beginRewind() {
+  const name = `undo_rewind_${++rewindSeq}`
+  db.exec(`SAVEPOINT ${name}`)
+  return name
+}
+
+function commitRewind(name) {
+  db.exec(`RELEASE SAVEPOINT ${name}`)
+}
+
+function rollbackRewind(name) {
+  db.exec(`ROLLBACK TO SAVEPOINT ${name}`)
+  db.exec(`RELEASE SAVEPOINT ${name}`)
+}
+
+// 全局时间线里从 targetId 起的记录 id（含边界）。op / order 内部写死，绝不接前端字符串：
+// 这两个值会拼进 SQL，放行外部输入等于开注入口。undo 逆序（>= target，后做的先退），
+// redo 正序（<= target，先做的先回）。
+function idsFromBoundary(targetId, dir, op, order) {
+  if (op !== '>=' && op !== '<=') throw new Error('无效的时间线方向')
+  if (order !== 'ASC' && order !== 'DESC') throw new Error('无效的执行顺序')
+  return db.prepare(`SELECT id FROM undo_history WHERE id ${op} ? AND dir = ? ORDER BY id ${order}`).all(targetId, dir)
+}
+
 // 某批次在某方向的记录 id，按撤销/重做的执行顺序取：
 //   undo 逆序（后做的先退）、redo 正序（先做的先回）
 function idsByOrigin(origin, dir, order) {
   return db.prepare(`SELECT id FROM undo_history WHERE dir = ? AND origin = ? ORDER BY id ${order}`).all(dir, origin)
 }
 
-// 最近一条 AI 更改（origin 非空）的批次标识；key 可选，限定某个资源
+// 某资源在某方向的全部记录 id（Ctrl+Z 找候选时用：要从最新往前逐条试，
+// 碰到「已失效」的由调用方决定是提示还是跳过，不能一上来只取一条）。
+function idsByKey(key, dir, order = 'DESC') {
+  const ord = order === 'ASC' ? 'ASC' : 'DESC'
+  return db.prepare(`SELECT id FROM undo_history WHERE key = ? AND dir = ? ORDER BY id ${ord}`).all(key, dir)
+}
+
+// 最近一条 AI 助手更改的批次标识；key 可选，限定某个资源。
+// 用 source 而不是 origin<>''：MCP 的 origin 也非空，旧口径会把外部工具的改动
+// 当成助手自己的更改退掉。分类在 push 时已按 origin 形态算好，这里直接用。
 function latestAiOrigin(key) {
-  let sql = "SELECT origin FROM undo_history WHERE dir = 1 AND origin <> ''"
+  let sql = "SELECT origin FROM undo_history WHERE dir = 1 AND source = 'ai_assistant'"
   const params = []
   if (key) { sql += ' AND key = ?'; params.push(String(key)) }
   sql += ' ORDER BY id DESC LIMIT 1'
   return db.prepare(sql).get(...params)
 }
 
-// AI 更改的可撤销记录（面板 step 分组用，最新在前）
+// AI 助手更改的可撤销记录（面板 step 分组用，最新在前）
 function listAiRows() {
-  return db.prepare("SELECT id, key, label, origin, ts FROM undo_history WHERE dir = 1 AND origin <> '' ORDER BY id DESC").all()
+  return db.prepare("SELECT id, key, label, origin, source, ts FROM undo_history WHERE dir = 1 AND source = 'ai_assistant' ORDER BY id DESC").all()
+}
+
+// 按主键读真实表的当前整行（expected 快照校验用）。
+// 表名来自撤销 payload，已在 executor.validate 经 ALLOWED_TABLES 白名单校验，这里不再重复。
+function findRowById(table, id) {
+  return db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id)
 }
 
 function deleteById(id) {
@@ -499,9 +559,16 @@ module.exports = {
   MAX_KEYS,
   claimDir,
   releaseDir,
+  beginRewind,
+  commitRewind,
+  rollbackRewind,
+  idsFromBoundary,
   idsByOrigin,
+  idsByKey,
   latestAiOrigin,
   listAiRows,
+  sourceOfOrigin,
+  findRowById,
   deleteById,
   clear,
   // 网格 / 文档列

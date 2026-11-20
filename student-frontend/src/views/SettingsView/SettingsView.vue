@@ -289,52 +289,119 @@
       @cancel="showDeleteSemester = false"
     />
 
-    <!-- ========== 撤销记录 ========== -->
+    <!-- ========== 更改审查 / 撤销 ========== -->
     <div class="mb-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 id="settings-section-undo" class="text-xl font-semibold text-text flex items-center gap-2"><IconGlyph name="undo" :size="20" /> 撤销记录</h2>
-        <button
-          v-if="hasUndoRecords"
-          @click="clearUndo"
-          class="text-sm text-danger hover:underline disabled:opacity-40"
-          :disabled="busyUndo"
-        >清空所有撤销记录</button>
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 id="settings-section-undo" class="text-xl font-semibold text-text flex items-center gap-2">
+          <IconGlyph name="undo" :size="20" /> 更改审查
+          <AppHelp aria-label="更改审查说明" text="一行 = 一步改动；实心圆点表示这一步仍生效，空心表示已撤销。&#10;能单独撤：格子类（值日/座位单格）和行类记录只退这一条，不动其它步骤；这一格或这一行后来又被改过时会拒绝。&#10;只能连带撤：整块快照类（智能排表、从模板导入、编辑权重等）拆不开，会把这一步和它之后的所有改动一起退回（跨表格）；中途出错整批不生效。&#10;「已失效」= 这一步之后数据又被别的路径改过，此刻退不了；把那次改动撤回去，这条会自动恢复可用。Ctrl+Z 撞上失效先提示原因，再按一次才跳过它。&#10;记录跨重启保留。" />
+        </h2>
+        <div class="flex items-center gap-3">
+          <!-- 来源筛选：与其他下拉同一套组件（原生 select 的箭头/圆角/毛玻璃都对不齐，
+               而且它是浏览器原生弹层，glass 主题压不到它） -->
+          <div class="text-xs text-text-muted flex items-center gap-1.5">
+            <span>来源</span>
+            <AppSelect v-model="undoSourceFilter" :options="undoSourceOptions" compact class="w-28" />
+          </div>
+          <button
+            v-if="hasUndoRecords"
+            @click="clearUndo"
+            class="btn-plain undo-clear-btn text-danger disabled:opacity-40"
+            :disabled="busyUndo"
+          >清空所有记录</button>
+        </div>
       </div>
 
       <div class="bg-surface rounded-lg border border-border p-6 relative">
-
         <div v-if="!hasUndoRecords" class="text-sm text-text-muted text-center py-8">
-          暂无编辑记录。在表格中修改数据后，这里会记录该次操作，之后可一键撤销、跨重启保留。
+          <template v-if="undoLoading">正在读取记录…</template>
+          <template v-else>暂无编辑记录。在表格中修改数据后，这里会记录该次操作，之后可一键退回、跨重启保留。</template>
+        </div>
+        <div v-else-if="!filteredUndoGroups.length" class="text-sm text-text-muted text-center py-8">
+          该来源下暂无记录。
         </div>
 
-        <div v-else ref="undoListRef" class="space-y-6 max-h-[22rem] overflow-y-auto pr-1 app-custom-scroll">
-          <div v-for="group in undoGroups" :key="group.key" class="border border-border rounded-lg overflow-hidden">
-            <div class="flex items-center justify-between px-4 py-2.5 bg-surface-hover border-b border-border">
-              <span class="font-medium text-text">{{ groupLabel(group.key) }}</span>
-              <span class="text-xs text-text-muted">{{ undoableCount(group) }} 步可撤销</span>
+        <!-- 表格标签就是这一块的「标题」：一张表一个标签（带可退回步数），点选切换。
+             下面直接是内容，外面只套一层毛玻璃（ai-glass-panel = 夜间统一转深玻璃的标记类），
+             不再有「表名 + 条数」的二级标题行 —— 那行和标签重复，白占一层高度。 -->
+        <div v-else-if="undoActiveGroup">
+          <div class="undo-tabs-row">
+            <div class="undo-tabs" role="tablist" aria-label="按表格切换更改记录">
+              <button
+                v-for="g in filteredUndoGroups"
+                :key="g.key"
+                type="button"
+                role="tab"
+                class="undo-tab"
+                :class="g.key === undoActiveGroup.key
+                  ? 'undo-tab-on ai-glass-panel bg-white/55 backdrop-blur-md text-text font-medium'
+                  : 'text-text-muted hover:text-text'"
+                :aria-selected="g.key === undoActiveGroup.key"
+                @click="selectUndoGroup(g.key)"
+              >
+                <span class="undo-tab-name" :title="groupLabel(g.key)">{{ groupLabel(g.key) }}</span>
+                <span class="undo-tab-count">{{ undoableCount(g) }}</span>
+              </button>
             </div>
-            <ul class="divide-y divide-border max-h-72 overflow-auto">
-              <!-- 一「行」= 一步动作：同一次改动登记的多条在这里折成一行，与 Ctrl+Z 口径一致 -->
-              <li v-for="ent in group.entries" :key="ent.key"
-                  class="flex items-center justify-between gap-3 px-4 py-2 hover:bg-surface-hover transition-theme">
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="text-xs text-text-muted flex-shrink-0">{{ fmtTs(ent.ts) }}</span>
-                  <span class="text-sm text-text truncate">{{ ent.label }}</span>
-                  <span v-if="ent.dir === 0" class="text-[11px] text-info flex-shrink-0">已撤销</span>
+            <!-- 去掉二级标题行后，把「几张表 / 合计几步」挪到标签行右侧，信息不丢也不多占一层 -->
+            <span class="undo-tabs-meta">{{ filteredUndoGroups.length }} 张表 · 合计 {{ undoTotalSteps }} 步可退回</span>
+          </div>
+
+          <div class="undo-glass ai-glass-panel bg-white/55 backdrop-blur-md border border-border rounded-lg overflow-hidden">
+            <!-- 时间轴：一「行」= 一步动作（同一次改动登记的多条折成一行）。
+                 左侧竖线 + 圆点表达「先后」：实心点 = 这条仍生效，空心点 = 已撤销。
+                 回退语义是「退到这条为止、连同它之后」，所以列表从新到旧读下来，
+                 越往下越早；圆点由实变空的位置就是当前停在的时间点。 -->
+            <ul ref="undoListRef" class="undo-tl h-full overflow-y-auto app-custom-scroll">
+              <li v-for="ent in undoActiveGroup.entries" :key="ent.key" class="undo-tl-row transition-theme">
+                <span class="undo-tl-gutter">
+                  <span class="undo-tl-dot" :class="{ 'is-undone': ent.dir === 0 }"></span>
+                </span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="text-xs text-text-muted flex-shrink-0">{{ fmtTs(ent.ts) }}</span>
+                    <span class="src-chip flex-shrink-0" :class="sourceBadgeClass(ent.source)">{{ sourceLabel(ent.source) }}</span>
+                    <span class="text-sm truncate" :class="ent.dir === 0 ? 'text-text-muted' : 'text-text'">{{ ent.label }}</span>
+                    <span v-if="ent.dir === 0" class="text-[11px] text-text-muted flex-shrink-0">已撤销</span>
+                    <!-- 失效 = 记录还在，但数据被别的路径改过，这一刻退不了。
+                         现算的：把那次改动撤回去，这条会自动变回可撤销。 -->
+                    <span v-else-if="ent.stale" class="text-[11px] text-warning flex-shrink-0" :title="ent.stale">已失效</span>
+                    <!-- 同一次保存改了多格：点开逐条看，每条可单独退 -->
+                    <button
+                      v-if="(ent.members || []).length > 1"
+                      type="button"
+                      class="undo-expand flex-shrink-0"
+                      @click="toggleUndoExpand(ent.key)"
+                    >{{ isUndoExpanded(ent.key) ? '收起' : `展开 ${ent.members.length} 条` }}</button>
+                  </div>
+                  <ul v-if="(ent.members || []).length > 1 && isUndoExpanded(ent.key)" class="undo-members">
+                    <li v-for="m in ent.members" :key="m.id" class="undo-member">
+                      <span class="text-xs truncate" :class="m.dir === 0 ? 'text-text-muted' : 'text-text'">{{ m.label }}</span>
+                      <button
+                        v-if="m.canOnly && m.dir === 1"
+                        type="button"
+                        class="undo-only flex-shrink-0"
+                        :disabled="busyUndo || !!m.stale"
+                        :title="m.stale || ''"
+                        @click="undoMember(m)"
+                      >{{ m.stale ? '已失效' : '只撤这一条' }}</button>
+                    </li>
+                  </ul>
                 </div>
                 <div class="flex-shrink-0">
                   <button
                     v-if="ent.dir === 1"
-                    @click="undoEntry(ent)"
+                    @click="undoRow(ent)"
+                    :title="ent.stale || (ent.canOnly || (ent.origin && ent.count > 1) ? '' : '会连同这一步之后的改动一起退回')"
                     class="bg-warning hover:bg-warning-hover text-text-inverse text-xs px-3 py-1 rounded transition-theme disabled:opacity-40"
-                    :disabled="busyUndo"
-                  >撤销</button>
+                    :disabled="busyUndo || !!ent.stale"
+                  >{{ ent.stale ? '无法撤销' : undoActionLabel(ent) }}</button>
                   <button
                     v-else
                     @click="redoEntry(ent)"
                     class="bg-info hover:bg-info-hover text-text-inverse text-xs px-3 py-1 rounded transition-theme disabled:opacity-40"
                     :disabled="busyUndo"
-                  >重做</button>
+                  >重做到此</button>
                 </div>
               </li>
             </ul>
@@ -479,56 +546,70 @@
         </div>
       </div>
 
-    <!-- ========== 工具箱设置 ========== -->
+    <!-- ========== 工具设置（桌面小组件 + 悬浮工具箱 + 其他工具） ==========
+         原来「工具箱设置」和「桌面小组件设置」是两个并列分区，各自一张玻璃卡，
+         但两者都是「这台电脑上除了主窗口之外还跑着什么」，合并成一节后按窗口分三小节：
+         桌面小组件 / 悬浮工具箱 / 其他工具。三块共用一张玻璃，小节之间用分隔线断开。 -->
     <div class="mb-6">
-      <h2 id="settings-section-toolbox" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="toolbox" :size="20" /> 工具箱设置</h2>
-      <div class="bg-surface rounded-lg border border-border p-6">
-        <div class="flex items-center gap-4">
-          <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
-            <label class="text-sm font-medium text-text">是否启用工具箱</label>
-            <AppHelp text="关闭后立即隐藏工具箱并释放其窗口，下次启动也不再显示；开启立即显示" aria-label="是否启用工具箱说明" />
-          </div>
-          <AppSwitch :model-value="toolboxEnabled" aria-label="是否启用工具箱" @change="onToolboxChange" />
-        </div>
-        <div class="flex items-center gap-4 mt-6">
-          <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
-            <label class="text-sm font-medium text-text">点名排除不在校同学</label>
-            <AppHelp text="开启后，工具箱点名器只从今天在校的同学里随机抽人；请假中且假期覆盖今天的学生会被排除。默认关闭，仍按全班名单点名。下次打开点名器生效。" aria-label="点名排除不在校同学说明" />
-          </div>
-          <AppSwitch :model-value="rollcallExcludeAbsent" aria-label="点名排除不在校同学" @change="onRollcallExcludeAbsentChange" />
-        </div>
-        <div class="flex items-center gap-4 mt-6">
-          <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
-            <label class="text-sm font-medium text-text">点名包含临时学生</label>
-            <AppHelp text="默认关闭：点名器只从正式学生里抽人。开启后，值日/座位里直接填名字自动建的临时学生也会参与点名。下次打开点名器生效。" aria-label="点名包含临时学生说明" />
-          </div>
-          <AppSwitch :model-value="rollcallIncludeProvisional" aria-label="点名包含临时学生" @change="onRollcallIncludeProvisionalChange" />
-        </div>
-        <div class="flex items-center gap-4 mt-6">
-          <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
-            <label class="text-sm font-medium text-text">新U盘插入自动打开</label>
-            <AppHelp text="插入新U盘时自动用文件资源管理器打开（仅Windows，即时生效）" aria-label="新U盘插入自动打开说明" />
-          </div>
-          <AppSwitch :model-value="usbAutoOpen" aria-label="新U盘插入自动打开" @change="onUsbAutoOpenChange" />
-        </div>
-      </div>
-    </div>
+      <h2 id="settings-section-tools" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="toolbox" :size="20" /> 工具设置</h2>
+      <div class="bg-surface rounded-lg border border-border p-6 space-y-6">
 
-    <!-- ========== 桌面小组件设置 ========== -->
-    <div class="mb-6">
-      <h2 id="settings-section-widget" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="monitor" :size="20" /> 桌面小组件设置</h2>
-      <div class="bg-surface rounded-lg border border-border p-6">
-        <div class="flex items-center gap-4">
-          <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
-            <label class="text-sm font-medium text-text">启用桌面小组件</label>
-            <AppHelp text="关闭后启动不创建桌面小组件窗口（更省资源），并可立即关闭当前窗口；开启立即显示" aria-label="启用桌面小组件说明" />
+        <!-- 桌面小组件 -->
+        <div>
+          <h3 class="text-lg font-semibold text-text">桌面小组件设置</h3>
+          <p class="text-xs text-text-muted mt-1">
+            组件固定常驻所有窗口之下（桌面图标之上）：不会被其它应用窗口盖住，点击也不会把窗口抬到最前面，
+            仍可点击、可拖动；位置会记住，下次启动回到原处。
+          </p>
+          <div class="flex items-center gap-4 mt-4">
+            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+              <label class="text-sm font-medium text-text">启用桌面小组件</label>
+              <AppHelp text="关闭后启动不创建桌面小组件窗口（更省资源），并可立即关闭当前窗口；开启立即显示" aria-label="启用桌面小组件说明" />
+            </div>
+            <AppSwitch :model-value="desktopWidgetEnabled" aria-label="启用桌面小组件" @change="onDesktopWidgetChange" />
           </div>
-          <AppSwitch :model-value="desktopWidgetEnabled" aria-label="启用桌面小组件" @change="onDesktopWidgetChange" />
         </div>
-        <p class="text-xs text-text-muted mt-2 ml-40">
-          组件固定常驻所有窗口之下（桌面图标之上）：不会被其它应用窗口盖住，点击也不会把窗口抬到最前面，
-          仍可点击、可拖动；位置会记住，下次启动回到原处。
-        </p>
+
+        <!-- 悬浮工具箱：开关 + 点名器的取人范围 -->
+        <div class="border-t border-border pt-6">
+          <h3 class="text-lg font-semibold text-text">悬浮工具箱设置</h3>
+          <p class="text-xs text-text-muted mt-1">
+            桌面上的悬浮工具箱窗口，以及里面点名器的抽人范围。
+          </p>
+          <div class="flex items-center gap-4 mt-4">
+            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+              <label class="text-sm font-medium text-text">是否启用工具箱</label>
+              <AppHelp text="关闭后立即隐藏工具箱并释放其窗口，下次启动也不再显示；开启立即显示" aria-label="是否启用工具箱说明" />
+            </div>
+            <AppSwitch :model-value="toolboxEnabled" aria-label="是否启用工具箱" @change="onToolboxChange" />
+          </div>
+          <div class="flex items-center gap-4 mt-6">
+            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+              <label class="text-sm font-medium text-text">点名排除不在校同学</label>
+              <AppHelp text="开启后，工具箱点名器只从今天在校的同学里随机抽人；请假中且假期覆盖今天的学生会被排除。默认关闭，仍按全班名单点名。下次打开点名器生效。" aria-label="点名排除不在校同学说明" />
+            </div>
+            <AppSwitch :model-value="rollcallExcludeAbsent" aria-label="点名排除不在校同学" @change="onRollcallExcludeAbsentChange" />
+          </div>
+          <div class="flex items-center gap-4 mt-6">
+            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+              <label class="text-sm font-medium text-text">点名包含临时学生</label>
+              <AppHelp text="默认关闭：点名器只从正式学生里抽人。开启后，值日/座位里直接填名字自动建的临时学生也会参与点名。下次打开点名器生效。" aria-label="点名包含临时学生说明" />
+            </div>
+            <AppSwitch :model-value="rollcallIncludeProvisional" aria-label="点名包含临时学生" @change="onRollcallIncludeProvisionalChange" />
+          </div>
+        </div>
+
+        <!-- 其他工具 -->
+        <div class="border-t border-border pt-6">
+          <h3 class="text-lg font-semibold text-text">其他工具设置</h3>
+          <div class="flex items-center gap-4 mt-4">
+            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+              <label class="text-sm font-medium text-text">新U盘插入自动打开</label>
+              <AppHelp text="插入新U盘时自动用文件资源管理器打开（仅Windows，即时生效）" aria-label="新U盘插入自动打开说明" />
+            </div>
+            <AppSwitch :model-value="usbAutoOpen" aria-label="新U盘插入自动打开" @change="onUsbAutoOpenChange" />
+          </div>
+        </div>
       </div>
     </div>
 
@@ -590,11 +671,100 @@
           </div>
         </div>
 
+        <!-- 启动相关：快速启动开关 + 上次启动耗时（同一区块，共用一条分隔线） -->
+        <div class="border-t border-border pt-6 mt-6 space-y-4">
+          <div class="flex items-center gap-4">
+            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+              <span class="text-sm font-medium text-text">快速启动</span>
+              <AppHelp
+                text="开启：占位页在界面元素（路由与样式）就绪时立即让位，首页数据边加载边显示，各卡片先显示加载中；关闭：等首页数据全部返回后才显示首页，整窗会多被占位页多挡一段接口往返。改动在下次启动生效。"
+                aria-label="快速启动说明"
+              />
+            </div>
+            <AppSwitch :model-value="fastStartup" aria-label="快速启动" @change="onFastStartupChange" />
+            <span class="text-xs text-text-muted">下次启动生效</span>
+          </div>
+          <div class="flex items-center gap-4">
+            <div class="flex items-center gap-1.5">
+              <span class="text-sm text-text-muted">上次启动耗时</span>
+              <AppHelp text="口径：进程启动到占位页移除（首屏内容真正绘制出来的那一刻），与 startup.log 同一口径" aria-label="启动耗时口径说明" :size="13" />
+            </div>
+            <span class="text-sm font-medium text-text" style="font-variant-numeric: tabular-nums;">{{ (perfStartupTotal / 1000).toFixed(3) }} s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 路径设置 ========== -->
+    <!-- 数据目录是根、两处截图位置是它下面的分支，本质都是「文件写到哪儿」。
+         原来分成「保存路径设置」「数据目录设置」两个分区，改一处要滚过另一处去对照；
+         合并成一块玻璃后，一次就能看清全部落盘位置。 -->
+    <div class="mb-6">
+      <h2 id="settings-section-paths" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="folder" :size="20" /> 路径设置</h2>
+      <div class="bg-surface rounded-lg border border-border p-6 space-y-6">
+        <!-- 数据目录：全部数据的唯一根，改动会整体搬迁 -->
+        <div>
+          <div class="flex items-center gap-4 mb-2">
+            <label class="text-sm font-medium text-text w-40 flex-shrink-0">数据目录</label>
+            <div class="flex-1 min-w-0">
+              <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="dataDir">
+                {{ dataDir || '加载中…' }}
+              </div>
+            </div>
+            <button @click="changeDataDir" :disabled="busyDataDir" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">
+              {{ busyDataDir ? '搬迁中…' : '修改' }}
+            </button>
+            <button @click="openDir(dataDir)" :disabled="busyDataDir" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">打开文件夹</button>
+          </div>
+          <p class="text-xs text-text-muted ml-40">全部本机数据的唯一根目录，修改会整体搬迁并重启应用服务。目录下按用途分四层，无需单独设置。</p>
+          <p class="text-xs text-text-muted ml-40 mt-1">core（数据库与密钥）、content（上传图片、AI 技能、快照）、cache（相册缩略图等可再生缓存）、logs（运行日志）。</p>
+        </div>
+
+        <!-- 截图落点：留空则用默认目录，只影响截图，不动数据目录 -->
+        <div class="border-t border-border pt-6 space-y-6">
+          <div>
+            <div class="flex items-center gap-4 mb-2">
+              <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+                <label class="text-sm font-medium text-text">注释截屏保存位置</label>
+                <AppHelp text="注释工具保存截图的目录，留空则使用默认位置" aria-label="注释截屏保存位置说明" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="noteSavePath || screenshotDir">{{ noteSavePath || screenshotDir }}</div>
+              </div>
+              <button @click="selectFolder('note')" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap">修改</button>
+              <button @click="openDir(noteSavePath || screenshotDir)" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap">打开文件夹</button>
+            </div>
+          </div>
+          <div>
+            <div class="flex items-center gap-4 mb-2">
+              <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
+                <label class="text-sm font-medium text-text">一键截屏保存位置</label>
+                <AppHelp text="一键截屏工具保存截图的目录，留空则使用默认位置" aria-label="一键截屏保存位置说明" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="screenshotSavePath || screenshotDir">
+                  {{ screenshotSavePath || screenshotDir }}
+                </div>
+              </div>
+              <button @click="selectFolder('screenshot')" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap">修改</button>
+              <button @click="openDir(screenshotSavePath || screenshotDir)" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap">打开文件夹</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 数据管理 ========== -->
+    <div class="mb-6">
+      <h2 id="settings-section-data" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="database" :size="20" /> 数据管理</h2>
+      <div class="space-y-6">
+        <DataExportPanel />
+
         <!-- 空间管理：磁盘占用彩条（一段一类）+ 图例给数值与占比 -->
-        <div class="border-t border-border pt-6 mt-6">
+        <div class="bg-surface rounded-lg border border-border p-6">
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-1.5">
-              <span class="text-sm font-medium text-text">空间管理</span>
+              <h3 class="text-base font-semibold text-text">空间管理</h3>
               <AppHelp
                 text="统计本身只读，不会删除任何文件。「图片微缩图」后面的两个按钮都是显式操作：「清理」删全部缓存（下次查看会重建），「回收」只删没有索引引用的孤儿、保留正在用的图，且会先报数再等确认。口径：软件本体＝程序安装目录（exe 与 resources）；该账号数据＝当前账号库文件（含 -wal/-shm）；其他账号数据＝其余账号库文件；图片微缩图＝缩略图目录（所有账号合计）；其他＝上传附件、相册回收站、快照与日志。"
                 aria-label="空间管理统计口径说明"
@@ -702,106 +872,7 @@
           <p v-else class="text-sm text-text-muted">{{ busyDisk ? '正在统计磁盘占用…' : (diskUsageError || '暂无数据') }}</p>
         </div>
 
-        <!-- 启动相关：快速启动开关 + 上次启动耗时（同一区块，共用一条分隔线） -->
-        <div class="border-t border-border pt-6 mt-6 space-y-4">
-          <div class="flex items-center gap-4">
-            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
-              <span class="text-sm font-medium text-text">快速启动</span>
-              <AppHelp
-                text="开启：占位页在界面元素（路由与样式）就绪时立即让位，首页数据边加载边显示，各卡片先显示加载中；关闭：等首页数据全部返回后才显示首页，整窗会多被占位页多挡一段接口往返。改动在下次启动生效。"
-                aria-label="快速启动说明"
-              />
-            </div>
-            <AppSwitch :model-value="fastStartup" aria-label="快速启动" @change="onFastStartupChange" />
-            <span class="text-xs text-text-muted">下次启动生效</span>
-          </div>
-          <div class="flex items-center gap-4">
-            <div class="flex items-center gap-1.5">
-              <span class="text-sm text-text-muted">上次启动耗时</span>
-              <AppHelp text="口径：进程启动到占位页移除（首屏内容真正绘制出来的那一刻），与 startup.log 同一口径" aria-label="启动耗时口径说明" :size="13" />
-            </div>
-            <span class="text-sm font-medium text-text" style="font-variant-numeric: tabular-nums;">{{ (perfStartupTotal / 1000).toFixed(3) }} s</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ========== 保存路径设置 ========== -->
-    <div class="mb-6">
-      <h2 id="settings-section-savepath" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="folder" :size="20" /> 保存路径设置</h2>
-      <div class="bg-surface rounded-lg border border-border p-6 space-y-6">
-        <div>
-          <div class="flex items-center gap-4 mb-2">
-            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
-              <label class="text-sm font-medium text-text">注释截屏保存位置</label>
-              <AppHelp text="注释工具保存截图的目录，留空则使用默认位置" aria-label="注释截屏保存位置说明" />
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="noteSavePath || screenshotDir">{{ noteSavePath || screenshotDir }}</div>
-            </div>
-            <button @click="selectFolder('note')" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap">修改</button>
-            <button @click="openDir(noteSavePath || screenshotDir)" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap">打开文件夹</button>
-          </div>
-        </div>
-        <div>
-          <div class="flex items-center gap-4 mb-2">
-            <div class="w-40 flex-shrink-0 flex items-center gap-1.5">
-              <label class="text-sm font-medium text-text">一键截屏保存位置</label>
-              <AppHelp text="一键截屏工具保存截图的目录，留空则使用默认位置" aria-label="一键截屏保存位置说明" />
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="screenshotSavePath || screenshotDir">
-                {{ screenshotSavePath || screenshotDir }}
-              </div>
-            </div>
-            <button @click="selectFolder('screenshot')" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap">修改</button>
-            <button @click="openDir(screenshotSavePath || screenshotDir)" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap">打开文件夹</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ========== 数据目录设置 ========== -->
-    <div class="mb-6">
-      <h2 id="settings-section-datadir" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="box" :size="20" /> 数据目录设置</h2>
-      <div class="bg-surface rounded-lg border border-border p-6 space-y-6">
-        <div>
-          <div class="flex items-center gap-4 mb-2">
-            <label class="text-sm font-medium text-text w-40 flex-shrink-0">数据目录</label>
-            <div class="flex-1 min-w-0">
-              <div class="truncate text-sm text-text-secondary border border-border bg-bg px-3 py-2 rounded-lg" :title="dataDir">
-                {{ dataDir || '加载中…' }}
-              </div>
-            </div>
-            <button @click="changeDataDir" :disabled="busyDataDir" class="bg-info hover:bg-info-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">
-              {{ busyDataDir ? '搬迁中…' : '修改' }}
-            </button>
-            <button @click="openDir(dataDir)" :disabled="busyDataDir" class="bg-success hover:bg-success-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50 whitespace-nowrap">打开文件夹</button>
-          </div>
-          <p class="text-xs text-text-muted ml-40">全部本机数据的唯一根目录，修改会整体搬迁并重启应用服务。目录下按用途分四层，无需单独设置。</p>
-          <p class="text-xs text-text-muted ml-40 mt-1">core（数据库与密钥）、content（上传图片、AI 技能、快照）、cache（相册缩略图等可再生缓存）、logs（运行日志）。</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- ========== 数据管理 ========== -->
-    <div class="mb-6">
-      <h2 id="settings-section-data" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="database" :size="20" /> 数据管理</h2>
-      <DataExportPanel />
-    </div>
-
-    <!-- ========== AI 数据保护 ========== -->
-    <div class="mb-6">
-      <h2 id="settings-section-aiprivacy" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="brain" :size="20" /> AI 数据保护</h2>
-      <div class="bg-surface rounded-lg border border-border p-6">
-        <AiPrivacyPanel />
-      </div>
-    </div>
-
-    <!-- ========== MCP 服务端（方向 B） ========== -->
-    <div class="mb-6">
-      <h2 id="settings-section-mcp" class="text-xl font-semibold text-text mb-4 flex items-center gap-2"><IconGlyph name="brain" :size="20" /> MCP 服务端</h2>
-      <div class="bg-surface rounded-lg border border-border p-6">
+        <!-- MCP 服务管理：一个启用开关 + 令牌 / 数据权限 / 提案三行「管理 ›」（卡片自带标题与边框） -->
         <McpSettingsPanel />
       </div>
     </div>
@@ -817,10 +888,12 @@
           </div>
           <button @click="openDeleteAccount" class="bg-danger hover:bg-danger-hover text-text-inverse px-4 py-2 rounded transition-theme">删除账号</button>
         </div>
-        <!-- 删除单个班级：多班级才给入口。它是「销毁一整套数据」，所以和删账号同列在危险区。
+        <!-- 删除单个班级：常显，不按班级数量藏。它是「销毁一整套数据」，所以和删账号同列在危险区。
+             只剩一个班时按钮照样在，点下去由 openDeleteClass 当场弹提示（一个账号必须保留一个班），
+             不开倒计时——藏起来会让用户以为功能没了，也不知道「为什么别人有这个按钮」。
              样式与「删除账号」完全一致（同一套 bg-danger/hover/圆角/内边距）——
              两个都是不可恢复的破坏性操作，视觉上不该做出「一个更重一个更轻」的暗示。 -->
-        <div v-if="classCount > 1" class="flex items-center justify-between flex-wrap gap-4 border-t border-border pt-5">
+        <div class="flex items-center justify-between flex-wrap gap-4 border-t border-border pt-5">
           <div class="space-y-2 text-text-secondary">
             <p class="font-medium text-text">删除该班级</p>
             <p class="text-sm text-text-muted">
@@ -965,7 +1038,7 @@
 
 <script setup vapor>
 import { getCurrentUser } from '../../utils/authStorage.js'
-import { ref, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHelp from '../../components/base/AppHelp.vue'
 import CustomScrollbar from '../../components/base/CustomScrollbar.vue'
@@ -974,8 +1047,6 @@ import ClassInfoDialog from '../../components/dialogs/ClassInfoDialog.vue'
 import AppSwitch from '../../components/base/AppSwitch.vue'
 import ViewSwitch from '../../components/base/ViewSwitch.vue'
 import DataExportPanel from '../../components/data-manage/DataExportPanel.vue'
-// AI 数据保护：独立面板（总开关 / 三子项 / 按表关闭），逻辑不塞进本文件
-import AiPrivacyPanel from '../../components/data-manage/AiPrivacyPanel.vue'
 // 方向 B：MCP 服务端设置（令牌 / 外部写提案确认），独立面板，避免把逻辑塞进本文件
 import McpSettingsPanel from '../../components/data-manage/McpSettingsPanel.vue'
 import { useThemeStore } from '../../stores/theme'
@@ -1031,16 +1102,13 @@ const searchActiveIndex = ref(0)
 const settingsSections = ref([
   { key: 'account',  label: '账号管理',       py: 'zhgl' },
   { key: 'semester', label: '学期设置',       py: 'xqsz' },
-  { key: 'undo',     label: '撤销记录',       py: 'cxjl' },
+  { key: 'undo',     label: '更改审查',       py: 'cxjl' },
   { key: 'theme',    label: '主题设置',       py: 'ztsz' },
-  { key: 'toolbox',  label: '工具箱设置',     py: 'gjxsz' },
-  { key: 'widget',   label: '桌面小组件设置', py: 'zmxjjsz' },
+  { key: 'tools',    label: '工具设置',       py: 'gjxszzmxjjsz' },
   { key: 'perf',     label: '性能',           py: 'xn' },
-  { key: 'savepath', label: '保存路径设置',   py: 'bcljsz' },
-  { key: 'datadir',  label: '数据目录设置',   py: 'sjmlsz' },
+  { key: 'paths',    label: '路径设置',       py: 'ljsz' },
   { key: 'data',     label: '数据管理',       py: 'sjgl' },
-  { key: 'aiprivacy', label: 'AI 数据保护',   py: 'aibh' },
-  { key: 'mcp',      label: 'MCP 服务端',     py: 'mcpfwd' },
+  { key: 'mcp',      label: 'MCP 服务管理',   py: 'mcpfw' },
   { key: 'danger',   label: '危险操作',       py: 'wxcz' },
 ])
 // 分区内的具体设置项：命中后滚动到该设置行（py 为标签拼音首字母）
@@ -1058,26 +1126,23 @@ const settingsItems = ref([
   { label: '动画效果',                 section: 'theme',    py: 'dhxg' },
   { label: '背景遮罩层（有自定义背景图时）', section: 'theme', py: 'bjzzc' },
   { label: '组件透明玻璃层',           section: 'theme',    py: 'zjtmlbl' },
-  { label: '是否启用工具箱',           section: 'toolbox',  py: 'sfqygjx' },
-  { label: '点名排除不在校同学',       section: 'toolbox',  py: 'dmpcbzxtx' },
-  { label: '本次启用工具箱',           section: 'toolbox',  py: 'bcqygjx' },
-  { label: '新U盘插入自动打开',        section: 'toolbox',  py: 'xupcrzddk' },
-  { label: '启用桌面小组件',           section: 'widget',   py: 'qyzmxjjs' },
-  { label: '注释截屏保存位置',         section: 'savepath', py: 'zsjpbcwz' },
-  { label: '一键截屏保存位置',         section: 'savepath', py: 'yjjpbcwz' },
-  { label: '数据库目录',               section: 'datadir',  py: 'sjkml' },
-  { label: '相册缩略图缓存',           section: 'datadir',  py: 'xcsltch' },
-  { label: '技能文件目录',             section: 'datadir',  py: 'jnwjml' },
+  { label: '是否启用工具箱',           section: 'tools',    py: 'sfqygjx' },
+  { label: '点名排除不在校同学',       section: 'tools',    py: 'dmpcbzxtx' },
+  { label: '点名包含临时学生',         section: 'tools',    py: 'dmbhlsx' },
+  { label: '新U盘插入自动打开',        section: 'tools',    py: 'xupcrzddk' },
+  { label: '启用桌面小组件',           section: 'tools',    py: 'qyzmxjjs' },
+  { label: '数据目录',                 section: 'paths',    py: 'sjml' },
+  { label: '注释截屏保存位置',         section: 'paths',    py: 'zsjpbcwz' },
+  { label: '一键截屏保存位置',         section: 'paths',    py: 'yjjpbcwz' },
   { label: '安全等级',                 section: 'account',  py: 'aqdj' },
   { label: '登录保持',                 section: 'account',  py: 'dlbc' },
   { label: '数据导出',                 section: 'data',     py: 'sjdc' },
   { label: '导出格式',                 section: 'data',     py: 'dcgs' },
   { label: 'zip 密码',                 section: 'data',     py: 'zipmm' },
-  { label: 'AI 数据保护总开关',        section: 'aiprivacy', py: 'aibhzkg' },
-  { label: '保护电话',                 section: 'aiprivacy', py: 'bhdhyx' },
-  { label: '按表关闭 AI 读取',         section: 'aiprivacy', py: 'abgbaiduq' },
-  { label: 'MCP 访问令牌',             section: 'mcp',      py: 'mcpfwld' },
-  { label: 'MCP 待确认提案',           section: 'mcp',      py: 'mcpdqrt' },
+  { label: 'MCP 令牌',                 section: 'mcp',      py: 'mcplp' },
+  { label: 'MCP 数据权限',             section: 'mcp',      py: 'mcpsjqx' },
+  { label: 'MCP 提案',                 section: 'mcp',      py: 'mcpta' },
+  { label: 'MCP 访问记录',             section: 'mcp',      py: 'mcpfwjl' },
 ])
 // 图标样式选项：彩色图标 / Emoji
 const iconStyleOptions = [
@@ -1144,10 +1209,6 @@ const dialogMounted = ref(false)
 const dialogCallback = ref(null)
 // 「删除账号」倒计时定时器
 const deleteTimer = ref(null)
-// 当前账号有几个班：决定危险区要不要出现「删除该班级」。
-// 初始 0（= 未知）时按「不显示」处理，拉回来再显示 —— 宁可晚一帧出现，
-// 也不要在单班账号上闪一个点下去必然被拒的按钮。
-const classCount = ref(0)
 // 账号信息区的「当前班级」：列表与当前 slug 同一次请求拿回来，
 // 切换时只换 slug，不重新拉列表（切完会重建视图，onMounted 再拉一次）。
 const classList = ref([])
@@ -1195,9 +1256,64 @@ const recoveryMounted = ref(false)
 watch(() => privacyPhrase.value, (v) => { if (v) recoveryMounted.value = true })
 // 撤销记录
 const undoGroups = ref([])
+// 来源筛选：all / manual / ai_assistant / mcp。只过滤展示，不改回退的全局作用域。
+const undoSourceFilter = ref('all')
+// 下拉选项与 undoSourceFilter 的取值一一对应；标签文案和 sourceLabel() 保持一致
+const undoSourceOptions = [
+  { value: 'all', label: '全部' },
+  { value: 'manual', label: '手改' },
+  { value: 'ai_assistant', label: 'AI 助手' },
+  { value: 'mcp', label: 'MCP' },
+]
+// 按来源过滤后的分组（组里没有匹配的条目就整组隐藏）
+const filteredUndoGroups = computed(() => {
+  const f = undoSourceFilter.value
+  if (f === 'all') return undoGroups.value
+  return undoGroups.value
+    .map(g => ({ ...g, entries: (g.entries || []).filter(e => (e.source || 'manual') === f) }))
+    .filter(g => g.entries.length > 0)
+})
+// 当前选中的表格标签（key 为空、或该表被来源筛掉时回退到第一张表，
+// 这样切换「来源」后标签高亮不会停在一张已经不在列表里的表上）
+const undoActiveKey = ref('')
+const undoActiveGroup = computed(() => {
+  const list = filteredUndoGroups.value
+  if (!list.length) return null
+  return list.find(g => g.key === undoActiveKey.value) || list[0]
+})
+// 标签行右侧的合计：口径与标签上的数字一致（都是「步」，不是「条」），随来源筛选一起变
+const undoTotalSteps = computed(() =>
+  filteredUndoGroups.value.reduce((s, g) => s + (g.entries || []).filter(e => e.dir === 1).length, 0)
+)
 // 撤销记录列表滚动容器（自定义滚动条的目标）
 const undoListRef = ref(null)
 const busyUndo = ref(false)
+// 撤销列表首屏：空列表和「还在读」是两件事，不能都显示「暂无记录」（会闪一下假空态）
+const undoLoading = ref(true)
+// 展开「一次改动（N 项）」里的逐条明细：只有同一批次（同一次保存）改了多格时才有意义。
+// 展开后每条自带「只撤这一条」——值日/座位这类单格记录可以跳过后面的记录单独退
+// （整块快照类型不给这个按钮，后端也会拒绝）。
+const undoExpanded = reactive({})
+function toggleUndoExpand(key) {
+  undoExpanded[key] = !undoExpanded[key]
+}
+function isUndoExpanded(key) {
+  return !!undoExpanded[key]
+}
+// 点标签切表：内容整体换掉，滚动位置必须回到顶部，
+// 否则新表会停在上一张表留下的中间位置，看着像「没切过去」。
+function selectUndoGroup(key) {
+  if (undoActiveKey.value === key) return
+  undoActiveKey.value = key
+  const el = undoListRef.value
+  if (el) el.scrollTop = 0
+  // 失效状态只算当前这张表：切表再取，不在进入页面时把所有表都算一遍
+  ctx.loadUndoStale(key)
+}
+// 来源筛选把当前表筛掉时，active 会回落到第一张 —— 新表的失效状态要跟着换
+watch(() => undoActiveGroup.value && undoActiveGroup.value.key, (k) => {
+  if (k) ctx.loadUndoStale(k)
+})
 // Theme
 const selectedThemeId = ref('')
 // 是否合并相同内容的重复提示
@@ -1465,10 +1581,10 @@ const ctx = {
   usernameError, busyUsername, exportPassword, exportEncrypt, exportDbPwd, busyExport, exportProgress,
   semesters, semesterId, semesterNameDraft, showRenameSemester, newSemesterName, showAddSemester,
   showDeleteSemester, busySemester, busySemesterDate, semesterStart, semesterEnd, semesterDateErrorText,
-  dialog, dialogMounted, dialogCallback, deleteTimer, classCount, classList, currentSlug, currentClassName, switchingClass, classDialogVisible, classInfo, toolboxEnabled, rollcallExcludeAbsent, rollcallIncludeProvisional, noteSavePath, screenshotSavePath,
+  dialog, dialogMounted, dialogCallback, deleteTimer, classList, currentSlug, currentClassName, switchingClass, classDialogVisible, classInfo, toolboxEnabled, rollcallExcludeAbsent, rollcallIncludeProvisional, noteSavePath, screenshotSavePath,
   screenshotDir, usbAutoOpen, desktopWidgetEnabled, loaded, _fromMainHandler, dataDir,
   busyDataDir, securityLevel, securityLevelLoading, busySecurityLevel,
-  securityDialog, privacyPhrase, undoGroups, busyUndo, selectedThemeId, mergeNotifications,
+  securityDialog, privacyPhrase, undoGroups, undoSourceFilter, filteredUndoGroups, undoActiveKey, busyUndo, undoLoading, selectedThemeId, mergeNotifications,
   bgImageUrl, bgImageFileName, perfProcs, perfTopRatio, perfAlive, perfTotal, perfAvg, perfMax,
   perfFront, perfBackend, perfOther, perfStartupTotal, fastStartup, busyGc, busyRestartBackend, busyRestartWidget,
   busyRestartAll, _perfTimer, diskUsage, diskUsageError, busyDisk, busyPurgeThumbs, busySweepThumbs, busyVacuum, vacuumDialog, busyLogs,
@@ -1511,7 +1627,7 @@ const {
   purgeThumbs, sweepThumbs, vacuumDb, cancelVacuumWait, clearLogs,
   recycleAll, redoEntry, requestDeleteSemester, restartAll, restartBackend, restartFrontend,
   restartWidget, renameClassFromSettings, saveClassInfoFromSettings, saveSemesterName, saveSemesterSettings, selectDiskSegment, selectFolder, showDiskTip,
-  switchClassFromSettings, createClassFromSettings, undoableCount, undoEntry,
+  sourceBadgeClass, sourceLabel, switchClassFromSettings, createClassFromSettings, undoableCount, undoMember, undoRow, undoActionLabel,
 } = ctx
 
 // 「修改密码 → 忘记密码？」：已登录且账号已知，所以不列账号列表，直接拿当前账号的库文件验证。
@@ -1626,6 +1742,228 @@ onBeforeUnmount(() => {
 /* 设置项搜索跳转锚点：滚动到标题时留出上边距，避免紧贴内容区顶端 */
 [id^="settings-section-"] {
   scroll-margin-top: 1.5rem;
+}
+
+/* ===== 更改审查：表格标签 + 内容玻璃 =====
+   标签行就是这一块的标题（表名 + 可退回步数），右侧挂一句合计；下面直接是记录列表。
+   选中标签与下面内容同一套白色毛玻璃配方（ai-glass-panel + bg-white/55 + backdrop-blur-md），
+   靠描边区分选中；未选中完全透明，只留文字与悬浮底色。
+   毛玻璃主题给每个 button 加了 1px 描边 + 圆角 + ::before 荧光圈（特异性 0,2,1，
+   高于 scoped 的 0,2,0），这里必须用 !important 清掉再自己给一套。 */
+.undo-tabs-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+}
+.undo-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+/* 合计：宽度够时与标签同一行右对齐，标签换行后落到下一行同样贴右 */
+.undo-tabs-meta {
+  margin-left: auto;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-muted, #9ca3af);
+  white-space: nowrap;
+}
+/* 清空记录：先过 .btn-plain 那一层 —— 毛玻璃主题给「所有 button」加了 1px 描边 +
+   圆角 + ::before 荧光环（特异性 0,2,1），裸文字链会被套成一颗发光胶囊，
+   比旁边的「来源」下拉还抢眼。这里只补尺寸，颜色留 text-danger：
+   它是这块里唯一不可逆的入口，警示只能靠颜色。 */
+.undo-clear-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+/* 内容玻璃：高度固定，不随「有几条记录」变化 —— 切标签时面板高度不跳，
+   内容超出才出滚动条（列表少时下方留白，这是选定高度换来的稳定）。
+   圆角用 --radius-card（base/glass2 = 8px，glass = 12px），跟随主题的「内嵌面板」档。 */
+.undo-glass {
+  height: 22.75rem; /* 320px（原列表上限）+ 44px（原二级标题行），整体高度与改版前一致 */
+  border-radius: var(--radius-card, 0.5rem);
+}
+.undo-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 14rem;
+  height: 2rem;
+  padding: 0 12px;
+  font-size: 12px;
+  line-height: 1;
+  /* 透明描边占位：选中时才显示颜色，避免选中瞬间文字横向跳 1px */
+  border: 1px solid transparent !important;
+  /* 圆角跟主题控件档（base/glass 6px、glass2 4px），与同页其它小按钮一致 */
+  border-radius: var(--radius-control, 6px) !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+.undo-tab::before { display: none !important; content: none !important; }
+/* 选中：白色毛玻璃（bg-white/55 + backdrop-blur-md + ai-glass-panel 在标签上），描边落色 */
+.undo-tab-on {
+  border-color: var(--color-border) !important;
+}
+/* 未选中悬浮：只用文字色派生的一层淡底，深色模式自动跟着变，不写死白 */
+.undo-tab:not(.undo-tab-on):hover {
+  background-color: color-mix(in srgb, var(--color-text, #111827) 6%, transparent);
+}
+/* 表名可能很长（如「加分扣分记录」），标签宽度封顶后省略，不把整排撑开 */
+.undo-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 步数胶囊：底色由当前文字色派生，选中（正文色）/ 未选中（辅助色）自动匹配 */
+.undo-tab-count {
+  min-width: 1.15rem;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 1.15rem;
+  text-align: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+}
+
+/* ===== 更改审查：记录时间轴 =====
+   一行 = 一步动作。左侧竖线 + 圆点表达先后，实心 = 仍生效，空心 = 已撤销；
+   竖线由每行的 .undo-tl-gutter::before 画（首行从圆点起、末行到圆点止），
+   圆点是 gutter 的子元素、天然盖在线上，不需要额外描边处理。
+   圆点用 --color-primary 而不是固定蓝色，换主题时跟着主色走。 */
+.undo-tl {
+  padding: 6px 0;
+}
+.undo-tl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px 9px 0;
+}
+.undo-tl-gutter {
+  position: relative;
+  align-self: stretch;
+  flex: 0 0 34px;
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.undo-tl-gutter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--color-border, #e5e7eb);
+}
+.undo-tl-row:first-child .undo-tl-gutter::before { top: 50%; }
+.undo-tl-row:last-child .undo-tl-gutter::before { bottom: 50%; }
+.undo-tl-row:only-child .undo-tl-gutter::before { display: none; }
+.undo-tl-dot {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--color-primary, #3b82f6);
+}
+/* 已撤销：空心点（底色 + 描边），与仍生效的实心点一眼可分 */
+.undo-tl-dot.is-undone {
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border-strong, #d1d5db);
+}
+/* 悬浮底色由文字色派生：深色主题自动变浅，不写死白 */
+.undo-tl-row:hover {
+  background: color-mix(in srgb, var(--color-text, #111827) 4%, transparent);
+}
+
+/* ===== 更改审查：一步里改了多格时，展开逐条挑着退 =====
+   只有「单格」记录（值日/座位单格、动态表单字段）给「只撤这一条」；
+   整块快照类型不展开也无法单独退 —— 单独写回整块快照会把后面几条的改动一起抹掉。 */
+.undo-expand {
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 0 7px;
+  border: none;
+  background: transparent;
+  color: var(--color-info, #3b82f6);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.undo-expand:hover {
+  background: color-mix(in srgb, var(--color-info, #3b82f6) 12%, transparent);
+}
+.undo-members {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 3px 0 1px;
+}
+.undo-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 1px 0 1px 10px;
+  /* 虚竖线表明这几条属于上面那一步（缩进比时间轴浅一档） */
+  border-left: 1px dashed var(--color-border, #e5e7eb);
+}
+.undo-only {
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-surface, #fff);
+  color: var(--color-text-muted, #6b7280);
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+.undo-only:hover {
+  color: var(--color-warning, #f59e0b);
+  border-color: color-mix(in srgb, var(--color-warning, #f59e0b) 45%, var(--color-border, #e5e7eb));
+}
+.undo-only:disabled { opacity: 0.4; cursor: default; }
+
+/* ===== 更改审查：来源色标 =====
+   三类来源各占一个语义色：手改 = info 蓝、AI 助手 = success 绿、MCP = warning 橙。
+   底色是本色 14%~16% 的淡染，文字把本色与正文色按 7:3 混合：
+   浅色主题下混出更深的同色系（11px 小字要够沉才看得清），
+   深色主题下正文色是浅的，混出来自动提亮 —— 一套规则同时管日夜，不写两份。
+   不用 --color-primary：base 主题的 primary 跟随用户强调色，可能是绿的，会和 AI 撞色。 */
+.src-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+}
+.src-manual {
+  color: color-mix(in srgb, var(--color-info, #3b82f6) 70%, var(--color-text, #111827));
+  background: color-mix(in srgb, var(--color-info, #3b82f6) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-info, #3b82f6) 30%, transparent);
+}
+.src-ai {
+  color: color-mix(in srgb, var(--color-success, #22c55e) 70%, var(--color-text, #111827));
+  background: color-mix(in srgb, var(--color-success, #22c55e) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-success, #22c55e) 30%, transparent);
+}
+.src-mcp {
+  color: color-mix(in srgb, var(--color-warning, #f59e0b) 70%, var(--color-text, #111827));
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 16%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning, #f59e0b) 32%, transparent);
 }
 
 /* 搜索弹窗：整体自下而上浮入 */

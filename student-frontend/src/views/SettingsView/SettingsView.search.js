@@ -2,6 +2,11 @@
 // 纯代码搬运自 SettingsView.vue 的 methods，未改写逻辑；经 ctx 闭包调用（script setup）。
 import { nextTick } from 'vue'
 
+// 已合并的分区键 → 现分区键。「工具箱设置」和「桌面小组件设置」合并成了「工具设置」，
+// 但 ?focus=toolbox / ?focus=widget 这类链接还在（浏览器历史、书签、旧文档里的截图说明），
+// 老键不映射就会静默不跳转——用户以为搜索坏了。左值只增不减。
+const SECTION_ALIAS = { toolbox: 'tools', widget: 'tools' }
+
 export function useSettingsSearch(ctx) {
   return {
     // 搜索框聚焦：展开悬浮弹窗，并同步坐标与滚动/缩放监听
@@ -113,7 +118,8 @@ export function useSettingsSearch(ctx) {
       const focus = ctx.route.query.focus
       if (!focus) { ctx._focusSig = ''; return }
       if (focus === ctx._focusSig) return
-      const [section, label] = String(focus).split('|')
+      const [rawSection, label] = String(focus).split('|')
+      const section = SECTION_ALIAS[rawSection] || rawSection
       const anchor = label
         ? ctx._findSettingItemEl(section, label)
         : document.getElementById('settings-section-' + section)

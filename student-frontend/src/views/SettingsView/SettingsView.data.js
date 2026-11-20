@@ -1,9 +1,9 @@
 // ===== 设置页：学期设置、撤销记录、弹窗/消息、账号与数据库导出 =====
 // 纯代码搬运自 SettingsView.vue 的 methods，未改写逻辑；经 ctx 闭包调用（script setup）。
-import { getCurrentUser, setCurrentUser, clearAuth } from '../../utils/authStorage.js'
+import { getCurrentUser, setCurrentUser, clearAuth, markLoggingOut } from '../../utils/authStorage.js'
 import { reportError } from '../../utils/reportError.js'
 import axios from 'axios'
-import { listUndo, undoById, redoById, undoBatch, redoBatch, clearUndo } from '../../api/undo'
+import { listUndo, listUndoStale, rewindTo, replayTo, clearUndo, undoOnly, undoBatch, undoById } from '../../api/undo'
 import { pad2 } from '../../utils/dateTime.js'
 import { invalidateSemesterStart } from '../../utils/semesterStart.js'
 import { clearMediaToken } from '../../utils/apiUrl'
@@ -19,6 +19,28 @@ import { useNotification } from '../../composables/useNotification.js'
 
 // 把同一次动作的多条记录折成一行：同 origin、同方向的连续记录算「一次改动（N 项）」，
 // 无 origin 的单条记录仍是一行。这样设置页与 Ctrl+Z 的口径一致：一次动作 = 一步。
+// members 保留逐条明细：值日/座位这类「单格」记录可以展开后挑一条单独退
+// （整块快照类型 canOnly=false —— 单独退一条快照会把后面几条的改动一起抹掉）。
+const CELL_ONLY_TYPES = new Set(['duty_cell', 'grid_cell', 'cell_update'])
+// 行级记录也能单独翻一条：后端 flip 会先比对该行快照，之后被改过就拒绝。
+// 与格子级的区别只是冲突判据（行快照 vs 单格当前值），对用户都是「撤销这一条」。
+const ROW_ONLY_TYPES = new Set(['row_insert', 'row_update', 'row_delete'])
+
+function toMember(rec) {
+  const isolate = CELL_ONLY_TYPES.has(rec.type) ? 'cell' : (ROW_ONLY_TYPES.has(rec.type) ? 'row' : '')
+  return {
+    id: rec.id,
+    label: rec.label,
+    ts: rec.ts,
+    dir: rec.dir,
+    type: rec.type,
+    isolate,
+    canOnly: !!isolate,
+    // 后端现算的失效原因（'' = 还能撤）。不缓存：每次 loadUndo 都会跟着当前数据变
+    stale: rec.stale || '',
+  }
+}
+
 function foldUndoEntries(records) {
   const entries = []
   for (const rec of records || []) {
@@ -26,20 +48,40 @@ function foldUndoEntries(records) {
     if (rec.origin && last && last.origin === rec.origin && last.dir === rec.dir) {
       last.ids.push(rec.id)
       last.count += 1
+      last.members.push(toMember(rec))
+      // 批次是原子的：成员里只要有一条失效，整批都退不了
+      last.stale = last.stale || rec.stale || ''
       continue
     }
     entries.push({
       key: rec.origin ? `o-${rec.origin}-${rec.dir}` : `r-${rec.id}`,
       origin: rec.origin || '',
+      // 来源标签：同 origin 的批次必然同源，取首条即可
+      source: rec.source || 'manual',
       ids: [rec.id],
       ts: rec.ts,
       dir: rec.dir,
       label: rec.label,
-      count: 1
+      count: 1,
+      stale: rec.stale || '',
+      members: [toMember(rec)]
     })
   }
-  // 多条时统一文案：逐格 label 拼起来太长，只给条数
-  return entries.map(e => (e.count > 1 ? { ...e, label: `一次改动（${e.count} 项）` } : e))
+  return entries.map((e) => {
+    // 单条 + 可隔离类型，才是「能只撤这一条」的一步：
+    // 整块快照退一条会把后面几条的改动一起抹掉，所以只能连带退回。
+    const canOnly = e.count === 1 && e.members.every((m) => m.canOnly)
+    // 多条时统一文案：逐格 label 拼起来太长，只给条数
+    return { ...e, canOnly, label: e.count > 1 ? `一次改动（${e.count} 项）` : e.label }
+  })
+}
+
+// 面板当前摊开的是哪张表：选中的 key 被来源筛选筛掉时回落到第一张（与 undoActiveGroup 同口径）
+function activeUndoKey(ctx) {
+  const list = ctx.filteredUndoGroups.value || []
+  if (!list.length) return ''
+  const picked = list.find(g => g.key === ctx.undoActiveKey.value)
+  return (picked || list[0]).key
 }
 
 export function useSettingsData(ctx) {
@@ -180,22 +222,102 @@ export function useSettingsData(ctx) {
     },
     // ==================== 撤销记录 ====================
     async loadUndo() {
+      ctx.undoLoading.value = true
       try {
         const { data } = await listUndo()
         ctx.undoGroups.value = (data.groups || []).map(g => ({ ...g, entries: foldUndoEntries(g.records) }))
-      } catch { }
+      } catch { } finally {
+        ctx.undoLoading.value = false
+      }
+      // 列表先铺开，再单独算「当前这张表」的失效 —— 没算完也不挡渲染，
+      // 顶多晚一帧才出现「已失效」标。
+      ctx.loadUndoStale(activeUndoKey(ctx))
     },
-    // 设置页的撤销/重做按钮：批次走 /origin/:origin/*（整批），单条走 /:id/*
+    // 失效状态与列表分开取：面板一次只铺一张表，就只算那一张（每表上限 50 条）。
+    // 只返回失效的 id → 原因；可撤的不占字节。算不出来不影响撤销本身（静默跳过）。
+    async loadUndoStale(key) {
+      const k = String(key || '')
+      if (!k) return
+      let map = {}
+      try {
+        const { data } = await listUndoStale(k)
+        map = data.stale || {}
+      } catch { return }
+      const g = (ctx.undoGroups.value || []).find(x => x.key === k)
+      if (!g) return
+      for (const ent of g.entries || []) {
+        let why = ''
+        for (const m of ent.members || []) {
+          m.stale = map[m.id] || ''
+          if (m.stale) why = m.stale
+        }
+        // 批次是原子的：任一成员失效 = 整步退不了
+        ent.stale = why
+      }
+    },
+    // 审查面板的回退/重做：统一走全局时间线的 rewind/replay（整批原子）。
+    // 回退锚点取批次内最大 id（该批最后一次写入的位置）——退「这条及之后」，
+    // 从末尾退才能覆盖整批；重做锚点取最小 id——正序重做从起点开始。
     async undoEntry(entry) {
       if (ctx.busyUndo.value || !entry) return
       ctx.busyUndo.value = true
+      const anchor = Math.max(...entry.ids)
       try {
-        const { data } = entry.origin
-          ? await undoBatch(entry.origin)
-          : await undoById(entry.ids[0])
-        if (data.ok) ctx.showAlert(data.label ? `已撤销：${data.label}` : '已成功撤销')
+        const { data } = await rewindTo(anchor)
+        if (data.ok) {
+          const tail = data.batch > 1 ? `（连带回退 ${data.batch} 项）` : ''
+          // 结果走提示条：审查是连续动作（一条接一条地退），弹窗要点掉才能继续，反而拖节奏。
+          // 失败也走提示条 —— 文案本身写清了原因，不需要用户「点一下表示知道了」。
+          useNotification().success((data.label ? `已回退：${data.label}` : '已成功回退') + tail)
+        }
       } catch (err) {
-        ctx.showAlert(err.response?.data?.error || '撤销失败，可能目标数据已被删除')
+        useNotification().error(err.response?.data?.error || '回退失败，这条之后的数据可能已被改动')
+      } finally {
+        ctx.busyUndo.value = false
+        await ctx.loadUndo()
+      }
+    },
+    // 一行 = 一步。按钮只作用于「这一步」，不连带更新的改动：
+    //   单条格子/行记录 → 只翻这一条（后端验「这之后没被再改过」）
+    //   同批次多条     → 整批回退（origin），不影响其它步骤
+    //   整块快照       → 拆不开，只能「连同之后」一起退（rewindTo）
+    undoRow(entry) {
+      if (ctx.busyUndo.value || !entry) return
+      if (entry.canOnly && entry.members?.[0]) return ctx.undoMember(entry.members[0])
+      if (entry.origin && entry.count > 1) return ctx.undoOriginStep(entry)
+      return ctx.undoEntry(entry)
+    },
+    // 按钮文案就是「这一步能不能单独撤」的答案
+    undoActionLabel(entry) {
+      if (!entry) return ''
+      if (entry.canOnly) return '撤销这一条'
+      if (entry.origin && entry.count > 1) return '撤销这一步'
+      return '退回此前'
+    },
+    // 同一次保存改了多格：按 origin 整批退，只退这一步，不动其它步骤。
+    async undoOriginStep(entry) {
+      if (ctx.busyUndo.value || !entry) return
+      ctx.busyUndo.value = true
+      try {
+        const { data } = await undoBatch(entry.origin)
+        if (data.ok) useNotification().success(data.label ? `已撤销：${data.label}` : '已撤销这一步')
+      } catch (err) {
+        useNotification().error(err.response?.data?.error || '撤销失败，这一步之后的数据可能已被改动')
+      } finally {
+        ctx.busyUndo.value = false
+        await ctx.loadUndo()
+      }
+    },
+    // 只撤「这一条」：跳过它后面的记录，只把这一条写回原值。
+    // 格子级走 /only（验这一格没被再改过）；行级走 /:id/undo（后端比对该行快照）。
+    async undoMember(member) {
+      if (ctx.busyUndo.value || !member) return
+      ctx.busyUndo.value = true
+      try {
+        const { data } = member.isolate === 'row' ? await undoById(member.id) : await undoOnly(member.id)
+        if (data.ok) useNotification().success(data.label ? `已撤销：${data.label}` : '已撤销这一条')
+      } catch (err) {
+        useNotification().error(err.response?.data?.error || '只撤失败，请从最新的一条开始退')
       } finally {
         ctx.busyUndo.value = false
         await ctx.loadUndo()
@@ -204,21 +326,36 @@ export function useSettingsData(ctx) {
     async redoEntry(entry) {
       if (ctx.busyUndo.value || !entry) return
       ctx.busyUndo.value = true
+      const anchor = Math.min(...entry.ids)
       try {
-        const { data } = entry.origin
-          ? await redoBatch(entry.origin)
-          : await redoById(entry.ids[0])
-        if (data.ok) ctx.showAlert(data.label ? `已重做：${data.label}` : '已成功重做')
+        const { data } = await replayTo(anchor)
+        if (data.ok) {
+          const tail = data.batch > 1 ? `（连带重做 ${data.batch} 项）` : ''
+          useNotification().success((data.label ? `已重做：${data.label}` : '已成功重做') + tail)
+        }
       } catch (err) {
-        ctx.showAlert(err.response?.data?.error || '重做失败')
+        useNotification().error(err.response?.data?.error || '重做失败')
       } finally {
         ctx.busyUndo.value = false
         await ctx.loadUndo()
       }
     },
+    // 清空全部更改记录：与危险区同一套「确定键先置灰 + 倒计时」。
+    // 记录清掉就再也退不回去（没有重做、也没有备份），而按钮就贴在列表边上，手滑一下代价太大。
+    // 比删账号的 10 秒短：这里销毁的只是「能退回的历史」，业务数据一行不动。
     clearUndo() {
       if (ctx.busyUndo.value) return
-      ctx.showConfirm('确定清空所有撤销记录吗？此操作不可恢复。', async () => {
+      ctx.clearDeleteTimer()
+      ctx.dialog.value = {
+        visible: true,
+        title: '警告',
+        message: '将清空全部更改记录，之后无法再退回任何一步。学生、成绩等数据本身不受影响。',
+        type: 'confirm',
+        showCancel: true,
+        confirmText: '确定(5)',
+        confirmDisabled: true,
+      }
+      ctx.dialogCallback.value = async () => {
         ctx.busyUndo.value = true
         try {
           await clearUndo('all')
@@ -226,7 +363,33 @@ export function useSettingsData(ctx) {
           ctx.busyUndo.value = false
           await ctx.loadUndo()
         }
-      })
+      }
+      let remain = 5
+      ctx.deleteTimer = setInterval(() => {
+        remain -= 1
+        if (remain <= 0) {
+          ctx.clearDeleteTimer()
+          ctx.dialog.value.confirmText = '确定'
+          ctx.dialog.value.confirmDisabled = false
+        } else {
+          ctx.dialog.value.confirmText = `确定(${remain})`
+        }
+      }, 1000)
+    },
+    // 来源标签与筛选：三类来源在面板上一眼可辨。只做前端展示过滤，
+    // 不改变 rewind 的全局作用域——筛选只是「看哪些」，回退仍是「退这条及之后」。
+    sourceLabel(source) {
+      return { manual: '手改', ai_assistant: 'AI 助手', mcp: 'MCP' }[source] || '手改'
+    },
+    // 来源色标：三类来源各占一个语义色（蓝 / 绿 / 橙），只返回修饰类，
+    // 具体底色与文字色在 SettingsView.vue 的 scoped 样式里（.src-manual/.src-ai/.src-mcp）。
+    // 不用 --color-primary：base 主题的 primary 跟用户强调色走，可能是绿的，会跟「AI 助手」撞色。
+    sourceBadgeClass(source) {
+      return {
+        manual: 'src-manual',
+        ai_assistant: 'src-ai',
+        mcp: 'src-mcp',
+      }[source] || 'src-manual'
     },
     groupLabel(key) {
       return ctx._undoKeyLabels.value[key] || key
@@ -238,7 +401,8 @@ export function useSettingsData(ctx) {
     fmtTs(ts) {
       if (!ts) return ''
       const d = new Date(ts)
-      return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+      // 精确到秒：同一次操作里连改几格，只到分钟会显示成一模一样的时间，分不出先后顺序
+      return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
     },
     // Account
     openModal(type) {
@@ -342,11 +506,15 @@ export function useSettingsData(ctx) {
     },
     confirmLogout() {
       ctx.showConfirm('确认退出登录？', async () => {
+        // 标记「正在主动登出」：随后在途请求的 401 是预期结果，全局处理会静默，
+        // 否则每次正常登出都会在登录页弹一条「登录已过期」。
+        markLoggingOut()
         // 通知后端吊销本次会话：原 token 立即失效（先发请求再清本地，token 已清会 401）
         try { await axios.post(AUTH_API.logout) } catch (_) {}
         clearAuth()
         clearMediaToken()
         ctx.router.push('/login')
+        useNotification().success('已退出登录')
       }, '确认')
     },
     // 打开「删除账号」警告弹窗：确定按钮先置灰，10 秒倒计时结束后才可点击
@@ -385,20 +553,17 @@ export function useSettingsData(ctx) {
         ctx.showAlert(err.response?.data?.error || '删除失败')
       }
     },
-    // 班级列表 + 当前班。账号信息区的「当前班级」和危险区的「删除该班级」
-    // 共用这一次请求（两者都只关心「有几个班、现在在哪个」）。
+    // 班级列表 + 当前班：账号信息区的「当前班级」用它。
+    // 危险区的「删除该班级」不再依赖它判断显隐（按钮常显），点下去时自己再拉一次列表。
     async loadClasses() {
       try {
         const r = await axios.get('/api/account/classes')
-        const list = r.data?.classes || []
-        ctx.classList.value = list
+        ctx.classList.value = r.data?.classes || []
         ctx.currentSlug.value = r.data?.current || ''
-        ctx.classCount.value = list.length
       } catch (_) {
-        // 拉不到就按「没有班级信息」处理：危险区不显示删班入口，账号区显示 —
+        // 拉不到就按「没有班级信息」处理：账号区显示 —，切班级/删除班级各自点按时再重试
         ctx.classList.value = []
         ctx.currentSlug.value = ''
-        ctx.classCount.value = 0
       }
     },
     // 打开班级弹窗：与首页齿轮打开的是同一个组件。先拉数据再显示 ——
@@ -506,7 +671,9 @@ export function useSettingsData(ctx) {
         return
       }
       if (classes.length <= 1) {
-        ctx.showAlert('这是你唯一的班级。删除后就没有可用数据了；如需销毁全部数据，请使用「删除账号」。')
+        // 按钮是常显的，所以这里必须给一句「为什么不能删」，而不只是「不能删」：
+        // 用户刚点下一个大红色按钮，要立刻明白这是账号层的约束，不是功能坏了。
+        ctx.showAlert('一个账号需要保留一个班级。\n\n当前这是唯一的班级，删除后账号就没有可用数据了。如需销毁全部数据，请使用上方的「删除账号」。')
         return
       }
       const name = classes.find((c) => c.slug === current)?.className || '当前班级'

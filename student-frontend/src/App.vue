@@ -154,7 +154,8 @@
     <Teleport to="body">
       <!-- 复用工具箱的浮现/收回动画：整块面板从贴合图标的一侧缩放浮现 -->
       <Transition name="ai-pop">
-        <!-- ai-glass-panel：硬编码浅色玻璃的标记类，夜间模式由 theme-night.css 统一覆盖为深色玻璃
+        <!-- ai-glass-panel：硬编码浅色玻璃的标记类，夜间模式由玻璃夜间层
+             （theme-glass-night.css / theme-glass2-night.css 的共用块）统一覆盖为深色玻璃
              （与 AI 页面内的对话列表/聊天区等玻璃块保持一致） -->
         <div
           v-if="assistantOpen"
@@ -655,7 +656,7 @@ async function persistToolboxDisabled() {
     await axios.put('/api/widget-settings', { toolboxEnabled: false })
     // 通知浮窗按最新设置刷新（此时它已被主进程隐藏，这里只是同步状态）
     window.electron?.send(SEND.TO_WIDGET, { type: 'settings-changed' })
-    useNotification().success('工具箱已关闭，可在「设置 → 工具箱设置」重新启用')
+    useNotification().success('工具箱已关闭，可在「设置 → 工具设置」重新启用')
   } catch (_) {
     useNotification().error('关闭工具箱失败，请重试')
   }

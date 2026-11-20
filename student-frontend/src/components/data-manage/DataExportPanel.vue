@@ -131,13 +131,15 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
 import axios from 'axios'
 import AppHelp from '../base/AppHelp.vue'
 import AppSwitch from '../base/AppSwitch.vue'
 import IconGlyph from '../base/IconGlyph.vue'
-import ExportExcel from '../import-export/ExportExcel/ExportExcel.vue'
-import { useExportFormats } from '../import-export/ExportExcel/ExportExcel.exporters.js'
+// 导出弹窗与格式库只在用户点「导出」时才用：模板里 <ExportExcel> 已是 v-if="dlg.visible"，
+// 但静态 import 会把 ExportExcel + exporters 两个 chunk 打进设置页首屏（约 33KB）。
+// 改成 async 组件 + 动态 import，让它们跟着弹窗一起按需加载。
+const ExportExcel = defineAsyncComponent(() => import('../import-export/ExportExcel/ExportExcel.vue'))
 import { saveBlobWithDialog } from '../../utils/saveFile.js'
 import { blobToBase64 } from '../../utils/base64.js'
 import { localDateStr } from '../../utils/dateTime.js'
@@ -257,7 +259,9 @@ function onDlgVisible(v) {
 
 // 复用 ExportExcel 的格式实现，只换写盘出口：注入 saveFile 后各格式函数把生成的
 // blob 交回来，而不是弹系统保存框。列宽 / 边框 / CSV 转义全部沿用同一份代码。
-function makeCollector() {
+// 格式库按需加载：zip 导出真的开始时才拉 exporters chunk（与上面弹窗同一个 chunk）。
+async function makeCollector() {
+  const { useExportFormats } = await import('../import-export/ExportExcel/ExportExcel.exporters.js')
   const out = []
   const ctx = {
     reportProgress() {},
@@ -314,7 +318,7 @@ async function runZip({ format, filename, reportProgress }) {
   const sources = await fetchSources(d.keys)
   if (!sources.length) throw new Error('没有取到数据')
 
-  const { ctx, out } = makeCollector()
+  const { ctx, out } = await makeCollector()
   const ext = EXT[format]
   for (let i = 0; i < sources.length; i++) {
     const t = sources[i]

@@ -310,7 +310,7 @@ async function openExportSkill(s) {
 }
 /* 两块「管理」内容的玻璃内层：标题留在层外。
    颜色与模糊直接复用项目浮层玻璃（bg-white/55 + backdrop-blur-md + ai-glass-panel，
-   夜间由 theme-night.css 统一覆盖成深玻璃），这里只补内边距、描边和圆角。 */
+   夜间由 theme-*-night.css 统一覆盖成深玻璃），这里只补内边距、描边和圆角。 */
 .dm-glass {
   padding: 10px 12px;
   border: 1px solid var(--color-border);

@@ -237,12 +237,15 @@ function createStreamUnmasker(maps, maxTokenLen = 10) {
 
 // 按 slug 分桶的门面：真正的 DB 读写由调用方注入，本批不提供（也就不会碰库）。
 // enabled 关闭时 substitute/restore 必须零拷贝直接返回，不建映射表。
+// kind 区分「谁的开关」：'ai' = 本地助手（privacy_json），'mcp' = 外部客户端（mcp_privacy_json）。
+// 只有开关分开，映射表（seed + 名册）始终共用一份 —— 两套实例会让改名后的别名缓存各走各的，
+// 一边刷新一边不刷新，反而把新名字漏成明文。
 function createAiPrivacy({ readSeed, writeSeed, listStudents, listLeaves, readEnabled, dataDir = '' } = {}) {
   const cache = new Map();
   // 开关读取失败（如纯函数测试未绑定 DB、或设置表暂时不可用）时当作关闭：
   // 保护模块绝不能因为读不到开关就阻断主对话。真实请求里 DB 已绑定，正常读到 true/false。
-  const enabledOf = (slug) => {
-    try { return typeof readEnabled === 'function' ? readEnabled(slug) !== false : true; }
+  const enabledOf = (slug, kind = 'ai') => {
+    try { return typeof readEnabled === 'function' ? readEnabled(slug, kind) !== false : true; }
     catch (_) { return false; }
   };
   function stateOf(slug) {
@@ -266,19 +269,19 @@ function createAiPrivacy({ readSeed, writeSeed, listStudents, listLeaves, readEn
     return state;
   }
   return {
-    enabled: (slug) => enabledOf(slug),
+    enabled: (slug, kind = 'ai') => enabledOf(slug, kind),
     buildMap: (slug) => stateOf(slug).maps,
-    substitute(value, slug) {
-      if (!enabledOf(slug)) return value;
+    substitute(value, slug, kind = 'ai') {
+      if (!enabledOf(slug, kind)) return value;
       const st = stateOf(slug);
       return substituteOut(value, st.maps, st.dataDir);
     },
-    restore(value, slug) {
-      if (!enabledOf(slug)) return value;
+    restore(value, slug, kind = 'ai') {
+      if (!enabledOf(slug, kind)) return value;
       return restoreIn(value, stateOf(slug).maps);
     },
-    stream(slug) {
-      if (!enabledOf(slug)) return { push: (c) => c, flush: () => '' };
+    stream(slug, kind = 'ai') {
+      if (!enabledOf(slug, kind)) return { push: (c) => c, flush: () => '' };
       return createStreamUnmasker(stateOf(slug).maps);
     },
     invalidate(slug) {
@@ -299,7 +302,9 @@ const privacy = createAiPrivacy({
   writeSeed: (_slug, seed) => aiConfigStore.writeSeed(seed),
   listStudents: () => aiStore.listPrivacyStudents(),
   listLeaves: () => aiStore.listPrivacyLeaves(),
-  readEnabled: () => aiConfigStore.readPrivacy().enabled === true,
+  // 开关按来源分：本地助手读隐私设置，外部 MCP 客户端读「MCP 数据权限」里的总开关。
+  // 映射表（seed + 名册）两边共用，改名后只需要失效一处缓存。
+  readEnabled: (_slug, kind) => (kind === 'mcp' ? aiConfigStore.readMcpPrivacy() : aiConfigStore.readPrivacy()).enabled === true,
   dataDir: dbManager.dataDir,
 })
 

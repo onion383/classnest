@@ -53,9 +53,9 @@ const accountRoutes = require('./routes/account');
 _boot('核心模块 require 完成（含 db/middleware/auth）');
 
 const app = express();
-// 端口可用环境变量覆盖（默认 3000）：打包/日常运行行为不变，
-// 仅用于在同一台机器上并行起一个「隔离数据目录」的测试后端做性能测量。
-const PORT = Number(process.env.PORT) || 3000;
+// 端口只从 config/ports.cjs 取（BACKEND_PORT > PORT > ports.json）；主进程 fork 时注入同一个值。
+// 这样默认端口只维护一处，测试后端也能用 PORT 单独起另一个实例。
+const { backendPort: PORT } = require('../config/ports.cjs');
 
 // 首屏归因（v6 · 2-13）：PERF_STARTUP=1 时记录 /api/dashboard 到达 Express 的 epoch。
 // 与 handler 里的「进入 <epoch>」相减，判断空档在 Node 事件循环/让路链，还是在渲染层/网络。
@@ -98,8 +98,13 @@ app.use((req, res, next) => {
   if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return next();
   return res.status(403).json({ error: '非法访问' });
 });
-// 备份包内含整库 base64 数据，体积可能达数十 MB，需放大请求体上限以避免 413
-app.use(express.json({ limit: '200mb' }));
+// 备份包内含整库 base64 数据，体积可能达数十 MB，需放大请求体上限以避免 413。
+// 但 /mcp 必须跳过：它的鉴权是路由中间件（mcp.server.authMcp），若全局解析器先跑，
+// 请求体（最大 200MB）会先被完整读进内存、解析失败还会回 400，未授权的本机进程即可借此打爆进程。
+// 所以 /mcp 交给路由自己「先鉴权、再用 1mb 上限解析」（见 mcp.server）。
+const jsonLarge = express.json({ limit: '200mb' });
+const MCP_PATH_RE = /^\/mcp(?:\/|$)/;
+app.use((req, res, next) => (MCP_PATH_RE.test(req.path) ? next() : jsonLarge(req, res, next)));
 
 // 加密通道中间件：请求解密优先于路由处理，响应加密在 express.json 之后
 // 仅当有 K_master（SECURE_MASTER 注入）时才真正安装，否则不影响明文请求
@@ -157,6 +162,9 @@ app.use('/api/account', accountRoutes);
 app.use('/mcp', require('./routes/ai/mcp/mcp.server').router);
 // 班集侧管理接口（提案确认、token 管理）：教师身份，走标准 auth。
 app.use('/api/mcp', auth(['teacher']), require('./routes/ai/mcp/mcp.routes'));
+// 数据访问记录（AI / MCP 读了什么）。前端两个面板各看自己的 source。
+// 与 /api/mcp 相邻：同属「数据被谁动过」这一组，require 很轻（Router + store）。
+app.use('/api/access-log', auth(['teacher']), require('./routes/accessLog'));
 // 首屏聚合接口：登录页/首页最早的一条业务请求，必须在 listen 之前就挂好。
 // 原先它排在懒加载队列最后一个 loader，队列被拆成逐 tick 让路后，它可能在
 // 队列跑完前就到达 —— 路由不存在会直接 404，前端首屏就拿不到数据。
@@ -290,13 +298,33 @@ let errorHandlerInstalled = false;
 // 让路链同理：重入时不能把 warmup / 20 个 loader 再排一遍（会重复 app.use）。
 let deferredStarted = false;
 
-// 端口冲突时自动重试（应用退出后旧进程可能未完全释放端口）
-function startServer(port) {
-  _boot(`开始监听端口 ${port}`);
+// 端口冲突策略：首选用 ports.json 的固定端口（文档、MCP 客户端配置、手工排障都依赖它可预期），
+// 被占用时**向后顺延**找第一个空闲端口，最多 MAX_PORT_TRIES 次。
+//
+// 为什么不再「等 1s 重试同一端口」：EADDRINUSE 意味着有人正在 LISTEN，不是 TIME_WAIT ——
+// 进程退出时监听是立刻释放的。死等同一端口只会把「端口被占」变成永久重试，用户看到的是
+// 无限白屏且没有任何提示（3000 是 Node 生态最容易被别的项目占用的端口）。
+// 顺延后实际端口由 backend-ready 的 port 字段回报主进程，主进程据此更新运行时 origin。
+const MAX_PORT_TRIES = 10;
+// 顺延重试会创建新的 http.Server；退出钩子需要关掉「当前真正在听」的那个。
+let currentServer = null;
+
+function startServer(port, attempt = 0) {
+  _boot(`开始监听端口 ${port}${attempt ? `（顺延第 ${attempt} 次）` : ''}`);
   // 只监听本机回环地址（127.0.0.1）：若像原先那样不指定 host，Node 会监听 0.0.0.0/::，
   // 首次启动即触发 Windows 防火墙“允许访问”弹窗。本服务只供本机前端/主进程访问，
   // 绑定回环即可满足需求，且不会触发防火墙提示（检查更新是出站请求，本就不会弹窗）。
-  const server = app.listen(port, '127.0.0.1', () => {
+  // 用 let 而不是 const：Express 的 listening 回调可能在 listen 返回前就被调用（见下），
+  // const 会命中 TDZ。
+  let server = null;
+  server = app.listen(port, '127.0.0.1', () => {
+    // ⚠️ 端口被占时 Express **也会调用这个回调**：实测（Windows / Node 22）回调先到、
+    // EADDRINUSE 后到，此时 server.listening 仍是 false。不校验就会在根本没监听成功时
+    // 打印「服务器已启动」并上报 backend-ready，主进程据此认为已就绪，前端请求全部打空
+    // —— 用户看到的就是永久白屏，而且日志里还写着「已启动」，极难归因。
+    // 所有副作用（上报端口、暖机链）一律以 server.listening 为准。
+    if (!server || !server.listening) return;
+    currentServer = server;
     console.log(`✅ 服务器已启动：http://127.0.0.1:${port}`);
     _boot('监听成功 = 就绪');
 
@@ -624,17 +652,30 @@ function startServer(port) {
   server.headersTimeout = 61_000;
 
   server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE' && attempt < MAX_PORT_TRIES) {
+      // 关掉这次失败的 server 再顺延：不 close 会残留一个带 error 监听器的实例。
+      console.log(`端口 ${port} 被占用，顺延到 ${port + 1} 重试（${attempt + 1}/${MAX_PORT_TRIES}）`);
+      try { server.close(); } catch (_) { /* 未进入 listening，close 可能抛 ERR_SERVER_NOT_RUNNING */ }
+      startServer(port + 1, attempt + 1);
+      return;
+    }
     if (err.code === 'EADDRINUSE') {
-      console.log(`端口 ${port} 被占用，等待 1s 后重试...`);
-      setTimeout(() => server.close(() => startServer(port)), 1000);
-    } else {
-      console.error('服务器启动失败:', err);
+      console.error(`端口 ${port} 起的连续 ${MAX_PORT_TRIES + 1} 个端口都被占用，后端无法启动。`);
       process.exit(1);
     }
+    console.error('服务器启动失败:', err);
+    process.exit(1);
   });
+}
 
-  // 优雅退出：收到 SIGTERM 时关闭服务器
-  process.on('SIGTERM', () => server.close(() => process.exit(0)));
+// 退出钩子只装一次：startServer 顺延时会在同一个进程里重复执行，
+// 写在函数体内会让 SIGTERM / exit 监听器随重试次数累积。
+function installExitHooks() {
+  // 优雅退出：收到 SIGTERM 时关闭当前服务器
+  process.on('SIGTERM', () => {
+    if (!currentServer) return process.exit(0);
+    currentServer.close(() => process.exit(0));
+  });
 
   // 退出前先叫醒扫描子进程。
   // 为什么必须主动做：worker 是 fork 出来的子进程，父进程 exit() 后它会**继续活着**
@@ -668,4 +709,5 @@ process.on('message', (msg) => {
   try { if (process.send) process.send({ type: 'pong', t: msg.t }) } catch (_) { /* 通道断开忽略 */ }
 });
 
+installExitHooks();
 startServer(PORT);

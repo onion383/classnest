@@ -16,7 +16,7 @@ const secureChannel = require('../services/secureChannel');
 const sessions = require('../services/sessions');
 // 恢复词重置密码 = 凭证变更，必须走统一动作层吊销该账号全部会话
 const { revokeAccountSessions } = require('../services/credentialChange');
-const { pickPhrase, deriveRestoreHash, normalizePhrase, formatPhrase, safeEqualHash, verifyRestoreHash } = require('../services/recoveryKey');
+const { pickPhrase, deriveRestoreHash, normalizePhrase, formatPhrase, verifyRestoreHash } = require('../services/recoveryKey');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
 // 待确认注册草稿：有密码账号先生成恢复密钥，用户「抄写前 3 词」通过后才真正建库。
 // 未确认的草稿不会占用账号，TTL 后自动失效；容量与淘汰策略见 services/pendingRegs.js。

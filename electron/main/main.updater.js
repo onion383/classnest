@@ -17,12 +17,10 @@ const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
 const { isPackaged } = require('./main.env')
-const { assertHttpsUrl, verifyDownloadedFile, sha256File } = require('./main.update-integrity')
+const { assertHttpsUrl, verifyDownloadedFile, sha256File, pickSetupAssetName } = require('./main.update-integrity')
 
 // GitHub 仓库信息（原先在 electron-builder.json 的 publish 里，现仅保留在代码常量中）
 const UPDATE_REPO = { owner: 'onion383', repo: 'classnest' }
-// Inno 安装包资产名匹配（如「ClassNest-Setup-0.1.0.exe」）
-const UPDATE_ASSET_RE = /setup.*\.exe$/i
 // 检查超时沿用既有 10s 风格；下载体积较大，整体超时放宽到 5 分钟
 const UPDATE_CHECK_TIMEOUT = 10000
 const UPDATE_DOWNLOAD_TIMEOUT = 300000
@@ -108,10 +106,14 @@ async function fetchLatestRelease() {
   }
 }
 
-// 从 release 资产中挑选 Inno 安装包（文件名形如「*-Setup-*.exe」）
+// 从 release 资产中挑选 Inno 安装包（文件名形如「*-Setup-*.exe」）。
+// 选择逻辑（含「排除 Vue 3.6 预览包」）放在 update-integrity 里做成纯函数，便于单测：
+// 预览包同样含 -Setup-，选错会把正式版用户升级到写着「仅供体验」的版本。
 function pickSetupAsset(release) {
   const assets = Array.isArray(release && release.assets) ? release.assets : []
-  return assets.find((a) => UPDATE_ASSET_RE.test(String((a && a.name) || ''))) || null
+  const name = pickSetupAssetName(assets.map((a) => (a && a.name) || ''))
+  if (!name) return null
+  return assets.find((a) => String((a && a.name) || '') === name) || null
 }
 
 // 开发/调试路径：仅直连探测 GitHub Releases，不下载、不安装

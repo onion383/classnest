@@ -63,4 +63,20 @@ async function verifyDownloadedFile({ filePath, expectedSize, digest }) {
   return { ok: true, verified: 'size-only', sha256: actual };
 }
 
-module.exports = { assertHttpsUrl, sha256File, verifyDownloadedFile };
+// 从发布资产名列表里挑 Inno 安装包。
+//
+// 为什么必须排除 Vue 3.6 预览包：它的名字同样含「-Setup-」（ClassNest-Vue36-Setup-x.y.z.exe），
+// 只按 /setup.*\.exe$/ 找再取第一个，正式版用户就可能被升级到预览版 —— 而这个包在安装页和
+// 引导页都写着「不建议作为主力版本使用」。资产顺序由 GitHub 返回，不可依赖。
+const SETUP_ASSET_RE = /setup.*\.exe$/i
+const PREVIEW_ASSET_RE = /vue36/i
+function pickSetupAssetName(names) {
+  for (const name of Array.isArray(names) ? names : []) {
+    const s = String(name || '')
+    if (!s || PREVIEW_ASSET_RE.test(s)) continue
+    if (SETUP_ASSET_RE.test(s)) return s
+  }
+  return null
+}
+
+module.exports = { assertHttpsUrl, sha256File, verifyDownloadedFile, pickSetupAssetName }

@@ -28,7 +28,7 @@
     "build:backend": "node student-backend/build.bundle.mjs",
     "build:win:inno": "node electron/inno/compile.mjs",
     "electron:build": "npm run build && npm run build:backend && electron-builder --dir && npm run build:win:inno",
-    "electron:buildnew": "npm run build:new && npm run build:backend && electron-builder --dir --config.directories.output=release36 && npm run build:win:inno -- release36",
+    "electron:buildnew": "npm run build:new && npm run build:backend && electron-builder --dir --config.directories.output=release36 && npm run build:win:inno -- release36 --vue36",
     "postinstall": "cd student-backend && npm install",
     "lint": "eslint student-frontend/src student-frontend/*.js student-backend electron",
     "test:behavior": "node testjs/run-behavior.js",

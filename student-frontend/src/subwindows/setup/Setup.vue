@@ -39,6 +39,11 @@
           <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold text-white bg-blue-500 leading-none">预览版</span>
         </div>
         <p class="welcome-hi">欢迎使用~</p>
+        <!-- 仅 Vue 3.6 预览通道的产物显示：这个包只是给愿意尝鲜的人试用，不该被当成主力版本 -->
+        <div v-if="IS_VUE36" class="welcome-vue36">
+          <p>该版本为Vue 3.6 新版本测试版本，可能会有不稳定性，仅供体验使用。</p>
+          <p>目前不推荐这个版本作为主力版本使用，如需主力使用，请下载其他版本</p>
+        </div>
         <p class="welcome-tip">目前这个版本仍然在测试状态，可能会不稳定或者有破坏性改动，尽请谅解</p>
         <p class="welcome-tip">首次使用前，我们需要进行一些初始化设置</p>
         <button type="button" class="btn-primary welcome-btn" @click="screen = 'mode'">开始</button>
@@ -395,7 +400,7 @@
                   <AppSwitch :model-value="features.usbAutoOpen" aria-label="插入新U盘时自动打开" @change="onFeatureChange('usbAutoOpen', $event)" />
                 </div>
                 <p v-if="errorMsg" class="f-error">{{ errorMsg }}</p>
-                <p class="f-hint">都不是必选项，全部不勾也能正常使用。之后可随时在「设置 → 工具箱设置 / 桌面小组件设置」里改。</p>
+                <p class="f-hint">都不是必选项，全部不勾也能正常使用。之后可随时在「设置 → 工具设置」里改。</p>
               </div>
             </div>
           </template>
@@ -455,7 +460,7 @@
   />
 </template>
 
-<script setup>
+<script setup vapor>
 import { setToken, setCurrentUser, getToken } from '../../utils/authStorage.js'
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import axios from 'axios'
@@ -467,6 +472,11 @@ import AppSelect from '../../components/base/AppSelect.vue'
 import AppSwitch from '../../components/base/AppSwitch.vue'
 import ViewSwitch from '../../components/base/ViewSwitch.vue'
 import ConfirmDialog from '../../components/base/ConfirmDialog.vue'
+
+/* global __VUE36__ */
+// 构建期常量（vite.config.js 的 define，Vue 3.6 预览通道为 true）。
+// 用 typeof 兜底：非 Vite 环境（如单测直接 import 组件）拿不到 define，不能抛 ReferenceError。
+const IS_VUE36 = typeof __VUE36__ !== 'undefined' ? __VUE36__ : false
 
 // 主题预览色：仅用于「主题选择」的缩略示意（真实配色由各主题 CSS 变量驱动）
 const PREVIEW = {
@@ -1211,6 +1221,26 @@ onBeforeUnmount(() => {
   margin: 6px 0 0;
   font-size: 14px;
   color: var(--color-text-muted);
+}
+/* Vue 3.6 预览通道的专属提示：用琥珀色底把「这是尝鲜包」和普通的版本说明区分开，
+   文字仍走 --color-text，日夜主题下都不用另配一套色。 */
+.welcome-vue36 {
+  margin: 12px 0 0;
+  padding: 9px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  background: rgba(245, 158, 11, 0.12);
+  text-align: left;
+  -webkit-app-region: no-drag;
+}
+.welcome-vue36 p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--color-text);
+}
+.welcome-vue36 p + p {
+  margin-top: 2px;
 }
 .welcome-btn {
   margin-top: 28px;

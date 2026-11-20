@@ -12,10 +12,15 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const issFile = path.join(here, 'setup.iss')
 
 // 打包输出目录名：正式版 release，Vue 3.6 预览通道 release36。
-// 由调用方以第一个参数传入（npm run build:win:inno -- release36），
+// 由调用方以第一个非选项参数传入（npm run build:win:inno -- release36 --vue36），
 // 再以 ISCC 的 /DAppDir 宏交给 setup.iss；不传时用 setup.iss 里的默认值 release。
 // 校验只放行目录名，避免拼出奇怪的路径。
-const appDir = String(process.argv[2] ?? '').trim()
+//
+// --vue36：给 ISCC 传 /DVue36，打开 setup.iss 里的预览通道分支（安装包名加 -Vue36、
+// 安装页多两行测试版提示）。不传时编出的就是正式版安装包。
+const rawArgs = process.argv.slice(2)
+const vue36 = rawArgs.includes('--vue36')
+const appDir = String(rawArgs.find((a) => !a.startsWith('--')) ?? '').trim()
 if (appDir && !/^[A-Za-z0-9._-]+$/.test(appDir)) {
   console.error(`[inno] 输出目录名不合法：${appDir}（只允许字母、数字、点、下划线、连字符）`)
   process.exit(1)
@@ -117,5 +122,10 @@ if (!iscc) {
 console.log(`[inno] 使用编译器：${iscc}`)
 console.log(`[inno] 编译脚本：${issFile}`)
 console.log(`[inno] 打包目录：${appDir || 'release'}${appDir ? '' : '（setup.iss 默认值）'}`)
-const result = spawnSync(iscc, appDir ? [`/DAppDir=${appDir}`, issFile] : [issFile], { stdio: 'inherit' })
+console.log(`[inno] 通道：${vue36 ? 'Vue 3.6 预览（安装包名带 -Vue36）' : '正式版'}`)
+const isccArgs = []
+if (appDir) isccArgs.push(`/DAppDir=${appDir}`)
+if (vue36) isccArgs.push('/DVue36=1')
+isccArgs.push(issFile)
+const result = spawnSync(iscc, isccArgs, { stdio: 'inherit' })
 process.exit(result.status == null ? 1 : result.status)

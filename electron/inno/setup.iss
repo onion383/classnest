@@ -59,6 +59,17 @@
   #define AppDir "release"
 #endif
 
+; ---- Vue 3.6 预览通道开关 ------------------------------------------------
+; 由 compile.mjs 的 --vue36 传 /DVue36 打开（CI 的 package-vue36 任务走这条）。
+; 打开后：安装包文件名加 -Vue36 后缀（避免与正式版同名互相覆盖）、安装页标题与
+; 提示语都标明「测试版」。AppId / 安装目录刻意不变 —— 两个通道是同一个应用的
+; 两个构建，装哪个就是哪个，不需要并存两份。
+#ifdef Vue36
+  #define SetupSuffix "-Vue36"
+#else
+  #define SetupSuffix ""
+#endif
+
 [Setup]
 ; AppId 写死为固定 GUID，切勿更改——它决定“同一应用的升级/卸载识别”，
 ; 每次变化会导致生成新的独立安装项、旧版不被覆盖。
@@ -81,9 +92,10 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 
-; 输出：固定文件名「ClassNest-Setup-x.y.z.exe」，便于更新逻辑按资产名匹配（*-Setup-*.exe）
+; 输出：固定文件名「ClassNest-Setup-x.y.z.exe」，便于更新逻辑按资产名匹配（*-Setup-*.exe）。
+; Vue 3.6 预览通道多一段 -Vue36，两个包挂在同一个 Release 下也不会撞名。
 OutputDir=..\..\{#AppDir}
-OutputBaseFilename=ClassNest-Setup-{#MyAppVersion}
+OutputBaseFilename=ClassNest{#SetupSuffix}-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 SetupLogging=yes
@@ -226,6 +238,9 @@ var
   CustomPage: TWizardPage;
   LogoImage: TBitmapImage;
   TitleLabel: TNewStaticText;
+  { Vue 3.6 预览通道专属的两行提示；非该通道时不创建，HintH / HintGap 为 0，布局与原来一致 }
+  Vue36Hint1: TNewStaticText;
+  Vue36Hint2: TNewStaticText;
   PathLabel: TNewStaticText;
   FieldBg: TBitmapImage;
   PathEdit: TNewEdit;
@@ -449,7 +464,7 @@ end;
 procedure InitializeWizard();
 var
   SW, SH, LogoSize, TitleH, RowH, CheckH: Integer;
-  Gap1, Gap2, Gap3, Gap4, BlockH, Top0, RowTop: Integer;
+  Gap1, Gap2, Gap3, Gap4, BlockH, Top0, RowTop, HintH, HintGap: Integer;
   FieldW, BtnW, LabelW, RowLeft, CheckW, MsgH, LinkH, LinkW: Integer;
   Measure: TNewStaticText;
 begin
@@ -578,8 +593,19 @@ begin
   Gap2 := ScaleY(26);
   Gap3 := ScaleY(24);
 
+  { Vue 3.6 预览通道在标题下多两行提示；非该通道时两者为 0，
+    下面 BlockH / RowTop 的算式退化成原样，安装页布局逐像素不变。
+    HintH 按「两行文案各最多折两行」留量：9pt 中文在 417px 的 Surface 上约 34 字/行，
+    两句各 40 字上下，允许折行才不会右侧被截断。 }
+  HintH := 0;
+  HintGap := 0;
+#ifdef Vue36
+  HintH := ScaleY(76);
+  HintGap := ScaleY(12);
+#endif
+
   { 竖直居中：先算内容块总高，再取居中起点 }
-  BlockH := LogoSize + Gap1 + TitleH + Gap2 + RowH + Gap3 + CheckH;
+  BlockH := LogoSize + Gap1 + TitleH + Gap2 + HintH + HintGap + RowH + Gap3 + CheckH;
   Top0 := (SH - BlockH) div 2;
   if Top0 < ScaleY(10) then
     Top0 := ScaleY(10);
@@ -607,9 +633,40 @@ begin
   TitleLabel.Top := Top0 + LogoSize + Gap1;
   TitleLabel.Font.Size := 15;
   TitleLabel.Font.Style := [fsBold];
+#ifdef Vue36
+  TitleLabel.Caption := '安装 班集 Vue 3.6 预览版';
+#else
   TitleLabel.Caption := '安装 班集 预览版';
+#endif
 
-  RowTop := Top0 + LogoSize + Gap1 + TitleH + Gap2;
+  { Vue 3.6 预览通道专属提示：两行居中，字号比标题小一号，位置紧跟标题下方 }
+#ifdef Vue36
+  Vue36Hint1 := TNewStaticText.Create(CustomPage);
+  Vue36Hint1.Parent := CustomPage.Surface;
+  Vue36Hint1.AutoSize := False;
+  Vue36Hint1.WordWrap := True;
+  Vue36Hint1.Alignment := taCenter;
+  Vue36Hint1.Left := ScaleX(18);
+  Vue36Hint1.Width := SW - ScaleX(36);
+  Vue36Hint1.Height := ScaleY(36);
+  Vue36Hint1.Top := Top0 + LogoSize + Gap1 + TitleH + Gap2;
+  Vue36Hint1.Font.Size := 9;
+  Vue36Hint1.Caption := '该版本为Vue 3.6 新版本测试版本，可能会有不稳定性，仅供体验使用。';
+
+  Vue36Hint2 := TNewStaticText.Create(CustomPage);
+  Vue36Hint2.Parent := CustomPage.Surface;
+  Vue36Hint2.AutoSize := False;
+  Vue36Hint2.WordWrap := True;
+  Vue36Hint2.Alignment := taCenter;
+  Vue36Hint2.Left := ScaleX(18);
+  Vue36Hint2.Width := SW - ScaleX(36);
+  Vue36Hint2.Height := ScaleY(36);
+  Vue36Hint2.Top := Vue36Hint1.Top + ScaleY(38);
+  Vue36Hint2.Font.Size := 9;
+  Vue36Hint2.Caption := '目前不推荐这个版本作为主力版本使用，如需主力使用，请下载其他版本';
+#endif
+
+  RowTop := Top0 + LogoSize + Gap1 + TitleH + Gap2 + HintH + HintGap;
 
   { 3) 安装路径：标签 + 圆角输入框 + 浏览按钮，整行水平居中 }
   FieldW := ScaleX(260);

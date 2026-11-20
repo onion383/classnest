@@ -747,7 +747,7 @@ watch(
 :root:is([data-theme="glass"]) .menu-panel {
   backdrop-filter: blur(20px) saturate(1.1);
 }
-/* 夜间不出现亮边（与 theme-night.css 的约定一致），改回主题边框色 */
+/* 夜间不出现亮边（与 theme-*-night.css 的约定一致），改回主题边框色 */
 :root[data-mode="night"]:is([data-theme="glass"]) .panel {
   border-color: var(--color-border, rgba(255, 255, 255, 0.08));
 }

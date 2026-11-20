@@ -253,7 +253,7 @@ const navRef = ref(null)
 }
 /* 顶部两个按钮：展开态下第一个占满左侧剩余空间（沿用全局 margin-left:auto），
    第二个紧跟其后不再撑开；折叠态为竖排，两个按钮都取消 auto 边距以居中。
-   这两条选择器特异性均高于 theme-night.css 的 `:root .bg-sidebar .mode-toggle-btn`(0,3,0)，
+   这两条选择器特异性均高于 theme-*-night.css 的 `:root .bg-sidebar .mode-toggle-btn`(0,3,0)，
    确保覆盖生效。 */
 .sidebar-root .mode-toggle-btn + .mode-toggle-btn {
   margin-left: 0;

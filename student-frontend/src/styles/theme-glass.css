@@ -48,7 +48,7 @@
   --radius-full: 9999px;
   --radius: var(--radius-control);
 
-  /* 角色别名 → 尺寸档（覆盖 theme-base.css 的默认映射）。
+  /* 角色别名 → 尺寸档（覆盖 theme.css 的默认映射）。
      control 12px：按钮/输入框/下拉（原硬编码 12px，视觉不变）
      card   20px：.bg-surface 卡片与弹窗（原硬编码 20px，视觉不变）
      table  16px：表格容器（原硬编码 16px，视觉不变）
@@ -119,7 +119,7 @@
 }
 /* 统一受光描边（只在白天）：与网格表格 / 卡片 / 弹窗 / 侧边栏同一套参数。
    标题栏 ::before 已被顶部受光占用，故用 ::after 画 1px 环。
-   深色模式下不出现亮边，交给 theme-night.css 自己的夜间描边。 */
+   深色模式下不出现亮边，交给 theme-glass-night.css 自己的夜间描边。 */
 /* 注意：标题栏不能加 ::after 描边覆盖层。
    标题栏是 -webkit-app-region: drag 的可拖动区域，覆盖层会落在最上层，
    让最小化/最大化/关闭三个按钮变成"拖动窗口"区域而点不动（pointer-events:none 对
@@ -149,7 +149,7 @@
 /* 全局图片背景 + 遮罩：统一画在固定视口的独立层（body::before），而非 main 的背景。
    橡皮筋滚动会对可滚动容器 main 做 translateY；若遮罩是 main 的背景就会跟随位移，
    在顶部/底部露出一条背景图（“跑出遮罩”）。固定层始终覆盖整个视口，拉伸时也不会跑出。
-   遮罩色走 --bg-mask-color 变量，夜间改这个变量即可（见 theme-night.css）。 */
+   遮罩色走 --bg-mask-color 变量，夜间改这个变量即可（见 theme-glass-night.css）。 */
 :root[data-theme="glass"].has-bg-image {
   --bg-mask-color: rgba(240, 244, 248, var(--bg-mask-opacity, 0.6));
 }
@@ -176,7 +176,7 @@
    侧边栏的观感 = 底色(随顶栏配色) + blur(24px) saturate(1.4) + 内高光 + 顶部受光渐变。
    这里把「底色 / 模糊」抽成变量，标题栏、卡片、弹窗、班费表容器、网格表格全部引用同一组值。
    只在白天生效：深色模式沿用各块自己的夜间配色与阴影，
-   并且除侧边栏外不出现亮边（见 theme-night.css）。 */
+   并且除侧边栏外不出现亮边（见 theme-glass-night.css）。 */
 :root:is([data-theme="glass"]) {
   --sidebar-glass-bg: var(--alpha-white-35);
   --sidebar-glass-blur: blur(24px) saturate(1.4);
@@ -657,7 +657,7 @@
    用户把「玻璃透明度」调低、或背景图偏暗时，0.4 白会合成到中灰蓝，
    深色正文的对比度从 7:1 掉到 4:1 附近，12px 的「忘记密码？」直接看不见。
    下限 0.62 保证文字始终有底，其它页面的卡片仍按用户设置。
-   夜间模式不适用（浅色文字需要深底，见 theme-night.css 的登录卡片规则）。 */
+   夜间模式不适用（浅色文字需要深底，见 theme-glass-night.css 的登录卡片规则）。 */
 :root:is([data-theme="glass"]):not([data-mode="night"]) .login-bg .bg-surface {
   background-color: rgba(255, 255, 255, clamp(0.62, var(--glass-opacity, 0.4), 1)) !important;
   backdrop-filter: blur(24px) saturate(1.2);
@@ -728,7 +728,7 @@
     inset 0 1px 0 var(--alpha-white-15);
 }
 /* 夜间（glass）：弹窗阴影。
-   当前启用：原深色阴影（theme-night.css 的 .bg-surface 原值）。
+   当前启用：原深色阴影（theme-glass-night.css 的 .bg-surface 原值）。
    下方注释备用：曾试过的「侧栏选中同款蓝光 + 蓝底」方案，保留供对比选用（未删）。 */
 :root[data-mode="night"][data-theme="glass"] .bg-surface.dialog-card {
   box-shadow: 0 0 20px var(--alpha-black-25);
@@ -1181,7 +1181,7 @@
    用 --color-text-muted(#64748b) 时对 0.62 白底只有 2.6:1（截图反馈「几乎看不见」）。
    #2b3a4d 在同样底上是 5.0:1 —— 刻意取到比「刚过 4.5」更深一档，
    因为卡片实际底色还会随背景图浮动，不能贴着及格线选。
-   夜间由 theme-night.css 的反向规则（浅色提亮）处理。 */
+   夜间由 theme-glass-night.css 的反向规则（浅色提亮）处理。 */
 :root:is([data-theme="glass"]):not([data-mode="night"]) .login-bg .login-card .text-text-muted {
   color: #2b3a4d !important;
 }

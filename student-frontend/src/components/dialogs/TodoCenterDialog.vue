@@ -12,8 +12,15 @@
 
           <div v-if="!items.length" class="text-sm text-text-muted py-8 text-center">暂时没有待处理事项</div>
 
+          <!-- 每条一张玻璃卡：bg-surface/55 + backdrop-blur-md 走 --color-surface，
+               夜间模式自动变深色（AI 面板那套白色玻璃在夜间会变成一块白板）。
+               原来是靠下边框分隔，套了卡片后改由卡片间隙分隔。 -->
           <div v-else class="flex-1 min-h-0 overflow-y-auto app-custom-scroll">
-            <div v-for="it in items" :key="it.key" class="py-3 border-b border-border last:border-b-0">
+            <div
+              v-for="it in items"
+              :key="it.key"
+              class="rounded-lg border border-border bg-surface/55 backdrop-blur-md px-3 py-2.5 mb-2 last:mb-0"
+            >
               <div class="flex items-center justify-between gap-3">
                 <h4 class="text-sm font-medium text-text">{{ it.title }}</h4>
                 <button class="btn-plain todo-action" @click="go(it.key)">去处理</button>

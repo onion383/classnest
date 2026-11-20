@@ -4,8 +4,8 @@
 // 包住「改 data-mode / data-theme」的那一下（swap 里同步改状态与 DOM），
 // 它会自动瞬时化元素过渡并做快照淡入。
 //
-// 背景（见 styles/theme-night.css / styles/themeLoader.js）：
-//   theme-night.css 里近 200 条规则全部以 :root[data-mode="night"] 限定作用域，而
+// 背景（见 styles/theme-*-night.css / styles/themeLoader.js）：
+//   theme-*-night.css 里近 200 条规则全部以 :root[data-mode="night"] 限定作用域，而
 //   data-mode 挂在 <html> 上，是整棵 DOM 的祖先属性。属性一变，浏览器要对每个元素
 //   重新匹配这些规则、重建 ComputedStyle，成本是 O(节点数)，表格多的时候尤其明显。
 //

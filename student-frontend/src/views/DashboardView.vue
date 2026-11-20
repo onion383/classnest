@@ -813,8 +813,9 @@ async function loadData(force = false) {
     loadRandomPhoto(dashboardAlbums.value)
     if (firstScreen && !firstRenderMarked) {
       firstRenderMarked = true
-      // 不 await：不能因为打点把首屏骨架屏多留一帧；nextTick 回调里再记时刻
-      nextTick().then(() => mark(`首页 patch 渲染 ${perfSince(renderAt)}ms`))
+      // 不 await：不能因为打点把首屏骨架屏多留一帧；nextTick 回调里再记时刻。
+      // 打点失败不能变成未处理的 rejection（会污染每次首屏），吞掉即可。
+      nextTick().then(() => mark(`首页 patch 渲染 ${perfSince(renderAt)}ms`)).catch(() => {})
     }
   } catch (err) {
     // 后端不可达（没有 response）时，App 的「后端启动失败」遮罩会统一提示，这里不重复打扰；
@@ -899,7 +900,7 @@ onBeforeUnmount(() => {
   background: rgba(0, 0, 0, 0.12);
   margin: 4px 0;
 }
-/* 时钟取色通过变量下传（AnimatedClock 内以 var() 读取），夜间由 theme-night.css 覆盖 */
+/* 时钟取色通过变量下传（AnimatedClock 内以 var() 读取），夜间由 theme-*-night.css 覆盖 */
 .clock-part {
   --ac-time-color: #111827;
   --ac-date-color: #4b5563;
@@ -1019,7 +1020,7 @@ onBeforeUnmount(() => {
    「占位页按钮统一蓝色」是既定口径，四套主题各自有现成配方 ——
      base / base-accent → 饱和蓝底白字（accent 下 --color-info 跟随页面强调色）；
      glass             → rgba(59,130,246,.36) 蓝色玻璃 + #1e40af 深蓝字 + 主题描边；
-     night             → theme-night.css 有专规则。
+     night             → theme-*-night.css 有专规则。
    所以这里不写任何 color / background / border，只留尺寸：
    写死色值就等于在主题之外开第五份副本。 */
 .card-go-btn {

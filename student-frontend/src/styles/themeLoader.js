@@ -8,20 +8,33 @@
 // 实现：Vite 会把每个动态 import 的 CSS 拆成独立 chunk，运行时按需注入 <link>。
 // 未使用的主题（如默认玻璃主题下的 glass2 / 夜间层）不会被打进首屏样式。
 
-// 每个主题需要的 CSS 文件（按加载顺序）。
-// base 只用入口样式里的 theme-base.css，无需额外文件；自定义主题走 JS 变量，也无需文件。
+// 每个主题日间需要的 CSS 文件（按加载顺序）。
+// 全站公共变量在 theme.css（常驻地基）；base 日间的专属规则在 theme-base.css
+// 与 theme-base-accent.css，都随 index.css 常驻，无需额外文件。
 const THEME_MODULES = {
   glass: ['theme-glass'],
   glass2: ['theme-glass2'],
 }
-// 仅 glass / glass2 需要单独加载 theme-night.css；
-// base 的夜间规则已合并进 theme-base-accent.css，随 index.css 常驻，不需要额外文件。
-const NIGHT_THEMES = ['glass', 'glass2']
+// 各主题「夜间」要额外加载的 CSS。三套主题各有一份，切换时精确按 主题+日/夜 加载：
+//   base  -> theme-base-night.css
+//   glass -> theme-glass-night.css（共用规则 + glass 专属）
+//   glass2-> theme-glass2-night.css（共用规则 + glass2 专属）
+// 原先 glass / glass2 共用 theme-night.css，导致每方都白下对方专属段；拆开后各取所需。
+// 日间一律不加载这些文件，只有切到夜间才 import 对应主题的那一份。
+const NIGHT_MODULES = {
+  base: 'theme-base-night',
+  glass: 'theme-glass-night',
+  glass2: 'theme-glass2-night',
+}
+// 支持夜间配色的主题（决定切换按钮是否可用，见 stores/theme.js 同名常量）。
+const NIGHT_THEMES = Object.keys(NIGHT_MODULES)
 
 const LOADERS = {
+  'theme-base-night': () => import('./theme-base-night.css'),
   'theme-glass': () => import('./theme-glass.css'),
   'theme-glass2': () => import('./theme-glass2.css'),
-  'theme-night': () => import('./theme-night.css'),
+  'theme-glass-night': () => import('./theme-glass-night.css'),
+  'theme-glass2-night': () => import('./theme-glass2-night.css'),
 }
 
 // 缓存的是「加载 Promise」而非布尔：并发/重复调用共享同一次加载，都能正确等到完成。
@@ -40,7 +53,7 @@ function once(key) {
 // 加载当前主题 + 当前模式所需的样式，返回 Promise（调用方 await 它可确保渲染前样式已就绪）。
 export function loadThemeStyles(theme, mode) {
   const keys = [...(THEME_MODULES[theme] || [])]
-  if (mode === 'night' && NIGHT_THEMES.includes(theme)) keys.push('theme-night')
+  if (mode === 'night' && NIGHT_MODULES[theme]) keys.push(NIGHT_MODULES[theme])
   return Promise.all(keys.map(once))
 }
 
@@ -48,11 +61,11 @@ export function loadThemeStyles(theme, mode) {
 // 夜间模式的「样式预热」——解决首次切换日/夜时的明显卡顿
 // =========================================================================
 //
-// 问题（实测，2026-10-20，Electron 37 / GPU 加速，基准见 student-frontend/mode-bench.html）：
+// 问题（实测，2026-10-20，Electron 37 / GPU 加速；当时的基准页 mode-bench.html 已随主题重构移除，数字保留作对照）：
 //   首次把 data-mode 从 day 改成 night → 约 200~280ms，期间有一个 180ms+ 的主线程长任务；
 //   之后每次切换只要 15~25ms。差了十几倍。
 //
-// 原因：theme-night.css 里的 176 条规则全部以 :root[data-mode="night"] 限定作用域。
+// 原因：各夜间文件里的规则全部以 :root[data-mode="night"] 限定作用域。
 //   data-mode 挂在 <html> 上，是整棵 DOM 的祖先属性。属性一变，浏览器要：
 //     ① 重新匹配所有以该属性为条件的规则；
 //     ② 为每个受影响元素重建 ComputedStyle（首轮还要把这些规则编译进内部表示）。
@@ -72,7 +85,7 @@ export function loadThemeStyles(theme, mode) {
 //   ④ 预热必须等夜间 CSS 加载完（否则规则还没到，匹配不到等于没预热）。
 
 // 已预热过的主题集合：按主题分别记录。
-// 用 Set 而非单个布尔量：night 规则虽在同一份 theme-night.css 里，但按 data-theme 分成了
+// 用 Set 而非单个布尔量：night 规则虽按主题拆成了多份文件，但仍按 data-theme 分成了
 // glass / glass2 两批选择器。用户在 base 主题下启动、之后才切到 glass 时，glass 那批规则
 // 同样需要「首次匹配」一次，故要能对每个主题各预热一次。
 const warmedThemes = new Set()

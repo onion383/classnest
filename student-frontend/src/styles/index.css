@@ -19,6 +19,7 @@ select {
 }
 
 @import "tailwindcss";
+@import "./theme.css";
 @import "./theme-base.css";
 @import "./utilities.css";
 /* 媒体查看器（图片/视频灯箱）：相册页与收据弹窗共用，样式单源 */
@@ -26,7 +27,7 @@ select {
 /* 彩色色块主题的 B 方案（深蓝 + 琥珀）覆盖层：放在基础层之后，
    主窗口与桌面小组件 / 引导页等子窗口都从这里拿到同一套外观。 */
 @import "./theme-base-accent.css";
-/* 主题皮肤（theme-glass / glass2）与夜间层（theme-night）不再在此静态引入：
+/* 主题皮肤（theme-glass / glass2）与各夜间层（theme-base-night / theme-glass-night / theme-glass2-night）不在此静态引入：
    改为按「当前 data-theme / data-mode」在运行时按需加载（见 styles/themeLoader.js）。
    各主题 CSS 都是 [data-theme=...] / [data-mode="night"] 属性选择器，属性不匹配时本就不生效，
    因此「只加载当前主题」与「全部加载」视觉等价，只是少了未用主题的下载与解析。 */
@@ -426,7 +427,7 @@ html.no-animations .layout-shift-hint {
 /* ==================== 表头筛选面板（DynamicTable） ====================
    网状表格表头上的放大镜/漏斗面板：降序/升序 + 值搜索 + 值勾选列表。
    类名统一 .dtf- 前缀，避免与其他样式冲突。
-   主题覆盖不在此处：毛玻璃在 theme-glass.css / theme-glass2.css，夜间在 theme-night.css。 */
+   主题覆盖不在此处：毛玻璃在 theme-glass.css / theme-glass2.css，夜间在 theme-*-night.css。 */
 .dtf-panel {
   position: fixed;
   z-index: 10020;

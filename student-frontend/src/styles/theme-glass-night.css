@@ -1,0 +1,847 @@
+/* ============================================================
+   glass 夜间配色层（从 theme-night.css 拆分）
+   ------------------------------------------------------------
+   全部规则以 [data-mode="night"] 限定作用域，日间不生效。
+   保留共用规则 + glass 专属规则，对方主题专属段已移除。
+   由 styles/themeLoader.js 在「glass + 夜间」时按需 import。
+   ============================================================ */
+
+/* ==================== 全局日/夜模式（夜间配色层） ====================
+   设计定位：日夜是「与主题正交」的全局开关（html[data-mode="day"|"night"]），
+   在任意主题之上再叠一层夜间配色。日间（data-mode="day"）时本文件全部不生效，
+   现有观感零变化。
+
+   覆盖范围：本文件只负责 glass（毛玻璃）与 glass2（新毛玻璃）两套主题的夜间配色。
+   彩色色块主题（base）的夜间规则在 theme-base-night.css，由 themeLoader 按需加载，
+   不经过本文件。
+
+   实现方式：各主题原文件里既有「CSS 变量」也有大量「硬编码色值」，因此夜间层
+   既要重定义变量，也要逐条覆盖硬编码的色（用更高特异性 + 与原规则同级的 !important）。
+   ============================================================ */
+
+/* ------------------------------------------------------------
+   0.1 语义彩色图标：沿用日间色系，深色模式下整体提亮
+   图标颜色来自 IconGlyph 的 MAP / 侧边栏配置（固定 hex），这里用亮度滤镜
+   在夜间统一提亮，保持色相不变（saturate 稍加补偿，避免提亮后发灰）。
+   仅标记了 .icon-color 的「彩色语义图标」生效；tint=current（按钮）继承文字色，
+   夜间本就是浅色，不参与提亮。
+   ------------------------------------------------------------ */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .icon-color {
+  filter: brightness(1.22) saturate(1.10);
+}
+
+/* ============================================================
+   A. glass（毛玻璃主题）夜间
+   ============================================================ */
+
+/* A1. 设计变量重映射
+   底色一族本次已整体提亮一档（页面底 #182238，玻璃面基色 rgba(36,53,88) 系），
+   避免「太黑」。若还要再调，按同样幅度抬亮 A 段所有 rgba(3x,5x,9x) 基色 + 页面底即可。 */
+:root[data-mode="night"][data-theme="glass"] {
+  --color-primary: #60a5fa;
+  --color-primary-hover: #4b93f0;
+  --color-primary-active: #3b82f6;
+  --color-primary-light: rgba(96, 165, 250, 0.18);
+
+  --color-bg: #182238;
+  --color-surface: rgba(46, 64, 100, 0.92);
+  --color-surface-hover: rgba(55, 76, 118, 0.95);
+  --color-sidebar: rgba(38, 55, 90, 0.72);
+  --color-sidebar-hover: var(--alpha-white-08);
+  --color-sidebar-active: rgba(96, 165, 250, 0.22);
+
+  --color-text: #e6ecf5;
+  --color-text-secondary: #a7b4c9;
+  --color-text-muted: #7f8ea6;
+  --color-text-inverse: #ffffff;
+
+  --color-border: var(--alpha-white-08);
+  --color-border-strong: var(--alpha-white-16);
+
+  --shadow-sm: 0 1px 2px var(--alpha-black-25);
+  --shadow-md: 0 4px 12px var(--alpha-black-30);
+  --shadow-lg: 0 8px 28px var(--alpha-black-42);
+  --shadow-card: 0 2px 10px var(--alpha-black-28);
+}
+/* 表单原生控件（日期/下拉/滚动条）跟随深色 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) {
+  color-scheme: dark;
+}
+
+/* A2. 页面底色与弥散光斑 */
+:root[data-mode="night"][data-theme="glass"] body {
+  background-color: #182238;
+}
+:root[data-mode="night"][data-theme="glass"] main {
+  background-color: #182238;
+  background-image:
+    radial-gradient(ellipse 40% 30% at 10% 15%, rgba(59, 130, 246, 0.24) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 30% at 90% 10%, rgba(99, 102, 241, 0.16) 0%, transparent 60%),
+    radial-gradient(ellipse 45% 35% at 50% 95%, rgba(56, 132, 222, 0.14) 0%, transparent 60%);
+  background-attachment: fixed;
+}
+/* 自定义背景图：遮罩改成深蓝压暗 */
+:root[data-mode="night"][data-theme="glass"].has-bg-image body {
+  background-color: #182238;
+}
+/* 背景图与遮罩现由 body::before 一层绘制（见 theme-glass.css），故夜间改遮罩变量而非背景色 */
+:root[data-mode="night"][data-theme="glass"].has-bg-image {
+  --bg-mask-color: rgba(16, 26, 52, calc(var(--bg-mask-opacity, 0.6) * 0.6));
+}
+/* 夜间内置默认底图本身已是深色风景图：遮罩再压轻，避免把这层夜色压死。
+   仅「glass + 夜间 + 无自选图」（.bg-night-default）生效；自选图仍走上一档系数。 */
+:root[data-mode="night"][data-theme="glass"].has-bg-image.bg-night-default {
+  --bg-mask-color: rgba(16, 26, 52, calc(var(--bg-mask-opacity, 0.6) * 0.30));
+}
+
+/* A3. 自绘标题栏 */
+:root[data-mode="night"][data-theme="glass"] .window-title-bar {
+  border-bottom-color: var(--alpha-white-08);
+  box-shadow:
+    inset 0 1px 0 var(--alpha-white-10),
+    0 4px 32px var(--alpha-black-35),
+    inset 0 -1px 0 var(--alpha-white-06);
+}
+:root[data-mode="night"][data-theme="glass"] .window-title-bar::before {
+  background: linear-gradient(180deg, var(--alpha-white-07) 0%, var(--alpha-white-02) 55%, var(--alpha-white-00) 100%);
+}
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .window-title-bar {
+  background-color: rgba(37, 54, 90, 0.46) !important;
+  color: #e6ecf5 !important;
+}
+:root[data-mode="night"][data-topbar-color="blue"][data-theme="glass"] .window-title-bar {
+  background-color: rgba(39, 64, 116, 0.46) !important;
+  color: #e6ecf5 !important;
+}
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .window-controls .win-btn:hover {
+  background: var(--alpha-white-12);
+}
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .win-app-title {
+  color: rgba(230, 236, 245, 0.85) !important;
+}
+
+/* A4. 侧边栏 */
+:root[data-mode="night"][data-theme="glass"] .bg-sidebar {
+  border-right-color: var(--alpha-white-08);
+  /* 同 theme-glass 的预防处理：去掉右向 4px 0 32px 暗带投影（夜间这条是 0.32 的纯黑，
+     更容易被网格表格的 backdrop-filter 采样成那条渐变线），保留两条内侧高光。 */
+  box-shadow:
+    inset 0 1px 0 var(--alpha-white-10),
+    inset -1px 0 0 var(--alpha-white-06);
+}
+:root[data-mode="night"][data-theme="glass"] .bg-sidebar::before {
+  background: linear-gradient(180deg, var(--alpha-white-07) 0%, var(--alpha-white-02) 55%, var(--alpha-white-00) 100%);
+}
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .bg-sidebar {
+  background-color: rgba(38, 55, 90, 0.50) !important;
+  color: #e6ecf5 !important;
+}
+:root[data-mode="night"][data-topbar-color="blue"][data-theme="glass"] .bg-sidebar {
+  background-color: rgba(40, 66, 120, 0.48) !important;
+  color: #eef3fb !important;
+}
+/* 白色调侧栏：文字/hover/选中改浅色 */
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .bg-sidebar a,
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .bg-sidebar nav a {
+  color: #cbd5e1 !important;
+}
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .bg-sidebar .app-name {
+  color: #eef3fb !important;
+}
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .sidebar-group-title {
+  color: #7f8ea6 !important;
+}
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .bg-sidebar-hover,
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .bg-sidebar a:hover:not(.bg-sidebar-active) {
+  background-color: var(--alpha-white-08) !important;
+  color: #f8fafc !important;
+}
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .bg-sidebar-active,
+:root[data-mode="night"][data-topbar-color="light"][data-theme="glass"] .bg-sidebar-active.rounded {
+  background-color: rgba(96, 165, 250, 0.22) !important;
+  color: #bfdbfe !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(96, 165, 250, 0.35),
+    inset 0 1px 0 var(--alpha-white-10),
+    0 0 16px rgba(96, 165, 250, 0.25),
+    0 2px 8px var(--alpha-black-25);
+}
+
+/* A5. 卡片 / 面板
+   日间卡片描边是 1px 白色叠在浅底上，基本看不出；到夜间换成浅蓝描边叠在深底上，
+   就会显成一圈清晰的亮边（圆角处即一段弧线）。同理，顶部内高光与 ::before 的
+   第一行受光渐变，在深底上都会变成卡片顶边的一条细线（被圆角裁切后带弧度）。
+   故夜间统一去掉描边与顶部内高光，并把受光渐变压到几乎不可见，与日间观感对齐。 */
+:root[data-mode="night"][data-theme="glass"] .bg-surface {
+  background-color: rgba(36, 53, 88, calc(var(--glass-opacity, 0.4) + 0.16)) !important;
+  border-color: transparent;
+  box-shadow: 0 0 20px var(--alpha-black-25);
+}
+:root[data-mode="night"][data-theme="glass"] .bg-surface::before {
+  background: linear-gradient(180deg, var(--alpha-white-02) 0%, var(--alpha-white-01) 55%, var(--alpha-white-00) 100%);
+}
+:root[data-mode="night"][data-theme="glass"] .bg-surface-hover {
+  background-color: rgba(47, 66, 106, calc(var(--glass-opacity, 0.4) + 0.24)) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .bg-surface.shadow-md {
+  background-color: rgba(36, 53, 88, 0.36) !important;
+  box-shadow: 0 2px 10px var(--alpha-black-30);
+}
+:root[data-mode="night"][data-theme="glass"] .bg-surface.shadow-md::before {
+  background: linear-gradient(180deg, var(--alpha-white-03) 0%, var(--alpha-white-01) 50%, var(--alpha-white-02) 100%);
+}
+/* 班费统计卡片 */
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 > div {
+  background-color: rgba(36, 53, 88, 0.36) !important;
+  box-shadow: 0 0 16px var(--alpha-black-25);
+}
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 > div::before {
+  background: linear-gradient(180deg, var(--alpha-white-03) 0%, var(--alpha-white-01) 50%, var(--alpha-white-02) 100%);
+}
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-success { color: #4ade80 !important; }
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-info { color: #7cb3fb !important; }
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-danger { color: #f87171 !important; }
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-text-secondary { color: #94a3b8 !important; }
+
+/* A6. 表格 */
+:root[data-mode="night"][data-theme="glass"] .table-scroll-wrapper {
+  background-color: rgba(37, 55, 90, calc(var(--glass-opacity, 0.4) + 0.16)) !important;
+  box-shadow: 0 0 16px var(--alpha-black-25);
+}
+:root[data-mode="night"][data-theme="glass"] .table-scroll-wrapper::before {
+  border-color: rgba(150, 180, 255, 0.05);
+}
+:root[data-mode="night"][data-theme="glass"] table th,
+:root[data-mode="night"][data-theme="glass"] table td {
+  color: #e6ecf5 !important;
+  border-right-color: rgba(150, 180, 255, 0.18) !important;
+  border-bottom-color: rgba(150, 180, 255, 0.18) !important;
+}
+/* 数据行比空数据区亮一档；hover / 选中依次再亮一档（保持原层次逻辑） */
+:root[data-mode="night"][data-theme="glass"] table tbody tr td {
+  background-color: var(--alpha-white-05) !important;
+}
+:root[data-mode="night"][data-theme="glass"] table tbody tr:hover td {
+  background-color: var(--alpha-white-09) !important;
+}
+:root[data-mode="night"][data-theme="glass"] table tbody tr.bg-surface-hover td {
+  background-color: var(--alpha-white-13) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .table-scroll-wrapper .bg-primary {
+  background-color: rgba(96, 165, 250, 0.22) !important;
+}
+/* 吸顶表头遮盖层（日间同款，见 theme-glass.css）：滚动时数据行从表头下穿过，
+   半透明表头会让下层文字透上来影响可读性，夜间同样要高遮盖打底 + 蓝调染层 */
+:root[data-mode="night"][data-theme="glass"] .table-scroll-wrapper thead th.bg-primary {
+  background-color: rgba(30, 41, 59, 0.92) !important;
+  background-image: linear-gradient(rgba(96, 165, 250, 0.22), rgba(96, 165, 250, 0.22)) !important;
+  backdrop-filter: blur(22px);
+}
+/* 操作列固定右侧：同表头一样是 sticky 遮盖层，横向滚动时数据从该列底下穿过 */
+:root[data-mode="night"][data-theme="glass"] .table-scroll-wrapper tbody td.col-op {
+  background-color: rgba(30, 41, 59, 0.92) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .table-scroll-wrapper .text-text-inverse {
+  color: #e6ecf5 !important;
+}
+:root[data-mode="night"][data-theme="glass"] .add-row-bar {
+  background-color: rgba(44, 63, 102, calc(var(--glass-opacity, 0.4) + 0.14)) !important;
+  border-color: rgba(150, 180, 255, 0.18) !important;
+  box-shadow: 0 1px 6px var(--alpha-black-25);
+}
+
+/* A7. 网状表格（GridView） */
+:root[data-mode="night"][data-theme="glass"] .grid-view-container {
+  background-color: rgba(37, 55, 90, calc(var(--glass-opacity, 0.4) + 0.10)) !important;
+  box-shadow: 0 0 16px var(--alpha-black-25);
+}
+:root[data-mode="night"][data-theme="glass"] .grid-view-container::before {
+  background: linear-gradient(180deg, var(--alpha-white-04) 0%, var(--alpha-white-01) 50%, var(--alpha-white-02) 100%);
+}
+:root[data-mode="night"][data-theme="glass"] .grid-view-container table th {
+  background-color: var(--alpha-white-07) !important;
+  color: #e6ecf5 !important;
+  border-right-color: rgba(150, 180, 255, 0.18) !important;
+  border-bottom-color: rgba(150, 180, 255, 0.18) !important;
+}
+/* 吸顶表头遮盖层（日间同款，见 theme-glass.css）：表头底色半透明，
+   数据行滚到它下面时文字会透上来，夜间同样要高遮盖打底 + 蓝调染层 */
+:root[data-mode="night"][data-theme="glass"] .grid-view-container thead th {
+  background-color: rgba(30, 41, 59, 0.92) !important;
+  background-image: linear-gradient(rgba(96, 165, 250, 0.22), rgba(96, 165, 250, 0.22)) !important;
+  backdrop-filter: blur(22px);
+}
+:root[data-mode="night"][data-theme="glass"] .grid-view-container table td {
+  background-color: var(--alpha-white-05) !important;
+  color: #e6ecf5 !important;
+  border-right-color: rgba(150, 180, 255, 0.18) !important;
+  border-bottom-color: rgba(150, 180, 255, 0.18) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .grid-view-container table .bg-warning\/30,
+:root[data-mode="night"][data-theme="glass"] .grid-view-container table .bg-warning\/20,
+:root[data-mode="night"][data-theme="glass"] .grid-view-container table .bg-info\/10 {
+  background-color: var(--alpha-white-07) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .grid-view-container table .bg-primary {
+  background-color: rgba(96, 165, 250, 0.22) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .grid-view-container .text-text-inverse {
+  color: #e6ecf5 !important;
+}
+/* 正在编辑的单元格：非热力图单元格改浅色字（热力图单元格保留其自身的深色字） */
+:root[data-mode="night"][data-theme="glass"] .grid-view-container table tbody tr td.cell-editing:not(.cell-heat),
+:root[data-mode="night"][data-theme="glass"] .grid-view-container table td.cell-editing:not(.cell-heat) {
+  color: #e6ecf5 !important;
+}
+
+/* A8. 表单控件 */
+:root[data-mode="night"][data-theme="glass"] input:not([type]),
+:root[data-mode="night"][data-theme="glass"] input[type="text"],
+:root[data-mode="night"][data-theme="glass"] input[type="number"],
+:root[data-mode="night"][data-theme="glass"] input[type="password"],
+:root[data-mode="night"][data-theme="glass"] input[type="search"],
+:root[data-mode="night"][data-theme="glass"] input[type="tel"],
+:root[data-mode="night"][data-theme="glass"] input[type="email"],
+:root[data-mode="night"][data-theme="glass"] input[type="url"],
+:root[data-mode="night"][data-theme="glass"] input[type="date"],
+:root[data-mode="night"][data-theme="glass"] input[type="datetime-local"],
+:root[data-mode="night"][data-theme="glass"] input[type="time"],
+:root[data-mode="night"][data-theme="glass"] textarea,
+:root[data-mode="night"][data-theme="glass"] select {
+  background-color: rgba(32, 46, 78, calc(var(--glass-opacity, 0.4) + 0.10)) !important;
+  border-color: rgba(150, 180, 255, 0.18) !important;
+  color: var(--color-text, #e6ecf5);
+}
+:root[data-mode="night"][data-theme="glass"] input:not([type]):focus,
+:root[data-mode="night"][data-theme="glass"] input[type="text"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="number"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="password"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="search"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="tel"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="email"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="url"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="date"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="datetime-local"]:focus,
+:root[data-mode="night"][data-theme="glass"] input[type="time"]:focus,
+:root[data-mode="night"][data-theme="glass"] textarea:focus,
+:root[data-mode="night"][data-theme="glass"] select:focus {
+  border-color: #60a5fa !important;
+  background-color: rgba(48, 68, 108, 0.88) !important;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.28);
+}
+:root[data-mode="night"][data-theme="glass"] input:disabled,
+:root[data-mode="night"][data-theme="glass"] textarea:disabled {
+  background-color: var(--alpha-white-04) !important;
+}
+:root[data-mode="night"][data-theme="glass"] select option {
+  background-color: #1e263a;
+  color: var(--color-text, #e6ecf5);
+}
+/* 自定义下拉框（AppSelect / .av-select）：select.css 给 glass 的触发区与菜单
+   硬编码了白色底（!important），此处用更高特异性 + !important 覆盖成夜间玻璃面。
+   菜单是 Teleport 到 body 的，仍在 html 下，故选择器同样命中。 */
+:root[data-mode="night"][data-theme="glass"] .av-select__trigger {
+  background-color: rgba(32, 46, 78, calc(var(--glass-opacity, 0.4) + 0.10)) !important;
+  border-color: rgba(150, 180, 255, 0.18) !important;
+  color: var(--color-text, #e6ecf5);
+}
+:root[data-mode="night"][data-theme="glass"] .av-select__trigger:hover {
+  background-color: rgba(40, 58, 94, calc(var(--glass-opacity, 0.4) + 0.16)) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .av-select--open .av-select__trigger {
+  background-color: rgba(48, 68, 108, 0.88) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .av-select--open .av-select__trigger,
+:root[data-mode="night"][data-theme="glass"] .av-select__trigger:focus-visible {
+  border: 1px solid #60a5fa !important;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.28) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .av-select--disabled .av-select__trigger {
+  background-color: var(--alpha-white-04) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .av-select__menu {
+  background-color: rgba(45, 63, 102, 0.85) !important;
+  border-color: rgba(150, 180, 255, 0.18) !important;
+  color: var(--color-text, #e6ecf5);
+  box-shadow: 0 10px 30px var(--alpha-black-45);
+}
+:root[data-mode="night"][data-theme="glass"] .move-arrow-btn {
+  background-color: rgba(96, 165, 250, 0.22);
+  border-color: rgba(96, 165, 250, 0.35);
+}
+:root[data-mode="night"][data-theme="glass"] .move-arrow-btn:hover {
+  background-color: rgba(96, 165, 250, 0.35);
+}
+/* 登录页输入框 */
+:root[data-mode="night"][data-theme="glass"] .login-bg input {
+  background-color: rgba(32, 46, 78, calc(var(--glass-opacity, 0.4) + 0.10)) !important;
+  border-color: rgba(150, 180, 255, 0.18);
+}
+/* 登录卡片：白天那份（theme-glass.css 的 `.login-bg .bg-surface` 0.62 白）与本节
+   通用的 `.bg-surface` 深底**优先级同分**，谁赢只取决于两份 CSS 的加载顺序 ——
+   调整 @import / 动态加载顺序时，夜间卡片会突然变白，浅色文字整片消失。
+   这里显式多带一个 `.login-bg` 提一级，把夜间登录卡片钉在深底上。
+   透明度和输入框一族对齐（+0.30 而不是 +0.16）：登录页背景图最暗、卡片又最大，
+   太透会透出天空的亮云，浅色文字反而看不清。 */
+:root[data-mode="night"][data-theme="glass"] .login-bg .bg-surface {
+  background-color: rgba(30, 44, 74, clamp(0.62, calc(var(--glass-opacity, 0.4) + 0.30), 1)) !important;
+  border-color: var(--alpha-white-12);
+}
+/* 夜间登录页的次要文字：全局 --color-text-muted(#7f8ea6) 在这块深底上只有 4.37:1，
+   卡在及格线下。登录页的链接是唯一出口，取 #8b9bb4（5.15:1）。
+   与 theme-glass.css 白天那条（反向加深）成对，两处要一起改。 */
+:root[data-mode="night"][data-theme="glass"] .login-bg .login-card .text-text-muted {
+  color: #8b9bb4 !important;
+}
+:root[data-mode="night"][data-theme="glass"] .login-bg input:focus {
+  border-color: #60a5fa !important;
+  background-color: rgba(48, 68, 108, 0.88) !important;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.28);
+}
+:root[data-mode="night"][data-theme="glass"] .login-bg input:-webkit-autofill:not(:focus),
+:root[data-mode="night"][data-theme="glass"] .login-bg input:-webkit-autofill:hover:not(:focus) {
+  -webkit-text-fill-color: #e6ecf5;
+  -webkit-box-shadow: 0 0 0 1000px rgba(48, 68, 108, 0.9) inset;
+  box-shadow: 0 0 0 1000px rgba(48, 68, 108, 0.9) inset;
+  border-color: rgba(150, 180, 255, 0.18) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .login-bg input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #e6ecf5;
+  -webkit-box-shadow: 0 0 0 1000px rgba(48, 68, 108, 0.92) inset;
+  box-shadow: 0 0 0 1000px rgba(48, 68, 108, 0.92) inset;
+  border-color: #60a5fa !important;
+}
+:root[data-mode="night"][data-theme="glass"] .login-glow {
+  /* 只有外圈：描边 + 两层蓝光 + 落影。内侧 4 条 1px 高光见下一条规则。 */
+  box-shadow:
+    0 0 0 1px var(--alpha-white-12),
+    0 0 30px rgba(96, 165, 250, 0.10),
+    0 0 60px rgba(96, 165, 250, 0.06),
+    0 4px 20px var(--alpha-black-40);
+}
+/* 内侧 4 条 1px 高光画在内层卡片上（外层是卡片外壳，inset 会被卡片半透明底盖掉）。
+   与 theme-glass.css 白天那份是同一组位置，只是数值换成夜间档，两处要一起改。 */
+:root[data-mode="night"][data-theme="glass"] .login-glow > .login-card {
+  box-shadow:
+    inset 0 1px 0 var(--alpha-white-16),
+    inset 1px 0 0 var(--alpha-white-08),
+    inset 0 -1px 0 var(--alpha-white-04),
+    inset -1px 0 0 var(--alpha-white-06);
+}
+:root[data-mode="night"][data-theme="glass"] .login-glow::before {
+  background: linear-gradient(
+    180deg,
+    var(--alpha-white-22) 0%,
+    var(--alpha-white-06) 20%,
+    var(--alpha-white-02) 50%,
+    var(--alpha-white-06) 80%,
+    var(--alpha-white-16) 100%
+  );
+}
+
+/* A9. 彩色玻璃按钮：把「白遮罩提亮」翻成「暗遮罩压深」，字色改浅 */
+/* 静止态配色（**不要再给它们补 :hover 版本**）。
+   夜间按钮悬浮不改变配色，见下方「夜间按钮悬浮冻结」一节。 */
+:root[data-mode="night"][data-theme="glass"] button.bg-primary.text-text-inverse {
+  background: rgba(34, 197, 94, 0.30) !important;
+  color: #bbf7d0 !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-success.text-text-inverse {
+  background: rgba(34, 197, 94, 0.30) !important;
+  color: #bbf7d0 !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-warning.text-text-inverse {
+  background: rgba(245, 158, 11, 0.32) !important;
+  color: #fde68a !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-danger.text-text-inverse {
+  background: rgba(239, 68, 68, 0.32) !important;
+  color: #fecaca !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-info.text-text-inverse {
+  background: rgba(59, 130, 246, 0.32) !important;
+  color: #dbeafe !important;
+}
+/* ---------- 悬浮时把文字色也钉住（2026-10-30 补） ----------
+   白天 theme-glass.css 里有 `button.bg-*.text-text-inverse:hover { color: <深色> }`，
+   特异性 (0,5,1)，**高于**上面静止态的 (0,4,1)。所以夜里一悬停文字就变深：
+   危险按钮浅粉 #fecaca → 深红 #7f1d1d（就是用户说的「悬停变红」）、
+   主色按钮浅绿 → 深绿、警告按钮浅黄 → 深棕。背景因为静止态也带 !important 且特异性够，没被带走。
+   这里用 (0,6,1) 把 5 个颜色分别压回夜间静止色。**删掉这段，夜间悬停就又会变深。** */
+:root[data-mode="night"][data-theme="glass"] button.bg-primary.text-text-inverse:not(.tab-active):hover {
+  color: #bbf7d0 !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-success.text-text-inverse:not(.tab-active):hover {
+  color: #bbf7d0 !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-warning.text-text-inverse:not(.tab-active):hover {
+  color: #fde68a !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-danger.text-text-inverse:not(.tab-active):hover {
+  color: #fecaca !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-info.text-text-inverse:not(.tab-active):hover {
+  color: #dbeafe !important;
+}
+/* 统一新风格的 box-shadow（原为白色内遮罩，改暗内遮罩） */
+:root[data-mode="night"][data-theme="glass"] button.bg-primary.text-text-inverse:not(.tab-active),
+:root[data-mode="night"][data-theme="glass"] button.bg-success.text-text-inverse:not(.tab-active),
+:root[data-mode="night"][data-theme="glass"] button.bg-warning.text-text-inverse:not(.tab-active),
+:root[data-mode="night"][data-theme="glass"] button.bg-danger.text-text-inverse:not(.tab-active),
+:root[data-mode="night"][data-theme="glass"] button.bg-info.text-text-inverse:not(.tab-active) {
+  box-shadow:
+    inset 0 0 0 40px var(--alpha-black-22),
+    0 0 14px var(--alpha-black-20) !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-primary.text-text-inverse:not(.tab-active):hover,
+:root[data-mode="night"][data-theme="glass"] button.bg-success.text-text-inverse:not(.tab-active):hover,
+:root[data-mode="night"][data-theme="glass"] button.bg-warning.text-text-inverse:not(.tab-active):hover,
+:root[data-mode="night"][data-theme="glass"] button.bg-danger.text-text-inverse:not(.tab-active):hover,
+:root[data-mode="night"][data-theme="glass"] button.bg-info.text-text-inverse:not(.tab-active):hover {
+  box-shadow:
+    inset 0 0 0 40px var(--alpha-black-28),
+    0 0 18px var(--alpha-black-26) !important;
+}
+:root[data-mode="night"][data-theme="glass"] button.bg-surface-hover {
+  background-color: var(--alpha-white-10) !important;
+  border-color: rgba(150, 180, 255, 0.16);
+  color: var(--color-text) !important;
+}
+/* ========== 刷新类按钮（.btn-refresh）：夜间淡暖色玻璃 ==========
+   与白天同一套思路（见 theme-glass.css 同名段）：去掉 !important、阴影只留一个来源。
+   夜间有两条硬规则要先让路，否则会被它们压掉：
+   ① 下方 `.opbar button` 的暗遮罩（(0,5,1) + !important）→ 已加 `:not(.btn-refresh)`；
+   ② A9b「夜间按钮悬浮冻结」里的 `button.bg-text-muted`（同特异性 + !important）
+      → 也已加 `:not(.btn-refresh)`，否则底色会被钉回灰色。
+   悬浮仍然遵守「夜间按钮不变色」：只加深内遮罩与暖光晕，background / color 保持不动。 */
+:root[data-mode="night"][data-theme="glass"] button.btn-refresh {
+  background: rgba(251, 146, 60, 0.32);
+  border: none;
+  backdrop-filter: blur(12px) saturate(1.3);
+  color: #fed7aa;
+  box-shadow:
+    inset 0 0 0 40px var(--alpha-black-18),
+    0 0 14px rgba(251, 146, 60, 0.18);
+}
+:root[data-mode="night"][data-theme="glass"] button.btn-refresh:hover {
+  background: rgba(251, 146, 60, 0.32);
+  color: #fed7aa;
+  box-shadow:
+    inset 0 0 0 40px var(--alpha-black-24),
+    0 0 20px rgba(251, 146, 60, 0.28);
+}
+/* 操作栏按钮的白色内遮罩改暗（.btn-refresh 除外，它自己带暖色阴影） */
+:root[data-mode="night"][data-theme="glass"] .opbar button:not(.view-switch-btn):not(.btn-refresh) {
+  box-shadow:
+    inset 0 0 0 40px var(--alpha-black-20),
+    0 0 14px var(--alpha-black-12) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .opbar button:hover:not(.view-switch-btn):not(.btn-refresh) {
+  box-shadow:
+    inset 0 0 0 40px var(--alpha-black-26),
+    0 0 18px var(--alpha-black-18) !important;
+}
+
+/* ==================== A9b. 夜间按钮悬浮冻结：深色模式下按钮不变色 ====================
+   需求：夜间鼠标移到按钮上，按钮**颜色不变**（可点的反馈只靠光标、以及上面对 box-shadow 的加深）。
+
+   难点：按钮底色绝大多数来自模板里的 `hover:bg-*` 工具类（特异性 (0,2,0)、无 !important），
+   而 glass2 主题从不覆盖按钮的静止底色，所以悬浮色一直照常生效。
+   CSS 没有"回到我原本那个色"的取值方式（revert 会退回浏览器默认），静止色只能显式写出。
+
+   解法：给静止色类补一条「**同值** + !important」的规则 —— 值与该主题原本的静止色完全一致
+   （观感零变化），但 !important 会压住 hover 工具类，于是悬浮时颜色不再跳变。
+   glass 主题的彩色按钮在上面已有半透明玻璃配方（特异性更高，仍然是它赢），这几条只兜住
+   不带 .text-text-inverse 的那些。
+
+   **不要再给这些类补 :hover 版本** —— hover 规则正是这里要消灭的东西。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-primary {
+  background-color: var(--color-primary) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-success {
+  background-color: var(--color-success) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-warning {
+  background-color: var(--color-warning) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-danger {
+  background-color: var(--color-danger) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-info {
+  background-color: var(--color-info) !important;
+}
+/* 中性灰按钮：夜间原本就是 tailwind 变量值（玻璃主题没覆盖过），这里只是把同一个值钉住。
+   glass 下排除 .btn-refresh —— 它有自己的淡暖色配方，不能被钉回灰底；
+   glass2 保持原样（它没有 btn-refresh 配方，冻结范围含 .btn-refresh，别改）。 */
+:root[data-mode="night"][data-theme="glass"] button.bg-text-muted:not(.btn-refresh) {
+  background-color: var(--color-text-muted) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-text-secondary {
+  background-color: var(--color-text-secondary) !important;
+}
+/* 半透明浅底按钮（关于页「用户协议 / 版本日志」、分组页「新增分组」） */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-primary\/10 {
+  background-color: color-mix(in srgb, var(--color-primary) 10%, transparent) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.bg-amber-300\/10 {
+  background-color: color-mix(in srgb, #fcd34d 10%, transparent) !important;
+}
+/* ---------- A9b-2. 文字色 / 半透明底的悬浮冻结 ----------
+   上一版只冻结了 `hover:bg-*`（背景），漏了 `hover:text-*`（文字），于是夜间
+   「✕ 关闭 / 删除 / 撤回更改」这类小图标按钮一悬停文字就变红 —— 用户报的「还是会变红」。
+   这类按钮静止色只有两种，按类分别钉回原色即可（不需要通用属性选择器，那会误伤
+   `.view-switch-btn` / `.dtf-sort-btn`）。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.hover\:text-danger.text-text-muted:hover {
+  color: var(--color-text-muted) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.hover\:text-danger.text-text-secondary:hover {
+  color: var(--color-text-secondary) !important;
+}
+/* 「删除」文字按钮（`text-danger hover:bg-danger/10`，如值日设置里的行内删除）：
+   静止是透明底，悬浮会冒出一层淡红 —— 钉回透明。这里能用类选择器精确定位，
+   所以不会波及 `.view-switch-btn` / `.dtf-sort-btn` 那批。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) button.hover\:bg-danger\/10:hover {
+  background-color: transparent !important;
+}
+/* 边框按钮 / 着色文字按钮（虚线边框的"添加"、`text-primary hover:bg-primary/10` 之类）：
+   静止本来就是透明，悬浮会冒出一层底色。**这类仍未冻结** —— 它们的 class 里不含 bg-，
+   用一条 `button:not([class*="bg-"])` 会把 `.view-switch-btn` / `.dtf-sort-btn`
+   这种"背景由组件 scoped 样式决定"的按钮一起打穿。要收掉得在模板里显式加 `bg-transparent`。 */
+
+/* A10. 浮层：候选列表 / 右键菜单 / 搜索面板 */
+:root[data-mode="night"][data-theme="glass"] .candidate-popup,
+:root[data-mode="night"][data-theme="glass"] .context-menu-popup {
+  background-color: rgba(45, 63, 102, 0.78) !important;
+  border-color: rgba(96, 165, 250, 0.4) !important;
+  box-shadow:
+    0 0 0 1px rgba(140, 175, 250, 0.10),
+    0 8px 28px var(--alpha-black-50);
+}
+:root[data-mode="night"][data-theme="glass"] .candidate-popup .bg-info\/20 {
+  background-color: rgba(96, 165, 250, 0.22) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .candidate-popup .hover\:bg-info\/10:hover {
+  background-color: rgba(96, 165, 250, 0.14) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .candidate-popup .text-text-muted {
+  color: #7f8ea6 !important;
+}
+:root[data-mode="night"][data-theme="glass"] .context-menu-popup .hover\:bg-surface-hover:hover {
+  background-color: rgba(96, 165, 250, 0.14) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .search-panel {
+  background-color: rgba(37, 55, 90, calc(var(--glass-opacity, 0.4) + 0.12)) !important;
+  border-color: var(--alpha-white-10);
+  box-shadow:
+    0 1px 6px var(--alpha-black-35),
+    inset 0 1px 0 var(--alpha-white-06);
+}
+:root[data-mode="night"][data-theme="glass"] .search-panel .bg-surface-hover {
+  background-color: var(--alpha-white-08) !important;
+}
+/* 视图切换（表格/时间轴）：夜间未选中标签与选中标签同色（白色）。
+   !important 用于压过 glass2 深蓝顶栏的未选中配色（同特异性，样式注入顺序不保证）。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .view-switch-btn {
+  color: #ffffff !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .view-switch-btn.on {
+  color: #ffffff !important;
+}
+
+/* A11. 通知吐司 */
+:root[data-mode="night"][data-theme="glass"] .nt-toast {
+  background-color: rgba(44, 62, 100, calc(var(--glass-opacity, 0.4) - 0.1)) !important;
+  border-color: var(--alpha-white-10) !important;
+  box-shadow:
+    0 4px 24px var(--alpha-black-40),
+    0 1px 4px var(--alpha-black-30),
+    inset 0 1px 0 var(--alpha-white-08);
+}
+:root[data-mode="night"][data-theme="glass"] .nt-toast::before {
+  background: linear-gradient(180deg, var(--alpha-white-12) 0%, var(--alpha-white-03) 50%, var(--alpha-white-05) 100%) !important;
+}
+:root[data-mode="night"][data-theme="glass"] .nt-title { color: #e6ecf5 !important; }
+:root[data-mode="night"][data-theme="glass"] .nt-msg { color: #a7b4c9 !important; }
+:root[data-mode="night"][data-theme="glass"] .nt-close { color: #7f8ea6 !important; }
+:root[data-mode="night"][data-theme="glass"] .nt-close:hover { background-color: var(--alpha-white-08) !important; color: #e6ecf5 !important; }
+
+/* A12. 滚动条 */
+:root[data-mode="night"][data-theme="glass"] {
+  scrollbar-color: var(--alpha-white-22) var(--alpha-white-04);
+}
+
+/* ============================================================
+   B. glass2（新毛玻璃主题）夜间
+   ============================================================ */
+
+/* B1. 设计变量重映射（--g2-* 是玻璃配方，改这几个即可整体翻转卡片/表格/弹窗）
+   底色同样已整体提亮一档（页面底 #1b2036，玻璃基色 rgba(42,50,76) 系）。 */
+
+/* B2. 背景：深色渐变 + 柔光斑 */
+/* 自定义背景图：遮罩改深色（其余 background-size/position 等沿用日间规则） */
+
+/* B3. 标题栏 */
+
+/* B4. 侧边栏 */
+/* 兜底：与日间同理，data-topbar-color 尚未写入时也不要沿用白字/深字错配 */
+/* 白色调侧栏：文字/hover/选中改浅色 */
+
+/* B5. 表格（表头字色、数据行层次、格内编辑态） */
+/* 吸顶表头遮盖层（日间同款，见 theme-glass2.css）：滚动时数据行从表头下穿过，
+   半透明表头会让下层文字透上来影响可读性，夜间同样要高遮盖打底 + 强调色染层 */
+/* 操作列固定右侧：同表头一样是 sticky 遮盖层，横向滚动时数据从该列底下穿过 */
+/* 网状表格的吸顶表头：与 .table-scroll-wrapper 同款遮盖（日间见 theme-glass2.css） */
+/* 正在编辑的单元格：非热力图单元格改浅色字 */
+
+/* B6. 表单控件与浮层 */
+/* 原 `button.bg-surface-hover:hover`（提到 0.9）已删除：夜间按钮悬浮不改配色，
+   静止值来自 theme-glass2.css 的 `.bg-surface-hover`（带 !important），悬浮时同样生效。 */
+
+/* B7. 视图切换（分段控件）轨道 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"])[data-topbar-color="light"] .view-switch {
+  background-color: rgba(38, 45, 72, 0.62) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"])[data-topbar-color="blue"] .view-switch {
+  background-color: rgba(48, 56, 108, 0.58) !important;
+}
+
+/* B8. 登录页 */
+
+/* B9. 滚动条 */
+
+/* ============================================================
+   C. 页面级硬编码毛玻璃块（glass / glass2 通用）
+   以下两块用的是与主题无关的「硬编码浅色玻璃 + 深色文字」：
+   1) AiAssistant 的对话列表/聊天区/加载与未启用态（.ai-glass-panel）
+   2) DashboardView 的「班级信息大框」（时钟/班级信息/倒计时）
+   两者在 glass 与 glass2 下日间观感一致，故夜间用同一条 :is(...) 规则覆盖。
+   ============================================================ */
+
+/* C1. AI 助手面板：白玻璃改为深色玻璃（border 走 --color-border 自动适配，无需覆盖） */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .ai-glass-panel {
+  background-color: rgba(46, 64, 100, 0.55) !important;
+}
+
+/* C2. 班级概览「班级信息大框」：底色/描边/投影翻转
+   描边改透明：日间是白色描边叠在浅底上、看不出；夜间白色描边叠在深底上会显成一圈
+   亮线（圆角处即弧线），与 .bg-surface 同因，故同样去掉，改用投影区分层次。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card {
+  background: rgba(46, 64, 100, 0.42);
+  border-color: transparent;
+  box-shadow: 0 4px 20px var(--alpha-black-30);
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .info-divider {
+  background: var(--alpha-white-12);
+}
+/* 时钟取色变量下传（AnimatedClock 内以 var() 读取） */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .clock-part {
+  --ac-time-color: #e6ecf5;
+  --ac-date-color: #a7b4c9;
+}
+/* 文字层次：主文字提亮，次要降为低饱和灰蓝 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .class-name,
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-top {
+  color: #e6ecf5;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .class-line {
+  color: #c3ccdd;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .line-label {
+  color: #8f9cb3;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .class-placeholder,
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .countdown-empty {
+  color: #6f7d95;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-bottom {
+  color: #a7b4c9;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-item-name,
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-num {
+  color: #60a5fa;
+}
+
+/* C3. 退出确认弹窗（ShutdownMenuDialog）
+   卡片本身（底/描边/投影/文字）已全走主题变量，glass / glass2 夜间自动跟随，
+   故此处只补两处写死的语义色：
+   1) 四个语义图标盒：日间是深色图标叠在 12% 淡色底上，夜间把底纹加浓、图标提亮，
+      色相不变（提亮值沿用 A5 卡片区既有口径：info→#7cb3fb / success→#4ade80 / danger→#f87171）。
+   2) 危险项 hover：日间的浅红底（#fef2f2）叠在深底上几乎看不见，改成更明显的暗红。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .opt-icon-blue {
+  background: rgba(59, 130, 246, 0.20);
+  color: #7cb3fb;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .opt-icon-cyan {
+  background: rgba(6, 182, 212, 0.20);
+  color: #22d3ee;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .opt-icon-green {
+  background: rgba(34, 197, 94, 0.20);
+  color: #4ade80;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .opt-icon-red {
+  background: rgba(239, 68, 68, 0.20);
+  color: #f87171;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .shutdown-opt.opt-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.16) !important;
+  border-color: rgba(239, 68, 68, 0.40) !important;
+}
+
+/* ========== 表头筛选面板（DynamicTable.filter.vue）==========
+   日间是随 --glass-opacity 变化的薄白玻璃，夜间换成同族深蓝玻璃
+   （透明度同样跟着滑块走，只比卡片略浓一点），面板内控件（hover 底、
+   搜索框、勾勾）同步提亮，避免在深底上对比度不足。 */
+:root[data-mode="night"] .dtf-panel {
+  background-color: rgba(37, 55, 90, calc(var(--glass-opacity, 0.4) + 0.12)) !important;
+  border-color: rgba(150, 180, 255, 0.18) !important;
+  color: var(--color-text, #e6ecf5);
+  backdrop-filter: blur(26px) saturate(1.35);
+  -webkit-backdrop-filter: blur(26px) saturate(1.35);
+  box-shadow:
+    0 16px 40px var(--alpha-black-40),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+:root[data-mode="night"] .dtf-item:hover,
+:root[data-mode="night"] .dtf-sort-btn:hover {
+  background-color: rgba(255, 255, 255, 0.09) !important;
+}
+:root[data-mode="night"] .dtf-sort-btn {
+  color: var(--color-text-secondary, #a8b6cf);
+}
+:root[data-mode="night"] .dtf-sort-btn.is-on {
+  /* 夜间也保持蓝色实底：主题蓝压深一档，配白字保证对比度 */
+  color: #fff !important;
+  background-color: color-mix(in srgb, var(--color-primary, #60a5fa) 65%, #0b1a33) !important;
+}
+:root[data-mode="night"] .dtf-search-input {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+:root[data-mode="night"] .dtf-search-input:focus {
+  background-color: rgba(255, 255, 255, 0.10) !important;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.22);
+}
+:root[data-mode="night"] .dtf-item-check {
+  color: var(--color-primary, #4ade80);
+}
+:root[data-mode="night"] .dtf-foot {
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+/* ---------- 空态「从 Excel 表格批量导入」：夜间暖色毛玻璃 ----------
+   白天用深琥珀字压在淡琥珀底上；夜间底色变深，必须把文字提到浅琥珀，
+   否则 #92400e 在深底上几乎读不出来。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .empty-import-btn {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.34);
+  box-shadow:
+    inset 0 0 0 20px rgba(255, 255, 255, 0.06),
+    0 2px 10px rgba(0, 0, 0, 0.28);
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .empty-import-btn:hover {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.26);
+}
+

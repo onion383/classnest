@@ -7,13 +7,14 @@ import { createLatest } from '../utils/latestOnly'
 import { SEND } from '../electronChannels.js'
 
 const THEME_KEY = 'app-theme'
-// 全局日/夜模式：与「主题」正交，任何主题之上再叠一层夜间配色（见 styles/theme-night.css）。
+// 全局日/夜模式：与「主题」正交，任何主题之上再叠一层夜间配色（见 styles/theme-*-night.css）。
 // base / glass / glass2 实现了夜间配色，其余主题保持日间外观（切换按钮禁用）。
 const MODE_KEY = 'app-mode'
 // 跟随系统：开启后按操作系统「深色/浅色」偏好自动切换日/夜（base / glass / glass2 支持）
 const FOLLOW_KEY = 'app-mode-follow-system'
-// base 的夜间规则已合并进 theme-base-accent.css（随 index.css 常驻），
-// 因此这里控制「按钮可用」，但 themeLoader 不需要再加载额外的夜间文件。
+// 三套主题都有夜间配色，各有一份按需加载的夜间 CSS
+// （base -> theme-base-night.css；glass -> theme-glass-night.css；
+//   glass2 -> theme-glass2-night.css），见 styles/themeLoader.js。
 const NIGHT_THEMES = ['base', 'glass', 'glass2']
 // 旧版「自定义主题 / 颜色调整」的存储键：对应 UI 入口已删除，仅用于启动时清掉遗留数据。
 const LEGACY_CUSTOM_COLOR_KEY = 'app-theme-custom'
@@ -35,7 +36,7 @@ const ANIMATIONS_KEY = 'app-animations'
 const DEFAULT_GLASS_BG = import.meta.env.PROD
   ? window.location.origin + '/glass-bg-opt.webp'
   : `${import.meta.env.BASE_URL}glass-bg-opt.webp`
-// glass 夜间模式的默认底图：本身已是深色风景图，故其上的黑色遮罩要更轻（见 theme-night.css
+// glass 夜间模式的默认底图：本身已是深色风景图，故其上的黑色遮罩要更轻（见 theme-glass-night.css
 // 的 .bg-night-default 规则），否则会把图压死。仅夜间生效，日间仍用 DEFAULT_GLASS_BG。
 const DEFAULT_GLASS_BG_NIGHT = import.meta.env.PROD
   ? window.location.origin + '/glass-bg-night.webp'
@@ -150,7 +151,7 @@ export const useThemeStore = defineStore('theme', () => {
 
   const applyTheme = () => {
     document.documentElement.dataset.theme = currentTheme.value
-    // 全局日/夜模式：写 data-mode，styles/theme-night.css 据此叠加夜间配色
+    // 全局日/夜模式：写 data-mode，styles/theme-*-night.css 据此叠加夜间配色
     document.documentElement.dataset.mode = mode.value
     // 按需加载当前主题/模式的样式：首次进入加载一份，切换主题或日/夜时自动补载新的一份
     // （同一份只加载一次，命中缓存；未用到的主题样式不参与首屏）
@@ -197,7 +198,7 @@ export const useThemeStore = defineStore('theme', () => {
       document.documentElement.classList.remove('has-bg-image')
     }
     // 夜间内置默认底图标记：仅「glass + 夜间 + 未用自定义图」时加。
-    // 供 theme-night.css 给这张深色图配一层更轻的遮罩；自定义图仍走通用遮罩系数。
+    // 供 theme-glass-night.css 给这张深色图配一层更轻的遮罩；自定义图仍走通用遮罩系数。
     document.documentElement.classList.toggle(
       'bg-night-default',
       !isCustomBg && currentTheme.value === 'glass' && mode.value === 'night'

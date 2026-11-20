@@ -103,7 +103,7 @@ function cancel() { emit('cancel') }
   max-width: calc(100vw - 32px);
   padding: 24px 28px 20px;
   /* 取色一律走主题变量：--color-surface 各主题都有定义，glass / glass2 的夜间取值
-     已在 theme-night.css 里重映射，故日/夜与其它主题都会自动跟随，无硬编码颜色。
+     已在 theme-*-night.css 里重映射，故日/夜与其它主题都会自动跟随，无硬编码颜色。
      再叠一层 backdrop-filter 做「第二层毛玻璃」（与引导页玻璃面板同一套做法）。 */
   background: var(--color-surface);
   backdrop-filter: blur(14px) saturate(1.15);
@@ -186,12 +186,12 @@ function cancel() { emit('cancel') }
 }
 .shutdown-opt.opt-danger:hover:not(:disabled) {
   /* 危险项 hover：用 --color-danger 按比例混出浅红底 / 描边（日间 ≈ 原来的 #fef2f2 / #fecaca），
-     夜间由 theme-night.css 的 C3 覆盖成更明显的暗红。 */
+     夜间由 theme-*-night.css 的 C3 覆盖成更明显的暗红。 */
   background: color-mix(in srgb, var(--color-danger) 8%, transparent);
   border-color: color-mix(in srgb, var(--color-danger) 28%, transparent);
 }
 
-/* 图标盒：底色/图标色沿用日间语义色，夜间在 theme-night.css C3 统一提亮 */
+/* 图标盒：底色/图标色沿用日间语义色，夜间在 theme-*-night.css C3 统一提亮 */
 .opt-icon {
   flex-shrink: 0;
   display: inline-flex;

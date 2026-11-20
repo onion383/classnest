@@ -113,7 +113,7 @@
   --radius-full: 9999px;
   --radius: var(--radius-control);
 
-  /* 角色别名 → 尺寸档（覆盖 theme-base.css 的默认映射）。
+  /* 角色别名 → 尺寸档（覆盖 theme.css 的默认映射）。
      control 12px：按钮（原硬编码 12px，视觉不变）
      card   22px：.bg-surface 卡片与表格容器（原硬编码 22px，视觉不变）
      surface 26px：抽屉/悬浮面板，比卡片更圆一档，体现层级 */

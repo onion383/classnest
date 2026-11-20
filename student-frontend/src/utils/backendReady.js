@@ -6,6 +6,7 @@
 // 调用方把它当成「可提前结束的退避等待」：慢不过原来的固定 sleep，快则在后端就绪瞬间立即重试。
 
 import { INVOKE, RECEIVE } from '../electronChannels.js'
+import { setRuntimeBackendOrigin } from './backendOrigin.js'
 
 let ready = false
 const waiters = new Set()
@@ -23,6 +24,12 @@ function subscribe() {
       // 后端重启/退出后主进程会广播该事件，本地就绪标记必须同步复位，
       // 否则后续请求会一直以为「已就绪」而不等待新的 backend-ready。
       ready = false
+    } else if (msg.type === 'backend-origin') {
+      // 首选端口被占用 → 后端顺延，媒体基址跟着换。只影响**之后**拼出来的 URL，
+      // 已经渲染的 <img> 不会自动重取（这是启动早期的窄窗口，重载视图反而更糟）。
+      if (setRuntimeBackendOrigin(msg.origin)) {
+        window.dispatchEvent(new CustomEvent('classnest:backend-origin', { detail: msg.origin }))
+      }
     }
   })
 }

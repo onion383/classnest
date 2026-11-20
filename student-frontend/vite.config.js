@@ -5,7 +5,12 @@ import tailwindcss from '@tailwindcss/vite'
 import fs from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
+import { createRequire } from 'node:module'
 import { emptyOutDirBatched } from './build-utils/outdir.js'
+
+const require = createRequire(import.meta.url)
+// 端口唯一口径：Vite dev 端口与 API 代理目标都与主进程/后端同源
+const ports = require('../config/ports.cjs')
 
 // 渲染阻塞 CSS 改非阻塞：首屏占位（index.html / setup.html 里内联的 splash）只用内联样式，
 // 不需要等 tailwind 全量 CSS（约 120KB）下载 + 解析才开始画。给构建产物里的
@@ -291,6 +296,13 @@ function stripSourcePreload() {
 }
 
 export default defineConfig({
+  // 构建期常量：渲染层据此判断「这份产物是不是 Vue 3.6 预览通道」。
+  // 为什么不用 import.meta.env：VUE_CHANNEL 没有 VITE_ 前缀，本来就不会进 import.meta.env；
+  // 而 define 在 dev 与 build 都生效，且被静态替换成 true/false，运行时零开销、也不会
+  // 因为终端残留变量串味（dev-vite.js 会显式设置/清掉 VUE_CHANNEL）。
+  define: {
+    __VUE36__: JSON.stringify(!!vue36),
+  },
   plugins: [
     // 顺序无实质影响（该插件是 enforce:'pre'），放最前只为读起来直观
     vue36?.plugin,
@@ -373,14 +385,14 @@ export default defineConfig({
       ],
     },
     host: '127.0.0.1',
-    port: 5173,
+    port: ports.frontendPort,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:3000',
+        target: ports.backendOrigin,
         changeOrigin: true
       },
       '/uploads': {
-        target: 'http://127.0.0.1:3000',
+        target: ports.backendOrigin,
         changeOrigin: true
       }
     }

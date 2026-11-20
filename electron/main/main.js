@@ -30,6 +30,7 @@ try {
   if (typeof NodeModule.enableCompileCache === 'function') NodeModule.enableCompileCache(_ccDir)
 } catch (_) { /* 编译缓存不可用时静默忽略，不影响启动 */ }
 const startupTimer = require('./main.startup-timer')
+const ports = require('../../config/ports.cjs')
 
 // 异步 fs：主进程里凡是「可能慢」的磁盘操作（目录遍历、整目录复制/删除、大文件写盘）
 // 一律走它，避免同步 IO 把事件循环堵住（同步期间窗口、菜单、IPC 全部停摆）。
@@ -886,7 +887,7 @@ function createMigrationWindow() {
   win.on('closed', () => { if (migrationWindow === win) migrationWindow = null })
 
   if (isDev) {
-    devLoader.loadUrlWithRetry(win, 'http://127.0.0.1:5173/migration.html')
+    devLoader.loadUrlWithRetry(win, ports.frontendOrigin + '/migration.html')
   } else {
     win.loadURL('app://local/migration.html')
   }
@@ -1018,7 +1019,7 @@ async function waitBackendReady(timeout = 15000) {
   const start = Date.now()
   for (;;) {
     try {
-      const res = await fetch('http://127.0.0.1:3000/api/accounts')
+      const res = await fetch(`${ports.backendOrigin}/api/accounts`)
       if (res.ok) {
         const data = await res.json().catch(() => ({}))
         return Array.isArray(data.accounts) ? data.accounts : []
@@ -1174,7 +1175,7 @@ function createSetupWindow(plan = launchPlan) {
     // 灰色副标题由 boot-status 实时驱动，不出现两种不同的加载画面
     win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(devLoader.devLoadingHtml())}`)
     // 直接探测 setup.html：命中即跳转，等待期间 Vite 已顺带编译好该页面
-    devLoader.loadUrlWithRetry(win, 'http://127.0.0.1:5173/setup.html')
+    devLoader.loadUrlWithRetry(win, ports.frontendOrigin + '/setup.html')
   } else {
     // B1：引导窗口同样保持 app://local，/api 由协议代理，origin 隔离不变。
     win.loadURL('app://local/setup.html')

@@ -109,7 +109,8 @@ export default [
   {
     files: ['student-frontend/src/**/*.{js,vue}'],
     languageOptions: {
-      ecmaVersion: 2024,
+      // 2025：backendOrigin.js 用 import attributes 读 config/ports.json（ES2025 语法）
+      ecmaVersion: 2025,
       sourceType: 'module',
       globals: {
         ...globals.browser,

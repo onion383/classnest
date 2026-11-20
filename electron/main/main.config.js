@@ -69,6 +69,13 @@ function resolveDataDir() {
   const cfg = resolveAppConfig()
   return cfg.dataDir ? path.resolve(cfg.dataDir) : path.join(app.getPath('userData'), 'data')
 }
+// 运行时端口发现文件：后端首选端口被占用时会顺延，而 MCP 转发器是 Claude Desktop
+// 拉起的独立进程，读不到本进程内存，只能靠这个文件跟随真实端口。
+// 位置固定在 userData 根 —— 不要挂到 dataDir 下：用户可以把数据目录改到别的盘，
+// 外部进程不该跟着猜那个自定义路径。
+function resolveRuntimePortPath() {
+  return path.join(app.getPath('userData'), 'runtime-port.json')
+}
 // v2 分层布局：根下固定 core / content / cache / logs 四层。
 // 主进程侧只做路径解析与目录初始化；与后端 dbManager.paths.js 的层级名保持一致，
 // 改一处必须同步改另一处。
@@ -190,6 +197,7 @@ module.exports = {
   resolveAppConfig,
   saveAppConfig,
   resolveDataDir,
+  resolveRuntimePortPath,
   ensureDataDirs,
   resolveCoreDir,
   resolveContentDir,

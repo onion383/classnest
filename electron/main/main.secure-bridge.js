@@ -3,7 +3,7 @@
 //
 // 只搬「握手报文」，不搬密钥：
 //   渲染层生成 ephemeral P-256、**自留私钥**，把 public key（base64）经 IPC 交给本模块；
-//   本模块用 Node http 直连 127.0.0.1:3000，换回后端的 public key + sessionId；
+//   本模块用 Node http 直连后端回环地址（config/ports.cjs，端口可能顺延），换回后端的 public key + sessionId；
 //   ECDH / HKDF / AES-256-GCM 仍然全部在渲染层的 WebCrypto 里完成。
 //
 // 为什么值得做：握手是应用启动后的第一条网络请求。走 app:// 时要经过
@@ -18,7 +18,7 @@
 // （main / widget / desktop-widget / setup / migration）都要用。
 // =========================================================================
 
-const { BACKEND_ORIGIN, nodeFetch } = require('./main.api-proxy')
+const { currentOrigin, nodeFetch } = require('./main.api-proxy')
 const { CH, IPC } = require('./channels')
 
 // P-256 未压缩公钥 raw 为 65 字节 → base64 88 字符。这里只校验形状，
@@ -28,13 +28,15 @@ const PUB_RE = /^[A-Za-z0-9+/]+={0,2}$/
 
 // 纯逻辑：渲染层公钥 → 后端公钥 + sessionId。
 // fetchImpl 注入（与 api-proxy 同款），让本模块在普通 node 下可直接单测。
-function createHandshakeBridge({ fetchImpl = nodeFetch, backendOrigin = BACKEND_ORIGIN } = {}) {
+function createHandshakeBridge({ fetchImpl = nodeFetch, backendOrigin } = {}) {
   return async function handshake(pub) {
     if (typeof pub !== 'string' || pub.length < PUB_MIN_LEN || !PUB_RE.test(pub)) {
       throw new Error('invalid public key')
     }
     const body = JSON.stringify({ pub })
-    const res = await fetchImpl(backendOrigin + '/api/secure/handshake', {
+    // 每次握手重新取 origin：端口顺延后旧地址会连到空处（或别人的服务），
+    // 显式传参优先，供单测固定口径。
+    const res = await fetchImpl((backendOrigin || currentOrigin()) + '/api/secure/handshake', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

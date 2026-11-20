@@ -14,6 +14,7 @@ const { isDev } = require('./main.env')
 // preload 运行在 sandbox 里，无法 require 本地文件，故由主进程读取后经 additionalArguments
 // 以字符串形式注入渲染进程 argv，preload 再从 process.argv 解析（见 preload.js）。
 const ipcChannels = require('../ipc-channels.json')
+const ports = require('../../config/ports.cjs')
 
 // IPC 授权表（通道 → 允许的窗口角色）。与名单分开：名单是「有哪些通道」，
 // 授权表是「谁能调」。裁剪后的名单按角色注入 preload —— 渲染层拿不到越权通道，
@@ -43,8 +44,10 @@ function buildWebPreferences({ devTools, backgroundThrottling, webviewTag, ipcRo
     // 注入渲染进程 argv：--secure-channel 供 preload 暴露 window.__SECURE_CHANNEL__；
     // --ipc-channels 传 IPC 通道白名单（sandbox 下 preload 不能 require 本地文件，只能这样传）；
     // --perf-long-task 仅在 PERF_LONG_TASK=1 时注入，供打包版按需采样主线程长任务。
+    // --backend-origin 把端口配置传给渲染层（媒体地址与 CSP 同源，运行时改端口不需重建前端）。
     additionalArguments: [
       '--secure-channel',
+      '--backend-origin=' + ports.backendOrigin,
       '--ipc-channels=' + JSON.stringify(allowed),
       ...(process.env.PERF_LONG_TASK === '1' ? ['--perf-long-task'] : []),
     ],

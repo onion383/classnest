@@ -95,6 +95,7 @@ const CH = Object.freeze({
   PERF_DISK_USAGE: 'perf-disk-usage',
   PERF_LOGS_CLEAR: 'perf-logs-clear',
   GET_APP_VERSION: 'get-app-version',
+  GET_MCP_LAUNCH_INFO: 'get-mcp-launch-info',
   UPDATE_CHECK: 'update-check',
   SET_CONTENT_PROTECTION: 'set-content-protection',
   COPY_SENSITIVE_TEXT: 'copy-sensitive-text',

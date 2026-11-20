@@ -17,6 +17,7 @@ const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
 const { resolveDataDir, resolveContentDir, resolveThumbsDir, resolveSkillsDir } = require('./main.config')
+const ports = require('../../config/ports.cjs')
 const {
   resolveSafeFolder,
   resolveSafeWriteDir,
@@ -175,7 +176,7 @@ function registerDialogsIpc(opts = {}) {
       if (isDev) {
         imageUrl = `/api/background/${fileName}`
       } else {
-        imageUrl = `http://127.0.0.1:3000/api/background/${fileName}`
+        imageUrl = `${ports.backendOrigin}/api/background/${fileName}`
       }
       return contract.ok({ url: imageUrl, fileName })
     } catch (err) {

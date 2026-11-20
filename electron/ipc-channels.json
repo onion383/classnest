@@ -82,6 +82,7 @@
     "perf-disk-usage",
     "perf-logs-clear",
     "get-app-version",
+    "get-mcp-launch-info",
     "update-check",
     "set-content-protection",
     "copy-sensitive-text"

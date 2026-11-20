@@ -12,6 +12,7 @@ const { app, session, protocol } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { createApiProxy, nodeFetch } = require('./main.api-proxy')
+const ports = require('../../config/ports.cjs')
 
 const { isDev } = require('./main.env')
 
@@ -169,7 +170,7 @@ function setupAppProtocol() {
   // 内容安全策略（打包版生效；开发模式页面由 Vite dev server 提供，不走这里）。
   // 只放行实际用到的三类「非 self」资源，其余一律拒绝：
   //   · style 'unsafe-inline' —— Vue 的 scoped 样式与运行时动态内联样式（改主题色/进度条宽度）依赖它；
-  //   · img/media http://127.0.0.1:3000 —— 相册与背景图走媒体绝对地址（Lax Cookie 要求同站请求）；
+  //   · img/media 后端回环地址 —— 相册与背景图走媒体绝对地址（Lax Cookie 要求同站请求）；
   //   · img data: blob: —— 图标与本地预览图。
   // 脚本只允许 'self'（生产构建没有 eval，也不需要外链脚本），但有两处内联脚本必须放行：
   //
@@ -203,30 +204,36 @@ function setupAppProtocol() {
   // blob: 留给本地生成的预览地址（resourceUrl 对 blob:/data: 原样返回）。
   // 别与下面的 frame-ancestors 混：frame-src 管「本页能不能嵌别人」，
   // frame-ancestors 管「本页能不能被别人嵌」。
-  // ⚠️ 这里写死的后端 origin 与 student-frontend/src/utils/backendOrigin.js 的
-  //    BACKEND_ORIGIN 必须一致，改端口要一起改（单测 packaged-csp 会对账）。
-  const CSP = [
-    "default-src 'self'",
-    SCRIPT_SRC,
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: http://127.0.0.1:3000",
-    "media-src 'self' blob: http://127.0.0.1:3000",
-    "font-src 'self' data:",
-    "connect-src 'self' http://127.0.0.1:3000",
-    "frame-src 'self' http://127.0.0.1:3000 blob:",
-    "object-src 'none'",
-    "base-uri 'none'",
-    "frame-ancestors 'none'",
-  ].join('; ')
-  // 引导页例外：setup.html 内联了一小段「程序正在干嘛」的状态提示脚本。
-  // 它必须在 HTML 里内联 —— 那段代码的意义就是「Vue 还没挂载时先显示点什么」，
-  // 挪成外部文件会多一次请求、正好毁掉它的用途。只对这一页放开内联脚本。
-  const CSP_SETUP = CSP.replace(SCRIPT_SRC, `${SCRIPT_SRC} 'unsafe-inline'`)
-  const htmlHeadersFor = (name) => ({
-    'content-type': MIME['.html'],
-    'cache-control': 'no-cache',
-    'content-security-policy': name === 'setup.html' ? CSP_SETUP : CSP,
-  })
+  // 后端 origin 来自 config/ports.cjs；渲染层的 BACKEND_ORIGIN 也由主进程注入同一份值，
+  // 改端口不必同步两处字面量（单测 packaged-csp 会对账）。
+  // 注意 CSP 每次响应现拼：后端首选端口被占用时会把实际端口顺延，主进程收到 backend-ready
+  // 后更新 ports；若在注册协议时把 CSP 算成常量，顺延后的图片 / PDF 预览会被整批拦掉
+  //（而且只在「端口被占」这种少见机器上复现，很难查）。
+  const htmlHeadersFor = (name) => {
+    const backendOrigin = ports.backendOrigin
+    const CSP = [
+      "default-src 'self'",
+      SCRIPT_SRC,
+      "style-src 'self' 'unsafe-inline'",
+      `img-src 'self' data: blob: ${backendOrigin}`,
+      `media-src 'self' blob: ${backendOrigin}`,
+      "font-src 'self' data:",
+      `connect-src 'self' ${backendOrigin}`,
+      `frame-src 'self' ${backendOrigin} blob:`,
+      "object-src 'none'",
+      "base-uri 'none'",
+      "frame-ancestors 'none'",
+    ].join('; ')
+    // 引导页例外：setup.html 内联了一小段「程序正在干嘛」的状态提示脚本。
+    // 它必须在 HTML 里内联 —— 那段代码的意义就是「Vue 还没挂载时先显示点什么」，
+    // 挪成外部文件会多一次请求、正好毁掉它的用途。只对这一页放开内联脚本。
+    const CSP_SETUP = CSP.replace(SCRIPT_SRC, `${SCRIPT_SRC} 'unsafe-inline'`)
+    return {
+      'content-type': MIME['.html'],
+      'cache-control': 'no-cache',
+      'content-security-policy': name === 'setup.html' ? CSP_SETUP : CSP,
+    }
+  }
   const serveIndex = () => serveFile(indexHtml, htmlHeadersFor('index.html'))
 
   // B1：/api/* 同源代理到后端；其余路径仍走静态文件。

@@ -25,7 +25,8 @@ const fs = require('fs')
 const { rotateIfNeeded } = require('./main.logRotator')
 const startupTimer = require('./main.startup-timer')
 const perf = require('./main.perf')
-const { getMasterKey, resolveDataDir, resolveLogsDir, getDbMasterKey, resolveCompileCacheDir } = require('./main.config')
+const { getMasterKey, resolveDataDir, resolveLogsDir, getDbMasterKey, resolveCompileCacheDir, resolveRuntimePortPath } = require('./main.config')
+const ports = require('../../config/ports.cjs')
 
 const { isDev } = require('./main.env')
 
@@ -334,6 +335,8 @@ async function compileBackendProcess() {
     env: {
       ...process.env,
       DATA_DIR: dataDir,
+      // 后端子进程只认 PORT；端口口径来自 config/ports.cjs，主进程与子进程不会各读一套
+      PORT: String(ports.backendPort),
       ELECTRON_RUN_AS_NODE: '1',
       // bundle 后所有模块共用一个 __dirname，后端根目录必须由主进程显式注入
       BACKEND_ROOT: backendDir,
@@ -358,7 +361,7 @@ async function compileBackendProcess() {
 // 为什么必须单飞：这个函数是 fire-and-forget（10 处调用点），而真正 fork 的
 // compileBackendProcess 是 async（fork 前要 await 主密钥）。两处近似同时的调用
 // （用户连点「重启后端」、或重启定时器与 IPC 同时触发）会在 await 那段各跑一遍，
-// fork 出两个后端抢 3000 端口 → EADDRINUSE 无限重试 → 启动卡死/白屏。
+// fork 出两个后端抢同一端口 → EADDRINUSE → 启动卡死/白屏。
 // createSingleFlight 保证任务体的**同步副作用**（置 backendReady、广播）仍在调用当场发生。
 const startBackend = createSingleFlight(async () => {
   try {
@@ -413,6 +416,27 @@ function getBootStatusText() {
   return bootStatusText
 }
 
+// 端口发现文件：MCP 转发器是 Claude Desktop 拉起的独立进程，读不到本进程内存，
+// 只能靠这个文件跟随真实端口。每次后端就绪都重写（幂等）—— 首次创建、顺延后更新、
+// 用户手动删掉都能自愈；写入失败只记日志，不能让启动路径挂掉。
+function writeRuntimePortFile(port) {
+  if (!Number.isInteger(port)) return
+  try {
+    const file = resolveRuntimePortPath()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const origin = ports.originFor(port)
+    fs.writeFileSync(file, JSON.stringify({
+      port,
+      origin,
+      mcpUrl: `${origin}/mcp`,
+      pid: process.pid,
+      updatedAt: new Date().toISOString(),
+    }, null, 2) + '\n')
+  } catch (err) {
+    backendLog(`[main] 写运行时端口文件失败：${err && err.message}\n`)
+  }
+}
+
 // 后端子进程消息：心跳应答（pong）与就绪上报（backend-ready）。
 // 就绪后广播给所有已存在的渲染窗口（广播 + backend-status 查询两者并存：广播覆盖
 // 「窗口先存在」，查询覆盖「窗口后加载」）
@@ -439,6 +463,22 @@ function onBackendMessage(msg) {
     return
   }
   if (msg.type !== 'backend-ready') return
+  // 端口对齐：后端遇到 EADDRINUSE 会向后顺延，实际端口只能以这里回报的为准。
+  // 放在测试开关之前 —— 即使模拟启动失败，也让 CSP / 媒体地址对准真实端口，
+  // 否则「后端能起但前端拿不到图」这种假故障会污染模拟结果。
+  if (Number.isInteger(msg.port)) {
+    // 即使端口没变也写一次：首次创建、文件被删后自愈都靠这句（幂等覆盖）。
+    writeRuntimePortFile(msg.port)
+    if (msg.port !== ports.backendPort) {
+      const from = ports.backendPort
+      if (ports.setBackendPort(msg.port)) {
+        backendLog(`[main] 首选端口 ${from} 被占用，后端已顺延到 ${msg.port}\n`)
+        // 广播给已存在的窗口：CSP 与 app:// 代理在下次请求时自己读新值，
+        // 渲染层的媒体基址要跟着换，否则相册/背景图整批 404。
+        broadcast({ type: 'backend-origin', origin: ports.backendOrigin })
+      }
+    }
+  }
   // 测试开关：SIM_BACKEND_FAIL 下故意忽略就绪上报，模拟「后端一直起不来」，用于验证失败提示
   if (process.env.SIM_BACKEND_FAIL) return
   // dead 模式：首次崩溃之后，重连实例的就绪上报全部忽略 → 重连必然超时失败 → 走满 5 次进全屏
@@ -749,6 +789,21 @@ function registerBackendIpc(opts = {}) {
 
   // 启动阶段状态查询：加载页据此补齐当前「程序正在干嘛」（兜住「页面后加载」的竞态）
   IPC.handle(CH.BOOT_STATUS, () => bootStatusText)
+
+  // MCP 客户端配置：软件自己知道装在哪，转发器路径与后端同源（getBackendPaths），
+  // 渲染层直接拿来填 mcpServers，不让用户手改「安装目录」。
+  // 开发版用系统 node 跑源码；打包版用自带运行时 exe + ELECTRON_RUN_AS_NODE=1。
+  IPC.handle(CH.GET_MCP_LAUNCH_INFO, () => {
+    const { backendDir } = getBackendPaths()
+    return {
+      command: isDev ? 'node' : app.getPath('exe'),
+      forwarderPath: path.join(backendDir, 'mcp-forwarder.cjs'),
+      useElectronAsNode: !isDev,
+      // 端口发现文件：后端顺延端口后，已配好的客户端仍能靠它找到真实端口。
+      // 转发器优先用 env 里的 URL，连不上再读这个文件。
+      runtimeFilePath: resolveRuntimePortPath(),
+    }
+  })
 }
 
 module.exports = {

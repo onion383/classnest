@@ -51,6 +51,11 @@ const onceMap = new Map()
 contextBridge.exposeInMainWorld('__SECURE_CHANNEL__', process.argv.includes('--secure-channel'))
 // 打包版长任务采样开关：主进程在 PERF_LONG_TASK=1 时注入该参数，渲染层据此安装观察器。
 contextBridge.exposeInMainWorld('__PERF_LONG_TASK__', process.argv.includes('--perf-long-task'))
+// 后端 origin 由主进程从 config/ports.cjs 注入；sandbox 下 preload 不能 require 本地文件，
+// 所以与 IPC 白名单同款走 argv。渲染层 backendOrigin.js 优先读它。
+const backendOriginArg = (process.argv || []).find((a) => typeof a === 'string' && a.startsWith('--backend-origin='))
+const backendOrigin = backendOriginArg ? backendOriginArg.slice('--backend-origin='.length) : ''
+if (backendOrigin) contextBridge.exposeInMainWorld('__BACKEND_ORIGIN__', backendOrigin)
 
 contextBridge.exposeInMainWorld('electron', {
   // 向主进程发送消息（单向）

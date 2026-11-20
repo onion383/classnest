@@ -263,6 +263,9 @@
   "get-app-version": [
     "main"
   ],
+  "get-mcp-launch-info": [
+    "main"
+  ],
   "update-check": [
     "main"
   ],

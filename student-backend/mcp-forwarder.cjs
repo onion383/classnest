@@ -9,8 +9,13 @@
 // 配置（Claude Desktop 的 mcpServers 项）：
 //   command: <node 或 ClassNest.exe --run-as-node>
 //   args:    [<本脚本绝对路径>]
-//   env:     CLASSNEST_MCP_URL=http://127.0.0.1:3000/mcp
+//   env:     CLASSNEST_MCP_URL=<班集后端地址>/mcp（由设置页生成的配置自动填好）
 //            CLASSNEST_MCP_TOKEN=<在班集设置页生成的 token>
+//            CLASSNEST_RUNTIME_FILE=<userData>/runtime-port.json（可选，端口顺延时用来自愈）
+//
+// 端口为什么不能只信配置：后端首选端口被占用时会顺延（见 app.js MAX_PORT_TRIES），
+// 而配置里的 URL 是复制那一刻的快照。这里按「env → 端口发现文件 → 默认端口」逐个试连，
+// 已配好的客户端不用重配也能跟上新端口。发现逻辑见 mcpForwarderDiscovery.cjs。
 //
 // stdout 是 JSON-RPC 通道，任何日志必须走 stderr（见 serveStdio 文档）。
 // 注意：打包版用 electron.exe + ELECTRON_RUN_AS_NODE=1 作为 node 运行时；
@@ -20,8 +25,26 @@
 const { Client, StreamableHTTPClientTransport } = require('@modelcontextprotocol/client');
 const { McpServer, createMcpHandler, fromJsonSchema } = require('@modelcontextprotocol/server');
 const { serveStdio } = require('@modelcontextprotocol/server/stdio');
+const { readRuntimePort, buildCandidates, guessRuntimeFiles } = require('./mcpForwarderDiscovery.cjs');
 
-const URL_ = String(process.env.CLASSNEST_MCP_URL || 'http://127.0.0.1:3000/mcp');
+// 默认端口兜底：开发模式下能读到 config/ports.cjs；打包版它在 asar 里读不到，
+// 那时只靠 env 与端口发现文件。
+function defaultPort() {
+  try { return require('../config/ports.cjs').backendPort; } catch (_) { return 0; }
+}
+
+function resolveCandidates() {
+  const explicitFile = process.env.CLASSNEST_RUNTIME_FILE;
+  // 老配置没有这个 env：按常见 userData 目录猜几份（读不到就是空，成本可忽略）。
+  const files = explicitFile ? [explicitFile] : guessRuntimeFiles();
+  const runtimeEntries = files.map(readRuntimePort).filter(Boolean);
+  return buildCandidates({
+    envUrl: process.env.CLASSNEST_MCP_URL,
+    runtimeEntries,
+    defaultPort: defaultPort(),
+  });
+}
+
 const TOKEN = String(process.env.CLASSNEST_MCP_TOKEN || '');
 
 if (!TOKEN) {
@@ -30,12 +53,37 @@ if (!TOKEN) {
 }
 
 async function main() {
-  const client = new Client({ name: 'classnest-forwarder', version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(new URL(URL_), {
-    requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } },
-  });
-  await client.connect(transport);
-  console.error(`[classnest-mcp] 已连接到 ${URL_}`);
+  const candidates = resolveCandidates();
+  console.error(`[classnest-mcp] 候选地址：${candidates.join(' | ') || '(空)'}`);
+
+  // 逐个试连：第一个连上的就是当前活着的后端。连失败要 close，
+  // 否则 Client 会留着半开的 transport 计时器。
+  let client = null;
+  let connectedUrl = '';
+  const failures = [];
+  for (const url of candidates) {
+    const probe = new Client({ name: 'classnest-forwarder', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } },
+    });
+    try {
+      await probe.connect(transport);
+      client = probe;
+      connectedUrl = url;
+      break;
+    } catch (e) {
+      failures.push(`${url}（${e && e.message}）`);
+      try { await probe.close(); } catch (_) { /* 未连接成功时 close 也可能抛 */ }
+    }
+  }
+  if (!client) {
+    throw new Error(
+      failures.length
+        ? `所有候选地址都连不上：${failures.join('；')}。请确认班集正在运行，或在设置页重新复制客户端配置`
+        : '没有可用的后端地址，请在班集设置页重新复制客户端配置'
+    );
+  }
+  console.error(`[classnest-mcp] 已连接到 ${connectedUrl}`);
 
   // 从后端拉取工具清单，原样镜像——不在转发器里重复定义 schema。
   const { tools } = await client.listTools();

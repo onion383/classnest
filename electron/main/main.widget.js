@@ -36,6 +36,7 @@ const ipcAuth = require('./main.ipc-auth')
 const desktopLayer = require('./main.desktop-layer')
 const { relayToWidgetWindows } = require('./widget-relay')
 const { appendWithRotation } = require('./main.logRotator')
+const ports = require('../../config/ports.cjs')
 
 const { isDev } = require('./main.env')
 
@@ -148,7 +149,7 @@ function createWidgetWindow() {
   }
 
   if (isDev) {
-    loadUrlWithRetry(widgetWindow, 'http://127.0.0.1:5173/widget.html')
+    loadUrlWithRetry(widgetWindow, ports.frontendOrigin + '/widget.html')
   } else {
     // B1：保持 app://local，API 由协议代理；origin 与主窗口一致，登录态共享。
     widgetWindow.loadURL('app://local/widget.html')
@@ -263,7 +264,7 @@ function writeJsonFile(file, obj) {
 
 function desktopWidgetUrl() {
   return isDev
-    ? 'http://127.0.0.1:5173/desktop-widget.html'
+    ? ports.frontendOrigin + '/desktop-widget.html'
     : 'app://local/desktop-widget.html'
 }
 

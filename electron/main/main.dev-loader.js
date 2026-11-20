@@ -10,6 +10,7 @@ const path = require('path')
 const fs = require('fs')
 const backend = require('./main.backend')
 const startupTimer = require('./main.startup-timer')
+const ports = require('../../config/ports.cjs')
 
 // 首屏占位共享来源：index.html / setup.html 由 Vite 注入同一份（splash/），
 // dev 下主进程先加载的 inline loading 页也复用这两份文件，避免同款加载画面维护多份。
@@ -90,26 +91,17 @@ ${css}
 // 实测可到 5s+），原来 40 次 ×100ms 用尽就静默放弃，窗口会永远停在 inline loading 页上，
 // 只能靠手动重启整个 dev 进程才能恢复。现在快轮询（100 次 ≈10s）用尽后转入 1s/次的低速轮询，
 // 窗口活着就一直等，Vite 迟到多久都能接上。
+// 判据：本项目的 dev 入口一定同时含 Vue 挂载点和 /src/main.js 引用。
+// 只判断「有响应」是不够的 —— 端口若被别的程序占着，Electron 会把**别人的页面**
+// 加载进来，而 preload 已经把 window.electron 桥暴露给该页面：既不安全，现象也
+// 极难归因（窗口里跑着别的应用）。宁可当作未就绪继续等，也不导航过去。
+function looksLikeOurVite(html) {
+  return /id=["']app["']/.test(html) && /\/src\/main\.js/.test(html)
+}
+
 function pollViteAndNavigate(win, retries = 100, slow = false) {
   const http = require('http')
-  const req = http.get('http://127.0.0.1:5173/', (res) => {
-    res.resume() // 消耗响应体，避免内存泄漏
-    startupTimer.mark('Vite 就绪，开始跳转')
-    backend.setBootStatus('开发服务器已就绪，正在加载界面…')
-    if (win && !win.isDestroyed()) {
-      // 必须接 catch：loadURL 失败会 reject，不接就是 unhandled rejection（仅开发模式）
-      win.loadURL('http://127.0.0.1:5173/').catch((err) => {
-        console.error('[Electron] 开发界面加载失败:', err && err.message)
-      })
-      // INP 测量时不开 DevTools：停靠的 DevTools 会改变内容区尺寸并叠加额外 CDP 开销，
-      // 干扰布局与交互耗时，导致测量失真。
-      if (!process.env.INP_DEBUG) win.webContents.openDevTools()
-      win.webContents.once('did-finish-load', () => {
-        startupTimer.mark('Vite 页面加载完成')
-      })
-    }
-  })
-  req.on('error', () => {
+  const scheduleRetry = () => {
     if (!win || win.isDestroyed()) return
     if (retries > 0) {
       // 快轮询阶段每 100 次（约 10s）报一次进度，方便在启动日志里看出「Vite 到底起多慢」
@@ -122,7 +114,43 @@ function pollViteAndNavigate(win, retries = 100, slow = false) {
     } else if (retries % 30 === 0) {
       console.log('[Electron] 仍在等待开发服务器就绪（1s/次）…')
     }
+  }
+
+  const req = http.get(ports.frontendOrigin + '/', (res) => {
+    let body = ''
+    res.setEncoding('utf8')
+    // dev 的 index.html 只有几 KB：读够判据就停止累积，但仍继续消费流（避免占着 socket）
+    res.on('data', (chunk) => { if (body.length < 16 * 1024) body += chunk })
+    res.on('end', () => {
+      if (res.statusCode !== 200 || !looksLikeOurVite(body)) {
+        // 只在首次与每 30 次提示：端口长期被别的服务占着时，这条会按 1s/次 的节奏
+        // 一直重试，逐次打印会把开发日志刷爆。
+        if (retries === 100 || retries % 30 === 0) {
+          console.error(
+            `[Electron] ${ports.frontendOrigin} 有响应（HTTP ${res.statusCode}），但不是本项目的开发服务器。` +
+            '可能被别的程序占用，不会导航过去；请关闭占用该端口的程序，或用 FRONTEND_PORT 指定别的端口。'
+          )
+        }
+        scheduleRetry()
+        return
+      }
+      startupTimer.mark('Vite 就绪，开始跳转')
+      backend.setBootStatus('开发服务器已就绪，正在加载界面…')
+      if (win && !win.isDestroyed()) {
+        // 必须接 catch：loadURL 失败会 reject，不接就是 unhandled rejection（仅开发模式）
+        win.loadURL(ports.frontendOrigin + '/').catch((err) => {
+          console.error('[Electron] 开发界面加载失败:', err && err.message)
+        })
+        // INP 测量时不开 DevTools：停靠的 DevTools 会改变内容区尺寸并叠加额外 CDP 开销，
+        // 干扰布局与交互耗时，导致测量失真。
+        if (!process.env.INP_DEBUG) win.webContents.openDevTools()
+        win.webContents.once('did-finish-load', () => {
+          startupTimer.mark('Vite 页面加载完成')
+        })
+      }
+    })
   })
+  req.on('error', scheduleRetry)
   req.end()
 }
 

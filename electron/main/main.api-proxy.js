@@ -1,5 +1,5 @@
 // =========================================================================
-// main.api-proxy.js —— B1：app://local/api/* → 127.0.0.1:3000 的同源代理
+// main.api-proxy.js —— B1：app://local/api/* → 后端回环地址的同源代理
 //
 // 为什么需要：页面保持 app://local（origin 隔离不变、登录态不迁移），但 API 走
 // app://local/api/* 后浏览器视为同源，不再发 CORS 预检，省掉实测 100ms+ 的
@@ -13,7 +13,7 @@
 const http = require('node:http')
 const { Readable } = require('node:stream')
 
-const BACKEND_ORIGIN = 'http://127.0.0.1:3000'
+const ports = require('../../config/ports.cjs')
 // 连接复用：启动首批请求仍要建连，但后续请求可复用；对照实验也用它排除「每请求重连」。
 const agent = new http.Agent({ keepAlive: true, maxSockets: 64 })
 
@@ -21,9 +21,15 @@ function isApiPath(pathname) {
   return pathname === '/api' || pathname.startsWith('/api/')
 }
 
+// 每次取当前 origin，不缓存：后端可能因首选端口被占用而顺延，
+// 代理目标必须在顺延后立刻指向新端口，否则 /api 全部 503。
+function currentOrigin() {
+  return ports.backendOrigin
+}
+
 function targetUrlFor(reqUrl) {
   const u = new URL(reqUrl)
-  return BACKEND_ORIGIN + u.pathname + u.search
+  return currentOrigin() + u.pathname + u.search
 }
 
 // Node 原生 http 版 fetch：绕过 Chromium 网络服务/系统代理解析，用于 2-16 对照。
@@ -100,8 +106,10 @@ function perfLog(line) {
 
 // 代理请求；非 /api 返回 null，交给静态文件处理。
 // fetchImpl 由调用方注入（生产传 Electron net.fetch），单测可替换。
-function createApiProxy({ fetchImpl, backendOrigin = BACKEND_ORIGIN } = {}) {
+function createApiProxy({ fetchImpl, backendOrigin } = {}) {
   if (typeof fetchImpl !== 'function') throw new TypeError('createApiProxy 需要 fetchImpl')
+  // 每个请求重新取：传了 backendOrigin 就是单测/固定口径，否则跟随运行期端口。
+  const resolveOrigin = () => backendOrigin || currentOrigin()
   return async function proxy(req) {
     let url
     try { url = new URL(req.url) } catch (_) { return null }
@@ -122,7 +130,7 @@ function createApiProxy({ fetchImpl, backendOrigin = BACKEND_ORIGIN } = {}) {
     }
 
     try {
-      const res = await fetchImpl(backendOrigin + url.pathname + url.search, init)
+      const res = await fetchImpl(resolveOrigin() + url.pathname + url.search, init)
       perfLog(`[perf] proxy 返回 ${url.pathname} ${Date.now()}（${Date.now() - t0}ms）`)
       return res
     } catch (err) {
@@ -136,4 +144,13 @@ function createApiProxy({ fetchImpl, backendOrigin = BACKEND_ORIGIN } = {}) {
   }
 }
 
-module.exports = { BACKEND_ORIGIN, isApiPath, targetUrlFor, createApiProxy, nodeFetch }
+module.exports = {
+  isApiPath,
+  targetUrlFor,
+  currentOrigin,
+  createApiProxy,
+  nodeFetch,
+  // 兼容旧引用：取的是**当下**的值（getter），解构到局部变量仍会变成快照，
+  // 运行期逻辑请用 currentOrigin()。
+  get BACKEND_ORIGIN() { return currentOrigin() },
+}

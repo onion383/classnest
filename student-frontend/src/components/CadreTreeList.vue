@@ -131,7 +131,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { useNotification } from '../composables/useNotification.js'
 import { ref, computed, nextTick } from 'vue'
 

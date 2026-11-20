@@ -153,7 +153,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import ColorSwatch from '../../components/base/ColorSwatch.vue'
 import IconGlyph from '../../components/base/IconGlyph.vue'

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>vapor bench</title>
+    <style>
+      /* 固定宽度：让每次 mount 的布局输入一致，避免窗口尺寸变化影响 getBoundingClientRect 的强制布局成本 */
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+      }
+      #bench-host {
+        width: 1200px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      仅供 testjs/probe/vapor-bench.mjs 驱动，**不在 build 的 input 列表里**，不会被打进产物。
+      Vite dev 会直接 serve 根目录下的这个 html。
+    -->
+    <script type="module" src="/bench/main.js"></script>
+  </body>
+</html>

@@ -175,7 +175,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
 import { reportError } from '../utils/reportError.js'
 import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'
@@ -189,7 +189,8 @@ import { useTableCRUD } from '../composables/useTableCRUD.js'
 import { useUndoShortcut, recordRowDelete, recordRowInsert, recordRowUpdate } from '../composables/useUndo.js'
 import { undoById } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
-import { useExportFormats } from '../components/import-export/ExportExcel/ExportExcel.exporters.js'
+// 导出格式库按需加载：收费页平时不需要 exporters（约 22KB），只有在
+// 「同时导出收据文件」真正开始导出时才拉——与 ExportExcel 组件同一个 chunk。
 import { saveBlobWithDialog } from '../utils/saveFile.js'
 import { blobToBase64 } from '../utils/base64.js'
 import { localDateStr } from '../utils/dateTime.js'
@@ -606,6 +607,7 @@ const exportWithReceipts = ref(false)
 const customExport = computed(() => (exportWithReceipts.value ? runExportWithReceipts : null))
 
 async function runExportWithReceipts({ format, filename, reportProgress }) {
+  const { useExportFormats } = await import('../components/import-export/ExportExcel/ExportExcel.exporters.js')
   const BUILDERS = {
     xlsx: (c, r, f, n) => c.exportXLSX(r, f, n),
     csv: (c, r, f, n) => c.exportCSV(r, f, n),

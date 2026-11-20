@@ -111,7 +111,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 import MediaViewer from '../base/MediaViewer.vue'

@@ -64,7 +64,7 @@ import { pushEscLayer, removeEscLayer, consumeEscape } from '../../utils/dialogS
 
 defineOptions({ name: 'MoreMenu' })
 
-const props = defineProps({
+defineProps({
   // [{ key, label, icon?, danger?, disabled?, hint? }]
   items: { type: Array, default: () => [] },
   label: { type: String, default: '更多操作' },

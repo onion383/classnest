@@ -136,7 +136,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import AnimatedClock from '../../components/AnimatedClock.vue'

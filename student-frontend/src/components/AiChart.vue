@@ -171,7 +171,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useNotification } from '../composables/useNotification.js'
 import { INVOKE } from '../electronChannels.js'

@@ -111,7 +111,7 @@
   </Teleport>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, nextTick } from 'vue'
 import AppSelect from '../base/AppSelect.vue'
 import { useViewerPan } from '../../composables/useViewerPan.js'

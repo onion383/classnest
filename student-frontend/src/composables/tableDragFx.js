@@ -266,8 +266,7 @@ export function computeColReorder(geom, from, to) {
 export function applyColShift(colEls, from, to, geom, fallback = 0, counterOf = null) {
   if (!colEls || !colEls.length) return
   const active = from !== null && to !== null && from !== to
-  // 取整：125% 缩放下行高是 33.6 这种小数，原样写进 translate 会让行落在半像素上
-  const uniform = Math.round(typeof geom === 'number' ? geom : fallback)
+  // 列方向不用「统一列宽」那种近似值（uniform 只属于行方向，见 applyRowShift）
   const g = Array.isArray(geom) ? geom : null
   const leftOf = (k) => (g && g[k] ? g[k].left : null)
 

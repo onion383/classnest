@@ -44,7 +44,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup vapor>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 
 /* 轨道宽度必须与 <style> 里的 .custom-scrollbar / .is-compact 保持一致：

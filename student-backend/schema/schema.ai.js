@@ -13,7 +13,13 @@ function migrateAi(conn) {
       api_key TEXT DEFAULT '',
       -- AI 数据保护：HMAC 种子按库走备份/恢复；开关与逐项配置跟着库迁移
       privacy_seed TEXT DEFAULT '',
-      privacy_json TEXT DEFAULT '{}'
+      privacy_json TEXT DEFAULT '{}',
+      -- MCP 服务端启用开关：opt-in，默认 0。/mcp 端点按 token 绑定库的此列判定，
+      -- 没开时带有效 token 也进不来（避免装了服务就一直对外暴露）。
+      mcp_enabled INTEGER DEFAULT 0,
+      -- 数据访问记录的设置：{ keep: 500, granularity: 'per_call' | 'per_day' }。
+      -- 与 AI 数据保护分开存：那一份是「允许读什么」，这一份是「记多少、怎么看」。
+      log_json TEXT DEFAULT '{}'
     );
     INSERT OR IGNORE INTO ai_settings (id) VALUES (1);
 
@@ -65,6 +71,26 @@ function migrateAi(conn) {
   }
   if (!aiCols.includes('privacy_json')) {
     conn.exec("ALTER TABLE ai_settings ADD COLUMN privacy_json TEXT DEFAULT '{}'");
+  }
+  // MCP 侧独立的一份数据保护配置（总开关 / 三个混淆项 / 按表两档）。
+  // 曾经与 AI 共用 privacy_json，但两边的风险面完全不同：AI 助手是老师自己在用，
+  // MCP 面向外部客户端。共用意味着「给外部 AI 收紧一张表」会连带把本地助手也锁住。
+  // 拆分那一刻把现有 AI 配置快照过去，老用户行为不变（原本就是同一份），之后各改各的。
+  if (!aiCols.includes('mcp_privacy_json')) {
+    conn.exec("ALTER TABLE ai_settings ADD COLUMN mcp_privacy_json TEXT DEFAULT '{}'");
+    conn.exec("UPDATE ai_settings SET mcp_privacy_json = privacy_json WHERE id = 1 AND (mcp_privacy_json IS NULL OR mcp_privacy_json = '{}')");
+  }
+  if (!aiCols.includes('mcp_enabled')) {
+    conn.exec('ALTER TABLE ai_settings ADD COLUMN mcp_enabled INTEGER DEFAULT 0');
+  }
+  // MCP 提案的展示/保留设置（不含权限，权限在 mcp_privacy_json）。
+  // 单独一列不塞进 log_json：那是「数据访问记录」的配置，两者生命周期不同，
+  // 混在一起会出现「改提案保留条数顺带影响访问日志裁剪」这种意外。
+  if (!aiCols.includes('mcp_prefs_json')) {
+    conn.exec("ALTER TABLE ai_settings ADD COLUMN mcp_prefs_json TEXT DEFAULT '{}'");
+  }
+  if (!aiCols.includes('log_json')) {
+    conn.exec("ALTER TABLE ai_settings ADD COLUMN log_json TEXT DEFAULT '{}'");
   }
 }
 

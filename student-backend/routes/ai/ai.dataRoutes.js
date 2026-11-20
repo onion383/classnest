@@ -11,6 +11,7 @@ const { applyRowStudentRef } = require('../../services/provisionalStudents');
 const { resolveNameCellsDetailed } = require('../../services/seatWrite');
 const dbManager = require('../../dbManager/dbManager');
 const { READ_TABLES, JSON_WRITE_TABLES } = require('./ai.constants');
+const { writeScope } = require('../../services/aiWriteScope');
 const { tableColumns, displayColumns, serializeColVal, clearTableColumnsCache } = require('./ai.helpers');
 const { safeJson } = require('../../utils/json');
 const { localDateStr, mondayOf } = require('../../utils/date');
@@ -106,6 +107,8 @@ function colType(table, col) {
 // 返回 { ok, table, id, before, after } 或 { error }；不抛异常，由调用方统一处理。
 function applyDocWrite(table, id, values) {
   if (!JSON_WRITE_TABLES[table]) return { error: '该表暂不支持 AI 整块写入' };
+  // 「只读」档：整块写入与行式写入同一口径（行式在 tools.js 派发前拦，这里是整块写入的入口）
+  if (writeScope.readonlyTables().includes(String(table))) return writeScope.readonlyError(table);
   if (!values || typeof values !== 'object' || Array.isArray(values)) return { error: '缺少要写入的列值' };
   const rid = Number(id);
   if (!Number.isInteger(rid) || rid <= 0) return { error: `记录 id 无效（收到：${id == null ? '' : id}）` };

@@ -2,25 +2,12 @@ const express = require('express');
 const crypto = require('crypto');
 const aiConfigStore = require('../../services/aiConfigStore');
 const { privacy: aiPrivacy } = require('../../services/aiPrivacy');
-const { READ_TABLES } = require('./ai.constants');
 
 const router = express.Router();
 
-// privacy_json 里允许前端写的字段：布尔开关 + 被关表清单。closed_tables 只收真实可读表名，
-// 防止前端塞入任意字符串导致「关掉一张不存在的表」而毫无效果却让用户以为生效了。
-const PRIVACY_BOOL_KEYS = ['enabled', 'hide_phone', 'hide_path', 'hide_album'];
-function normalizePrivacyPatch(body) {
-  const patch = {};
-  const src = body && typeof body === 'object' ? body : {};
-  for (const k of PRIVACY_BOOL_KEYS) {
-    if (src[k] !== undefined) patch[k] = !!src[k];
-  }
-  if (src.closed_tables !== undefined) {
-    const arr = Array.isArray(src.closed_tables) ? src.closed_tables : [];
-    patch.closed_tables = [...new Set(arr.map((t) => String(t).trim()).filter((t) => Object.prototype.hasOwnProperty.call(READ_TABLES, t)))];
-  }
-  return patch;
-}
+// 数据保护那份配置的读写语义（字段白名单 / 表清单 / 单表改档）抽在 privacy.shared.js，
+// MCP 侧用的是同一套——两边各写一份迟早长出差别。
+const { normalizePrivacyPatch, privacyTables, setTableLevel } = require('./privacy.shared');
 
 // ---------------- 配置 ----------------
 function currentSettings() {
@@ -157,17 +144,23 @@ router.put('/config', (req, res) => {
 // GET /api/ai/privacy —— AI 数据保护开关 + 可读表清单（判据 §6：刷新读的是 ai_settings，不是 localStorage）
 // 表清单由后端下发：READ_TABLES 是唯一来源，前端不重复维护一份表名。
 router.get('/privacy', (req, res) => {
-  const tables = Object.entries(READ_TABLES).map(([key, description]) => ({ key, description }));
-  res.json({ success: true, data: { ...aiConfigStore.readPrivacy(), tables } });
+  const cur = aiConfigStore.readPrivacy();
+  res.json({ success: true, data: { ...cur, tables: privacyTables(cur) } });
 });
 
 // PUT /api/ai/privacy —— 写开关；只更新请求里带了的字段，未知字段忽略。
+// 也可以只写一张表的权限：{ table, level }（与五个开关互斥，一次请求不混两种语义）。
 // 写入后清映射缓存：开关/被关表变化要让下一次对话立刻读到新状态。
 router.put('/privacy', (req, res) => {
+  if (req.body && req.body.table !== undefined) {
+    const r = setTableLevel(req.body.table, req.body.level, { read: aiConfigStore.readPrivacy, set: aiConfigStore.setPrivacy });
+    if (r.error) return res.status(400).json({ error: r.error });
+    try { aiPrivacy.invalidate(); } catch (_) { /* 缓存清理失败不阻断设置保存 */ }
+    return res.json({ success: true, data: { ...r, tables: privacyTables(r) }, message: '已保存' });
+  }
   const next = aiConfigStore.setPrivacy(normalizePrivacyPatch(req.body));
   try { aiPrivacy.invalidate(); } catch (_) { /* 缓存清理失败不阻断设置保存 */ }
-  const tables = Object.entries(READ_TABLES).map(([key, description]) => ({ key, description }));
-  res.json({ success: true, data: { ...next, tables }, message: '已保存' });
+  res.json({ success: true, data: { ...next, tables: privacyTables(next) }, message: '已保存' });
 });
 
 // GET /api/ai/models —— 模型列表（密钥仅标记是否已填，不下发明文）

@@ -15,6 +15,7 @@ const { COLUMN_RULES } = require('../../../../services/sanitize');
 const dbManager = require('../../../../dbManager/dbManager');
 const { READ_TABLES, WRITE_TABLES, JSON_WRITE_TABLES } = require('../../ai.constants');
 const { readScope } = require('../../../../services/aiReadScope');
+const { writeScope } = require('../../../../services/aiWriteScope');
 const { privacy: aiPrivacy, hasUnrestoredToken } = require('../../../../services/aiPrivacy');
 const { tableColumns } = require('../../ai.helpers');
 const { CHART_TYPES } = require('../tools.schema');
@@ -410,8 +411,8 @@ function describeOneTable(table) {
       }
       return f;
     });
-  const rowWritable = !!WRITE_TABLES[table];
-  const jsonWritable = !!JSON_WRITE_TABLES[table];
+  const rowWritable = !!WRITE_TABLES[table] && writeScope.isTableWritable(table);
+  const jsonWritable = !!JSON_WRITE_TABLES[table] && writeScope.isTableWritable(table);
   return {
     table,
     label: READ_TABLES[table],

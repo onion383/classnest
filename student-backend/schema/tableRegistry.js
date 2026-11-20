@@ -35,7 +35,11 @@ const PHYSICAL = {
   undo: ['undo_history'],
   widget: ['widget_settings'],
   // 方向 B：外部 MCP 客户端提交的待确认写提案（schema.mcp.js）
-  mcp: ['mcp_proposals'],
+  // mcp_tokens 是令牌明文副本（班级库加密，主密钥保护），漏登记过一次 ——
+  // 漏登记不会报错，只会让 architecture-guard 的「DDL ↔ registry 双向一致」挂掉。
+  mcp: ['mcp_proposals', 'mcp_tokens'],
+  // 数据访问记录（schema.log.js）：AI / MCP 的读操作，只存元信息
+  log: ['access_log'],
 };
 
 const ALL_PHYSICAL = Object.freeze(Object.values(PHYSICAL).flat());

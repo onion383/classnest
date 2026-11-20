@@ -1,150 +1,227 @@
 <template>
-  <div class="mcp-panel space-y-5">
-    <p class="text-xs text-text-muted leading-relaxed">
-      把本班数据暴露给 Claude Desktop / Cursor 等外部 AI 客户端。传输走本机回环地址，
-      使用独立访问令牌鉴权；外部 AI 只能读取预设数据，写入必须先生成提案、由你在这里确认后才会执行。
+  <!-- MCP 服务管理：一个启用开关 + 四行入口（令牌 / 数据权限 / 提案 / 访问记录）。
+       原来这里竖排了说明、开关、令牌列表、混淆+权限、提案五段，一屏塞不下，
+       下面的权限和提案永远在视野外。现在面板只负责「状态摘要」，
+       具体操作各自进弹窗（令牌 / 数据权限 / 提案 / 访问记录），一屏能看完。 -->
+  <div class="bg-surface rounded-lg border border-border p-6">
+    <div class="flex items-center gap-1.5 mb-2">
+      <h3 id="settings-section-mcp" class="text-base font-semibold text-text">MCP 服务管理</h3>
+      <AppHelp aria-label="MCP 服务说明" :z-index="10007" :text="introHelp" />
+    </div>
+    <p class="text-xs text-text-muted leading-relaxed mb-1">
+      把本班数据暴露给 Claude Desktop / Cursor 等外部 AI 客户端。传输走本机回环地址，使用独立访问令牌鉴权；
+      外部 AI 只能读取预设数据，写入默认要你确认。
     </p>
 
-    <!-- 令牌管理 -->
-    <div>
-      <div class="flex items-center justify-between mb-2">
-        <h4 class="text-sm font-medium text-text">访问令牌</h4>
-        <button type="button" @click="generate" :disabled="busy"
-          class="bg-primary hover:bg-primary-hover text-text-inverse px-3 py-1.5 rounded text-sm transition-theme disabled:opacity-50">
-          生成令牌
-        </button>
+    <!-- 启用开关：opt-in，默认关闭。安全提示必须留在这一行，不能跟着令牌一起收进弹窗 -->
+    <div class="flex items-center justify-between gap-4 py-3">
+      <div class="min-w-0">
+        <span class="block text-sm font-medium text-text">启用 MCP 服务</span>
+        <span class="block text-xs text-text-muted mt-0.5">默认关闭。开启后，任何持有令牌的客户端都能读写本班数据。</span>
       </div>
-      <div v-if="tokens.length" class="space-y-2">
-        <div v-for="t in tokens" :key="t.id" class="flex items-center justify-between gap-3 bg-bg-secondary rounded px-3 py-2">
-          <div class="min-w-0">
-            <p class="text-sm text-text truncate">{{ t.label || '未命名令牌' }}
-              <span v-if="t.revoked" class="text-danger text-xs ml-1">（已撤销）</span>
-            </p>
-            <p class="text-xs text-text-muted font-mono">{{ t.id }}</p>
-          </div>
-          <button v-if="!t.revoked" type="button" @click="revoke(t.id)" :disabled="busy"
-            class="text-danger hover:underline text-sm flex-shrink-0">撤销</button>
-        </div>
-      </div>
-      <p v-else class="text-xs text-text-muted">还没有令牌。生成一个后，把下面的一段配置填到 Claude Desktop / Cursor。</p>
+      <AppSwitch :model-value="mcpEnabled" aria-label="启用 MCP 服务" @update:model-value="setMcpEnabled" />
     </div>
 
-    <!-- 新生成的令牌，只显示一次 -->
-    <div v-if="newToken" class="bg-warning/10 border border-warning rounded p-3">
-      <p class="text-sm text-warning font-medium mb-2">请立即复制并保存，此令牌只显示这一次：</p>
-      <code class="block text-xs text-text bg-bg-secondary rounded p-2 break-all select-all">{{ newToken }}</code>
-      <button type="button" @click="copy(newToken)" class="mt-2 text-sm text-info hover:underline">复制令牌</button>
+    <!-- 自动执行：默认关闭。开启后外部 AI 的改动不再经人确认（含删除），
+         所以用自己的确认弹窗挡一道，且状态行常驻提示——避免开了忘关。 -->
+    <div class="flex items-center justify-between gap-4 py-3 border-t border-border">
+      <div class="min-w-0">
+        <span class="block text-sm font-medium text-text">自动执行提案</span>
+        <span class="block text-xs mt-0.5" :class="autoConfirm ? 'text-warning' : 'text-text-muted'">
+          {{ autoConfirm ? '已开启：外部 AI 的改动不再等确认，删除也直接执行。' : '关闭时，外部 AI 每次改动都要你点确认。' }}
+        </span>
+      </div>
+      <AppSwitch :model-value="autoConfirm" aria-label="自动执行提案" @update:model-value="onAutoSwitch" />
     </div>
 
-    <!-- 客户端配置片段 -->
-    <div>
-      <h4 class="text-sm font-medium text-text mb-2">客户端配置（mcpServers）</h4>
-      <pre class="text-xs text-text bg-bg-secondary rounded p-3 overflow-auto">{{ configSnippet }}</pre>
-      <button type="button" @click="copy(configSnippet)" class="mt-2 text-sm text-info hover:underline">复制配置</button>
-      <p class="text-xs text-text-muted mt-2 leading-relaxed">
-        <code>命令</code>需指向安装目录下的 <code>mcp-forwarder.cjs</code>（用随应用的 Node 运行时启动）。
-        转发器只携带 URL 与令牌，接触不到数据库密钥。
-      </p>
+    <!-- 三行管理入口：行尾必须带状态摘要，否则每次都要点进去才知道里面有什么 -->
+    <div
+      v-for="row in rows"
+      :key="row.key"
+      class="flex items-center justify-between gap-4 py-3 border-t border-border"
+    >
+      <div class="min-w-0">
+        <span class="block text-sm font-medium text-text">{{ row.title }}</span>
+        <span v-if="row.summary" class="block text-xs mt-0.5 truncate" :class="row.warn ? 'text-warning' : 'text-text-muted'">{{ row.summary }}</span>
+      </div>
+      <button
+        type="button"
+        class="flex items-center gap-1 flex-shrink-0 bg-bg hover:bg-surface-hover text-text border border-border px-3 py-1.5 rounded text-sm transition-theme whitespace-nowrap"
+        @click="openDialog = row.key"
+      >{{ row.action || '管理' }}<span class="text-text-muted">›</span></button>
     </div>
 
-    <!-- 待确认提案 -->
-    <div>
-      <div class="flex items-center justify-between mb-2">
-        <h4 class="text-sm font-medium text-text">待确认提案
-          <span v-if="pending.length" class="text-warning">（{{ pending.length }}）</span>
-        </h4>
-        <button type="button" @click="loadProposals" :disabled="busy" class="text-sm text-info hover:underline">刷新</button>
-      </div>
-      <div v-if="pending.length" class="space-y-2">
-        <div v-for="p in pending" :key="p.proposal_id" class="bg-bg-secondary rounded p-3">
-          <p class="text-sm text-text mb-1">{{ p.label || '数据修改提案' }}</p>
-          <p class="text-xs text-text-muted mb-2">{{ p.table }} · {{ p.operation }} · {{ p.created_at }}</p>
-          <div class="flex gap-2">
-            <button type="button" @click="decide(p.proposal_id, 'confirm')" :disabled="busy"
-              class="bg-primary hover:bg-primary-hover text-text-inverse px-3 py-1 rounded text-sm">确认执行</button>
-            <button type="button" @click="decide(p.proposal_id, 'reject')" :disabled="busy"
-              class="bg-bg-secondary hover:bg-danger/20 text-text px-3 py-1 rounded text-sm">拒绝</button>
-          </div>
-        </div>
-      </div>
-      <p v-else class="text-xs text-text-muted">暂无待确认提案。</p>
-    </div>
+    <p v-if="!mcpEnabled" class="text-xs text-text-muted mt-2 leading-relaxed">
+      服务当前未启用：令牌与权限可以先配好，但外部客户端连不进来，配置在开启后才生效。
+    </p>
+
+    <McpTokensDialog :visible="openDialog === 'tokens'" @close="openDialog = ''" @changed="reloadAll" />
+    <McpPermissionsDialog :visible="openDialog === 'perms'" @close="openDialog = ''" @changed="reloadPrivacy" />
+    <McpProposalsDialog :visible="openDialog === 'proposals'" @close="openDialog = ''" @changed="loadProposals" />
+    <AccessLogDialog :visible="openDialog === 'logs'" source="mcp" @close="openDialog = ''" @changed="loadLogSummary" />
+
+    <ConfirmDialog :visible="askAutoConfirm" :z-index="10010" title="开启自动执行"
+      :message="autoConfirmMessage" show-cancel confirm-text="仍然开启"
+      @confirm="confirmAuto" @cancel="askAutoConfirm = false" />
   </div>
 </template>
 
-<script setup>
-import { ref, computed, onMounted } from 'vue'
+<script setup vapor>
+import { computed, onMounted, ref } from 'vue'
 import axios from 'axios'
 import { useDisposables } from '../../utils/disposables.js'
 import { useNotification } from '../../composables/useNotification.js'
+import { usePrivacyConfig, levelOf } from '../../composables/usePrivacyConfig.js'
+import AppSwitch from '../base/AppSwitch.vue'
+import AppHelp from '../base/AppHelp.vue'
+import ConfirmDialog from '../base/ConfirmDialog.vue'
+import McpTokensDialog from './McpTokensDialog.vue'
+import McpPermissionsDialog from './McpPermissionsDialog.vue'
+import McpProposalsDialog from './McpProposalsDialog.vue'
+import AccessLogDialog from './AccessLogDialog.vue'
+import { useAccessLog } from '../../composables/useAccessLog.js'
 
 // 定时器统一走 disposables：组件卸载自动释放（项目红线：不许裸 setInterval）
 const d = useDisposables()
 const notify = useNotification()
 
-const tokens = ref([])
-const pending = ref([])
-const newToken = ref('')
-const busy = ref(false)
-const endpoint = ref('/mcp')
+// 只用来算摘要（混淆 x/3、可写/只读几张）；真正改写在弹窗里，那个实例负责回滚与序号守卫。
+// 读的是 MCP 自己那份（mcp_privacy_json），不是 AI 助手的数据保护。
+const { cfg, load: loadPrivacy } = usePrivacyConfig('mcp')
 
-const configSnippet = computed(() => JSON.stringify({
-  mcpServers: {
-    classnest: {
-      command: '<随应用 Node 运行时>',
-      args: ['<安装目录>/student-backend/mcp-forwarder.cjs'],
-      env: {
-        CLASSNEST_MCP_URL: 'http://127.0.0.1:3000/mcp',
-        CLASSNEST_MCP_TOKEN: newToken.value || '<在此填入令牌>',
-      },
-    },
-  },
-}, null, 2))
+// 访问记录摘要：只看 mcp（AI 那一侧在「AI 数据保护」里）。只拉摘要，不拉列表。
+const { summary: logSummary, loadSummary: loadLogSummary } = useAccessLog('mcp')
+
+const tokens = ref([])
+const pendingCount = ref(0)
+const mcpEnabled = ref(false)
+const autoConfirm = ref(false)
+const askAutoConfirm = ref(false)
+const openDialog = ref('') // '' | tokens | perms | proposals
+
+const autoConfirmMessage = '开启后，持有令牌的外部 AI 改动本班数据时不再询问你：新增、修改、删除都会立即执行。'
+  + '\n改动仍会登记下来，可以从「更改审查」整批退回；每次自动执行也会记进「MCP 访问记录」。'
+
+const introHelp = [
+  '开关只影响外部客户端：本班自己用的 AI 助手不受影响。',
+  '关着时，外部客户端即使带着有效令牌也连不进来。',
+  '「自动执行提案」默认关：关着时外部 AI 的每次改动都要你确认；打开后（含删除）立即执行。',
+  '令牌、按表权限、待确认提案分别点对应行的「管理」查看。',
+].join('\n')
+
+const tokenSummary = computed(() => {
+  // 没有令牌时不再写一句「还没有令牌，点『管理』新增」——「管理」按钮就在右边，
+  // 说明文字留给 ⓘ。（新规矩：界面少说话，重要说明进 ⓘ。）
+  if (!tokens.value.length) return ''
+  const revoked = tokens.value.filter(t => t.revoked).length
+  return `${tokens.value.length} 个${revoked ? ` · ${revoked} 个已失效` : ''}`
+})
+
+const permSummary = computed(() => {
+  const c = cfg.value
+  const tables = Array.isArray(c.tables) ? c.tables : []
+  if (!tables.length) return '正在读取…'
+  const writable = tables.filter(t => levelOf(t) === 'write').length
+  const readonly = tables.filter(t => levelOf(t) === 'read').length
+  const masked = ['hide_phone', 'hide_path', 'hide_album'].filter(k => c[k]).length
+  return `${c.enabled ? `混淆 ${masked}/3` : '混淆未启用'} · 可写 ${writable} 张 · 只读 ${readonly} 张`
+})
+
+const proposalSummary = computed(() => (pendingCount.value ? `${pendingCount.value} 条待确认` : ''))
+
+const logSummaryText = computed(() => {
+  const s = logSummary.value
+  const parts = []
+  if (s.total) parts.push(`${s.total} 次读取`)
+  if (s.writes) parts.push(`${s.writes} 次写入`)
+  if (s.denied) parts.push(`${s.denied} 次被拒`)
+  if (s.failed) parts.push(`${s.failed} 次失败`)
+  if (s.pending) parts.push(`${s.pending} 条待确认`)
+  return parts.join(' · ')
+})
+
+const rows = computed(() => [
+  { key: 'tokens', title: 'MCP 令牌', summary: tokenSummary.value, warn: false },
+  { key: 'perms', title: 'MCP 数据权限', summary: permSummary.value, warn: false },
+  { key: 'proposals', title: 'MCP 提案', summary: proposalSummary.value, warn: pendingCount.value > 0 },
+  // 访问记录：只读、只看 mcp（AI 那一侧在「AI 数据保护」弹窗底部）。
+  // 按钮文案是「查看」而不是「管理」——这里没有可配置的东西（除了弹窗底部的记录设置）。
+  { key: 'logs', title: 'MCP 访问记录', summary: logSummaryText.value, warn: logSummary.value.denied > 0, action: '查看' },
+])
+
+async function loadEnabled() {
+  try {
+    const r = await axios.get('/api/mcp/enabled')
+    mcpEnabled.value = !!r.data.enabled
+  } catch (_) { /* 读不到按关闭显示，不阻断面板 */ }
+}
+async function loadPrefs() {
+  try {
+    const r = await axios.get('/api/mcp/prefs')
+    // 严格等于 true 才算开启：后端也用同一口径，脏值当关闭
+    autoConfirm.value = r.data.auto_confirm === true
+  } catch (_) { /* 读不到按关闭显示 */ }
+}
+
+// 开启要过一道确认（含删除）；关闭不要——关掉永远不会造成损失，多问一次只是烦。
+function onAutoSwitch(v) {
+  if (!v) { setAutoConfirm(false); return }
+  askAutoConfirm.value = true
+}
+function confirmAuto() {
+  askAutoConfirm.value = false
+  setAutoConfirm(true)
+}
+async function setAutoConfirm(v) {
+  const prev = autoConfirm.value
+  autoConfirm.value = v // 乐观更新，避免等回包时开关闪回
+  try {
+    const r = await axios.put('/api/mcp/prefs', { auto_confirm: v })
+    autoConfirm.value = r.data.auto_confirm === true
+    notify.success(v ? '已开启自动执行' : '已关闭自动执行')
+  } catch (e) {
+    autoConfirm.value = prev
+    notify.error('保存自动执行设置失败：' + (e.response?.data?.error || e.message))
+  }
+}
+async function setMcpEnabled(v) {
+  const prev = mcpEnabled.value
+  mcpEnabled.value = v // 乐观更新，避免等待回包时开关闪回
+  try {
+    const r = await axios.put('/api/mcp/enabled', { enabled: v })
+    mcpEnabled.value = !!r.data.enabled
+  } catch (e) {
+    mcpEnabled.value = prev
+    notify.error('保存启用状态失败：' + (e.response?.data?.error || e.message))
+  }
+}
 
 async function loadTokens() {
-  const r = await axios.get('/api/mcp/tokens')
-  tokens.value = r.data.tokens || []
-  endpoint.value = r.data.endpoint || '/mcp'
+  try {
+    const r = await axios.get('/api/mcp/tokens')
+    tokens.value = r.data.tokens || []
+  } catch (_) { /* 摘要读不到就保持「还没有令牌」，点进去会重拉 */ }
 }
 async function loadProposals() {
-  const r = await axios.get('/api/mcp/proposals', { params: { status: 'pending' } })
-  pending.value = r.data.proposals || []
-}
-async function generate() {
-  busy.value = true
   try {
-    const r = await axios.post('/api/mcp/tokens', { label: '外部 AI 客户端' })
-    newToken.value = r.data.token
-    await loadTokens()
-  } catch (e) { notify.error('生成令牌失败：' + (e.response?.data?.error || e.message)) }
-  finally { busy.value = false }
+    const r = await axios.get('/api/mcp/proposals', { params: { status: 'pending' } })
+    pendingCount.value = (r.data.proposals || []).length
+  } catch (_) { /* 保留上次条数，不闪成 0 */ }
 }
-async function revoke(id) {
-  busy.value = true
-  try {
-    await axios.post(`/api/mcp/tokens/${encodeURIComponent(id)}/revoke`, {})
-    await loadTokens()
-  } catch (e) { notify.error('撤销失败：' + (e.response?.data?.error || e.message)) }
-  finally { busy.value = false }
-}
-async function decide(id, decision) {
-  busy.value = true
-  try {
-    const r = await axios.post(`/api/mcp/proposals/${encodeURIComponent(id)}/decide`, { decision })
-    if (r.data.status === 'failed') notify.error('执行失败：' + (r.data.result?.error || '未知原因'))
-    else notify.success(decision === 'confirm' ? '已执行提案' : '已拒绝提案')
-    await loadProposals()
-  } catch (e) { notify.error('处理提案失败：' + (e.response?.data?.error || e.message)) }
-  finally { busy.value = false }
-}
-async function copy(text) {
-  try { await navigator.clipboard.writeText(text); } catch (_) { /* 剪贴板不可用时用户可手动选中 */ }
+function reloadPrivacy() { loadPrivacy().catch(() => {}) }
+function reloadAll() {
+  loadTokens()
+  reloadPrivacy()
+  loadProposals()
+  loadLogSummary()
 }
 
 onMounted(() => {
-  loadTokens().catch(() => {})
-  loadProposals().catch(() => {})
-  // 每 8 秒拉一次待确认提案，卸载时由 disposables 自动清掉
+  loadEnabled().catch(() => {})
+  loadPrefs().catch(() => {})
+  reloadAll()
+  // 提案条数留在面板上轮询：弹窗按需挂载，关着时没人拉数据。
+  // （下一步计划交给标题栏通知中心统一喊，届时这里可以去掉。）
   d.interval(() => { loadProposals().catch(() => {}) }, 8000)
 })
 </script>

@@ -10,7 +10,9 @@
 //   ===== export_image 工具：课表/座位表/值日表 → 排布图规格（前端渲染成 PNG） =====
 //       → tools.executors/executors.image.js
 const dbManager = require('../../../dbManager/dbManager');
+const accessLog = require('../../../services/accessLogStore');
 const { privacy, hasUnrestoredToken } = require('../../../services/aiPrivacy');
+const { writeScope } = require('../../../services/aiWriteScope');
 const schema = require('./tools.schema');
 const exec = require('./tools.executors/executors');
 const { subagentTool, runSubagent } = require('./tools.subagent');
@@ -32,7 +34,30 @@ const {
 // 绝不能把 P-xxxxxx 写进数据库或导出的文件里。
 const TOKEN_STRICT_TOOL_RE = /^(propose_|save_memory$|export_file$|show_chart$)/;
 
-async function runTool(name, args, ctx) {
+// 「只读 / 读写」闸门：写类工具在派发前统一拦一次，读类工具一律不受影响。
+// 只拦「老师显式设成只读」的表 —— 不支持写入的表仍由各自的 normalize 报原有文案，
+// 不能把「这表本来就不支持写」说成「你设了只读」，否则老师会去设置里找个不存在的开关。
+const WRITE_TOOL_TABLE_REFS = {
+  propose_write: (a) => [a && a.table],
+  propose_add_many: (a) => [a && a.table],
+  propose_delete_many: (a) => [a && a.table],
+  propose_update_many: (a) => [a && a.table],
+  propose_json_write: (a) => [a && a.table],
+  // 批量提案里每个 op 各自带 table，要逐个查，不能只看第一层
+  propose_batch: (a) => (Array.isArray(a && a.ops) ? a.ops.map((o) => o && o.table) : []),
+};
+function readonlyBlockedError(name, args) {
+  const pick = WRITE_TOOL_TABLE_REFS[name];
+  if (!pick) return '';
+  const ro = writeScope.readonlyTables();
+  for (const t of pick(args)) {
+    const key = String(t || '').trim();
+    if (key && ro.includes(key)) return writeScope.readonlyError(key).error;
+  }
+  return '';
+}
+
+async function dispatchTool(name, args, ctx) {
   // 入站还原必须在 normalizeProposal 之前：diff 的「旧值」来自库里真值，
   // 「新值」若还是代号，确认卡片会显示「真号 → P-xxxxxx」这种荒谬对照。
   // 只有显式带 slug 的主对话 / 子助手才还原；MCP 方向 B 不传 slug，保持原样。
@@ -42,6 +67,10 @@ async function runTool(name, args, ctx) {
       return { result: { ok: false, error: 'AI 数据保护：内容里有无法识别的代号（S-/P-），请按原名重新填写后再试' } };
     }
   }
+  // 「只读」闸门：老师把某张表设成只读后，写类工具在派发前就被挡下，
+  // 模型拿到明确原因（而不是先拼出提案、等老师点确认时才失败）。
+  const roErr = readonlyBlockedError(name, args);
+  if (roErr) return { result: { ok: false, error: roErr } };
   switch (name) {
     case 'query':
       return { result: runQuery(args) };
@@ -255,6 +284,71 @@ async function runTool(name, args, ctx) {
     default:
       return { result: { error: '未知工具' } };
   }
+}
+
+// ===== 数据访问记录：只覆盖「读」 =====
+// 与 MCP 侧同一张 access_log 表，source 区分。写类工具**不记这里** —— 写入在
+// 「设置 → 更改审查」（undo_history，带来源色标与回退入口）里有完整前后值，
+// 再记一份只会让两份记录的口径互相打脸。三者边界：
+//   AI 数据保护 → AI 访问记录（只看 ai）
+//   MCP 服务管理 → MCP 访问记录（只看 mcp）
+//   设置 → 更改审查 → 全部来源的写入与回退
+const AI_READ_TOOLS = new Set([
+  'query', 'aggregate', 'search_all', 'describe_table',
+  'show_record', 'export_image', 'export_file', 'delete_impact',
+]);
+
+function describeAiRead(name, args, result) {
+  if (!AI_READ_TOOLS.has(name)) return null;
+  const a = args || {};
+  const r = result || {};
+  let target = '';
+  if (name === 'search_all') target = String(a.q || '');
+  else if (name === 'export_image') target = String(a.target || '');
+  else if (name === 'export_file') target = String(a.filename || '');
+  else target = String(a.table || (Array.isArray(a.tables) ? a.tables.join('、') : '') || '');
+  let amount = 0;
+  let detail = '';
+  if (Array.isArray(r.rows)) { amount = r.rows.length; detail = `${amount} 行`; }
+  else if (Array.isArray(r.groups)) { amount = r.groups.length; detail = `${amount} 组结果`; }
+  else if (typeof r.count === 'number') { amount = r.count; detail = `${amount} 条`; }
+  return { target, detail, amount };
+}
+
+// 记录失败绝不影响工具结果（观测不能反过来打断业务）。
+// 「被拒」= 撞上按表关闭，与普通失败分开记：那是权限真的生效的证据。
+function logAiRead(name, args, ctx, result) {
+  const slug = ctx && ctx.slug;
+  if (!slug) return;
+  const d = describeAiRead(name, args, result);
+  if (!d) return;
+  const errorText = String((result && result.error) || '');
+  // 读工具的成功返回并不都带 ok:true（如 query 只回 { count, rows }），
+  // 所以判据是「有 error 才算失败」，不能写成 result.ok 真值判断 ——
+  // 否则每一次正常查询都会被记成 failed，这一页就变成噪音了。
+  const hasError = !!result && (result.ok === false || errorText !== '');
+  const denied = hasError && /设置中关闭/.test(errorText);
+  const write = () => accessLog.record({
+    source: 'ai',
+    actor: (ctx && ctx.convTitle) || '',
+    tool: name,
+    target: d.target,
+    detail: d.detail,
+    amount: d.amount,
+    result: hasError ? (denied ? 'denied' : 'failed') : 'ok',
+    reason: hasError ? errorText : '',
+  });
+  // 工具调用本来就在本轮 withDb 里：再套一层要多一次开库解析（含密钥解密）。
+  // 只有当前没绑定到同一个库时才自己绑一次。
+  if (dbManager.currentSlug() === slug) write();
+  else dbManager.withDb(slug, write);
+}
+
+// 统一的工具执行入口：流式 / 非流式共用
+async function runTool(name, args, ctx) {
+  const out = await dispatchTool(name, args, ctx);
+  try { logAiRead(name, args, ctx, out && out.result); } catch (_) { /* 记录失败不阻断 */ }
+  return out;
 }
 
 module.exports = {

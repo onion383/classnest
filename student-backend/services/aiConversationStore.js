@@ -94,6 +94,13 @@ function getMeta(id) {
   return db.prepare('SELECT summary, summary_upto, last_prompt_tokens FROM ai_conversations WHERE id = ?').get(id)
 }
 
+// 只取标题：数据访问记录要写「哪次对话读了什么」，每轮取一次（不是每次工具调用），
+// 比在每条记录里存对话 id、让前端再翻译成人话便宜得多。
+function getTitle(id) {
+  const r = db.prepare('SELECT title FROM ai_conversations WHERE id = ?').get(id)
+  return String((r && r.title) || '')
+}
+
 function updateSummary(id, summary, upto) {
   db.prepare('UPDATE ai_conversations SET summary = ?, summary_upto = ? WHERE id = ?').run(summary, upto, id)
 }
@@ -119,6 +126,7 @@ module.exports = {
   deleteMessages,
   getSummary,
   getMeta,
+  getTitle,
   updateSummary,
   setLastPromptTokens,
 }

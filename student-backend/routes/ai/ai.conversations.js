@@ -245,6 +245,8 @@ router.post('/chat/stream', async (req, res) => {
   // 联网搜索开关：仅当请求未显式关闭（webSearch === false）时下发 web_search 工具
   const webSearchOn = !!(req.body && req.body.webSearch !== false);
   const ctx = { blocks, slug: req.user && req.user.dbSlug, images: tools().latestUserImages(messages), attachments, signal: clientGone.signal, cfg: s };
+  // 对话标题：数据访问记录里「谁读了什么」的那个「谁」（每轮取一次，工具层直接用）。
+  ctx.convTitle = conversationId ? aiConversationStore.getTitle(conversationId) : '';
   // 子助手轨迹实时下发：增量事件挂到当前工具步骤 id 上，前端据此把片段追加到那一格过程块。
   // 只在工具执行期间有 stepId，没有宿主步骤时不下发（避免前端收到孤儿事件）。
   ctx.stepId = null;

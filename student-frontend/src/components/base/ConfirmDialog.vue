@@ -1,5 +1,5 @@
 <template>
-  <DialogShell :visible="visible" :z-index="10006" @overlay="handleOverlayClick">
+  <DialogShell :visible="visible" :z-index="zIndex" @overlay="handleOverlayClick">
     <div class="bg-surface p-5 rounded-lg min-w-[300px] max-w-[600px] text-center shadow-card dialog-card">
       <h3 v-if="title" class="text-lg font-bold mb-3">{{ title }}</h3>
       <!-- 添加列：显示列名输入 + 类型选择 -->
@@ -68,6 +68,9 @@ const props = defineProps({
   columnName: String,
   columnType: String,
   errorMsg: String,
+  // 弹窗层级：从已打开的弹窗（MCP 令牌弹窗 10070）里再开确认框时必须高于父弹窗，
+  // 否则确认框被压在遮罩下面，看起来像「点了没反应」。默认沿用原来的 10006。
+  zIndex: { type: Number, default: 10006 },
 })
 const emit = defineEmits(['confirm', 'cancel', 'extra', 'update:columnName', 'update:columnType'])
 

@@ -32,6 +32,42 @@ const READ_TABLES = {
   undo_history: '操作撤销历史（key 资源标识/type 类型/label 描述/dir 1=可撤销 0=已撤销/ts 时间）',
 };
 
+// AI 数据保护面板的「人读目录」：中文名优先 + 一句解释，界面上不出现英文表名/列名。
+// 键集必须与 READ_TABLES 完全一致（单测钉住），新增可读表时两处一起补；
+// 说明文字是给老师看的，故意与 READ_TABLES 的模型说明分开 —— 后者要写全字段名给模型读。
+const READ_TABLE_LABELS = {
+  students: { label: '学生名单', hint: '学号、姓名、班级、家长电话、备注' },
+  leave_records: { label: '请假记录', hint: '请假类型、起止时间、状态、返校时间' },
+  fee_records: { label: '班费收支', hint: '收支类型、金额、日期、备注、收据' },
+  score_records: { label: '加分扣分', hint: '类型、项目、分值、原因、时间' },
+  activities: { label: '班级活动', hint: '时间、主题、地点、简介、参与人员' },
+  countdowns: { label: '倒计时', hint: '名称、截止日' },
+  groups: { label: '分组名单', hint: '各分组里都有谁' },
+  group_members: { label: '小组成员', hint: '组别、姓名、备注' },
+  group_dimensions: { label: '分组维度', hint: '组长称呼、每组人数、小组数' },
+  cadres: { label: '班干部职务', hint: '职务名、上级职务、可任职人数' },
+  cadre_members: { label: '班干部任职', hint: '职务、学生姓名、排序' },
+  semesters: { label: '学期列表', hint: '学期名、起止日期、当前学期' },
+  widget_settings: { label: '系统设置', hint: '小组件、点名器、保存目录、班级信息' },
+  master_schedule: { label: '主课表模板', hint: '课程数据与配置' },
+  schedule: { label: '当前课表', hint: '每周的课程数据与配置' },
+  schedule_history: { label: '历史课表', hint: '周起始日、课程数据、快照时间' },
+  seat_layout: { label: '当前座位表', hint: '排布模式、行列数、座位与配置' },
+  seat_template: { label: '座位模板', hint: '排布模式、行列数、座位数据' },
+  seat_draft: { label: '座位草稿', hint: '本次排表条件与未保存的座位' },
+  seat_weight: { label: '座位权重', hint: '权重矩阵与配置' },
+  seat_history: { label: '座位历史', hint: '周起始日、快照日期、座位数据' },
+  duty_settings: { label: '值日设置', hint: '值日项目、辛苦度、需要人数、周期' },
+  duty_layout: { label: '当前值日表', hint: '每天各项由谁值日' },
+  duty_template: { label: '值日模板', hint: '值日表的结构模板' },
+  duty_weight: { label: '值日权重', hint: '各项目在各天的权重' },
+  duty_draft: { label: '值日草稿', hint: '排表条件与未保存的值日表' },
+  duty_history: { label: '值日历史', hint: '周起始日、快照日期、值日数据' },
+  albums: { label: '班级相册', hint: '相册名、文件夹路径、排序' },
+  album_photos: { label: '相册照片', hint: '所属相册、文件名、拍摄日期、大小' },
+  undo_history: { label: '撤销历史', hint: '操作类型、描述、时间' },
+};
+
 // 可「写」（需用户确认）的表
 // 仅收录：既有 REST 接口支持「按 id 增/改/删」、且撤销白名单（undo.js ALLOWED_TABLES）已放行的行式表
 const WRITE_TABLES = {
@@ -81,5 +117,5 @@ function filterReadTables(allTables, closedTables) {
   return out;
 }
 
-module.exports = { READ_TABLES, WRITE_TABLES, JSON_WRITE_TABLES, DOC_UNDO_KEY, filterReadTables };
+module.exports = { READ_TABLES, READ_TABLE_LABELS, WRITE_TABLES, JSON_WRITE_TABLES, DOC_UNDO_KEY, filterReadTables };
 

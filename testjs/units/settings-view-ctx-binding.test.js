@@ -101,3 +101,10 @@ test('开关用 :model-value + @change 显式绑定（避免 v-model 与 change 
     '开关绑定形式被改动：现在应当是受控开关（:model-value + @change）',
   )
 })
+
+test('设置页不使用原生 <select>：下拉统一走 AppSelect', () => {
+  // 原生 select 的下拉层由浏览器画，毛玻璃主题压不到它；箭头/圆角/高度也和
+  // 同页的 AppSelect 对不齐。来源筛选曾经是一处漏网的 <select>，钉住别再回来。
+  const tpl = templateOf(viewSrc())
+  assert.ok(!/<select\b/.test(tpl), '设置页模板里出现原生 <select>，改成 AppSelect')
+})

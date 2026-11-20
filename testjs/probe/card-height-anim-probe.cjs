@@ -11,6 +11,7 @@
 //
 // 判据：两个方向都要有足够多的中间高度、终点正确、过程不越过终点。
 const { app, BrowserWindow } = require('electron')
+const { waitFor, waitForStable } = require('../tools/waitFor.cjs')
 const fs = require('fs')
 const path = require('path')
 const { execFileSync } = require('child_process')
@@ -93,14 +94,20 @@ app.whenReady().then(async () => {
     if (/ResizeObserver loop|undelivered/i.test(msg)) errors.push(msg)
   })
   await win.loadFile(path.join(OUT, 'index.html'))
-  await new Promise((r) => setTimeout(r, 600))
+  // 等入口脚本把 __heights 挂上，而不是死等 600ms（慢机器上可能还没执行到）
+  await waitFor(() => win.webContents.executeJavaScript('typeof window.__heights === "function"'), { label: '入口脚本挂载' })
 
   const h0 = await win.webContents.executeJavaScript('window.__heights(1)')
   const before = Math.round(h0[0])
 
   await win.webContents.executeJavaScript('window.__toggle(true)')
   const grow = (await win.webContents.executeJavaScript('window.__heights(20)')).map(Math.round)
-  await new Promise((r) => setTimeout(r, 400))
+  // 等变高动画真正停住再反向：固定 400ms 在慢机器上会砍在动画中间，
+  // 量到的「变矮起点」就不是终态。连续三次读数不变即视为稳定。
+  await waitForStable(
+    async () => JSON.stringify(await win.webContents.executeJavaScript('window.__heights(1)')),
+    { intervalMs: 100, stableTimes: 3, label: '变高动画收尾' },
+  )
   await win.webContents.executeJavaScript('window.__toggle(false)')
   const shrink = (await win.webContents.executeJavaScript('window.__heights(20)')).map(Math.round)
 

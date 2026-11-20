@@ -29,7 +29,7 @@ const { killTree } = require('../tools/killTree.cjs')
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
 const CDP_PORT = 9222   // 主进程写死（main.js 用 INP_DEBUG=1 开 remote-debugging-port 9222）
-const BASE = 'http://127.0.0.1:5173'
+const BASE = require('../../config/ports.cjs').frontendOrigin
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const argv = process.argv.slice(2)

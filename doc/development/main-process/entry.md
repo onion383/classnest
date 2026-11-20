@@ -111,7 +111,7 @@ classnest/
 - **启动计时有两个锚点**：窗口首次显示只是候选，定稿看「占位页移除」；引导窗口例外（停留不计入启动耗时）。
 - **迁移流程先建进度窗口再关其它窗口**：否则窗口数归零会触发 `window-all-closed` 提前退出；同时 `tray.beginCloseWithoutMenu()` 放行主窗口关闭。
 - **失败语义要保住**：数据目录/加密转换失败一律保留旧目录与旧配置；重启后端，避免用户回主界面后连不上。
-- **引导预热轮询地址是硬编码的 `127.0.0.1:3000`**：`waitBackendReady()` 用 IPv4 字面量轮询 `/api/accounts`。后端只绑 IPv4，写成 `localhost` 会先解析 `::1` 被拒再回退，白做一次失败连接；改后端端口时要同步这里。
+- **引导预热轮询地址取自 `config/ports.cjs`**：`waitBackendReady()` 用 `ports.backendOrigin`（IPv4 字面量）轮询 `/api/accounts`。后端只绑 IPv4，写成 `localhost` 会先解析 `::1` 被拒再回退，白做一次失败连接；改端口只动 `config/ports.json`。
 - **新增入口级通道要三处同步**：本文件注册、`electron/ipc-channels.json`（通道名单）、`electron/ipc-policy.json`（授权表）。
 - **`get-master-key` 的调用方受 `ipc-policy.json` 授权表约束**：只有表中列出的窗口角色能调用（v5 起由 `installIpcGuard()` 统一校验发送方角色，表外通道 fail-closed）；新增窗口时要同时在授权表登记其角色，否则会直接被拒。
 - **`content-protection` 与剪贴板清理有平台差异**：前者依赖 Windows `SetWindowDisplayAffinity`（窗口防截屏 API）；后者默认 60s、只清「仍是这段文本」的剪贴板。

@@ -30,7 +30,7 @@
 
 前端开发期（4 个，不进产物）：`vite`、`@vitejs/plugin-vue`、`tailwindcss`、`@tailwindcss/vite`（均 MIT）。
 
-#### 2.后端运行时依赖（`student-backend/package.json`，12 个）
+#### 2.后端运行时依赖（`student-backend/package.json`，16 个）
 
 见 [backend.md](./backend.md)。均为 MIT / BSD / Apache-2.0，无 GPL 类强传染许可（FFmpeg 为 LGPL，单独随包）。
 

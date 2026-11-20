@@ -113,7 +113,7 @@ node testjs/run-smoke.cjs --bail     # 第一个失败就停
 
 标准：
 - 退出码 `0` = 通过，非 0 = 失败；**退出码 `3` = 脚本自己判定「环境不具备，跳过」**（如缺产物文件），不计失败。
-- 需要后端在跑的脚本（`auth-smoke.js`）在后端未监听 3000 端口时判为跳过。
+- `auth-smoke.js` 默认自起隔离后端（临时目录 + 自动选空闲端口），不依赖本机是否已有服务；只有 `AUTH_SMOKE_EXTERNAL=1` 时才连 `PORT` / `38120` 上的外部后端。
 - 有产物顺序依赖：`pdf-subset-verify.mjs` 先生成子集，`font-subset-verify.mjs` 再核对（`run-smoke.cjs` 的 ORDER_HINT 已排好）。
 
 | 脚本 | 覆盖范围 |

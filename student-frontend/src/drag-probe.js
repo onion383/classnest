@@ -8,10 +8,11 @@
 //   · 每行的 transform（残留检测）
 //   · 相邻行是否重叠（乱掉的判据）
 //
-// 用法：electron 打开 http://127.0.0.1:5173/drag-probe.html
+// 用法：electron 打开 <开发服务器>/drag-probe.html（端口见 config/ports.json 的 frontendPort）
 //       探针跑完会 console.log('__PROBE_DONE__')
 // =========================================================================
 import { createApp, h, nextTick } from 'vue'
+import { createPinia } from 'pinia'
 import GridView from './components/tables/GridView/GridView.vue'
 
 const DAYS = ['周一', '周二', '周三', '周四', '周五']
@@ -92,6 +93,10 @@ const app = createApp({
   },
 })
 window.__ROWDBG = true
+// GridView 里的 IconGlyph 会读 useThemeStore()，store 需要 pinia 先装上；
+// 缺了会抛 getActivePinia() 并把 GridView 的更新搅成递归。探针自建 app 没有主入口那套引导，
+// 所以这里补一次（2026-11 主题重构后 IconGlyph 才引入 store，探针因此静默失败过）。
+app.use(createPinia())
 app.mount('#app')
 
 // ---------------------------------------------------------------- 自动化
@@ -157,17 +162,6 @@ function snap(tag) {
   const dirty = items.filter((i) => i.transform || i.opacity !== '1')
   if (dirty.length) console.log(`[probe] ${tag} dirty=${JSON.stringify(dirty)}`)
   return { items, overlaps }
-}
-
-// 找到「第 n 个可拖行的行手柄」中心点
-function handleAt(rowIdx) {
-  const trs = Array.from(document.querySelectorAll('#app tbody tr'))
-  const tr = trs[rowIdx]
-  if (!tr) return null
-  const h = tr.querySelector('.drag-handle')
-  if (!h) return null
-  const r = h.getBoundingClientRect()
-  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
 }
 
 function rowCenterY(rowIdx) {

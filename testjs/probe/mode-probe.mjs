@@ -37,8 +37,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const FRONTEND = path.join(ROOT, 'student-frontend')
 // 端口与 electron/main/main.js 的 INP_DEBUG 分支一致（那里 appendSwitch 写死 9222）
 const PORT = 9222
-const BASE = 'http://127.0.0.1:5173'
-const BACKEND = 'http://127.0.0.1:3000'
+const BASE = require('../../config/ports.cjs').frontendOrigin
+const BACKEND = require('../../config/ports.cjs').backendOrigin
 const CDP_HOST = `127.0.0.1:${PORT}`
 
 const USER = process.env.MODE_PROBE_USER || 'test1314'

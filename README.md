@@ -146,7 +146,7 @@ npm run dev:new            # 3.6 通道只起 Vite
 | `npm run channels:gen`                                 | 由 `electron/ipc-channels.json` 生成 `electron/main/channels.js`（`--check` 只校验同源） |
 | `npm run electron:build`                               | 前端 → electron-builder（`--dir`）→ Inno，产物在 `release/` |
 | `npm run electron:buildnew`                            | 同上，走 3.6 通道，产物在 `release36/`                        |
-| `npm run build:win:inno`                               | 只编译安装包（需先有 unpacked 产物）                             |
+| `npm run build:win:inno`                               | 只编译安装包（需先有 unpacked 产物）；跟 `-- release36 --vue36` 出 3.6 预览包 |
 | `npm test`                                             | units + behavior（约 2.4s）                            |
 | `npm run test:units` / `test:behavior`                 | 单独跑某一层                                              |
 | `npm run smoke`                                        | 链路冒烟（约 1min，发版前）                                    |
@@ -166,29 +166,30 @@ npm run electron:build     # 构建 + electron-builder（--dir）+ Inno 安装�
 npm run build:win:inno     # 仅生成安装包（需先完成 electron-builder 打包）
 ```
 
-- 安装包输出 `release/ClassNest-Setup-x.y.z.exe`（3.6 通道为 `release36/`）。
+- 安装包输出 `release/ClassNest-Setup-x.y.z.exe`；3.6 通道输出到 `release36/`，文件名带 `-Vue36`（如 `ClassNest-Vue36-Setup-x.y.z.exe`），且安装页与引导页会多一行「仅供体验、不建议作为主力版本」的提示。
+- 两个通道共用同一个 `AppId` 与安装目录：装了其中一个再装另一个会直接覆盖，不会并存两份。
 
 - 打包前建议清理编译缓存（`node_modules/.cache`）后再执行。
 
 - 打包流程、剔除/保留清单与双通道机制见 [打包与分支专题](doc/development/topics/build-and-branches.md)。
 
-- CI/CD：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑测试，push 到 `main` 或手动触发时打包；产物（安装包、免安装 ZIP、源码 ZIP，各附 `.sha256`）自动存入 Draft Release（草稿，不自动发布）。
+- CI/CD：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑测试，push 到 `main` 或手动触发时打包；一次出两份安装包（Vue 3.5 正式版 + Vue 3.6 预览版），外加免安装 ZIP、源码 ZIP，各附 `.sha256`，自动存入 Draft Release（草稿，不自动发布）。
 
-## 环境变量
+## 端口与环境变量
 
-实际生效的只有后端端口与 JWT 密钥，其余由主进程自动注入：
+端口默认值集中在 [`config/ports.json`](config/ports.json)：改那一个文件，主进程代理、后端监听、Vite 代理、CSP 与媒体地址会一起跟着变。启动前也可用环境变量临时覆盖：
 
 | 变量                                                | 默认值    | 说明                                                  |
 | ------------------------------------------------- | ------ | --------------------------------------------------- |
-| `PORT`                                            | `3000` | 后端监听端口（仅 `127.0.0.1`）；`app.js` 读 `process.env.PORT` |
+| `BACKEND_PORT`                                    | `38120` | 后端监听端口（仅 `127.0.0.1`），优先于 `PORT`；被占用时自动向后顺延 |
+| `PORT`                                            | 同上     | 兼容旧口径；隔离测试后端也用它                                   |
+| `FRONTEND_PORT`                                   | `38140` | 开发服务器端口；Electron 主进程与 Vite 同步读取（仅开发模式使用）          |
 | `JWT_SECRET`                                      | 自动生成   | 可选；未设置时用 `data/core/.jwt-secret`                    |
 | `DB_MASTER_KEY`                                   | —      | 主进程注入（DPAPI 持久化的库主密钥），**无需手填**                      |
 | `SECURE_MASTER`                                   | —      | 主进程每次运行随机生成，**无需手填**                                |
 | `DATA_DIR`                                        | —      | 唯一的数据根目录，主进程按配置注入，**无需手填**；其下固定 `core / content / cache / logs` 四层 |
 
-前端 dev 端口写死在 [`vite.config.js`](student-frontend/vite.config.js) 的 `server.port`（5173），可用 `dev-vite.js --port` 覆盖。
-
-> 根目录 `.env` 里的 `BACKEND_PORT` / `FRONTEND_PORT` 是历史占位，**当前代码不读取**；改端口请用上面的 `PORT` 或 `vite --port`。
+> 根目录 `.env` 不会被自动加载；改端口请改 `config/ports.json` 或在启动命令前导出环境变量。`dev-vite.js --port` 只改 Vite，主进程不会跟着变，开发模式请用 `FRONTEND_PORT`。
 
 ## 数据位置与备份
 

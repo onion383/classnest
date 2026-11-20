@@ -18,6 +18,7 @@ const path = require('node:path')
 const http = require('node:http')
 const { makeTempDir, removeDirWithRetry } = require('./_tmpdir.cjs')
 const { parseFrames } = require('./_thumb-frames.cjs')
+const { waitFor, waitForStable } = require('../tools/waitFor.cjs')
 
 const ROOT = path.join(__dirname, '..', '..')
 const BACKEND = path.join(ROOT, 'student-backend')
@@ -99,10 +100,13 @@ async function main() {
 
   // ---------- ① 发出后立刻掐断 ----------
   const req = startBatch(port, ids)
-  await new Promise((r) => setTimeout(r, 120))   // 让头一两批真的跑起来
+  // 等第一批真的落盘再掐断。死等 120ms 在慢机器上可能「还没开始就中断」，
+  // 那样 afterAbort=0 也能过断言，等于没测到「在跑的那批」。
+  await waitFor(() => countOnDisk(slug) > 0, { label: '第一批开始生成' })
   req.destroy()
-  // 给后端足够时间把「已经在跑的那批」跑完（并发生成不会再启动新批）
-  await new Promise((r) => setTimeout(r, 3000))
+  // 等「已经在跑的那批」跑完（并发生成不会再启动新批）：计数连续几次不变即视为收尾，
+  // 比死等 3s 更快，也不会在慢机器上砍在中间。
+  await waitForStable(() => countOnDisk(slug), { intervalMs: 200, stableTimes: 3, label: '在跑批次收尾' })
   const afterAbort = countOnDisk(slug)
   check(`中断后落盘 ${afterAbort} 张 < 请求的 ${N} 张（剩余不再生成）`, afterAbort < N, { afterAbort, N })
 

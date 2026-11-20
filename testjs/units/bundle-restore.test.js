@@ -20,6 +20,11 @@ const ROOT = path.resolve(__dirname, '../..')
 const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
 
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'bundle-restore-'))
+// 这个目录只在单个文件进程里用，进程退出时删掉：否则每跑一次 tests 就在 %TEMP% 留一份
+// 「解出来的 bundle + 假 db」目录。
+process.on('exit', () => {
+  try { fs.rmSync(WORK, { recursive: true, force: true }) } catch (_) { /* 仍被占用就留给系统清理 */ }
+})
 process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
 process.env.DATA_DIR = WORK
 

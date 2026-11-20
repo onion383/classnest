@@ -10,7 +10,7 @@
 // =========================================================================
 const { app, BrowserWindow } = require('electron')
 
-const URL = process.env.PROBE_URL || 'http://127.0.0.1:5173/drag-probe.html'
+const URL = process.env.PROBE_URL || require('../../config/ports.cjs').frontendOrigin + '/drag-probe.html'
 const TIMEOUT = Number(process.env.PROBE_TIMEOUT || 45000)
 let done = false
 

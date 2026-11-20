@@ -9,6 +9,7 @@
 const { app, BrowserWindow, protocol } = require('electron')
 const fs = require('fs')
 const path = require('path')
+const { waitFor } = require('../tools/waitFor.cjs')
 
 const ROOT = path.join(__dirname, '../..')
 const DIST = path.join(ROOT, 'student-frontend/dist')
@@ -80,7 +81,11 @@ app.whenReady().then(async () => {
   })
 
   await win.loadURL('app://local/index.html')
-  await new Promise((r) => setTimeout(r, 2500))
+  // 等页面真就绪（样式表已挂上）而不是死等 2.5s：快机器白等，慢机器可能还没到。
+  // 判据就是下一步要读的那两样东西已经存在。
+  await waitFor(() => win.webContents.executeJavaScript(
+    `document.readyState === 'complete' && document.querySelectorAll('link[rel=stylesheet]').length > 0`
+  ), { timeoutMs: 15000, label: '样式表就绪' })
 
   const out = await win.webContents.executeJavaScript(`(() => {
     const links = [...document.querySelectorAll('link[rel=stylesheet]')]

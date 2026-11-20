@@ -7,7 +7,7 @@ const crypto = require('node:crypto')
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { assertHttpsUrl, sha256File, verifyDownloadedFile } = require('../../electron/main/main.update-integrity')
+const { assertHttpsUrl, sha256File, verifyDownloadedFile, pickSetupAssetName } = require('../../electron/main/main.update-integrity')
 
 const tmpDir = path.join(os.tmpdir(), 'update-integrity-' + process.pid)
 
@@ -80,4 +80,28 @@ test('安装前复核：下载时记下的哈希能识别出「下载后被替�
   assert.notEqual(recheck, recorded, '被替换的安装包必须与下载时记下的哈希不一致')
 
   await fsp.rm(tmpDir, { recursive: true, force: true })
+})
+
+// ==================== 资产挑选：别把正式版用户升级到 Vue 3.6 预览版 ====================
+// 背景：release 里同时挂 ClassNest-Setup-x.exe 与 ClassNest-Vue36-Setup-x.exe，
+// 两者都命中 /setup.*\.exe$/。只取「第一个」会随 GitHub 返回顺序漂移，可能选中预览包。
+test('pickSetupAssetName：预览包排在前面也不选；只剩预览包时宁可返回 null', () => {
+  assert.equal(
+    pickSetupAssetName(['ClassNest-Vue36-Setup-0.1.0.exe', 'ClassNest-Setup-0.1.0.exe']),
+    'ClassNest-Setup-0.1.0.exe',
+    '必须跳过预览包，不能靠资产顺序',
+  )
+  assert.equal(
+    pickSetupAssetName(['ClassNest-Setup-0.1.0.exe.sha256', 'ClassNest-Setup-0.1.0.exe']),
+    'ClassNest-Setup-0.1.0.exe',
+    '.sha256 不是安装包',
+  )
+  assert.equal(
+    pickSetupAssetName(['ClassNest-Vue36-Setup-0.1.0.exe']),
+    null,
+    '只有预览包时应放弃更新，而不是装一个写着「仅供体验」的版本',
+  )
+  assert.equal(pickSetupAssetName(['ClassNest-Portable-0.1.0-win-x64.zip', 'x.txt']), null)
+  assert.equal(pickSetupAssetName([]), null)
+  assert.equal(pickSetupAssetName(null), null)
 })

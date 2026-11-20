@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
-const BASE = 'http://127.0.0.1:5173'
+const BASE = require('../../config/ports.cjs').frontendOrigin
 const CDP = '127.0.0.1:9222'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 

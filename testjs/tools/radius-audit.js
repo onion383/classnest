@@ -15,7 +15,9 @@ const STYLES = path.join(SRC, 'styles');
 
 const SCALE = ['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl'];
 const THEMES = {
-  base: 'theme-base.css',
+  // 公共圆角尺寸档/角色别名在 theme.css（常驻地基），base 主题自己的覆盖在 theme-base.css。
+  // 审计「各主题尺寸档」要读定义处，故 base 指向 theme.css。
+  base: 'theme.css',
   glass: 'theme-glass.css',
   glass2: 'theme-glass2.css',
 };

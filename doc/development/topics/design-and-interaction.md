@@ -51,7 +51,10 @@ classnest/
 │   │   │   ├── theme-base-accent.css
 │   │   │   ├── theme-base.css
 │   │   │   ├── theme-glass.css
-│   │   │   ├── theme-night.css  # 重映射 --color-*，覆盖页面底色与弥散光斑、标题栏、侧栏、按钮、输入框、卡片、弹窗、…
+│   │   │   ├── theme-glass2.css
+│   │   │   ├── theme-base-night.css
+│   │   │   ├── theme-glass-night.css
+│   │   │   ├── theme-glass2-night.css
 │   │   │   ├── themeLoader.js
 │   │   │   ├── themetransition.js
 │   │   │   └── utilities.css
@@ -165,12 +168,14 @@ index.css（入口，始终加载）
 ├─ @import tailwindcss
 ├─ @import theme-base.css          ← 基础令牌 + 默认外观
 ├─ @import utilities.css           ← 工具类（glass / transition-theme / dlg-close / btn-plain…）
-└─ @import theme-base-accent.css   ← base 的 B 方案 + base 的夜间规则（常驻）
+└─ @import theme-base-accent.css   ← base 的 B 方案（常驻；夜间规则已独立到 theme-base-night.css）
 
 运行时按需（themeLoader.js）
 ├─ theme-glass.css   ← 仅当前主题为 glass，或切换时
 ├─ theme-glass2.css  ← 仅当前主题为 glass2
-└─ theme-night.css   ← 仅 glass / glass2 且 mode=night
+├─ theme-base-night.css    ← 仅 base 且 mode=night
+├─ theme-glass-night.css   ← 仅 glass 且 mode=night
+└─ theme-glass2-night.css  ← 仅 glass2 且 mode=night
 ```
 
 - 每个主题文件都用 `:root[data-theme="glass"]`（根元素 glass 主题选择器）/ `:root[data-theme="glass2"]`（根元素 glass2 主题选择器）/ `:root[data-mode="night"]`（根元素夜间模式选择器）限定作用域，**属性不匹配时规则本就不生效**，所以「只加载当前主题」与「全部加载」视觉等价，只是省掉未用文件的下载与解析。
@@ -262,12 +267,12 @@ index.css（入口，始终加载）
 
 | 主题 | 文件 | 做法 |
 | --- | --- | --- |
-| `base` | [`theme-base-accent.css`](../../../student-frontend/src/styles/theme-base-accent.css) 的 `:root[data-theme="base"][data-mode="night"]` | 夜间规则**直接合并在本主题内**，随 `index.css` 常驻，不需要额外加载 `theme-night.css`。重定义 `--page-accent / --color-* / --warm-* / --base-* / --sidebar-*`，再覆盖标题栏、滚动条、表头、页头输入框、侧栏按钮。 |
-| `glass` | [`theme-night.css`](../../../student-frontend/src/styles/theme-night.css) 的 A 段 | 重映射 `--color-*`，覆盖页面底色与弥散光斑、标题栏、侧栏、按钮、输入框、卡片、弹窗、表格、Toast、滚动条；对原文件里的硬编码色用「更高特异性 + `!important`」逐条覆盖。 |
-| `glass2` | 同文件的 B 段 | 重映射 `--g2-glass / strong / soft / line / hair / hl / edge / shadow / accent`，再覆盖页面底色、光斑、标题栏、侧栏、按钮、表单、卡片、表格、吐司、浮层、登录页、滚动条。 |
-| 公共块 | 同文件的 C 段 | `glass / glass2` 共用的硬编码浅色玻璃：`.ai-glass-panel`（AI 对话列表/聊天区）改深色玻璃；`.class-info-card`（首页班级信息大框）改深底 + 投影；`ShutdownMenuDialog` 等退出确认弹窗同步。 |
+| `base` | [`theme-base-night.css`](../../../student-frontend/src/styles/theme-base-night.css) | 全部规则以 `:root[data-theme="base"][data-mode="night"]` 限定；仅「base + 夜间」时由 `themeLoader.js` 按需加载（日间用户不再下载解析）。重定义 `--page-accent / --color-* / --warm-* / --base-* / --sidebar-*`，再覆盖标题栏、滚动条、表头、页头输入框、侧栏按钮。 |
+| `glass` | [`theme-glass-night.css`](../../../student-frontend/src/styles/theme-glass-night.css) | 共用块 + glass 专属块。重映射 `--color-*`，覆盖页面底色与弥散光斑、标题栏、侧栏、按钮、输入框、卡片、弹窗、表格、Toast、滚动条；对原文件里的硬编码色用「更高特异性 + `!important`」逐条覆盖。 |
+| `glass2` | [`theme-glass2-night.css`](../../../student-frontend/src/styles/theme-glass2-night.css) | 共用块 + glass2 专属块。重映射 `--g2-glass / strong / soft / line / hair / hl / edge / shadow / accent`，再覆盖页面底色、光斑、标题栏、侧栏、按钮、表单、卡片、表格、吐司、浮层、登录页、滚动条。 |
+| 共用块 | 两份 glass 夜间文件各有一份（内容相同） | `glass / glass2` 共用的硬编码浅色玻璃：`.ai-glass-panel`（AI 对话列表/聊天区）改深色玻璃；`.class-info-card`（首页班级信息大框）改深底 + 投影；`ShutdownMenuDialog` 等退出确认弹窗同步。 |
 
-`theme-night.css` 只在「当前是 glass/glass2 且 mode=night」时按需加载（`loadThemeStyles()` 判断），base 的夜间规则常驻。
+三份夜间文件都只在「本主题 + mode=night」时按需加载（`loadThemeStyles()` 判断），各取所需、互不重叠；base 的夜间层原先合并在 `theme-base-accent.css` 里随入口常驻，现已独立成 `theme-base-night.css`。
 
 #### 4.4 切换时序（`stores/theme.js` + `themetransition.js`）
 
@@ -300,7 +305,7 @@ sequenceDiagram
 - **动画总开关关闭时**：`snapshotTransitionAllowed()`（是否允许快照过渡）返回 false，直接走瞬时切换，CSS 里的 `theme-switch-in`（主题切换进入动画）也双保险关掉。
 - **启动**：若开启跟随系统，store 初始化时直接按系统偏好设 `mode`，不走过渡；启动时本来就是正确配色。
 
-**实现位置**：`stores/theme.js`（`data-mode`（明暗模式）与夜间切换）、`Sidebar.vue`（日夜按钮）、`styles/theme-night.css`（夜间配色层）。
+**实现位置**：`stores/theme.js`（`data-mode`（明暗模式）与夜间切换）、`Sidebar.vue`（日夜按钮）、`styles/theme-*-night.css`（按主题拆分的夜间配色层）。
 
 ### 5. 动画设计
 

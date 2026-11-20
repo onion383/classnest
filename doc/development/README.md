@@ -138,7 +138,7 @@ flowchart LR
 
   MP -->|IPC（preload 白名单）| RD
   MP -->|child_process.fork（创建子进程）| BE
-  RD -->|HTTP 127.0.0.1:3000| BE
+  RD -->|HTTP 127.0.0.1:38120| BE
   BE --> DB
 ```
 
@@ -148,7 +148,7 @@ flowchart LR
 
 | 机制 | 说明 | 详见 |
 | --- | --- | --- |
-| 进程模型 | 后端由主进程 fork，仅监听环回地址；端口取 `BACKEND_PORT`（默认 3000） | `main-process/README.md`、`backend/README.md` |
+| 进程模型 | 后端由主进程 fork，仅监听环回地址；端口默认取 `config/ports.json`，可用 `BACKEND_PORT` / `PORT` 覆盖 | `main-process/README.md`、`backend/README.md` |
 | IPC 白名单 | 渲染进程只能调用 `preload.js` 中显式登记的通道（invoke / send / on 三类） | `main-process/README.md` |
 | 前端加载 | 打包后用自定义 `app://` 协议加载，而非 `file://`，以获得可持久化的 origin | `main-process/README.md` |
 | 通信安全 | axios + JWT；请求/响应体经安全通道加密（ECDH P-256 + HKDF + AES-256-GCM） | `backend/README.md`、`frontend/misc.md` |

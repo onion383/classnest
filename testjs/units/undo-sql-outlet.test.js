@@ -1,7 +1,7 @@
 // =========================================================================
 // undo-sql-outlet.test.js —— 撤销域的 SQL 出口（档 C · M12-B8）
 //
-// 判据：undo 域的 4 个文件（入口 / 记录 / 辅助 / 执行器）都不许再有裸 SQL，
+// 判据：undo 域的 5 个文件（入口 / 记录 / 辅助 / 执行器 / expected 校验）都不许再有裸 SQL，
 // 语句只在 services/undoStore.js；执行器的每条复合动作必须真的经 store。
 // 这不是「换个写法」的洁癖：撤销的语句此前散在四处，同一条 undo_history 查询
 // 抄两遍 —— 一处改了、另一处没改，表现是「撤销面板有记录、Ctrl+Z 说没有」。
@@ -17,6 +17,7 @@ const FILES = [
   'student-backend/routes/undo/undo.records.js',
   'student-backend/routes/undo/undo.helpers.js',
   'student-backend/routes/undo/undo.executors.js',
+  'student-backend/routes/undo/undo.expected.js',
 ]
 
 function read(file) {
@@ -28,7 +29,7 @@ function codeOnly(file) {
     .replace(/^[ \t]*\/\/.*$/gm, '')
 }
 
-test('SQL 出口：undo 的 4 个文件不留裸 SQL', () => {
+test('SQL 出口：undo 的 5 个文件不留裸 SQL', () => {
   for (const f of FILES) {
     const code = codeOnly(f)
     assert.ok(!/\.prepare\(/.test(code), `${f} 不许再有裸 SQL（应走 services/undoStore；显式 conn 也不行）`)
@@ -39,8 +40,11 @@ test('SQL 出口：undo 的 4 个文件不留裸 SQL', () => {
 test('undoStore 承担记录表与执行器动作的语句', () => {
   const st = read('student-backend/services/undoStore.js')
   // 记录表：插入（含清 redo 与淘汰）与方向 CAS
-  assert.match(st, /INSERT INTO undo_history \(key, type, label, payload, dir, origin, ts\)/)
+  // source 是统一来源分类（manual/ai_assistant/mcp），列顺序固定，改列清单这里是第一道闸。
+  assert.match(st, /INSERT INTO undo_history \(key, type, label, payload, dir, origin, source, ts\)/)
   assert.match(st, /UPDATE undo_history SET dir = \? WHERE id = \? AND dir = \?/)
+  // expected 校验读当前行也必须走 store（不许在 records/expected 里写裸 SQL）
+  assert.match(st, /function findRowById\(table, id\)/)
   // 每 key 上限：面板不分页完全建立在这条上
   assert.match(st, /LIMIT -1 OFFSET \?/)
 })

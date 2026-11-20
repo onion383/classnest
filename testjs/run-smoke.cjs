@@ -51,7 +51,7 @@ const NODE_EXT = new Set(['.cjs', '.mjs', '.js'])
 // 集合空了以后那套逻辑只剩副作用：**每次跑都白探一次 3000 端口**（不通时白等 600ms），
 // 外加一条永远走不到的 SKIP 分支。现已整段删除。
 // 新脚本需要真后端时请自己起隔离后端（smoke/_isolated-backend.cjs），别再引入外部依赖判定。
-const BACKEND_PORT = Number(process.env.PORT) || 3000
+const BACKEND_PORT = Number(process.env.PORT) || require('../config/ports.cjs').backendPort
 // 单个冒烟脚本的超时上限（ms）。
 // 正常脚本 1~30 秒；给 180 秒是为了容忍慢机器上启 Electron 的那几个。
 // 超时按**失败**计入（不能当成通过）—— 否则「脚本卡死了」会被算成「跑过了」。

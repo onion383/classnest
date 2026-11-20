@@ -42,8 +42,11 @@ const require = createRequire(import.meta.url)
 const { killTree } = require('../tools/killTree.cjs')
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
+// 前端端口统一走 config/ports.cjs：prod 静态服务必须与 dev 同端口，
+// 写死字面量会在改端口后静默落到登录页（登录态按 origin 隔离）。
+const ports = require('../../config/ports.cjs')
 const PORT = Number(process.env.INP_PORT || 9222)
-const BASE = `http://127.0.0.1:5173`
+const BASE = ports.frontendOrigin
 const CDP_HOST = `127.0.0.1:${PORT}`
 
 // 通道选择：INP_VUE=36 走 Vue 3.6 预览通道（vapor）；INP_VUE=36v 走 3.6 纯 VDOM 对照组
@@ -56,12 +59,12 @@ const VUE = Object.hasOwn(LABELS, process.env.INP_VUE) ? process.env.INP_VUE : '
 // --prod：页面换成生产构建产物（排除 dev 运行时断言与未压缩 ESM 的解析开销）。
 // 全程不打包 exe —— 这台机器的 SmartScreen 会拦未签名产物、放行要管理员权限。
 //
-// 关键约束：**静态服务必须占用 5173**，不能换个端口起。
+// 关键约束：**静态服务必须占用与 dev 相同的前端端口**，不能换个端口起。
 // 原因是登录态按 origin 隔离（authStorage.js 把 token 写进 localStorage），
-// 换成 5180 就会落在登录页 —— 第一版就是这么失败的。同端口后 localStorage / cookie
+// 换成别的端口就会落在登录页 —— 第一版就是这么失败的。同端口后 localStorage / cookie
 // 全部天然复用，连 location.href 都与 dev 口径一致，不用为测量做任何登录态搬运。
-// 代价是必须先把 dev server 关掉（它占着 5173），所以 prod 模式不再启动 Vite，
-// 由静态服务直接扮演「5173 上的那个服务器」，主进程的 dev-loader 照样能 loadURL 成功。
+// 代价是必须先把 dev server 关掉（它占着该端口），所以 prod 模式不再启动 Vite，
+// 由静态服务直接扮演「该端口上的那个服务器」，主进程的 dev-loader 照样能 loadURL 成功。
 const argv = process.argv.slice(2)
 const PROD = argv.includes('--prod')
 const PROD_DIR = path.join(ROOT, 'testjs', 'tmp', 'bench', `app${VUE}`)
@@ -178,10 +181,11 @@ async function detectViteChannel() {
   })
 }
 
-// 后端健康探测。主进程 fork 出的后端进程在 Electron 起来后约 0.5s 才监听 3000；
+// 后端健康探测。主进程 fork 出的后端进程在 Electron 起来后约 0.5s 才监听；
 // 渲染进程首屏请求若早于它，Vite 代理会 ECONNREFUSED、安全通道握手也一起失败，
 // 页面便长期停在「空数据」状态（dtRows=0），后续所有交互都测在空表上。
-const BACKEND = 'http://127.0.0.1:3000'
+// 端口读 config/ports.cjs（后端被占用时会顺延，写死字面量会静默测空）。
+const BACKEND = require('../../config/ports.cjs').backendOrigin
 async function backendUp() {
   const http = require('node:http')
   return new Promise((resolve) => {
@@ -319,11 +323,11 @@ const INJECT = `
     Authorization: 'Bearer ' + (localStorage.getItem('token') || ''),
   });
 
-  // API 前缀：dev 下前端走同源 /api（由 Vite proxy 转发到 3000），生产构建里则是绝对地址
-  // （httpClient.js: backendBaseUrl() 返回 import.meta.env.PROD ? 'http://localhost:3000' : ''）。
+  // API 前缀：dev 下前端走同源 /api（由 Vite proxy 转发到后端），生产构建里则是绝对地址
+  // （httpClient.js: backendBaseUrl() 生产返回后端 origin）。
   // 探针的造数请求此前一律写相对路径，--prod 下会打到静态服务上拿回 "not found"，
   // 紧接着 JSON.parse 抛 SyntaxError —— 就是被这个坑绊住的。
-  const API_PREFIX = ${JSON.stringify(PROD ? 'http://localhost:3000' : '')};
+  const API_PREFIX = ${JSON.stringify(PROD ? BACKEND : '')};
   window.__inpApi = (p) => API_PREFIX + p;
 
   // 学生表为空时补几条测试学生，保证 /students 的表格交互场景有行可点。
@@ -710,7 +714,7 @@ function buildProd() {
 // 生产真身是 app:// 协议（electron/main/protocol.js），这里用 http 是近似 ——
 // 两者都是标准安全协议，后端 CORS 白名单也接受回环 origin（student-backend/app.js:50），
 // 对 INP 而言差的只是协议换页开销，量级可忽略。
-// 监听 5173（与 dev 同端口），登录态才有得复用，理由见文件头。
+// 监听前端端口（与 dev 同端口），登录态才有得复用，理由见文件头。
 function serveProd() {
   return new Promise((resolve, reject) => {
     const http = require('node:http')
@@ -742,12 +746,12 @@ function serveProd() {
     server.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
         return reject(new Error(
-          '5173 已被占用，prod 模式需要它来托管生产产物（同端口才能复用登录态）。'
+          `${ports.frontendPort} 已被占用，prod 模式需要它来托管生产产物（同端口才能复用登录态）。`
           + '请先关掉正在运行的 dev server / 应用再重试。'))
       }
       reject(err)
     })
-    server.listen(5173, '127.0.0.1', () => { prodServer = server; resolve() })
+    server.listen(ports.frontendPort, '127.0.0.1', () => { prodServer = server; resolve() })
   })
 }
 
@@ -780,7 +784,7 @@ async function ensureRunner() {
 
   if (PROD) {
     // 静态服务已经占住 5173，主进程 dev-loader 探测到端口有响应就会 loadURL —— 加载的正是生产产物
-    console.log('[inp] prod 模式：不启动 Vite，5173 由静态服务托管生产产物')
+    console.log(`[inp] prod 模式：不启动 Vite，${ports.frontendPort} 由静态服务托管生产产物`)
   } else if (!(await viteUp())) {
     console.log(`[inp] Vite 未就绪，启动开发服务器（${VUE_LABEL}）…`)
     // 直接用 dev-vite.js 而不是 `npm run dev`：它与 npm script 等价，但额外支持 --vue36 / --vdom
@@ -801,7 +805,7 @@ async function ensureRunner() {
   } else {
     const ch = await detectViteChannel()
     if (ch && ch !== VUE) {
-      throw new Error(`5173 上已有的 Vite 是 Vue ${ch} 通道，本次要测 ${VUE}。请先关掉它再重试。`)
+      throw new Error(`${ports.frontendPort} 上已有的 Vite 是 Vue ${ch} 通道，本次要测 ${VUE}。请先关掉它再重试。`)
     }
     console.log(`[inp] Vite 已在运行（通道 Vue ${ch || '?'}）`)
   }
@@ -837,7 +841,7 @@ async function main() {
   if (PROD) {
     // 先确认端口空闲，再花一分多钟构建：反过来会白等
     if (await viteUp()) {
-      throw new Error('5173 已被占用（dev server 还在跑）。prod 模式需要它来托管生产产物，请先关掉再重试。')
+      throw new Error(`${ports.frontendPort} 已被占用（dev server 还在跑）。prod 模式需要它来托管生产产物，请先关掉再重试。`)
     }
     await buildProd()
     await serveProd()
@@ -887,7 +891,7 @@ async function main() {
     if (modeCheck.hasDevProbe) throw new Error('prod 校验失败：页面仍装着 dev 探针，说明没切到生产产物')
     if (!modeCheck.href.startsWith(PAGE_BASE)) throw new Error(`prod 校验失败：当前 URL 是 ${modeCheck.href}，不是 ${PAGE_BASE}`)
   } else if (!modeCheck.hasDevProbe) {
-    console.log('[inp] 提示：dev 通道下也没装 inpProbe（二级视图会空），确认 5173 起的是 dev 而非生产')
+    console.log(`[inp] 提示：dev 通道下也没装 inpProbe（二级视图会空），确认 ${ports.frontendPort} 起的是 dev 而非生产`)
   }
 
   // 诊断（只读）：打印当前主题与合成/绘制相关的计算样式，便于把「呈现」成本归因到具体图层。

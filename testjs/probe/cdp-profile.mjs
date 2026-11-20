@@ -17,7 +17,11 @@
 //   node testjs/probe/cdp-profile.mjs --wait=3000 --json    # 采样窗口 / 只输出 json 路径
 
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
+
+const require = createRequire(import.meta.url)
+const { killTree } = require('../tools/killTree.cjs')
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -189,8 +193,8 @@ async function main() {
     }
   } finally {
     if (!exited) {
-      try { child.kill() } catch (_) { /* 忽略 */ }
-      // Windows 上子进程树可能还在，交给调用方 taskkill 兜底
+      // electron 会再起渲染/GPU 孙进程，只 kill 直接子进程在 Windows 上会留一堆残留
+      killTree(child)
     }
   }
 }

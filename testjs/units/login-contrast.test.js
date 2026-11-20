@@ -18,7 +18,7 @@ const assert = require('node:assert/strict')
 
 const ROOT = path.resolve(__dirname, '../..')
 const GLASS = fs.readFileSync(path.join(ROOT, 'student-frontend/src/styles/theme-glass.css'), 'utf8')
-const NIGHT = fs.readFileSync(path.join(ROOT, 'student-frontend/src/styles/theme-night.css'), 'utf8')
+const NIGHT = fs.readFileSync(path.join(ROOT, 'student-frontend/src/styles/theme-glass-night.css'), 'utf8')
 
 // ---- CSS 取值 ----
 function block(css, selector) {

@@ -37,6 +37,23 @@ const { createRequire } = require('node:module')
 
 const ROOT = path.resolve(__dirname, '../..')
 const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
+
+// 建临时数据目录，并登记「进程退出时删掉」。
+// 为什么不在 fx.close() 里删：同一进程里多次 createBackendDb 会复用同一个 DATA_DIR
+// （见下面 env 那行），先 close 的那个一删，后面的夹具就写进虚空。放到进程退出时删，
+// 既不影响用例，也不会让 %TEMP% 每次跑测试留下一百多个目录。
+// 只注册一次 exit 监听（用集合收集）：每个文件建好几个夹具时不至于撞 MaxListeners。
+const tempDirs = new Set()
+process.on('exit', () => {
+  for (const dir of tempDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch (_) { /* 仍被占用就留给系统清理 */ }
+  }
+})
+function makeTempDataDir(label) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${label}-`))
+  tempDirs.add(dir)
+  return dir
+}
 // 原生模块，加载与环境变量无关，可以提前取：调用方造「老库迁移」这类特殊库时要用
 const Database = backendRequire('better-sqlite3-multiple-ciphers')
 
@@ -98,7 +115,7 @@ function makeFaultyDb(conn, fault) {
 function createBackendDb({ label, currentSlug, dataDir, extraDbExports, dbKey, faults } = {}) {
   if (!label) throw new Error('createBackendDb 需要 label（用于临时目录与密钥，避免串库）')
   process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || (dbKey || `${label}-test-key`)
-  process.env.DATA_DIR = dataDir || process.env.DATA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), `${label}-`))
+  process.env.DATA_DIR = dataDir || process.env.DATA_DIR || makeTempDataDir(label)
 
   const { initSchema } = require('../../student-backend/schema/schema')
 

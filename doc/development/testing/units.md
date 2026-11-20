@@ -148,7 +148,9 @@ classnest/
         ├── group-manage.test.js  # 分组管理的读写路径（档 C · M12-B1）
         ├── leaves-paging.test.js  # 请假列表分页与「今日到班」范围
         ├── live-blocks.test.js  # AI 流式渲染按块缓存（切块不改变渲染结果）
+        ├── mcp-forwarder-discovery.test.js  # MCP 转发器的后端地址发现：env → 端口发现文件 → 默认端口
         ├── packaged-csp.test.js  # 打包版 CSP 与构建产物内联脚本的对账
+        ├── ports-config.test.js  # 端口单一口径：ports.json / 环境变量覆盖 / 运行期顺延后，主进程、后端、Vite、CSP 一起变
         ├── score-paging.test.js  # 成绩列表分页与统计页签全量
         ├── score-provisional.test.js  # 加分记录里的名册外姓名
         ├── semester-crud.test.js  # 学期 CRUD 与「当前学期」镜像（档 C · M12-B4）
@@ -170,7 +172,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），159 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），206 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
 - **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
@@ -324,7 +326,9 @@ classnest/
 | [`group-manage.test.js`](../../../testjs/units/group-manage.test.js) | 分组管理读写路径（档 C · M12-B1）：默认维度自动建且不重复、组数增减连带成员、**宿舍改组保留组 id 与成员**（全删重建会清空全班分配）、维度排序边界、成员增删改移与满员拒绝、智能分组写回、导入合并追加/跳过重名；末尾一条 SQL 出口判据 | 内存库 + 真 router |
 | [`leaves-paging.test.js`](../../../testjs/units/leaves-paging.test.js) | 请假列表分页与「今日到班」范围：全量语义保留（挂件、导出、AI 工具依赖）；`hasMore` 用「多取一条」不跑 COUNT；`scope=today` 单独取「请假中 + 今天已返校」两类；末尾一条 SQL 出口判据锁 `leaveStore` | 内存库 + 真 router |
 | [`live-blocks.test.js`](../../../testjs/units/live-blocks.test.js) | AI 流式渲染分块（v6 性能专题 · 2-4）：原实现每跨一行就重跑整段 `marked.parse` + `DOMPurify.sanitize`（O(n²)，500 行时单次 47.9ms）。按块缓存后每块只算一次，判据锁「切块不改变渲染结果」 | 前端 ESM |
+| [`mcp-forwarder-discovery.test.js`](../../../testjs/units/mcp-forwarder-discovery.test.js) | MCP 转发器在后端端口顺延后怎么找到后端：候选顺序 `env CLASSNEST_MCP_URL` → `runtime-port.json` → 默认端口、同一地址不重复试连、文件半写入/损坏/缺失一律当没有；另有接线判据（主进程写文件、设置页传 `CLASSNEST_RUNTIME_FILE`、转发器不再顶层解析一次地址） | 纯函数 + 接线判据 |
 | [`packaged-csp.test.js`](../../../testjs/units/packaged-csp.test.js) | 打包版 CSP 与构建产物内联脚本的对账：入口 CSS 的 `onload`、启动页脚本、PDF 字体子集化的 `wasm-unsafe-eval` 三类 hash 必须同时留在 `script-src`，且 style 标签要的 `unsafe-hashes` 不能删；改 CSP 就要重算 hash | 真实构建产物 + 源码对账 |
+| [`ports-config.test.js`](../../../testjs/units/ports-config.test.js) | 端口单一口径的变异反证：`config/ports.json` 改一处，主进程代理 / 后端 fork / Vite 代理 / CSP / 渲染层媒体地址同时跟着变；环境变量覆盖与 `BACKEND_PORT > PORT` 优先级在子进程里重读配置验证；另测运行期顺延后 getter 与代理目标同步变化、dev 就绪判据能命中真实 `index.html` | 子进程重载配置 + 源码接线判据 |
 | [`score-paging.test.js`](../../../testjs/units/score-paging.test.js) | 成绩列表分页与首页聚合：列表按页取、统计页签仍走全量（它要汇总而不是逐条）；首页摘要与旧 `computed` 逐项一致；分页只对列表 opt-in | 内存库 + 真 router |
 | [`score-provisional.test.js`](../../../testjs/units/score-provisional.test.js) | 加分记录里的名册外姓名：允许直接写名字，由后端走与值日/座位/分组同一套 `provisionalStudents`（建 `is_provisional=1` 并回填 `student_id`）；转正只改状态位，引用不断 | 内存库 + 真 router |
 | [`semester-crud.test.js`](../../../testjs/units/semester-crud.test.js) | 学期 CRUD 与「当前学期」镜像（档 C · M12-B4）：新增即当前且当前唯一、列表把空日期排最后、切换互斥、删当前自动补选、**只传 `semester_start` 不能清空 `end_date`**（结束日期是快照补存的上界）、老库无 `is_current` 时回退最新；另含两条 SQL 出口判据 | 内存库 + 真 router |

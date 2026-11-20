@@ -73,7 +73,7 @@ classnest/
 - **定位**：后端 HTTP 路由层（`student-backend/routes/`），负责挂载点、接口清单与每个接口的处理链。
 - **公共逻辑**：所有业务接口经 `auth(['teacher'])`（鉴权中间件，只允许教师角色）→ `JWT`（登录令牌）校验 → `dbManager.withDb`（按当前库执行回调的包装函数）绑定当前库；路由内做参数校验、`sanitize`（数据清洗）清洗、事务写库、撤销登记与统一 JSON 响应。
 - **局限**：不展开数据层加密/多库细节、安全通道握手、AI 提案与撤销执行器内部实现；这些见 [data-layer.md](./data-layer.md)、[topics/security.md](../topics/security.md)、[topics/ai.md](../topics/ai.md)。
-- **规模**：共 238 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
+- **规模**：共 264 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
 
 
 ### 处理标准的写法

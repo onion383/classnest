@@ -114,7 +114,10 @@ test('§3.4 入站还原：提案落库前是真值，未知代号被拒，MCP �
 
   const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/ai/ai.tools/tools.js'), 'utf8')
   const atRestore = src.indexOf('privacy.restore(args')
-  const atNormalize = src.indexOf('function runTool')
+  // 派发函数已改名为 dispatchTool：runTool 现在是外层壳（先派发、再记数据访问记录），
+  // 还原仍然留在派发函数内部的第一行，判据跟着它走。
+  const atNormalize = src.indexOf('function dispatchTool')
+  assert.ok(atNormalize > 0, '派发入口必须仍叫 dispatchTool')
   assert.ok(atRestore > atNormalize && atRestore < src.indexOf("case 'propose_write'"), '还原必须在派发/规范化之前')
 })
 

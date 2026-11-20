@@ -20,6 +20,10 @@
 // =========================================================================
 
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { killTree } = require('../tools/killTree.cjs')
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
@@ -157,9 +161,8 @@ async function main() {
     }
     process.exitCode = r.splashInDom ? 1 : 0
   } finally {
-    if (!exited) {
-      try { child.kill() } catch (_) { /* 忽略 */ }
-    }
+    // electron 的渲染/GPU 是孙进程：只 kill 直接子进程会在 Windows 上残留
+    if (!exited) killTree(child)
   }
 }
 

@@ -62,6 +62,26 @@
 - 使用位置：AI 工具执行器（`executors.common.js`（执行器通用小工具）懒加载）、`routes/search.js`（全局搜索路由）。
 - **备注**：与前端共用同一版本。
 
+### [`@modelcontextprotocol/server`](../../../student-backend/node_modules/@modelcontextprotocol/server) 2.4.0 · Apache-2.0 · MCP 服务端实现
+- 用途：MCP 协议的服务端（工具注册、JSON-RPC 传输、会话）。
+- 使用位置：[`routes/ai/mcp/mcp.server.js`](../../../student-backend/routes/ai/mcp/mcp.server.js)（把工具挂到 `/mcp` 上）。
+- **备注**：2.x 拆成 client/server/node 三个包；许可为 MIT → Apache-2.0 过渡期，见包内 `LICENSE`。
+
+### [`@modelcontextprotocol/client`](../../../student-backend/node_modules/@modelcontextprotocol/client) 2.4.0 · Apache-2.0 · MCP 客户端实现
+- 用途：MCP 客户端（stdio / HTTP 传输、工具调用、请求超时）。
+- 使用位置：`testjs/units/mcp-server.test.js`（stdio 转发器的端到端用例）、[`mcp-forwarder.cjs`](../../../student-backend/mcp-forwarder.cjs)。
+- **备注**：默认单次请求超时 60s（`DEFAULT_REQUEST_TIMEOUT_MSEC`），起子进程的用例在慢机器上可能顶到上限。
+
+### [`@modelcontextprotocol/node`](../../../student-backend/node_modules/@modelcontextprotocol/node) 2.1.2 · Apache-2.0 · MCP 的 Node 运行时适配
+- 用途：给 client/server 提供 Node 侧的传输与运行时胶水（stdio、HTTP server 适配）。
+- 使用位置：随上面两个包间接加载，`student-backend/package.json` 显式声明以锁定版本。
+- **备注**：三个 MCP 包版本不同步（2.4.0 / 2.1.2），升级时一起看。
+
+### [`zod`](../../../student-backend/node_modules/zod) 4.6.7 · MIT · 运行时类型校验
+- 用途：MCP 工具的入参 schema 校验（`limit` 上限 200、`data` 必须是对象等都在这里拦）。
+- 使用位置：[`routes/ai/mcp/mcp.server.js`](../../../student-backend/routes/ai/mcp/mcp.server.js)（工具 `inputSchema`）。
+- **备注**：越界参数由它直接拒绝，是「`limit=999999` 被拦」那条审计结论的实现位置。
+
 ---
 
 ## 打包去向

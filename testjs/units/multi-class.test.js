@@ -143,13 +143,16 @@ test('多班级：删除班级只删一个库，会话迁移必须在吊销之�
 
 // 设置页危险区的「删除该班级」。
 // 立这条的两个点都是静默失效型：倒计时删掉不会有任何报错（只是少了一道防误删）；
-// classCount 漏拉则入口永远不出现（用户以为功能没做）。
-test('设置页：删除该班级入口走 10 秒倒计时，且仅多班级显示', () => {
+// 入口被隐藏则用户以为功能没做。
+// 2026-11-18 改口径（用户要求）：入口**常显**，唯一班级点下去由 openDeleteClass 当场拦下
+// 给提示，不再用 v-if 按班级数收起 —— 收起时如果班级列表拉取失败（classCount 被写成 0），
+// 多班账号也会看不到按钮，而且是静默消失。
+test('设置页：删除该班级入口常显，唯一班级点按时先拦下（不进倒计时）', () => {
   const vue = read('student-frontend/src/views/SettingsView/SettingsView.vue')
   assert.match(vue, /@click="openDeleteClass"/, '危险区没有「删除该班级」入口')
-  assert.match(vue, /v-if="classCount > 1"/,
-    '没有按班级数收起入口：单班账号会看到一个点下去必然被拒的按钮')
-  assert.match(vue, /ctx\.loadClasses\(\)/, '没有在初始化时拉班级列表，classCount 永远是 0')
+  assert.ok(!/v-if="classCount > 1"/.test(vue),
+    '入口又按班级数收起了：单班账号会看不到按钮，多班账号在列表拉取失败时也会静默消失')
+  assert.match(vue, /ctx\.loadClasses\(\)/, '没有在初始化时拉班级列表')
 
   const js = read('student-frontend/src/views/SettingsView/SettingsView.data.js')
   const start = js.indexOf('async openDeleteClass()')
@@ -159,6 +162,7 @@ test('设置页：删除该班级入口走 10 秒倒计时，且仅多班级显�
   assert.match(seg, /confirmDisabled: true/, '确定按钮初始必须置灰，否则倒计时形同虚设')
   assert.match(seg, /ctx\.deleteTimer = setInterval/, '没有倒计时定时器')
   assert.match(seg, /classes\.length <= 1/, '弹窗前应拦住唯一班级，不该让用户数满 10 秒才被拒')
+  assert.match(seg, /一个账号需要保留一个班级/, '唯一班级的提示文案丢了')
 
   // 删完是换库，必须和切班走同一条收尾
   const perf = js.slice(js.indexOf('async performDeleteClass()'), js.indexOf('async exportDb()'))

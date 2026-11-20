@@ -17,11 +17,13 @@ classnest/
 │   │   │   ├── dialog-transition.css  # 弹窗过渡：遮罩淡入 + 卡片 96%→101.5%→100% 回弹
 │   │   │   ├── index.css  # 样式入口：导入 Tailwind 与主题、注册 @theme（主题变量声明）、全局 user…
 │   │   │   ├── select.css  # AppSelect 的 .av-select 全局样式
-│   │   │   ├── theme-base-accent.css  # base 的 B 方案覆盖（深蓝主色 + 工具栏琥珀暖色），并内含 base 的夜间规则（随…
+│   │   │   ├── theme-base-accent.css  # base 的 B 方案覆盖（深蓝主色 + 工具栏琥珀暖色）；夜间规则已移出到 theme-base-night.css
 │   │   │   ├── theme-base.css  # 基础主题（默认）：:root 变量与半透明主区
 │   │   │   ├── theme-glass.css  # 毛玻璃：蓝灰底 + 薄白玻璃 + 荧光描边 + 光斑/内置背景图
 │   │   │   ├── theme-glass2.css  # 新毛玻璃：薰衣草冷雾、漂移柔光斑、分层阴影，透明度由 --glass-opacity 驱动
-│   │   │   ├── theme-night.css  # glass / glass2 的夜间配色层（按需加载；base 夜间在 theme-base…
+│   │   │   ├── theme-base-night.css  # base 的夜间配色层（仅「base + 夜间」时按需加载）
+│   │   │   ├── theme-glass-night.css  # glass 的夜间配色层（共用块 + glass 专属块）
+│   │   │   ├── theme-glass2-night.css  # glass2 的夜间配色层（共用块 + glass2 专属块）
 │   │   │   ├── themeLoader.js  # 主题 CSS 按需加载（避免首屏加载全部主题）
 │   │   │   ├── themetransition.js  # 主题切换的过渡控制
 │   │   │   └── utilities.css  # 工具类：skeleton-block、glass、transition-theme、cont…
@@ -137,14 +139,16 @@ classnest/
 | [`theme-base-accent.css`](../../../student-frontend/src/styles/theme-base-accent.css) | base 的 B 方案覆盖（深蓝主色 + 工具栏琥珀暖色），并内含 base 的夜间规则（随入口常驻） |
 | [`theme-glass.css`](../../../student-frontend/src/styles/theme-glass.css) | 毛玻璃：蓝灰底 + 薄白玻璃 + 荧光描边 + 光斑/内置背景图 |
 | [`theme-glass2.css`](../../../student-frontend/src/styles/theme-glass2.css) | 新毛玻璃：薰衣草冷雾、漂移柔光斑、分层阴影，透明度由 `--glass-opacity` 驱动 |
-| [`theme-night.css`](../../../student-frontend/src/styles/theme-night.css) | glass / glass2 的夜间配色层（按需加载；base 夜间在 `theme-base-accent.css`） |
+| [`theme-base-night.css`](../../../student-frontend/src/styles/theme-base-night.css) | base 的夜间配色层：全部规则以 `:root[data-theme="base"][data-mode="night"]` 限定，日间与其它主题不生效；自包含（硬编码色值，无外部 var/url），加载顺序不影响结果 |
+| [`theme-glass-night.css`](../../../student-frontend/src/styles/theme-glass-night.css) | glass 的夜间配色层：共用块（`.ai-glass-panel` / `.class-info-card` / 退出确认弹窗等）+ glass 专属块；glass2 专属块已移除 |
+| [`theme-glass2-night.css`](../../../student-frontend/src/styles/theme-glass2-night.css) | glass2 的夜间配色层：共用块与 glass 那份相同 + glass2 专属块；glass 专属块已移除 |
 | [`utilities.css`](../../../student-frontend/src/styles/utilities.css) | 工具类：`skeleton-block`、`glass`、`transition-theme`、`content-visibility-auto`、`.btn-plain`、`.dlg-close`、基础/极简主题下的遮罩模糊 |
 | [`select.css`](../../../student-frontend/src/styles/select.css) | `AppSelect` 的 `.av-select` 全局样式 |
 | [`dialog-transition.css`](../../../student-frontend/src/styles/dialog-transition.css) | 弹窗过渡：遮罩淡入 + 卡片 96%→101.5%→100% 回弹 |
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，61 个）
+### 4. 工具（`src/utils/`，64 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |
@@ -152,7 +156,7 @@ classnest/
 | [`apiUrl.js`](../../../student-frontend/src/utils/apiUrl.js) | `apiUrl(path)`、`resourceUrl(path)`：补后端地址并为图片/背景追加 token | 各视图的资源显示处 |
 | [`httpClient.js`](../../../student-frontend/src/utils/httpClient.js) | `setupApiClient({ baseURL, getToken })`、`backendBaseUrl()`：各窗口共用的 axios 装配（token、退避重试、安全通道） | `subwindows/setup`、`widget`、`desktop-widget` 的 `main.js` |
 | [`backendReady.js`](../../../student-frontend/src/utils/backendReady.js) | `waitForBackendReady(timeoutMs=4000)`（等待后端就绪，超时 4 秒）、`isBackendReady()`（是否已就绪） | `httpClient`、`main.js` |
-| [`backendOrigin.js`](../../../student-frontend/src/utils/backendOrigin.js) | B1 的地址唯一口径：`apiBaseUrl()` 永远返回相对路径（dev 走 Vite 代理，打包走 `app://local/api` 协议代理）；`mediaBaseUrl()` 在打包版补全 `127.0.0.1:3000`，保证图片/视频的 Cookie、媒体凭据与 Range 语义不变。三个调用方（`httpClient` / `apiUrl` / `secureChannel`）共用这一份，避免再出现「页面跨源、API 同源」两套域 | `httpClient`、`apiUrl`、`secureChannel` |
+| [`backendOrigin.js`](../../../student-frontend/src/utils/backendOrigin.js) | B1 的地址唯一口径：`apiBaseUrl()` 永远返回相对路径（dev 走 Vite 代理，打包走 `app://local/api` 协议代理）；`mediaBaseUrl()` 在打包版补全后端回环地址（默认 `127.0.0.1:38120`，端口顺延后由主进程广播更新），保证图片/视频的 Cookie、媒体凭据与 Range 语义不变。三个调用方（`httpClient` / `apiUrl` / `secureChannel`）共用这一份，避免再出现「页面跨源、API 同源」两套域 | `httpClient`、`apiUrl`、`secureChannel` |
 | [`changelog.js`](../../../student-frontend/src/utils/changelog.js) | `parseChangelog(markdown)`：把根目录 `CHANGELOG.md` 解析为 `{ version, date, notes }` 列表（按日期倒序、兼容 v 前缀与多种分隔符） | `AboutView`、`testjs/units/changelog.test.js` |
 | [`jwt.js`](../../../student-frontend/src/utils/jwt.js) | JWT 解码（base64url，不用 `atob`）与过期判断 | `router/index.js`、`authStorage` |
 | [`authStorage.js`](../../../student-frontend/src/utils/authStorage.js) | token / 当前用户的唯一读写点（空值语义、坏 JSON 防御） | 全局 |
@@ -257,7 +261,7 @@ classnest/
 - **主题只走 store**：切主题统一调 `useThemeStore().applyTheme()`（主题仓库的应用主题方法）（`data-theme`（主题标识属性）/ CSS 变量 / 背景图 / `theme-chrome`（通知主进程换窗口外观的 IPC）一起下发）；各窗口入口都先 `applyTheme()`（应用主题函数）再挂载，否则首帧是默认主题。
 - **token 只走 `authStorage`**：`token`（登录令牌）/ `currentUser`（当前用户）的裸存储键只能出现在 `authStorage.js`（登录态唯一读写模块）（`behavior/sfc-conventions.test.js`（架构标准行为测试）会扫全量 SFC（单文件组件）拦截）。
 - **请求与资源地址统一封装**：接口经 `setupApiClient`（axios 装配函数，带 token、退避重试与安全通道）装配的实例，图片 / 背景用 `apiUrl`（拼接口地址）/ `resourceUrl`（拼资源地址并附 token）追加 token；直接拼裸地址会漏掉重试与鉴权。
-- **主题 CSS 按需加载**：主题样式由 `themeLoader.js`（主题样式加载器）按主题加载，夜间配色单独在 `theme-night.css`（夜间配色样式文件）；新增主题或配色要落到对应 `theme-*.css`（各主题样式文件），改完跑 `radius-audit.js`（圆角使用审计脚本）与主题切换检查。
+- **主题 CSS 按需加载**：主题样式由 `themeLoader.js`（主题样式加载器）按主题加载。夜间配色按「主题 + 日/夜」精确拆分：`theme-base-night.css` / `theme-glass-night.css` / `theme-glass2-night.css` 三份互不重叠（各自只含共用块 + 本主题专属块），避免任一方白下对方专属段；新增主题或配色要落到对应 `theme-*.css`（各主题样式文件），改完跑 `radius-audit.js`（圆角使用审计脚本）与主题切换检查。
 - **新增窗口入口要登记构建**：独立窗口的 HTML 入口必须写进 `vite.config.js`（Vite 构建配置）的 `rollupOptions.input`（Rollup 打包入口清单），否则打包后找不到页面；入口脚本按 `widgets.md` 的做法先 `applyTheme()`（应用主题函数）再挂载。
 
 ---

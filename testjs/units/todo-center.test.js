@@ -37,6 +37,16 @@ test('通知中心聚合两类待办，total 是各项数量之和', () => {
   assert.match(t, /reduce\(\(n, item\) => n \+ item\.count, 0\)/, '胶囊总数必须等于两类之和')
 })
 
+test('通知中心每条是一张毛玻璃卡（不是靠下边框分隔的裸列表）', () => {
+  const s = read('components/dialogs/TodoCenterDialog.vue')
+  // 玻璃配方用 bg-surface/55 而不是 bg-white/55：前者走 --color-surface，夜间自动变深；
+  // 后者是给 AI 面板的浅色玻璃，放到通知中心会在夜间留一块白板。
+  assert.match(s, /bg-surface\/55 backdrop-blur-md/, '每条带毛玻璃')
+  assert.match(s, /rounded-lg border border-border bg-surface\/55/, '卡片有描边与圆角')
+  assert.ok(!/bg-white\/55/.test(s), '不用浅色玻璃配方')
+  assert.ok(!/border-b border-border last:border-b-0/.test(s), '原来的下边框分隔已去掉，改由卡片间隙分隔')
+})
+
 test('App.vue 已换成共用胶囊，旧的销假专属铃铛清干净', () => {
   const s = read('App.vue')
   assert.match(s, /<TodoBell v-if="\$route\.path !== '\/login'" :total="todoTotal" @open="todoOpen = true" \/>/)

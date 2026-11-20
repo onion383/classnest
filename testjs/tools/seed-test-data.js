@@ -1,7 +1,7 @@
 // 一键生成测试账号 + 完整测试数据
 // 通过本地后端 HTTP API 写入（服务端需已启动：npm run electron:dev 或打包后运行）。
 // 用法： node seed-test-data.js
-//       可选环境变量：SEED_BASE（默认 http://127.0.0.1:3000）
+//       可选环境变量：SEED_BASE（默认取 config/ports.json 的后端端口）
 //                     SEED_USER / SEED_PASSWORD（默认 测试班主任 / test1234）
 //       安全开关：--yes（或 SEED_ASSUME_YES=1）——见下方注释
 // 说明：后端运行态已持有正确的主密钥，故这里走 HTTP 注册/登录/写业务数据，
@@ -13,7 +13,8 @@
 //   必须显式加 --yes，避免在用户正在使用的班级库上误运行。
 'use strict';
 
-const BASE = process.env.SEED_BASE || 'http://127.0.0.1:3000';
+// 端口不从写死字面量取：后端可能因首选端口被占用而顺延，统一走 config/ports.cjs。
+const BASE = process.env.SEED_BASE || require('../../config/ports.cjs').backendOrigin;
 
 // ============ 账号（可用环境变量覆盖，便于多次灌不同账号） ============
 const DEFAULT_USERNAME = '测试班主任';

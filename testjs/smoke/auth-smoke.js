@@ -30,7 +30,7 @@
 const { startIsolatedBackend } = require('./_isolated-backend.cjs')
 
 const EXTERNAL = process.env.AUTH_SMOKE_EXTERNAL === '1'
-let BASE = 'http://127.0.0.1:' + (Number(process.env.PORT) || 3000)
+let BASE = 'http://127.0.0.1:' + (Number(process.env.PORT) || require('../../config/ports.cjs').backendPort)
 let backend = null
 
 async function post(p, body) {

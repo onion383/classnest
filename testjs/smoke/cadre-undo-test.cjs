@@ -249,8 +249,10 @@ async function cleanup() {
   const badRec = ((listRes.json && listRes.json.groups) || [])
     .flatMap((g) => g.records || [])
     .find((r) => r.label === '一条被改坏的记录')
-  check('坏记录仍在列表里，payload 按 {} 兜底（不静默丢条）',
-    !!badRec && badRec.payload && typeof badRec.payload === 'object', badRec)
+  // 列表接口刻意不回 payload（整块快照单条上百 KB，几十条就是几 MB 的无用响应），
+  // 所以这里只守「那条坏记录没有被静默丢掉」；真要前后值按 id 取单条。
+  check('坏记录仍在列表里（不静默丢条；列表按契约不回 payload）',
+    !!badRec && (badRec.payload === undefined || typeof badRec.payload === 'object'), badRec)
 
   console.log(failed ? `\n${failed} 条断言失败` : '\n全部通过')
   await cleanup()

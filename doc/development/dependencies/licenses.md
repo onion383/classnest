@@ -60,6 +60,10 @@
 | `sharp` | 0.35.5 | Apache-2.0 | 版权归 Lovell Fuller 及贡献者 |
 | `yauzl` | 3.4.0 | MIT | Copyright (c) 2014 Josh Wolfe |
 | `pinyin-match` | 1.2.10 | MIT | 同前端 |
+| `@modelcontextprotocol/server` | 2.4.0 | Apache-2.0 | 版权归 Model Context Protocol 项目贡献者（包内 `LICENSE` 为 MIT → Apache-2.0 过渡说明） |
+| `@modelcontextprotocol/client` | 2.4.0 | Apache-2.0 | 同上 |
+| `@modelcontextprotocol/node` | 2.1.2 | Apache-2.0 | 同上 |
+| `zod` | 4.6.7 | MIT | Copyright (c) 2025 Colin McDonnell |
 
 ### 3. 根依赖与随包资源
 

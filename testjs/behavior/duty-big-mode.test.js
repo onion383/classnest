@@ -23,10 +23,12 @@ const BE = 'student-backend'
 // =========================================================================
 
 test('后端：列名与模式配置统一走 dutyConfig（不再直接 SELECT days）', () => {
-  // 6 处后端读点里，除了 dutyConfig 自己，不该再有直接读 days 列的地方
+  // 6 处后端读点里，除了 dutyConfig 自己，不该再有直接读 days 列的地方。
+  // 搜索的查询体已从 routes/search.js 搬到 services/searchQuery.js（路由只剩 HTTP 形状），
+  // 所以要盯的是后者 —— 早先在这里盯 search.js，重构后就成了「怎么改都过」的空断言。
   const readers = [
     `${BE}/routes/duty.js`,
-    `${BE}/routes/search.js`,
+    `${BE}/services/searchQuery.js`,
     `${BE}/routes/ai/ai.tools/tools.executors/executors.image.js`,
     `${BE}/routes/dataExport.js`,
     `${BE}/services/businessRules.js`,

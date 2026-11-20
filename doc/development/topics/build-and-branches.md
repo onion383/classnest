@@ -53,11 +53,13 @@ flowchart TD
 | `npm run build` | 仅构建前端（Vue 3.5 主线） | `student-frontend/dist/` |
 | `npm run build:new` | 用 Vue 3.6 预览通道构建 | `student-frontend/dist/` |
 | `npm run electron:build` | 3.5 主线：前端 → electron-builder（`--dir`）→ Inno | `release/` |
-| `npm run electron:buildnew` | 3.6 预览：`electron-builder --dir --config.directories.output=release36` + Inno（`-- release36`） | `release36/` |
-| `npm run build:win:inno` | 只编译安装包（需先有 unpacked 产物） | 同上 |
+| `npm run electron:buildnew` | 3.6 预览：`electron-builder --dir --config.directories.output=release36` + Inno（`-- release36 --vue36`） | `release36/` |
+| `npm run build:win:inno` | 只编译安装包（需先有 unpacked 产物）；跟 `-- release36 --vue36` 出预览包 | 同上 |
 | `npm run setup:vue36` | 安装 Vue 3.6 预览依赖到 `student-frontend/vue36/` | — |
 
-两个通道的产物目录刻意分离（`release/` 与 `release36/`），互不覆盖；安装包文件名固定为 `ClassNest-Setup-x.y.z.exe`，便于 [`main.updater.js`](../../../electron/main/main.updater.js) 按 `*-Setup-*.exe` 匹配更新资产。
+两个通道的产物目录刻意分离（`release/` 与 `release36/`），互不覆盖。安装包文件名：正式版 `ClassNest-Setup-x.y.z.exe`，3.6 预览版 `ClassNest-Vue36-Setup-x.y.z.exe`（`setup.iss` 里 `#ifdef Vue36` 加后缀）——两个包会挂在同一个 Release 下，同名会互相覆盖。
+
+**更新器必须避开预览包**：两者都命中 `/setup.*\.exe$/`，所以 [`main.update-integrity.js`](../../../electron/main/main.update-integrity.js) 的 `pickSetupAssetName` 会跳过名字含 `vue36` 的资产，只剩预览包时宁可返回 `null`（不更新），也不能把正式版用户升到写着「仅供体验」的版本。
 
 #### 2. 前端构建阶段
 
@@ -103,7 +105,7 @@ flowchart TD
 - [`inno/compile.mjs`](../../../electron/inno/compile.mjs)：按「`INNO_SETUP_ISCC` 环境变量 → PATH 中 `iscc` → 常见安装目录（Inno 6/7）→ 注册表 `InstallLocation`」定位 `ISCC.exe`；找不到时打印中文提示与下载地址并以退出码 1 结束；`spawnSync(iscc, [setup.iss], { stdio:'inherit' })` 编译。
 - [`inno/setup.iss`](../../../electron/inno/setup.iss)：固定 AppId GUID（升级/卸载识别）、`PrivilegesRequired=admin`（机器级安装，触发 UAC）、`WizardStyle=modern`、`CloseApplications/RestartApplications=yes`（静默升级自动关旧进程）、`#define MyAppVersion` 必须与 `package.json` 一致；界面由 `[Code]` 段自绘（logo/路径/协议勾选/协议弹窗）。
 - 资源：`installer.ico` / `uninstaller.ico` / `license.txt`（UTF-8 BOM）/ `field-bg.png` / `wizard-large.bmp` / `wizard-small.bmp` / `app-icon.png`。
-- `AppDir` 默认 `release`，3.6 通道传 `release36`。
+- `AppDir` 默认 `release`，3.6 通道传 `release36`；`compile.mjs` 的 `--vue36` 额外给 ISCC 传 `/DVue36`，打开 `setup.iss` 的预览分支：安装包名加 `-Vue36`、安装页标题写成「安装 班集 Vue 3.6 预览版」并在标题下多两行「仅供体验、不建议作为主力版本」的提示（非该通道时 HintH/HintGap 为 0，布局与原来逐像素一致）。
 
 #### 6. Vue 3.6 与 3.5 双分支
 
@@ -116,6 +118,7 @@ flowchart TD
 - **3.5 兼容的写法**：组件写 `<script setup vapor>`，3.5 编译时把 `vapor` 当普通未知属性**逐字忽略**，因此零影响。拼错标记不会报错，只会静默失效。
 - **纯 VDOM 对照**：`--vue36 --vdom` 时用 `stripVaporAttr()` 在 `compiler-sfc` 读取前剥掉根级 `vapor` 属性，让同一编译器产出 VDOM 代码，用来分离「3.6 编译器收益」与「Vapor 收益」。
 - **Vapor 互操作**：入口通过 `virtual:vapor-interop` 条件导出 `vaporInteropPlugin`（3.5 下导出空），`main.js` 里 `if (vaporInterop) app.use(vaporInterop)` 两条通道都能跑。
+- **界面标识**：`vite.config.js` 用 `define` 注入 `__VUE36__`（dev 与 build 都生效、被静态替换成 true/false）。[`Setup.vue`](../../../student-frontend/src/subwindows/setup/Setup.vue) 据此在欢迎页显示琥珀色的两行提示「该版本为 Vue 3.6 测试版…不推荐作为主力版本使用」；正式版构建里这段不渲染。
 - **缓存隔离**：三条通道（`vue35-vdom` / `vue36-vdom` / `vue36-vapor`）各用一份 Vite 缓存目录，产物互不兼容，不能共用。
 - **构建产物**：`npm run build`（3.5）→ `release/`；`npm run build:new` + `electron:buildnew`（3.6）→ `release36/`。
 

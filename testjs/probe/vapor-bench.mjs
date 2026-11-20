@@ -40,7 +40,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const FRONTEND = path.join(ROOT, 'student-frontend')
 const OUT_DIR = path.join(ROOT, 'testjs', 'tmp')
 const PORT = Number(process.env.INP_PORT || 9222)
-const VITE_BASE = 'http://127.0.0.1:5173'
+const VITE_BASE = require('../../config/ports.cjs').frontendOrigin
 const PROD_PORT = 5180
 const PROD_BASE = `http://127.0.0.1:${PROD_PORT}`
 const CDP_HOST = `127.0.0.1:${PORT}`
@@ -186,7 +186,7 @@ function stopVite() {
 async function ensureVite() {
   if (await viteUp()) {
     const ch = await detectViteChannel()
-    if (ch && ch !== VUE) throw new Error(`5173 上的 Vite 是 Vue ${ch} 通道，本次要测 ${VUE}。请先关掉它。`)
+    if (ch && ch !== VUE) throw new Error(`${VITE_BASE} 上的 Vite 是 Vue ${ch} 通道，本次要测 ${VUE}。请先关掉它。`)
     console.log(`[bench] 复用已运行的 Vite（通道 ${ch || '?'}）`)
     return
   }

@@ -11,6 +11,7 @@ classnest/
     └── tools/
         ├── album-sql-args.js  # 相册 SQL 参数构造核对
         ├── closeServer.cjs  # 关闭 HTTP server 并等它真正收尾：server.close() 只是「不再接受新…
+        ├── waitFor.cjs  # 轮询等待：等条件成立/等值稳定，替代「死等 N 秒」（slow 机器不 flaky、快机器不白等）
         ├── code_stats.ps1  # 代码与文档量统计（生成 ；文档统计 doc/ + 仓库根目录 Markdown，根目录不含 …
         ├── comment-audit.js  # 注释保真审计：比对拆分前后注释，只读不改
         ├── component-vapor-audit.mjs  # 组件 Vapor 标记审计
@@ -48,12 +49,13 @@ classnest/
 
 | 脚本 | 用途 | 用法 / 前置 |
 | --- | --- | --- |
-| [`verify-batch.mjs`](../../../testjs/tools/verify-batch.mjs) | **一把跑批验证**：把 6 项验证（单元测试 / 模式扫描探针 / ESLint / 文档一致性 / 冒烟 / 前端构建）串成一次调用。任一环节失败**继续跑完其余环节**（一次看全问题），末尾出汇总表。⚠️ 冒烟里 `secure-channel-retry` 需要 Vite 在 5173 端口（没起会自动跳过那一项，不算失败） | `node testjs/tools/verify-batch.mjs`；`--fast` 跳过冒烟与构建；`--only=units,lint` 只跑指定项；`--skip=docs` 跳过指定项 |
+| [`verify-batch.mjs`](../../../testjs/tools/verify-batch.mjs) | **一把跑批验证**：把 6 项验证（单元测试 / 模式扫描探针 / ESLint / 文档一致性 / 冒烟 / 前端构建）串成一次调用。任一环节失败**继续跑完其余环节**（一次看全问题），末尾出汇总表。⚠️ 冒烟里 `secure-channel-retry` 需要 Vite 在 `38140` 端口（没起会自动跳过那一项，不算失败） | `node testjs/tools/verify-batch.mjs`；`--fast` 跳过冒烟与构建；`--only=units,lint` 只跑指定项；`--skip=docs` 跳过指定项 |
 | [`mutate-sweep-b19.cjs`](../../../testjs/tools/mutate-sweep-b19.cjs) | **批 19 的反向验证（变异测试）**：17 处变异逐个改坏被守行为，验证 [`sweep-fixes-b19.test.js`](./units.md) 的判据真能抓到回归。⚠️ 锚点自动适配 CRLF 行尾；`M7` 的锚点必须把 `waitQuiet` **之后**那句 `dirty = false` 一起纳入替换范围 —— 只往前加一行会让两个 `dirty = false` 互相抵消，成为**等价变异**（行为没变 → 误报「判据太松」） | `node testjs/tools/mutate-sweep-b19.cjs`；退出码 0 = 17 处全抓到 |
 | [`mutate-sweep.cjs`](../../../testjs/tools/mutate-sweep.cjs) | **反向验证（变异测试）**：逐个把源码里的「被守行为」改坏，跑单测，确认单测变红。用来证明判据**真的能抓到回归**，而不是假绿。⚠️ 还原挂在 `process.on('exit')` 上（只靠循环末尾还原，中途异常退出就把坏代码留在工作区）；锚点自动适配 CRLF 行尾 | `node testjs/tools/mutate-sweep.cjs`；退出码 0 = 全部变异都被抓到 |
 | [`seed-test-data.js`](../../../testjs/tools/seed-test-data.js) | 灌测试数据（幂等，按业务键去重；产出账号「测试班主任 / test1234」） | `npm run seed`；`SEED_BASE` / `SEED_USER` / `SEED_PASSWORD` 可覆盖；**需后端在跑** |
 | [`killTree.cjs`](../../../testjs/tools/killTree.cjs) | **结束子进程及其后代**（跨平台）：`child.kill()` 只杀直接子进程，而 Electron / dev-vite 都会再起孙进程（渲染进程 / vite 子进程）→ 只 kill 直接子进程会**残留**它们 → 端口被占（下次跑报 EADDRINUSE）+ 进程泄漏。Windows 走 `taskkill /T /F`，POSIX 走进程组 kill | `const { killTree } = require('./killTree.cjs'); killTree(child)`；**永不抛异常**（清理路径上抛异常会掩盖真正的错误） |
 | [`closeServer.cjs`](../../../testjs/tools/closeServer.cjs) | **关闭 HTTP server 并等它真正收尾**：`server.close()` 只是「不再接受新连接」，已有的 keep-alive 连接还挂着 → Node 事件循环仍有活 handle → 脚本**永不退出**（在那里空等，不产出任何输出）。做法=先 `closeAllConnections()`（Node 18.2+）再 `close(cb)`，带超时兜底 | `await closeServer(server)`；与 `testjs/smoke/api-routes-test.cjs` 里已验证的实现一致，抽成共用工具 |
+| [`waitFor.cjs`](../../../testjs/tools/waitFor.cjs) | **轮询等待，替代「死等 N 秒」**：`await new Promise((r) => setTimeout(r, 3000))` 在快机器上白等、慢机器上还没就绪就往下走（flaky）。`waitFor(pred)` 等到条件成立；`waitForStable(fn)` 等到取值连续多次不变，用于「等动画结束 / 等任务收尾」这类没有结束信号的场景。探针与冒烟里由模式扫描 `fixed-wait` 守着 | `const { waitFor, waitForStable } = require('../tools/waitFor.cjs')`；两个函数**都不抛异常**（探测条件本身抛错=还没就绪），超时返回 `false` 由调用方决定 |
 | [`docs-verify.mjs`](../../../testjs/tools/docs-verify.mjs) | 文档一致性校验：死链、源码覆盖（含构建配置与安装器素材）、路由、依赖版本/许可、关键计数、Mermaid、用户手册索引与结构、工具/测试脚本覆盖、doc-tree 结构、禁用词、英文标识配中文、字段标签加粗、模块与文末分隔线（只读，失败退出码 1） | `npm run docs:verify`（`--json` 输出机器可读结果） |
 | [`docs-counts.mjs`](../../../testjs/tools/docs-counts.mjs) | **数量类计数的唯一来源**：组件 / 组合式函数 / utils / 主进程文件 / 依赖 / 页面 / 导出表 / 单元测试文件 / 后端路由，共 9 项，全部从源码现算。`docs-verify` 只负责「比」，`docs-sync` 只负责「写」，两边共用这一张表 —— 避免「校验通过、文档还是旧数」的假绿 | `countExpectations(routeCount)`、`replaceCount(text, re, actual)` |
 | [`docs-sync.mjs`](../../../testjs/tools/docs-sync.mjs) | 按源码现算值改写文档里的数量类计数：只替换捕获到的数字、不动叙述；找不到计数位置时退出码 1（说明文档结构变了，要人工处理）。改完仍要跑 `docs:verify` 做全量对账（死链 / 覆盖 / 路由 / 格式） | `npm run docs:sync`；`--dry` 只预览 |

@@ -16,6 +16,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
+const ports = require('../../config/ports.cjs')
 
 const ROOT = path.join(__dirname, '../..')
 const PROTOCOL = path.join(ROOT, 'electron/main/main.protocol.js')
@@ -130,7 +131,7 @@ const RECEIPT_DIALOG = path.join(ROOT, 'student-frontend/src/components/dialogs/
 // 整条 CSP 拼出来（与探针同一套读法，不复制字符串）
 function readCsp() {
   const src = protocolSrc()
-  const consts = {}
+  const consts = { backendOrigin: ports.backendOrigin }
   for (const m of src.matchAll(/const (\w+_HASH) = '(sha256-[^']+)'/g)) consts[m[1]] = m[2]
   const tpl = src.match(/const SCRIPT_SRC = `([^`]*)`/)
   assert.ok(tpl, 'main.protocol.js 必须有 SCRIPT_SRC 模板')
@@ -142,8 +143,13 @@ function readCsp() {
     const line = raw.trim().replace(/,$/, '')
     if (!line) continue
     if (line === 'SCRIPT_SRC') { parts.push(scriptSrc); continue }
-    const m = line.match(/^"([^"]*)"$/)
-    if (m) parts.push(m[1])
+    const literal = line.match(/^"([^"]*)"$/)
+    if (literal) { parts.push(literal[1]); continue }
+    // 端口相关指令现在拼的是 ${backendOrigin}，按同一份配置展开
+    const template = line.match(/^`([^`]*)`$/)
+    if (template) {
+      parts.push(template[1].replace(/\$\{(\w+)\}/g, (_, n) => consts[n] ?? `<缺失常量 ${n}>`))
+    }
   }
   return parts.join('; ')
 }
@@ -156,9 +162,16 @@ function directive(name) {
 
 function readBackendOrigin() {
   const src = fs.readFileSync(BACKEND_ORIGIN_SRC, 'utf8')
-  const m = src.match(/export const BACKEND_ORIGIN = '([^']+)'/)
-  assert.ok(m, 'backendOrigin.js 必须有 BACKEND_ORIGIN 常量')
-  return m[1]
+  assert.match(
+    src,
+    /import ports from '\.\.\/\.\.\/\.\.\/config\/ports\.json'/,
+    'backendOrigin.js 必须从 config/ports.json 取默认端口，别再写死地址',
+  )
+  assert.ok(
+    !/['"`]http:\/\/127\.0\.0\.1:\d+['"`]/.test(src),
+    'backendOrigin.js 不得残留写死的后端地址',
+  )
+  return ports.backendOrigin
 }
 
 test('CSP 必须显式声明 frame-src（不能靠 default-src 回落）', () => {

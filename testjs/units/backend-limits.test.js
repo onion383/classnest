@@ -177,19 +177,20 @@ test('undo 路由：非整数 / 非正数的 :id 必须被拒（不能靠 NaN �
     'parseUndoId 必须拒绝非正数（id 必须是正整数）'
   )
 
-  // 三处 :id 路由都必须走这个收敛函数
+  // 每一处 :id 路由都必须走收敛函数。不写死路由数量（新增 /:id/rewind、/:id/replay
+  // 后数量会变），改为三者动态对齐——守卫的真实意图是「一个都不能漏」，不是「恰好三个」。
   const idRoutes = src.match(/router\.(post|delete)\('\/:id[^']*'/g) || []
-  assert.equal(idRoutes.length, 3, 'undo.js 里应有 3 处 :id 路由（实际 ' + idRoutes.length + '）')
+  assert.ok(idRoutes.length >= 3, 'undo.js 至少要有 undo/redo/delete 三处 :id 路由')
   const uses = src.match(/parseUndoId\(req\.params\.id\)/g) || []
   assert.equal(
-    uses.length, 3,
-    '每处 :id 路由都必须走 parseUndoId（实际 ' + uses.length + ' 处）'
+    uses.length, idRoutes.length,
+    '每处 :id 路由都必须走 parseUndoId（路由 ' + idRoutes.length + ' 处 / 调用 ' + uses.length + ' 处）'
   )
 
   // 收敛失败必须回 400（不能静默当「记录不存在」）
   const guards = src.match(/id == null\) return res\.status\(400\)/g) || []
   assert.equal(
-    guards.length, 3,
-    '每处 :id 路由都必须对收敛失败回 400（实际 ' + guards.length + ' 处）'
+    guards.length, idRoutes.length,
+    '每处 :id 路由都必须对收敛失败回 400（路由 ' + idRoutes.length + ' 处 / 守卫 ' + guards.length + ' 处）'
   )
 })

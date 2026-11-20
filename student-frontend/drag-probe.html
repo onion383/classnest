@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>drag probe</title>
+  <!-- 必须引入项目样式：没有 CSS 时行高/边框都是裸的，几何与真实表格完全不同，
+       探针测出来的重叠/位移结论没有参考价值 -->
+  <link rel="stylesheet" href="/src/styles/index.css" />
+  <!--
+    仅供 testjs/probe/grid-row-drag-probe.cjs 驱动（它在 electron 里打开本页并收集 console）。
+    不在 build 的 input 列表里，不会被打进产物；Vite dev 会直接 serve 根目录下的这个 html。
+    2026-11 主题重构时被误删过，导致拖拽探针静默失效（打开是 404、超时才报错），现已补回。
+  -->
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/drag-probe.js"></script>
+</body>
+</html>

@@ -43,6 +43,10 @@ import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+// 端口统一读 config/ports.cjs：前后端都可能顺延，写死字面量会让测量打到空端口。
+const require = createRequire(import.meta.url)
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const BACKEND_DIR = path.join(ROOT, 'student-backend')
@@ -56,7 +60,7 @@ const ISO_USER_DATA = path.join(ISO_ROOT, 'user-data')
 const ISO_DATA = path.join(ISO_ROOT, 'data')
 const LOG_DIR = path.join(ISO_ROOT, 'logs')
 const ELECTRON_EXE = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
-const DEV_PORT = 5173
+const DEV_PORT = require('../../config/ports.cjs').frontendPort
 // 应用自身落盘的时间线（saveLog 写 userData/data/startup.log）。
 // 隔离模式读隔离目录；--real（真实数据）读 %APPDATA% 下的真实 userData。
 function appLogCandidates() {

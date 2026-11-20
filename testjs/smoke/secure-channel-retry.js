@@ -25,8 +25,8 @@ const { spawn } = require('node:child_process')
 const ROOT = path.join(__dirname, '..', '..')
 const PAGE_FILE = path.join(ROOT, 'testjs', 'probe', 'pages', 'secure-channel-retry.html')
 // Windows 上要写成 D:/… 正斜杠形式；/@fs/ 之后是文件系统绝对路径
-const PAGE_URL = 'http://127.0.0.1:5173/@fs/' + PAGE_FILE.replace(/\\/g, '/')
-const VITE_PORT = 5173
+const VITE_PORT = require('../../config/ports.cjs').frontendPort
+const PAGE_URL = `http://127.0.0.1:${VITE_PORT}/@fs/` + PAGE_FILE.replace(/\\/g, '/')
 const TOOL = path.join(ROOT, 'testjs', 'tools', 'electron-page-probe.cjs')
 // Electron 子进程的超时上限（ms）：断言页要起 Electron + 跑完 5 组重试用例，
 // 慢机器上给 90 秒；超时按**失败**计入（不能当成通过）。

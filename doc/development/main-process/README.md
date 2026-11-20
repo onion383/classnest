@@ -24,7 +24,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
   - 打包模式用 `process.execPath`（当前可执行文件路径，即 electron.exe）+ `ELECTRON_RUN_AS_NODE=1`（以纯 Node 模式运行），以 Electron 内置 Node 的「纯 Node 模式」运行，目标机无需安装 Node。
   - 两者均通过 `execArgv: ['--expose-gc']`（Node 启动参数：暴露垃圾回收接口）暴露 `GC`（垃圾回收），并通过 `env`（环境变量）注入 `DATA_DIR / SECURE_MASTER / DB_MASTER_KEY / NODE_COMPILE_CACHE`。目录只有一个根：缩略图与 AI 技能路径由后端从 `DATA_DIR` 派生，不再单独注入。
 - 渲染层为 Vue 3 前端（`student-frontend/`）构建产物：
-  - 开发模式经 Vite（`http://127.0.0.1:5173`）加载；
+  - 开发模式经 Vite（`http://127.0.0.1:38140`）加载；
   - 打包模式经自定义 `app://local/*` 协议加载（如 `app://local/index.html`、`setup.html`、`widget.html`、`migration.html`、`desktop-widget.html`）。
 - 渲染进程统一使用 `electron/preload.js`（预加载脚本）暴露的 `window.electron`（`contextIsolation`（上下文隔离）开启、`nodeIntegration`（Node 集成）关闭、`sandbox`（沙箱）开启）。
 
@@ -51,7 +51,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 - 统一为「无边框（`frame: false`）+ 系统亚克力材质（`backgroundMaterial: 'acrylic'`）+ 不透明底色」；**不用 `transparent`**（透明窗口会禁用系统材质），磨砂由渲染层 CSS `backdrop-filter` 完成，Win11 会据此自动加圆角。`mainWindowChrome` 恒为 `'frameless'`。
 - 尺寸 1280x800（**最小 1200x600 DIP**），图标 `app-icon.png`；`webPreferences` 由 `main/web-prefs.js` 的 `buildWebPreferences()` 统一生成（各窗口共用），主窗口额外传 `devTools:true`：`contextIsolation:true`、`nodeIntegration:false`、`sandbox:true`、`additionalArguments:['--secure-channel']`、`webSecurity:!isDev`。
 - 显示时机：`show:false` 创建，等 `ready-to-show` 再 `show`（先露出一层空亚克力底），并设有 1500ms 兜底 `revealWindow`。`revealWindow` 在显示前对 win32 再次 `applyBackgroundMaterial(win,'acrylic')`（隐藏态创建时材质可能未生效）。
-- 开发模式：先 `loadURL` 一份内联 loading 页（`data:text/html` 的 `devLoadingHtml()`，窗口 <1s 出画），同时后台 `pollViteAndNavigate` 轮询 Vite，就绪后导航到 `http://127.0.0.1:5173/` 并打开 DevTools（`INP_DEBUG` 时不打开）。
+- 开发模式：先 `loadURL` 一份内联 loading 页（`data:text/html` 的 `devLoadingHtml()`，窗口 <1s 出画），同时后台 `pollViteAndNavigate` 轮询 Vite（校验响应确为本项目入口才导航，避免端口被别的服务占用时加载错页面），就绪后导航到 `http://127.0.0.1:38140/` 并打开 DevTools（`INP_DEBUG` 时不打开）。
 - 打包模式：`win.loadURL('app://local/index.html')`。
 
 引导窗口（`createSetupWindow`）：
@@ -135,7 +135,7 @@ preload 层区分不了「谁在调」；主进程只能逐 handler 手写 `even
 - **fail-closed**：表里没有的通道一律拒绝。新增通道忘登记 → 开发期立刻表现为「调用没生效」，而不是「忘了写 if 就等于放行」。
 - **单一判据**：改一处即可，不必同步 N 个 handler。
 - **角色 ≠ 窗口**：`get-master-key` 与 `secure-handshake` 授权给同一批 5 个角色 —— 凡是装了 `apiClient` 的窗口都会建安全通道（`setupApiClient` → `setupSecureAxios`），包括引导窗。两者是同一批窗口的两半（取主密钥 / 发握手报文），角色集合必须完全一致，`ipc-policy-probe.cjs` 会断言这一点。
-- **所有窗口同 origin**（`app://local` 或 dev 的 `127.0.0.1:5173`），所以「同源」不构成任何边界 —— 边界只由授权表与「渲染层不加载外部内容」构成。
+- **所有窗口同 origin**（`app://local` 或 dev 的 `127.0.0.1:38140`），所以「同源」不构成任何边界 —— 边界只由授权表与「渲染层不加载外部内容」构成。
 
 **授权表怎么来的**：`ipc-policy-gen.mjs` 对每个通道的每个调用点文件做两段判定 ——
 文件在 `src/subwindows/<role>/**` → 角色就是 `<role>`；文件是公共模块（`src/` 根下）→ 角色 = 能 import 到它的入口集合。

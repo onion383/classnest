@@ -2,6 +2,7 @@ import axios from 'axios'
 import { ensureMarkdown, isMarkdownReady } from './aiMarkdown.js'
 import { AI_PERMISSION_FULL } from './aiConstants.js'
 import { reportError } from '../../utils/reportError.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import { computed, nextTick } from 'vue'
 
 // 恢复 / 切换会话时默认只取最近若干条；更早的消息在滚动到顶部时按需补载
@@ -11,6 +12,9 @@ const EARLIER_MSG_LIMIT = 20
 // 会话 / 模型 / 加载 相关的方法组 + computed 组（原 Options API mixin，现为 ctx 闭包 composable）。
 // ctx 契约：状态/computed ref 用 .value 访问，跨模块方法经 ctx 运行时解析。
 export function useAiConversations(ctx) {
+  // 会话代次：切换/新建/恢复会话会 begin 作废旧在途；各 fetch 回来校验 isCurrent，
+  // 防止快速连点会话时旧会话的历史覆盖新会话（#18）。闭包实例，被下面所有方法共享。
+  const convSeq = createLatest()
   return {
     // ===== computed 组 =====
     // 会话列表：默认只渲染最近 3 条（列表本身已按 updated_at 倒序，越靠前越新）
@@ -152,6 +156,7 @@ export function useAiConversations(ctx) {
       if (!ctx.conversationId.value || ctx.loadingEarlier.value || !ctx.hasEarlier.value) return false
       const cursor = ctx.earliestMsgId.value
       if (!cursor) return false
+      const my = convSeq.current()   // 捕获本次补载时的会话代次（不递增）
       ctx.loadingEarlier.value = true
       const box = ctx.msgBox.value
       const prevScrollHeight = box ? box.scrollHeight : 0
@@ -160,6 +165,7 @@ export function useAiConversations(ctx) {
         const { data } = await axios.get(
           `/api/ai/conversations/${ctx.conversationId.value}/messages?limit=${EARLIER_MSG_LIMIT}&before_id=${cursor}`
         )
+        if (!convSeq.isCurrent(my)) return false   // 期间切了会话 → 别把旧会话历史前插到新会话
         const rows = data.data || []
         const earlier = ctx._parseMessages(rows)
         if (earlier.length) {
@@ -174,7 +180,7 @@ export function useAiConversations(ctx) {
         })
         return true
       } catch (_) { return false } finally {
-        ctx.loadingEarlier.value = false
+        if (convSeq.isCurrent(my)) ctx.loadingEarlier.value = false
       }
     },
     // 内容不足一屏（没有滚动条）时无法靠滚动触发补载，这里主动补，直到可滚动或已无更早消息
@@ -193,22 +199,26 @@ export function useAiConversations(ctx) {
       const current = ctx.conversationList.value.find((c) => c.id === ctx.conversationId.value)
       if (current) return
       const latest = ctx.conversationList.value[0]
+      const my = convSeq.begin()
       ctx.conversationId.value = latest.id
       try {
         // 默认只取最近 5 条；更早的消息在滚动到顶部时按需补载
         const { data } = await axios.get(`/api/ai/conversations/${latest.id}/messages?limit=${INITIAL_MSG_LIMIT}`)
+        if (!convSeq.isCurrent(my)) return
         ctx._applyInitialMessages(data)
         nextTick(() => {
+          if (!convSeq.isCurrent(my)) return
           // 用 stickBottom 而非 scrollBottom：内容还在长高（markdown 重算 / 表格取数 / 图片），
           // 需要一直跟到底，直到用户自己往上滑
           ctx.stickBottom()
           ctx._fillEarlier()
         })
-      } catch (_) { ctx.messages.value = [] }
+      } catch (_) { if (convSeq.isCurrent(my)) ctx.messages.value = [] }
     },
     // 切换会话
     async switchConversation(id) {
       if (id === ctx.conversationId.value || ctx.busy.value) return
+      const my = convSeq.begin()   // 会话切换：作废所有在途的历史/补载请求
       ctx.conversationId.value = id
       ctx.messages.value = []
       ctx.input.value = ''
@@ -217,8 +227,10 @@ export function useAiConversations(ctx) {
       try {
         // 默认只取最近 5 条；更早的消息在滚动到顶部时按需补载
         const { data } = await axios.get(`/api/ai/conversations/${id}/messages?limit=${INITIAL_MSG_LIMIT}`)
+        if (!convSeq.isCurrent(my)) return   // 期间又切了会话 → 旧会话消息不能落进来
         ctx._applyInitialMessages(data)
         nextTick(() => {
+          if (!convSeq.isCurrent(my)) return
           // 同上：切换会话后伴随分批长高，需要跟随贴底
           ctx.stickBottom()
           ctx._fillEarlier()
@@ -228,6 +240,7 @@ export function useAiConversations(ctx) {
     // 新建会话
     async newConversation() {
       if (ctx.busy.value) return
+      convSeq.invalidate()   // 作废在途的历史/补载请求，别让旧会话内容落进新会话
       ctx.messages.value = []
       ctx.conversationId.value = null
       ctx.input.value = ''

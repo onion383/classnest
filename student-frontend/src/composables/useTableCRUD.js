@@ -1,5 +1,6 @@
 import { reportError } from '../utils/reportError.js'
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { useDisposables } from '../utils/disposables.js'
 import axios from 'axios'
 import { recordUndo as recordUndoSpec, rowSnapshot } from '../utils/undoRecorder.js'
 import {
@@ -11,6 +12,7 @@ import { createRowReuseCache } from '../utils/rowReuse.js'
 import { filterRowsByKeyword, isSearchNoResult } from '../utils/tableSearch.js'
 import { zhCollator } from '../utils/collator.js'
 import { createLatest } from '../utils/latestOnly.js'
+import { moveRowByAnchor, moveRowsByAnchor } from '../utils/rowReorder.js'
 import { readRenameOutcome } from '../utils/renameOutcome.js'
 
 export function useTableCRUD(apiBase, defaultFields, options = {}) {
@@ -54,11 +56,13 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   const searchKeyword = ref('')
   // 防抖后的搜索词：避免每敲一个键就触发全表 filter+sort+重建数组造成卡顿
   const searchKeywordDebounced = ref('')
-  let searchTimer = null
+  // 搜索防抖 + 文档级点击监听都登记进 disposables：这个 composable 在组件 setup 里调用，
+  // 作用域结束（卸载）时统一释放，不用再手写 onBeforeUnmount 清单。
+  const d = useDisposables()
+  const scheduleSearch = d.defer()
   watch(searchKeyword, (v) => {
-    clearTimeout(searchTimer)
-    if (v === '') { searchKeywordDebounced.value = ''; return }
-    searchTimer = setTimeout(() => { searchKeywordDebounced.value = v }, 150)
+    if (v === '') { scheduleSearch.cancel(); searchKeywordDebounced.value = ''; return }
+    scheduleSearch(() => { searchKeywordDebounced.value = v }, 150)
   })
   const dialogCallback = ref(null)
   const selectedCount = ref(0)
@@ -647,16 +651,11 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     }
   }
 
-  async function onMoveSelectedRows({ selectedKeys, oldIndex, newIndex, isDownward }) {
+  async function onMoveSelectedRows({ selectedKeys, newIndex, isDownward }) {
     const before = orderSnapshot()
-    const records = [...rows.value]
-    const selectedRows = selectedKeys.map(key => records.find(r => r.id === key || r._rowKey === key)).filter(r => r && !r._isNew)
-    if (selectedRows.length === 0) return
-    const selectedIds = selectedRows.map(r => r.id)
-    const otherRows = records.filter(r => !selectedIds.includes(r.id))
-    const rowsBefore = records.slice(0, newIndex).filter(r => !selectedIds.includes(r.id)).length
-    const insertIdx = isDownward ? rowsBefore + 1 : rowsBefore
-    otherRows.splice(insertIdx, 0, ...selectedRows)
+    // newIndex 是**可见列表**下标（过滤+排序后），不能直接当完整数组下标用（v7 §5-6 / #37）
+    const otherRows = moveRowsByAnchor(rows.value, displayRows.value, selectedKeys, newIndex, isDownward)
+    if (!otherRows) return
     rows.value = otherRows
     const ids = otherRows.map(r => r.id)
     try {
@@ -703,11 +702,11 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   // ==================== 行/列拖拽（移动语义：插入到目标位置，中间项顺移） ====================
   async function onSwapRows(fromIndex, toIndex) {
     if (fromIndex === toIndex) return
+    // from/to 是**可见列表**（过滤+排序后）下标：按行对象定位后再动完整数组，
+    // 直接用下标 splice 会挪错行、还会改动用户看不见的行（v7 §5-6 / #37）
+    const records = moveRowByAnchor(rows.value, displayRows.value, fromIndex, toIndex)
+    if (!records) return
     const before = orderSnapshot()
-    const records = [...rows.value]
-    const [moved] = records.splice(fromIndex, 1)
-    if (moved === undefined) return
-    records.splice(toIndex, 0, moved)
     rows.value = records
     const ids = records.map(r => r.id)
     try {
@@ -812,12 +811,7 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
 
   onMounted(() => {
     fetchRows()
-    document.addEventListener('click', hideContextMenu)
-  })
-
-  onBeforeUnmount(() => {
-    document.removeEventListener('click', hideContextMenu)
-    clearTimeout(searchTimer)
+    d.listen(document, 'click', hideContextMenu)
   })
 
   return {

@@ -127,6 +127,10 @@ function scanFile(file) {
     const name = m[1]
     if (name.startsWith('_')) continue
     const defIndex = m.index + m[0].indexOf(name)
+    // export 出去的模块级状态由其它文件读写（如 classScope.js 的弹窗显隐）——
+    // 本探针按单文件判断，不能把它算成「只写不读」（等价于 defineExpose 豁免）。
+    const lineStart = scriptCode.lastIndexOf('\n', m.index) + 1
+    if (/^\s*export\s+/.test(scriptCode.slice(lineStart, m.index))) continue
     if (usedAsRead(name, scriptCode, defIndex)) continue
     if (tplCode && nameRe(name).test(tplCode)) continue
     const line = scriptStartLine + scriptCode.slice(0, m.index).split('\n').length

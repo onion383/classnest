@@ -9,7 +9,7 @@ const {
 // 值日列名的唯一读取入口（日常值日=星期几，大扫除=分组名+全部）
 const dutyConfig = require('../../../../services/dutyConfig');
 // 座位列头/行走廊判定：走廊是真实列，列号必须按座位列序号算（见 services/seatGrid.js）
-const { columnLabels, rowIsAisle } = require('../../../../services/seatGrid');
+const { SEAT_CELL, columnLabels, rowIsAisle } = require('../../../../services/seatGrid');
 
 // 课表行标签：优先按 settings.sections 的节次结构取 lesson 行，退化为 periods/pass 序号
 function buildScheduleRowLabels(settings, cells) {
@@ -75,11 +75,19 @@ function buildSeatImage() {
   const rows = seats.map((r, i) => {
     const line = [`第${i + 1}排`];
     const arr = Array.isArray(r) ? r : [];
+    const typeRow = Array.isArray(types[i]) ? types[i] : [];
+    const aisleRow = rowIsAisle(types, i);
     for (let c = 0; c < cols; c++) {
+      const t = typeRow[c];
+      // 走廊格：整行走廊写「走廊」，单独交叉格留空（与导出表口径一致，避免满图「走廊」）
+      if (t === SEAT_CELL.AISLE) { line.push(aisleRow ? '走廊' : ''); continue; }
+      // 空位格（types=2）：这里没有桌子。必须写「空位」—— 留白会和「有桌无人」一模一样，
+      // 模型据此会把没桌子的洞当成空着的座位，给出「把某人安排到这儿」这种做不到的建议。
+      if (t === SEAT_CELL.HOLE) { line.push('空位'); continue; }
       const v = arr[c];
       if (v == null || v === '') {
         // 整行走廊在排布图里写成「走廊」，否则这一排看起来只是一条空行
-        line.push(rowIsAisle(types, i) ? '走廊' : '');
+        line.push(aisleRow ? '走廊' : '');
         continue;
       }
       line.push(typeof v === 'number' ? (idName[v] || `#${v}`) : String(v));

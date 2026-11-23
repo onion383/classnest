@@ -606,7 +606,9 @@ async function onImportData({ fields, rows }) {
   const prev = JSON.parse(JSON.stringify(sourceCells || []))
   const target = isMaster ? masterCells : activeCells
   target.value = next
-  const ok = await (isMaster ? master.saveMaster() : active.saveMaster())
+  // 实行课表用的是 active 模块的 saveActive()；写成 active.saveMaster() 会在保存前抛 TypeError，
+  // 结果是本地表已换、库里没存、也没有成功提示（审查 v7 · #25）。
+  const ok = await (isMaster ? master.saveMaster() : active.saveActive())
   if (!ok) return
   recordGridSnapshotUndo('课程表', isMaster ? 'master_schedule' : 'schedule', prev, next, '从 Excel 导入')
   notifySuccess(`已从 Excel 导入${isMaster ? '一般课表' : '实行课表'}`)

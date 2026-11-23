@@ -12,6 +12,7 @@
 // 保证各分组高度可精确预算，无需测量。
 // =========================================================================
 import { ref, computed, nextTick, watch, onBeforeUnmount } from 'vue'
+import { useDisposables } from '../utils/disposables.js'
 
 export function usePhotoTimeline(groupsRef, options = {}) {
   const GAP = options.gap ?? 12       // 格子间距（与模板 gap-3 一致）
@@ -50,12 +51,12 @@ export function usePhotoTimeline(groupsRef, options = {}) {
    * pointerup / mouseup：拖的是窗口边框，指针事件根本不会进页面。 */
   const RESIZE_IDLE_MS = options.resizeIdleMs ?? 180
   const resizing = ref(false)
-  let resizeIdleTimer = 0
+  // 松手判定用的「最后一次 resize 之后静默」定时器：可替换，作用域结束自动清
+  const d = useDisposables()
+  const scheduleResizeIdle = d.defer()
   function beginResize() {
     resizing.value = true
-    if (resizeIdleTimer) clearTimeout(resizeIdleTimer)
-    resizeIdleTimer = setTimeout(() => {
-      resizeIdleTimer = 0
+    scheduleResizeIdle(() => {
       resizing.value = false
     }, RESIZE_IDLE_MS)
   }
@@ -349,7 +350,7 @@ export function usePhotoTimeline(groupsRef, options = {}) {
 
   onBeforeUnmount(() => {
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
-    if (resizeIdleTimer) { clearTimeout(resizeIdleTimer); resizeIdleTimer = 0 }
+    scheduleResizeIdle.cancel()
     if (resizeObs) resizeObs.disconnect()
     clearFlip()
   })

@@ -40,6 +40,9 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 // 结束子进程树（只杀直接子进程会残留孙进程 → 端口占用 + 进程泄漏）
 const { killTree } = require('../tools/killTree.cjs')
+const { createOwnedChild } = require('../tools/ownedChild.cjs')
+// 只登记本进程 spawn 的 Electron；复用外部调试实例时 launched=false，不登记、不误杀。
+const ownedElectron = createOwnedChild({ killTree, label: 'inp' })
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
 // 前端端口统一走 config/ports.cjs：prod 静态服务必须与 dev 同端口，
@@ -832,6 +835,7 @@ async function ensureRunner() {
     stdio: 'inherit',
   })
   child.on('exit', (code) => { console.log(`[inp] Electron 退出（code=${code}）`) })
+  ownedElectron.adopt(child)
   return { launched: true, child }
 }
 
@@ -962,7 +966,7 @@ async function main() {
   if (process.env.INP_ONESHOT) {
     console.log('\n[inp] 测量结束（one-shot）。')
     cdp.close()
-    if (child) killTree(child)
+    ownedElectron.stop()
     stopVite()
     stopProd()
     process.exit(0)
@@ -1069,14 +1073,15 @@ function report(out, raw, measures, probe, envInfo) {
 // 清理：结束脚本时一并关掉它启动的子进程
 function wireCleanup() {
   const kill = () => {
+    ownedElectron.stop() // 信号退出也要关掉本进程启动的 Electron（原实现只停 Vite，残留占单实例锁）
     stopVite()
     stopProd()
     try { process.exit(0) } catch {}
   }
   process.on('SIGINT', kill)
   process.on('SIGTERM', kill)
-  process.on('exit', () => { stopVite(); stopProd() })
+  process.on('exit', () => { ownedElectron.stop(); stopVite(); stopProd() })
 }
 
 wireCleanup()
-main().catch((err) => { console.error('[inp] 失败:', err.message); process.exit(1) })
+main().catch((err) => { console.error('[inp] 失败:', err.message); ownedElectron.stop(); process.exit(1) })

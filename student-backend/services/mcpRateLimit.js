@@ -88,9 +88,32 @@ function consume(slug, kind, now = Date.now()) {
   bucketOf(slug, kind, now).count += 1;
 }
 
+// 检查并预占额度，一步完成（同步无 await → Node 单线程下原子）。
+// 读/搜索用：它们无论工具成败都算一次，可以在执行前预占，不必等执行后。
+// 修的是原 check/consume 分离的中间 await 窗口：并发请求都 check 通过后才各自 consume，
+// 结果超出 perMin（比如限 1 却在同一帧放行两个）。write 不走这里 —— 它要查 DB 的
+// pending 数且只在建出提案后计数，仍用 check/consume。
+function checkAndConsume(slug, kind, now = Date.now()) {
+  if (!kind || !limits[kind]) return { ok: true };
+  const lim = limits[kind];
+  prune(now);
+  const b = bucketOf(slug, kind, now);
+  if (b.count >= lim.perMin) {
+    const retryAfter = Math.max(1, Math.ceil((b.start + WINDOW_MS - now) / 1000));
+    return {
+      ok: false,
+      retryAfter,
+      error: `${lim.label}过于频繁（每分钟最多 ${lim.perMin} 次），请 ${retryAfter} 秒后再试`,
+    };
+  }
+  b.count += 1;
+  return { ok: true };
+}
+
 module.exports = {
   check,
   consume,
+  checkAndConsume,
   WINDOW_MS,
   limits: () => limits,
   _resetForTest: () => { buckets.clear(); limits = DEFAULT_LIMITS; },

@@ -33,6 +33,9 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 // 结束子进程树（只杀直接子进程会残留孙进程 → 端口占用 + 进程泄漏）
 const { killTree } = require('../tools/killTree.cjs')
+const { createOwnedChild } = require('../tools/ownedChild.cjs')
+// 只登记本进程 spawn 的 Electron；复用外部实例时 launched=false，不登记、不误杀。
+const ownedElectron = createOwnedChild({ killTree, label: 'mode' })
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
 // 端口与 electron/main/main.js 的 INP_DEBUG 分支一致（那里 appendSwitch 写死 9222）
@@ -376,9 +379,9 @@ function stopVite() {
   }
   viteChild = null
 }
-process.on('exit', stopVite)
-process.on('SIGINT', () => { stopVite(); process.exit(130) })
-process.on('SIGTERM', () => { stopVite(); process.exit(143) })
+process.on('exit', () => { ownedElectron.stop(); stopVite() })
+process.on('SIGINT', () => { ownedElectron.stop(); stopVite(); process.exit(130) })
+process.on('SIGTERM', () => { ownedElectron.stop(); stopVite(); process.exit(143) })
 
 async function ensureRunner() {
   // 已有实例（调试口已开）就直接复用，不重复启动（单实例锁 + 僵尸进程问题）
@@ -402,6 +405,7 @@ async function ensureRunner() {
     stdio: 'inherit',
   })
   child.on('exit', (code) => console.log(`[mode] Electron 退出（code=${code}）`))
+  ownedElectron.adopt(child)
   return { launched: true, child }
 }
 
@@ -449,11 +453,11 @@ async function main() {
 
   if (process.env.MODE_PROBE_ONESHOT) {
     cdp.close()
-    if (child) killTree(child)
+    ownedElectron.stop()
     stopVite()
     process.exit(0)
   }
   console.log('\n[mode] 测量结束。窗口保持打开，可自行再操作；Ctrl+C 退出脚本。')
 }
 
-main().catch((e) => { console.error('[mode] 失败:', e.message); process.exit(1) })
+main().catch((e) => { console.error('[mode] 失败:', e.message); ownedElectron.stop(); process.exit(1) })

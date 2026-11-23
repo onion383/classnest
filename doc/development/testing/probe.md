@@ -66,7 +66,13 @@ classnest/
         ├── viewer-open-probe.cjs  # 照片查看器打开耗时
         ├── widget-bottom-regression.ps1  # 置底回归：-Drags N 次合成拖动，校验位移正确、尺寸不变、松手仍在 Progman 之…
         ├── widget-shot.ps1  # 把组件窗口临时提到最前截图（-Out 指定路径，截完压回）
-        └── write-only-ref-probe.cjs  # 「只写不读」的响应式变量：ESLint 的 no-unused-vars 只抓「从未被引用」…
+        ├── write-only-ref-probe.cjs  # 「只写不读」的响应式变量：ESLint 的 no-unused-vars 只抓「从未被引用」…
+        ├── cdp-profile.mjs  # 渲染层启动 CPU 采样（CDP Profiler），按自身耗时聚合热点函数
+        ├── fk-reject-probe.cjs  # 外键严格的表收到不存在的 student_id：期望 400 明确报错
+        ├── keepalive-key-probe.mjs  # KeepAlive 的 key 变化作废全部缓存实例（真实 Vue 自定义渲染器）
+        ├── mcp-live-connect-probe.cjs  # 真实 MCP 客户端连运行中后端：令牌鉴权、工具清单、一次只读调用
+        ├── splash-raf-probe.mjs  # rAF 被暂停时占位页仍能移除（CDP 注入永不回调）
+        └── student-write-paths-probe.cjs  # 所有写学生入口：名册外姓名是否建档、改名是否重认 student_id
 ```
 <!-- doc-tree:end -->
 

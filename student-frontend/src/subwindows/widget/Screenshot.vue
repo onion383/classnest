@@ -25,6 +25,7 @@
 
 <script setup vapor>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import axios from 'axios'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import { INVOKE } from '../../electronChannels.js'
@@ -35,7 +36,8 @@ const emit = defineEmits(['close'])
 const capturing = ref(true)
 const result = ref(null)
 const error = ref('')
-let autoCloseTimer = null
+// 截图完成后 3 秒自动关闭：可替换定时器，确认/卸载都走同一条取消路径
+const scheduleAutoClose = useDisposables().defer()
 
 const statusText = computed(() => {
   if (error.value) return error.value
@@ -82,24 +84,21 @@ async function capture() {
   }
 
   if (result.value) {
-    autoCloseTimer = setTimeout(() => {
+    scheduleAutoClose(() => {
       emit('close')
     }, 3000)
   }
 }
 
 function confirm() {
-  if (autoCloseTimer) {
-    clearTimeout(autoCloseTimer)
-    autoCloseTimer = null
-  }
+  scheduleAutoClose.cancel()
   emit('close')
 }
 
 onMounted(capture)
 
 onUnmounted(() => {
-  if (autoCloseTimer) clearTimeout(autoCloseTimer)
+  scheduleAutoClose.cancel()
   // 兜底：万一截屏途中组件被关掉，不能把整个窗口留在 visibility:hidden 状态（否则工具箱永久隐身）
   restoreAfterCapture()
 })

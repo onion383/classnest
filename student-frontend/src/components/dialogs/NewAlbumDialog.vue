@@ -80,6 +80,7 @@ import { useNotification } from '../../composables/useNotification.js'
 import { recordUndo as recordUndoSpec } from '../../utils/undoRecorder.js'
 import { INVOKE } from '../../electronChannels.js'
 import { selectionCount, buildVirtualAlbumBody } from '../../composables/albumPhotoPages.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import '../../styles/dialog-transition.css'
 
 const props = defineProps({
@@ -132,9 +133,13 @@ watch(sourceAlbumId, (v, old) => {
   if (old !== null && v !== old) picked.value = null
 })
 
+// 连点「选择文件夹」时只认最后一次：先发起的慢响应不能把后选的路径顶掉
+const pickSeq = createLatest()
 async function pickFolder() {
+  const my = pickSeq.begin()
   try {
     const result = await window.electron.invoke(INVOKE.SELECT_FOLDER)
+    if (!pickSeq.isCurrent(my)) return
     if (result && result.filePaths && result.filePaths.length > 0) {
       folderPath.value = result.filePaths[0]
       // 相册名缺省取文件夹名（加「相册」后缀，和任务管理里的行标题一致）

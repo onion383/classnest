@@ -115,10 +115,11 @@
 import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 import MediaViewer from '../base/MediaViewer.vue'
-import { resourceUrl } from '../../utils/apiUrl'
+import { resourceUrl, ensureMediaToken, refreshMediaToken } from '../../utils/apiUrl'
 import { saveBlobWithDialog } from '../../utils/saveFile'
 import { useNotification } from '../../composables/useNotification'
 import { renderMarkdown } from '../../composables/ai/aiMarkdown.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import { INVOKE } from '../../electronChannels.js'
 import '../../styles/dialog-transition.css'
 
@@ -157,6 +158,8 @@ const mediaIndex = ref(0)
 const docItem = ref(null)         // { kind: 'pdf' | 'text', name, path }
 const docHtml = ref('')
 const docLoading = ref(false)
+// 连续点开不同 md 收据时，慢的旧渲染不能覆盖新收据的内容（#18）
+const docSeq = createLatest()
 
 // 关掉 Chromium 内置阅读器的工具栏与侧栏：
 // · 那套 UI 是深色固定皮肤，跟应用主题无关（毛玻璃/浅色主题下尤其突兀）；
@@ -181,6 +184,17 @@ watch(() => props.visible, (v) => {
   localItems.value = (props.receipts || []).map((r) => ({ ...r, kind: r.kind || kindOfPath(r.path) }))
   removedPaths.value = []
   dragOver.value = false
+})
+
+// 父级回滚（收据关联写库失败）时会把它那份 items 换回库里的内容。只看 visible 的 watcher
+// 接不住这次变化 —— 弹窗会继续显示「已附上」，而库里根本没有这条关联（审查 v7 · #28）。
+// 按路径签名比较：自己 emit 出去的内容绕一圈回来时签名不变，不重置（避免无谓重建对象、
+// 也别把别人正在看着的预览列表换掉）。
+const receiptPathSig = (list) => (list || []).map((x) => (x && x.path) || '').join('\u0000')
+watch(() => receiptPathSig(props.receipts), (sig, prev) => {
+  if (!props.visible || sig === prev) return
+  localItems.value = (props.receipts || []).map((r) => ({ ...r, kind: r.kind || kindOfPath(r.path) }))
+  removedPaths.value = []
 })
 
 function close() { emit('update:visible', false) }
@@ -287,24 +301,42 @@ function view(f) {
 }
 
 function closeDoc() {
+  docSeq.invalidate()   // 作废在途渲染：关闭后旧响应不能再写回
   docItem.value = null
   docHtml.value = ''
 }
 
 // Markdown 收据：拉原文 → 复用 AI 助手那套 marked + DOMPurify（懒加载，已 sanitize）
+// 取带鉴权的静态文件：resourceUrl() 只是把当时 localStorage 里的媒体凭据拼进查询串，
+// 凭据过期后 fetch 拿到 401 不会自己重试（<img>/<iframe> 同理，所以那两处只能靠重开弹窗）。
+// 这里先用 ensureMediaToken() 补一份（缺失或临期才真的发请求），401 时强刷一次再重试，
+// 否则登录久了的用户点预览/下载一律「无法读取该文件」（审查 v7 · #28）。
+async function fetchMedia(path) {
+  const get = () => fetch(resourceUrl(path))
+  await ensureMediaToken()
+  const res = await get()
+  if (res.status !== 401) return res
+  if (!await refreshMediaToken()) return res
+  return get()
+}
+
 async function openMarkdown(f) {
+  const my = docSeq.begin()   // 换收据时让上一个在途渲染失效
   docItem.value = f
   docHtml.value = ''
   docLoading.value = true
   try {
-    const res = await fetch(resourceUrl(f.path))
+    const res = await fetchMedia(f.path)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    docHtml.value = await renderMarkdown(await res.text())
+    const html = await renderMarkdown(await res.text())
+    if (!docSeq.isCurrent(my)) return   // 期间换了收据/关闭 → 不写旧内容
+    docHtml.value = html
   } catch (err) {
+    if (!docSeq.isCurrent(my)) return   // 旧请求的失败也不盖新状态
     closeDoc()
     notifyError(`无法读取该文件：${err.message || '未知错误'}`)
   } finally {
-    docLoading.value = false
+    if (docSeq.isCurrent(my)) docLoading.value = false
   }
 }
 
@@ -326,7 +358,7 @@ async function download(f) {
   if (downloading.value) return
   downloading.value = true
   try {
-    const res = await fetch(resourceUrl(f.path))
+    const res = await fetchMedia(f.path)
     if (!res.ok) throw new Error('读取文件失败')
     const blob = await res.blob()
     const saved = await saveBlobWithDialog(f.name || '收据', blob)

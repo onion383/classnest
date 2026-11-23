@@ -75,14 +75,20 @@ if (process.env.PERF_STARTUP === '1') {
   });
 }
 
-// CORS 白名单：只允许应用自身来源（Electron 自定义协议 / file://）与本机回环页面访问。
+// CORS 白名单：只允许应用自身来源（app:// 自定义协议）与本机回环页面访问。
 // 之前裸 cors() 会回显任意站点的 Origin，任意网页都能把响应读走，配合本机明文凭据会扩大攻击面。
-const CORS_ORIGIN_RE = /^(?:app:\/\/|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$)/;
+// 应用已从 file:// 迁到 app://local（见 main.protocol.js）：file:// 页面在浏览器里发
+// Origin: null，与沙盒 iframe 无法区分 —— 放行 null 等于放行任意沙盒页面跨域读公开 API、
+// 对登录/恢复流程做可读的在线口令探测。故 null 与 file:// 一律不再信任。
+const CORS_ORIGIN_RE = /^(?:app:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$)/;
+function corsOriginAllowed(origin) {
+  // 无 Origin：Electron 主进程 / Node 客户端 / 同源请求（不是跨域，没有需要信任的来源）
+  if (!origin) return true;
+  return CORS_ORIGIN_RE.test(origin);
+}
 app.use(cors({
   origin(origin, cb) {
-    // 无 Origin：Electron 主进程 / Node 客户端 / 同源请求；'null'：file:// 页面
-    if (!origin || origin === 'null') return cb(null, true);
-    return cb(null, CORS_ORIGIN_RE.test(origin));
+    return cb(null, corsOriginAllowed(origin));
   },
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Proof'],
@@ -374,10 +380,17 @@ function startServer(port, attempt = 0) {
     // 这里只**定义**步骤、不排队：下面统一由 runStep 串成一条每次只跑一步的链，
     // 每步之间事件循环能回到 poll 阶段处理网络请求（见文件末尾「让路链」说明）。
     const warmupStep = () => {
+      // 安装器预热（--warmup，CLASSNEST_INSTALL_WARMUP=1）只暖模块/文件缓存：
+      // dbManager.warmup() 里的 ensureIndex() 会**创建 index.db**，warmupMostRecent() 会开账号库 ——
+      // 两者都会让首次真启动把新装机器判成"非首启"，跳过引导向导（#47）。
+      // 因此安装预热跳过这两步；鉴权模块预热是纯内存加载，保留。
+      const installWarmup = process.env.CLASSNEST_INSTALL_WARMUP === '1';
       // warmup 会加载 sqlite 原生模块、打开加密库并 initSchema —— 它不阻塞「就绪」信号，
       // 却直接决定第一个请求能不能立刻返回，也就是首屏数据什么时候到，因此单独计时。
       const _warmT0 = Date.now();
-      try { dbManager.warmup(); } catch (_) { /* 暖机失败不影响正常懒加载路径 */ }
+      if (!installWarmup) {
+        try { dbManager.warmup(); } catch (_) { /* 暖机失败不影响正常懒加载路径 */ }
+      }
       // 鉴权模块预热：jsonwebtoken 首次 require 实测 79ms，原先落在首个请求的
       // verifyToken 里 —— 那次同步加载会把同时到达的首屏请求一起挡住（87~133ms 停顿）。
       // 放在这里：listen 已就绪（就绪信号不受影响）、首屏请求还没到，正好错开。
@@ -390,7 +403,9 @@ function startServer(port, attempt = 0) {
       // （后端自己在 withDb 里把 slug 记在 data/.last-db，不靠会话猜）。
       // 与上面分开计时：上面那条日志的「本段」口径（含 sqlite 模块加载 + index 库 + 鉴权）保持不变。
       const _wuT0 = Date.now();
-      try { dbManager.warmupMostRecent(); } catch (_) { /* 预热失败静默，首屏请求照旧自己冷开 */ }
+      if (!installWarmup) {
+        try { dbManager.warmupMostRecent(); } catch (_) { /* 预热失败静默，首屏请求照旧自己冷开 */ }
+      }
       try { console.log(`[boot] +${Date.now() - _bootT0}ms 账号库预热完成（本段 ${Date.now() - _wuT0}ms）`); } catch (_) { /* 忽略 */ }
     };
 

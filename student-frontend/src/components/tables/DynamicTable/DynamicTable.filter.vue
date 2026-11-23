@@ -77,7 +77,8 @@
 // 职责：展示「排序 / 值搜索 / 值复选」三块，并把用户操作抛给 DynamicTable 处理；
 // 自身只负责定位、关键字过滤与过渡动画，不持有筛选状态。
 // 样式不走独立 css：基础样式在 styles/index.css，毛玻璃/夜间覆盖在各主题 css 里。
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
+import { useDisposables } from '../../../utils/disposables.js'
 import IconGlyph from '../../../components/base/IconGlyph.vue'
 
 const PANEL_W = 268
@@ -146,11 +147,13 @@ function onEnter() {
   if (shownOptions.value.length === 1) emit('toggle', shownOptions.value[0].value)
 }
 
+// 视口变化就收起面板：监听走 disposables，卸载时自动摘掉（不再手写一对 add/remove）。
+const d = useDisposables()
+d.listen(window, 'resize', onViewportChange)
+
 onMounted(() => {
   place()
   // 打开即聚焦搜索框：直接开打要筛的值
   nextTick(() => { if (kw.value) kw.value.focus() })
-  window.addEventListener('resize', onViewportChange)
 })
-onBeforeUnmount(() => { window.removeEventListener('resize', onViewportChange) })
 </script>

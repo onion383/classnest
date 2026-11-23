@@ -182,13 +182,15 @@ router.put('/group-members/:id', (req, res) => {
     const id = Number(req.params.id);
   const { member_name, remark, student_id } = req.body;
   if (!groupDim.memberById(id)) return res.status(404).json({ error: '成员不存在' });
-  let name = null;
+  let saved = null;
   try {
-    name = groupDim.updateMember(id, { memberName: member_name, remark, studentId: student_id });
+    saved = groupDim.updateMember(id, { memberName: member_name, remark, studentId: student_id });
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
-  res.json({ message: '保存成功', member_name: name });
+  // student_id 一并返回：前端登记撤销时要连「改名前后各绑的是谁」一起记，
+  // 撤销回写姓名时才不用按姓名重新猜人（同名歧义会清掉引用，v7 §5-4）。
+  res.json({ message: '保存成功', member_name: saved.name, student_id: saved.studentId });
 });
 
 // DELETE /api/group-manage/group-members/:id —— 删除成员

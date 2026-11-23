@@ -67,8 +67,19 @@ console.log(`[bundle] app.bundle.js ${(size / 1024).toFixed(0)}KB，内联模块
 //   · init.js           —— 独立脚本（手动建库/修库），不被 app.js 引用
 //   · worker.scan.js    —— 相册扫描的子进程入口，由 fork 拉起，必须留在磁盘上
 //   · mcp-forwarder.cjs —— 方向 B 的 stdio 转发器，由 Claude Desktop 直接拉起，留在磁盘上
-// =========================================================================
-const NOT_BUNDLED = new Set(['init.js', 'worker.scan.js', 'mcp-forwarder.cjs']);
+//   · mcpForwarderDiscovery.cjs —— 上面那个转发器的依赖（端口发现），必须跟它一起留在磁盘上。
+//                          转发器不进 bundle，它的 require 也就不会被 esbuild 跟到。
+// 按**目录**整块排除的：
+//   · migrations/       —— 迁移体系预置件，接入前没有任何代码 require 它。
+//                          不能按文件名排除（这里的 index.js 和别处同名），只能按目录。
+//                          将来接线时把它从 NOT_BUNDLED_DIRS 里去掉，漏打包检查会立刻抓到。
+const NOT_BUNDLED = new Set([
+  'init.js',
+  'worker.scan.js',
+  'mcp-forwarder.cjs',
+  'mcpForwarderDiscovery.cjs',
+]);
+const NOT_BUNDLED_DIRS = ['migrations/'];
 
 function listBackendSources(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -79,11 +90,14 @@ function listBackendSources(dir, out = []) {
     // 产物自身与构建脚本不是输入
     if (entry.name === 'app.bundle.js' || entry.name === 'build.bundle.mjs') continue;
     if (NOT_BUNDLED.has(entry.name)) continue;
+    const rel = path.relative(HERE, full).split(path.sep).join('/');
+    if (NOT_BUNDLED_DIRS.some((prefix) => rel.startsWith(prefix))) continue;
     out.push(path.relative(process.cwd(), full).split(path.sep).join('/'));
   }
   return out;
 }
 
+// =========================================================================
 const inlined = new Set(Object.keys(result.metafile.inputs).map((p) => p.split(path.sep).join('/')));
 const missing = listBackendSources(HERE).filter((rel) => !inlined.has(rel));
 if (missing.length) {

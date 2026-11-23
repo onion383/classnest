@@ -132,6 +132,20 @@ async function collectRendererGarbage(wc) {
   }
 }
 
+// 对一组窗口**并行**回收，按输入位置返回布尔（null / 已销毁的占 false）。
+// 工具箱与桌面挂件可以同时开着，原先用 `if (工具箱) ... else if (桌面挂件) ...`
+// 只会给先命中的那个回收，另一个被静默跳过 —— 按钮写着「回收全部」，实际没覆盖
+// 所有存活 renderer（审查 v7 · #42）。GC 之间互不依赖，并行也省掉串行累加的等待。
+async function collectAllRendererGarbage(windows, collect) {
+  const list = windows || []
+  const aliveIdx = []
+  list.forEach((w, i) => { if (w && !w.isDestroyed()) aliveIdx.push(i) })
+  const flags = await Promise.all(aliveIdx.map((i) => collect(list[i].webContents)))
+  const out = list.map(() => false)
+  aliveIdx.forEach((i, n) => { out[i] = flags[n] === true })
+  return out
+}
+
 // Utility 进程名是 Chromium 给的英文：serviceName 是 non-localized name（可能是
 // network.mojom.NetworkService 这类 Mojo 接口名），name 也只是 Network Service 等英文可读名，
 // Electron 不做本地化。这里只做展示层翻译；两个字段任一命中即可，命中不了保留原名，
@@ -394,22 +408,16 @@ function registerPerfIpc(opts = {}) {
       if (typeof global.gc === 'function') { global.gc(); main = true }
     } catch (_) { /* 忽略 */ }
 
-    // 渲染进程逐个回收（前端主窗口 + 工具箱/桌面组件）
-    const mainWindow = getMainWindow()
-    const widgetWindow = getWidgetWindow()
-    const desktopWidgetWindow = getDesktopWidgetWindow()
-    const front = await collectRendererGarbage(mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null)
-    let widget = false
-    if (widgetWindow && !widgetWindow.isDestroyed()) {
-      widget = await collectRendererGarbage(widgetWindow.webContents)
-    } else if (desktopWidgetWindow && !desktopWidgetWindow.isDestroyed()) {
-      widget = await collectRendererGarbage(desktopWidgetWindow.webContents)
-    }
+    // 渲染进程并行回收（前端主窗口 + 工具箱 + 桌面组件）
+    const [front, toolbox, desktop] = await collectAllRendererGarbage(
+      [getMainWindow(), getWidgetWindow(), getDesktopWidgetWindow()],
+      collectRendererGarbage,
+    )
 
     // 后端
     const backend = (await queryBackendGc()) === true
 
-    return { main, front, widget, backend }
+    return { main, front, widget: toolbox || desktop, backend }
   })
 
   // 上次启动耗时与打点时间线

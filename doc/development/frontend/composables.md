@@ -65,6 +65,7 @@ classnest/
 ### 表格与网格
 
 #### [`useTableCRUD.js`](../../../student-frontend/src/composables/useTableCRUD.js) · 动态列 CRUD（增删改查）
+| [`useTodoCenter.js`](../../../student-frontend/src/composables/useTodoCenter.js) | 标题栏待办汇总：销假与临时学生两类数据按需刷新，换号即清空 |
 - **签名**：`useTableCRUD(apiBase, defaultFields, options)`（表格增删改查组合式函数；`apiBase`（接口基址）、`defaultFields`（默认字段）、`options`（选项））；`options = { requiredField, protectedColumns, enableRenameColumn, customValidate, undoTableKey }`（必填字段 / 受保护列 / 是否允许重命名列 / 自定义校验 / 撤销表键）。
 - 返回（关键）：`rows / fields / newRow / editingCell / loadError / contextMenu / dialog / columnForm / sortField / sortOrder / searchField / searchKeyword / searchKeywordDebounced / searchNoResult / selectedCount / selectedRowKeys / clipboard / displayRows / displayIndexes / visibleFields / allBusinessFields / importDialogVisible / dedupeDialogVisible / fetchRows`，以及 `startEditCell / saveCell / addNewRowAtBottom / insertRowAbove / insertRowBelow / saveNewRow / cancelNewRow / moveRow / deleteRow / deleteColumn / addColumn / renameColumn / moveColumn / importRows / dedupe / toggleSort / setSearch / applyUndoChange / showAlert / showConfirm / onDialogConfirm` 等。
 - **内部时序**：所有写操作先记 `rowsSnapshot`（行快照）→ 调接口 → 成功后就地更新 → `recordCellUndo` / `recordRow*` 登记 `/api/undo`；搜索用 `debounce`（防抖，停止输入一段后才执行）；`perfMark`（性能打点）记录耗时。
@@ -126,6 +127,7 @@ classnest/
 ### 相册
 
 #### [`usePhotoTimeline.js`](../../../student-frontend/src/composables/usePhotoTimeline.js) · 时间轴虚拟滚动
+| [`usePrivacyConfig.js`](../../../student-frontend/src/composables/usePrivacyConfig.js) | AI 与 MCP 两份数据保护配置的唯一前端实现：乐观更新、回滚与序号守卫 |
 - **签名**：`usePhotoTimeline(groupsRef, options)` → `{ containerRef, scrollTop, clientH, viewW, cols, cell, cellStyle, layout, totalH, visibleGroups, measure, onScroll, onResize, reset }`。
 - 内部：按日期分组为窗口单元；按目标格宽 200px 反推列数（3~12）；只挂载视口附近分组（900px 缓冲），外部用总高度撑滚动条。
 - **调用方**：`AlbumView`、`AlbumPhotoPickerDialog`。
@@ -137,6 +139,7 @@ classnest/
 - **注意事项**：objectURL 必须 revoke；批量响应是「4 字节长度 + JPEG」逐张拼接。
 
 #### [`useAlbumScan.js`](../../../student-frontend/src/composables/useAlbumScan.js) · 扫描轮询
+| [`useAccessLog.js`](../../../student-frontend/src/composables/useAccessLog.js) | 「数据访问记录」的唯一前端实现，按 `source` 区分 AI 与 MCP |
 - **签名**：`useAlbumScan()` → `{ waitScan(id, { onProgress, onTick }), stopAll }`。
 - 内部：`POST /:id/rescan` 立即返回，前端按 800ms 轮询 `/status` 直到 `scanning=false`；定时器集中登记，卸载 `stopAll`。
 - **调用方**：`AlbumView`（刷新、撤销重做后渐进刷新）。`AlbumTaskDialog` 不走它，直接轮询 `/api/album/tasks`。
@@ -172,6 +175,7 @@ classnest/
 - **调用方**：`useSeatGrid`、`useTableCRUD`、`DutyView`、`AlbumView`、`GroupManageView`、`ActivitiesView` 等。
 
 #### [`useNotification.js`](../../../student-frontend/src/composables/useNotification.js) · 全局通知
+| [`useOverdueLeaveBadge.js`](../../../student-frontend/src/composables/useOverdueLeaveBadge.js) | 标题栏「需销假」待办计数：请假中且已过结束时间的记录数 |
 - **签名**：`useNotification()` → `{ notifications, show, remove, success, error, warning, info, undoable }`；`undoable(message, onUndo, duration = 8000)` 是带「撤销」按钮的提示。
 - 内部：全局 `reactive` 列表；`localStorage.mergeNotifications` 控制同文案合并。
 - **调用方**：几乎所有视图与弹窗、`NotificationToast`。

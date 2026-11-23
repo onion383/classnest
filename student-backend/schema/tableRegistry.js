@@ -112,6 +112,35 @@ const UNDO_DOC_TABLES = Object.freeze([
   'widget_settings',
 ]);
 
+// 值日有两张存学生引用的表：当前表 + 模板。删学生的关联统计/清理/撤销、
+// 「应用模板」都要同时覆盖两张（模板引用会在当前表为空时被读出来）。
+const DUTY_TABLES = Object.freeze(['duty_layout', 'duty_template']);
+
+// routes/ai/ai.tools/tools.executors/executors.checks.js：每条体检 / 冲突规则实际会读的表。
+// AI 的「完全禁止」读闸门直接消费这份声明；规则实现里不许再手抄表名数组，
+// 新增规则必须在这里登记，否则执行器的 fail-closed 判定会拒绝它。
+const AI_CHECK_RULE_TABLES = Object.freeze({
+  cadre_dangling: Object.freeze(['cadre_members', 'students']),
+  group_dangling: Object.freeze(['group_members', 'students']),
+  score_dangling: Object.freeze(['score_records', 'students']),
+  leave_dangling: Object.freeze(['leave_records', 'students']),
+  seat_dangling: Object.freeze(['seat_layout', 'students']),
+  duty_dangling: Object.freeze(['duty_layout', 'students']),
+  leave_reversed: Object.freeze(['leave_records']),
+  fee_negative: Object.freeze(['fee_records']),
+  sno_duplicate: Object.freeze(['students']),
+  seat_duplicate: Object.freeze(['seat_layout', 'students']),
+  duty_duplicate: Object.freeze(['duty_layout']),
+  countdown_passed: Object.freeze(['countdowns']),
+  schedule_conflict: Object.freeze(['schedule']),
+});
+
+// score_weights 的两组依赖：座位指数要权重 + 历史 + 学生姓名映射，值日指数只要权重 + 历史。
+const AI_SCORE_TABLES = Object.freeze({
+  seat: Object.freeze(['seat_weight', 'seat_history', 'students']),
+  duty: Object.freeze(['duty_weight', 'duty_history']),
+});
+
 // 物理表名与逻辑表名都算「已知表名」；白名单 / 配置里出现别的名字即视为手抄。
 function isKnownName(name) {
   return ALL_PHYSICAL.includes(name) || ALL_LOGICAL.includes(name);
@@ -126,6 +155,9 @@ module.exports = {
   UNDO_WRITE_TABLES,
   UNDO_DOC_TABLES,
   AI_SEARCH_TABLES,
+  AI_CHECK_RULE_TABLES,
+  AI_SCORE_TABLES,
   SEAT_CURRENT_SLOTS,
+  DUTY_TABLES,
   isKnownName,
 };

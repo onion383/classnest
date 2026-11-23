@@ -77,7 +77,10 @@ function flushThumbs(slug) {
   thumbReport.flush(slug);
 }
 
-// 正在跑的任务：albumId → task（本地标志，用于快速响应 stop 指令）
+// 任务键与主进程共用单点定义（utils/scanTaskKey），避免两处各写一遍分叉。
+const { scanTaskKey: taskKey } = require('./utils/scanTaskKey');
+
+// taskKey → task（本地标志，用于快速响应 stop 指令）
 const running = new Map();
 
 // 「已请求停止但任务还没注册」的 albumId 集合。
@@ -139,16 +142,17 @@ async function runScan(slug, albumId, mode, resumeFrom, token) {
     send({ type: 'error', slug, albumId, message: '库不存在或无法打开' });
     return;
   }
+  const key = taskKey(slug, albumId);
   // 同一相册已在跑就不再重复起（主进程已防，这里再兜一层）
-  if (running.has(albumId)) return;
+  if (running.has(key)) return;
   // token = 本次扫描的归属标识（主进程派活时生成并已写库）。
   // 所有推进断点的写操作都带它，就不会误改/误删「别的那一次扫描」的行。
   const task = albumScan.newTask(mode, token);
-  running.set(albumId, task);
+  running.set(key, task);
 
   // 补上「早到的停止」：用户在任务注册前就点了停止，这里直接收工。
-  if (pendingStops.has(albumId)) {
-    pendingStops.delete(albumId);
+  if (pendingStops.has(key)) {
+    pendingStops.delete(key);
     task.cancelled = true;
   }
 
@@ -171,7 +175,7 @@ async function runScan(slug, albumId, mode, resumeFrom, token) {
     flushThumbs(slug);
     send({ type: 'error', slug, albumId, message: err && err.message });
   } finally {
-    running.delete(albumId);
+    running.delete(key);
   }
 }
 
@@ -202,18 +206,19 @@ process.on('message', async (msg) => {
     }
     case 'stop': {
       // 快速路径：先改本地标志让扫描尽快在检查点收工。
-      const t = running.get(msg.albumId);
+      const key = taskKey(msg.slug, msg.albumId);
+      const t = running.get(key);
       if (t) { t.cancelled = true; t.paused = false; }
       // 任务还没注册（用户抢在扫描启动前点了停止）：记下来，runScan 开头补上。
       // 否则这次停止会被「丢弃」——用户以为停了，扫描照跑。
-      else pendingStops.add(msg.albumId);
+      else pendingStops.add(key);
       // 注意：**这里不写库**。state 由主进程独占写（只有它知道 token），
       // 子进程再写一遍只会带来「谁后写谁赢」的竞态
       //（比如用户刚点停止、主进程写了 cancelled，子进程随后写 running 就把指令抹了）。
       break;
     }
     case 'pause': {
-      const t = running.get(msg.albumId);
+      const t = running.get(taskKey(msg.slug, msg.albumId));
       if (t) t.paused = !!msg.paused;
       // 同上：暂停/继续只改本地标志（快速路径），跨进程真源交给主进程写。
       // 「任务还没注册时来的 pause」不用另记 —— waitWhilePaused 会按 token

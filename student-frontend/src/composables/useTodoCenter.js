@@ -55,7 +55,7 @@ export function refreshProvisionalStudents() {
  *   ③ 10 分钟轮询 → 兜底，防事件丢失 / 别的窗口改了库
  *
  * debounce 用 disposables.defer() 的 schedule：它内部会 clearTimeout 上一次排期。
- * 注意 d.timeout() 的取消函数**不**清 timer（项目里踩过），不能拿来做 debounce。
+ * 不用 d.timeout()：它不是「可替换」的，要防抖得自己保存上一轮的取消函数，容易忘。
  */
 export function startTodoCenter() {
   if (disposables) return

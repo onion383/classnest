@@ -70,6 +70,10 @@ import Screenshot from './Screenshot.vue'
 import Note from './Note.vue'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import { SEND, INVOKE, RECEIVE } from '../../electronChannels.js'
+import { useDisposables } from '../../utils/disposables.js'
+
+// 浮窗里的定时器/拖拽监听全部走统一登记表：窗口销毁即释放，动态排期自动撤上一次
+const d = useDisposables()
 
 const state = ref('icon') // 'icon' | 'menu' | 'tool'
 const activeTool = ref('')
@@ -87,12 +91,12 @@ const menuTransition = ref('toolbox-pop')
 function afterWidgetResized(cb, fallbackMs = 250) {
   let finished = false
   let handler = null
-  const timer = setTimeout(finish, fallbackMs)
+  const cancelFallback = d.timeout(() => finish(), fallbackMs)
   function finish() {
     if (finished) return
     finished = true
     if (handler) window.electron.off(RECEIVE.FROM_MAIN, handler)
-    clearTimeout(timer)
+    cancelFallback()
     // 等一帧，确保渲染层已按新尺寸完成布局后再显示
     requestAnimationFrame(cb)
   }
@@ -115,15 +119,13 @@ const exitConfirm = ref(false)
 // 菜单态窗口尺寸（确认视图不改变窗口大小，只是把面板内容换掉）
 const MENU_SIZE = [284, 360]
 
-let toolCloseTimer = null
-let toolOpenTimer = null
+// 「可替换」的定时器调度器：连点时自动撤掉上一次排期，不用手写 clearTimeout 配对
+const scheduleToolClose = d.defer()
+const scheduleToolOpen = d.defer()
 
 // 取消尚未执行的「点工具切换」，并恢复整体透明度（用于用户在淡出过程中又操作了其它入口）
 function cancelPendingToolOpen() {
-  if (toolOpenTimer) {
-    clearTimeout(toolOpenTimer)
-    toolOpenTimer = null
-  }
+  scheduleToolOpen.cancel()
   wrapperFading.value = false
 }
 
@@ -144,16 +146,11 @@ function confirmExitToolbox() {
 }
 
 function openTool(id) {
-  if (toolCloseTimer) {
-    clearTimeout(toolCloseTimer)
-    toolCloseTimer = null
-  }
-  if (toolOpenTimer) clearTimeout(toolOpenTimer)
+  scheduleToolClose.cancel()
   // 先让整个容器淡出（不改动任何面板的挂载与布局），淡出后再切面板、改窗口尺寸，最后整体淡入。
   // 这样「菜单瞬间消失 + 窗口立刻改尺寸」不会露出来，避免闪一下。
   wrapperFading.value = true
-  toolOpenTimer = setTimeout(() => {
-    toolOpenTimer = null
+  scheduleToolOpen(() => {
     menuTransition.value = ''
     activeTool.value = id
     toolReady.value = true // 内容就位（此时整体仍处于淡出态，看不到旧尺寸渲染）
@@ -191,9 +188,7 @@ function closeToIcon() {
     // 普通工具：面板先淡出（复用 tool-hidden 的透明度过渡），淡出结束再切回图标。
     // 注意：此处不清空 activeTool，否则退场中的工具面板会立刻变回「功能开发中」占位。
     toolReady.value = false
-    if (toolCloseTimer) clearTimeout(toolCloseTimer)
-    toolCloseTimer = setTimeout(() => {
-      toolCloseTimer = null
+    scheduleToolClose(() => {
       state.value = 'icon'
       activeTool.value = ''
     }, 130)
@@ -214,13 +209,14 @@ function onDragMouseDown(e) {
   }
 
   const onMouseUp = () => {
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
+    cancelMove()
+    cancelUp()
     window.electron.send(SEND.WIDGET_DRAG_END)
   }
 
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
+  // 松手即摘：拖拽期间的 document 监听不能等到窗口卸载才收尾
+  const cancelMove = d.listen(document, 'mousemove', onMouseMove)
+  const cancelUp = d.listen(document, 'mouseup', onMouseUp)
 }
 
 function onFabMouseDown(e) {
@@ -242,8 +238,8 @@ function onFabMouseDown(e) {
   }
 
   const onMouseUp = () => {
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
+    cancelMove()
+    cancelUp()
     window.electron.send(SEND.WIDGET_DRAG_END)
     if (!hasMoved) {
       cancelPendingToolOpen()
@@ -257,8 +253,8 @@ function onFabMouseDown(e) {
     }
   }
 
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
+  const cancelMove = d.listen(document, 'mousemove', onMouseMove)
+  const cancelUp = d.listen(document, 'mouseup', onMouseUp)
 }
 
 // 右键浮窗图标：呼出原生右键菜单（当前含「本次退出」）
@@ -298,7 +294,7 @@ async function checkToolboxEnabled() {
 }
 
 onMounted(() => {
-  document.addEventListener('mousedown', onDocMouseDown)
+  d.listen(document, 'mousedown', onDocMouseDown)
   checkToolboxEnabled()
   blurHandler = window.electron.on(RECEIVE.FROM_MAIN, (data) => {
     if (data && data.type === 'blur' && state.value === 'menu') {
@@ -312,25 +308,20 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  document.removeEventListener('mousedown', onDocMouseDown)
-  if (toolOpenTimer) clearTimeout(toolOpenTimer)
-  if (toolCloseTimer) clearTimeout(toolCloseTimer)
+  // mousedown 监听与三个排期定时器由 disposables 释放
   if (blurHandler) {
     window.electron.off(RECEIVE.FROM_MAIN, blurHandler)
   }
 })
 
 // 状态变化时自动调整窗口大小和位置
-let iconShrinkTimer = null
+const scheduleIconShrink = d.defer()
 
 watch(
   [state, activeTool],
   ([newState, newTool], [oldState, oldTool]) => {
     // 状态再次变化则取消尚未执行的窗口收缩，避免与新的展开动画抢时序
-    if (iconShrinkTimer) {
-      clearTimeout(iconShrinkTimer)
-      iconShrinkTimer = null
-    }
+    scheduleIconShrink.cancel()
 
     // 回到图标态时复位「退出确认」，否则下次展开菜单会直接停在确认视图
     if (newState === 'icon') exitConfirm.value = false
@@ -339,8 +330,7 @@ watch(
     if (newState === 'icon') {
       if (oldState === 'menu') {
         // 收起工具箱：先让面板播完收起动画，再收缩窗口，否则窗口提前变小会瞬间裁掉面板
-        iconShrinkTimer = setTimeout(() => {
-          iconShrinkTimer = null
+        scheduleIconShrink(() => {
           window.electron.send(SEND.WIDGET_RESIZE, [48, 48])
         }, 120)
         return

@@ -222,12 +222,14 @@ test('§6 单表权限档：完全禁止 / 只读 / 读写，且写闸门真的�
   const stillRead = await tools.runTool('query', { table: 'students' })
   assert.ok(!stillRead.result.error, '只读不影响读取')
 
-  // 完全禁止：进 closed_tables，读被拦
+  // 完全禁止：同时进 closed_tables（读闸门）和 readonly_tables（写闸门），读写都拦
   const p2 = await fx.call('PUT', '/api/ai/privacy', { table: 'students', level: 'none' })
   assert.ok(p2.json.data.closed_tables.includes('students'))
-  assert.ok(!p2.json.data.readonly_tables.includes('students'), '两张清单不会同时命中')
+  assert.ok(p2.json.data.readonly_tables.includes('students'), '完全禁止必须同时断写（#5）：写闸门只看 readonly_tables')
   const noRead = await tools.runTool('query', { table: 'students' })
   assert.match(String(noRead.result.error || ''), /关闭/)
+  const noWrite = await tools.runTool('propose_write', { table: 'students', operation: 'add', data: { 姓名: '测试乙' } })
+  assert.equal(noWrite.result.ok, false, '完全禁止的表写提案必须被拒（过去只断读、写能过）')
 
   // 非法输入一律 400：不支持写的表设「读写」、不存在的表、未知档位
   assert.equal((await fx.call('PUT', '/api/ai/privacy', { table: 'groups', level: 'write' })).status, 400)

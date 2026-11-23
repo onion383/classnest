@@ -5,7 +5,7 @@ const path = require('path');
 const { db } = require('../db');
 const albumStore = require('../services/albumStore');
 const dbManager = require('../dbManager/dbManager');
-const { moveToTrash, deleteThumb } = require('../albumOps');
+const { moveToTrash, restoreToOriginal, deleteThumb } = require('../albumOps');
 const albumThumbs = require('../albumThumbs');
 // 「清理微缩图」只做文件删除（纯 fs，可单测）；索引与数据库一律不动，恢复靠 /thumb 的现场重建
 const { purgeThumbFiles } = require('../services/thumbPurge');
@@ -423,7 +423,7 @@ router.post('/:id/stop', (req, res) => {
 router.post('/:id/pause', (req, res) => {
   const albumId = Number(req.params.id);
   const slug = dbManager.currentSlug();
-  const task = scanWorker.getActive(albumId);
+  const task = scanWorker.getActive(slug, albumId);
   if (!task) return res.json({ message: '当前没有扫描任务', paused: false });
   if (task.cancelled) return res.json({ message: '任务已停止', paused: false });
   const paused = !(req.body && req.body.paused === false);
@@ -468,7 +468,8 @@ router.get('/random-photo/thumb', async (req, res) => {
 // 这里一并读出来，让「暂停中」这个状态即使 IPC 消息丢了也能正确显示。
 router.get('/:id/status', (req, res) => {
   const albumId = Number(req.params.id);
-  const task = scanWorker.getActive(albumId);
+  const slug = dbManager.currentSlug();
+  const task = scanWorker.getActive(slug, albumId);
   if (!task) {
     return res.json({ scanning: false, progress: null });
   }
@@ -557,6 +558,7 @@ router.get('/tasks/pending', (req, res) => {
 // 已在跑的任务会被跳过（同相册同时只跑一个）。
 router.post('/tasks/resume', (req, res) => {
   try {
+    const slug = dbManager.currentSlug();
     const rows = readPendingScanTasks(db);
     if (!rows.length) return res.json({ message: '没有待恢复的任务', resumed: 0 });
     const want = Array.isArray(req.body && req.body.albumIds)
@@ -566,8 +568,8 @@ router.post('/tasks/resume', (req, res) => {
     for (const r of rows) {
       const albumId = r.album_id;
       if (want && !want.has(albumId)) continue;
-      // 已经在跑的不重复启动
-      if (scanWorker.isDispatched(albumId)) continue;
+      // 已经在跑的不重复启动（按账号+相册判断，不能只看裸 albumId）
+      if (scanWorker.isDispatched(slug, albumId)) continue;
       // 相册已不存在（被删了）→ 清掉断点，不再续
       const album = albumStore.albumKind(albumId);
       if (!album) {
@@ -636,6 +638,9 @@ router.delete('/:id', async (req, res) => {
   try {
     const albumId = Number(req.params.id);
     const slug = dbManager.currentSlug();
+    // 先确认真有这条相册：不存在时直接 404，不要往下走「删缩略图 + 空事务」再回
+    // 「相册已删除」—— 另一个窗口已删过时用户会以为这次也删掉了什么。
+    if (!albumStore.albumById(albumId)) return res.status(404).json({ error: '相册不存在' });
     // 删除相册时清理其所有照片的缩略图缓存
     // 路径按库隔离推导（{THUMB_DIR}/{slug}/{photoId}.jpg）；
     // 库里的 thumb_path 也一并清掉，避免索引删了但文件还在。
@@ -1355,7 +1360,18 @@ router.delete('/photo/:photoId', async (req, res) => {
     }
     // 清理已生成的缩略图缓存（按库隔离路径）
     await deleteThumb(photo, dbManager.currentSlug()).catch(() => {});
-    albumStore.deletePhotoRow(photo.id);
+    // 文件系统与数据库双写：文件已移入回收站，若删索引失败必须把文件搬回，
+    // 否则索引仍指向源文件、但文件已在回收站 —— 两边状态永久不一致。
+    try {
+      albumStore.deletePhotoRow(photo.id);
+    } catch (err) {
+      try {
+        await restoreToOriginal(photo);
+      } catch (back) {
+        console.error('[album] 删索引失败且回退文件失败:', back.message);
+      }
+      return res.status(500).json({ error: '删除照片失败（已回退文件）：' + err.message });
+    }
     res.json({ message: '已移入回收站' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1436,6 +1452,6 @@ router.cancelScan = (albumId) => {
 
 // 供 undo.js「重做添加相册」调用：重新加入该文件夹，触发增量扫描（空索引会把现有文件当新增逐步索引）。
 router.startScan = (albumId) => {
-  if (scanWorker.isDispatched(albumId)) return;
+  if (scanWorker.isDispatched(dbManager.currentSlug(), albumId)) return;
   dispatchIncremental(albumId, '');
 };

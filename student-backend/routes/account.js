@@ -89,8 +89,13 @@ async function resolveExportKeying({ slug, user, password, encrypt, dbPassword }
     // 明文库数据本身不加密，「用导出密码加密」对该库无意义，包内不携带库钥匙
     keyFields.key = null;
   } else if (wantEncrypt) {
-    // 库钥匙用导出密码派生钥匙包裹，换机后可用该密码解包恢复
-    keyFields.wrappedByPassword = dbManager.wrapKeyBySecret(bundle.key, wrapPwd);
+    // 库钥匙用导出密码经 scrypt 派生的钥匙包裹（与隐私库同一套 KDF）：
+    // salt 与参数随包携带，恢复端按包里的参数派生，不再用单次 SHA-256。
+    const salt = dbManager.newPrivacySalt();
+    const params = dbManager.SCRYPT_PARAMS;
+    keyFields.passwordSalt = salt;
+    keyFields.kdfParamsPassword = dbManager.serializeScryptParams(params);
+    keyFields.wrappedByPassword = dbManager.wrapKeyByPrivacySecret(bundle.key, wrapPwd, salt, params);
   } else {
     // 未加密：库钥匙明文随包带回，换机免密恢复
     keyFields.key = bundle.key;
@@ -117,7 +122,7 @@ router.post('/export-zip', auth(), async (req, res) => {
     .map((f) => ({ name: `db/${require('path').basename(f)}`, path: f }));
 
   const meta = {
-    version: 3,
+    version: 4, // v4：库钥匙包裹改用 scrypt（salt + 参数随包），不再兼容 v3 的单次 SHA-256 包
     slug: bundle.slug,
     username: bundle.username,
     encrypted: bundle.encrypted,
@@ -689,14 +694,27 @@ router.delete('/class', auth(), (req, res) => {
 // 删除当前登录账号：关闭并删除该账号的库文件、清除 index 登记，不可恢复。
 // 仅删本账号自身的数据；uploads 等为多账号共享资源，不做清理。
 router.delete('/', auth(), (req, res) => {
-    const slug = (req.user && req.user.dbSlug) || 'default';
-  const rec = dbManager.registryFindBySlug(slug);
-  if (!rec) return res.status(404).json({ error: '账号不存在或已被删除' });
-  dbManager.deleteTeacher(slug);
-  // 账号都没了，其它窗口残留的 token 不能继续按旧 sid 通过鉴权
-  revokeAccountSessions(req.user.userId, req.user.dbSlug);
+  const u = req.user;
+  // 「删除账号」= 销毁该账号名下的**全部**班级 + 凭证，不是只删当前班（#4）。
+  // 先在删库前收集全部 slug —— deleteTeacher 会摘登记，删完再查就少了。
+  // token 里的 username 是账号维度的名字（改名后已同步 accounts/registry），据此归属最稳。
+  const allClasses = dbManager.registryFindAllByUsername(u.username);
+  let slugs = allClasses.map((c) => c.slug).filter(Boolean);
+  const current = u.dbSlug;
+  if (!slugs.includes(current) && current) slugs = [current, ...slugs];
+  if (!slugs.length) return res.status(404).json({ error: '账号不存在或已被删除' });
+
+  try {
+    for (const slug of slugs) dbManager.deleteTeacher(slug);
+  } catch (err) {
+    console.warn('[account] 删除账号失败:', err.message);
+    return res.status(500).json({ error: '删除账号失败：' + err.message });
+  }
+  // 账号都没了，其它窗口残留的 token 不能继续按旧 sid 通过鉴权 ——
+  // 按全部班级吊销（只吊销当前班会让别的班窗口的 token 继续可用）。
+  revokeAccountSessions(u.userId, slugs);
   res.clearCookie('token');
-  res.json({ message: '账号已删除' });
+  res.json({ message: '账号已删除', deletedClasses: slugs.length });
 });
 
 // 当前账号的安全等级：plain 明文 / nopass 免密加密 / password 普通密码 / privacy 超级隐私
@@ -787,9 +805,26 @@ router.post('/security-level', auth(), async (req, res) => {
       // 先算出哈希再写库：哈希是异步的，必须 await 拿到结果才能入库
       const newHash = await bcryptHash(effectivePwd, 10);
       userStore.updatePassword(user.id, newHash);
+      // 多班级：登录校验以 accounts.password_hash 为权威（auth.js hashSource），
+      // 切到需密码的等级时必须同步权威哈希，否则新密码登录仍被旧哈希判 401。
+      // 口径同 PUT /password（下方 610-615）：库内 users.password 保持自洽，账号表另写一份。
+      try {
+        const acc = dbManager.accountFindByUsername(username);
+        if (acc) dbManager.accountSetPassword(acc.id, newHash);
+      } catch (err) {
+        console.warn('[account] 切换安全等级同步账号密码失败:', err.message);
+      }
     } else if (target === 'plain' || target === 'nopass') {
       // 明文库与免密登录都不能保留密码
       userStore.updatePassword(user.id, '');
+      // 清空库内密码的同时必须清空权威哈希：否则登录 hashSource 仍拿到旧哈希，
+      // 切到免密/明文后反而还要输旧密码，安全等级与登录策略分裂。
+      try {
+        const acc = dbManager.accountFindByUsername(username);
+        if (acc) dbManager.accountSetPassword(acc.id, '');
+      } catch (err) {
+        console.warn('[account] 切换安全等级清空账号密码失败:', err.message);
+      }
     }
 
     // 退出隐私：先把库钥匙改回主密钥包裹，再处理免密/明文

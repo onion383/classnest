@@ -123,8 +123,13 @@ test('usePhotoTimeline 把安静窗口接到 window resize，而不是只写在�
   const body = code.slice(code.indexOf('function onResize()'), code.indexOf('// ===== 盯住容器自身尺寸'))
   assert.match(body, /beginResize\(\)/, 'onResize 必须调 beginResize（只 schedule 等于没冻结）')
   assert.match(body, /schedule\(\)/, '布局仍要跟手')
-  assert.match(code, /if \(resizeIdleTimer\) \{ clearTimeout\(resizeIdleTimer\); resizeIdleTimer = 0 \}/,
-    '卸载时必须清掉静默期定时器')
+  // 清法两种都收：裸 clearTimeout，或走 disposables 的 defer().cancel()。
+  // 不变量是「卸载时静默期定时器不再跑」，不是用哪种 API。
+  assert.match(
+    code,
+    /(if \(resizeIdleTimer\) \{ clearTimeout\(resizeIdleTimer\); resizeIdleTimer = 0 \}|scheduleResizeIdle\.cancel\(\))/,
+    '卸载时必须清掉静默期定时器',
+  )
   assert.match(code, /cellStyle, layout, totalH, visibleGroups, resizing,/, 'resizing 必须导出')
 })
 

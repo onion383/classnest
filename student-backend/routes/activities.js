@@ -15,31 +15,45 @@ router.get('/', (req, res) => {
 
 // POST /api/activities 新增
 router.post('/', (req, res) => {
+  // 校验错误必须是 400：cleanUp 抛出的「不是合法日期」若不加 try 会被 Express 兜成
+  // 500 + HTML 错误页，前端只看到「服务器错误」，看不出是时间填错了。
+  try {
     const body = req.body || {};
-  const data = cleanUp(body, EDITABLE, 'activities');
-  data.created_at = now();
-  // position 的「取最大值 + 插入 + 重排」必须在同一个事务里：并发两个 POST 时
-  // 两个请求都读到同一个 max，会写出重复 position（审查 v4 · B02-12）。
-  const result = db.transaction(() => {
-    data.position = maxPosition('activities') + 1;
-    const r = buildInsert('activities', data);
-    renumber('activities');
-    return r;
-  })();
-  res.json({ id: result.lastInsertRowid, message: '添加活动成功' });
+    const data = cleanUp(body, EDITABLE, 'activities');
+    data.created_at = now();
+    // position 的「取最大值 + 插入 + 重排」必须在同一个事务里：并发两个 POST 时
+    // 两个请求都读到同一个 max，会写出重复 position（审查 v4 · B02-12）。
+    const result = db.transaction(() => {
+      data.position = maxPosition('activities') + 1;
+      const r = buildInsert('activities', data);
+      renumber('activities');
+      return r;
+    })();
+    res.json({ id: result.lastInsertRowid, message: '添加活动成功' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // PUT /api/activities/:id 编辑
 router.put('/:id', (req, res) => {
+  try {
     const row = cleanUp(req.body || {}, EDITABLE, 'activities');
-  if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
-  buildUpdate('activities', row, req.params.id);
-  res.json({ message: '修改成功' });
+    if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
+    // 不存在的 id 必须 404：buildUpdate 对空结果不报错，原先一律回「修改成功」，
+    // 前端在另一个窗口已删掉这条时看不到任何异常，用户以为改动保存了。
+    const result = buildUpdate('activities', row, req.params.id);
+    if (result.changes === 0) return res.status(404).json({ error: '活动不存在' });
+    res.json({ message: '修改成功' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // DELETE /api/activities/:id 删除
 router.delete('/:id', (req, res) => {
-    activityStore.removeById(Number(req.params.id));
+    const result = activityStore.removeById(Number(req.params.id));
+  if (result.changes === 0) return res.status(404).json({ error: '活动不存在' });
   renumber('activities');
   res.json({ message: '删除成功' });
 });

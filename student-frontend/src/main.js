@@ -1,4 +1,4 @@
-import { getToken, clearToken, isLoggingOut } from './utils/authStorage.js'
+import { getToken, clearAuth, isLoggingOut } from './utils/authStorage.js'
 // 跨窗口登录态同步：别的窗口登出/换号时，本窗口的登录代次与用户级缓存要一起作废
 import { installAuthSync } from './utils/authSync.js'
 import { createApp } from 'vue'
@@ -57,7 +57,11 @@ setupApiClient({
     const isAuthReq = /(login|register|restore|recover)/i.test(url)
     if (!config?.__skipAuth && !isAuthReq && Date.now() - lastAuthPrompt > 2000) {
       lastAuthPrompt = Date.now()
-      clearToken()
+      // 用 clearAuth 而不是只清 token：currentUser 与用户级缓存（开学日 / 仪表盘快照）
+      // 必须一起作废，同时把用户作用域代次 +1 —— 否则在途请求的响应会被当成「还属于
+      // 当前用户」，而下一个登录的人（可能是别的账号）会看到上一个人的缓存（v7 §5-2）。
+      // 与路由守卫、登出入口保持同一口径。
+      clearAuth()
       clearMediaToken()
       useNotification().error('登录已过期，请重新登录', 5000)
       if (router.currentRoute.value.path !== '/login') {

@@ -21,7 +21,8 @@
 
 <script setup vapor>
 import '../../styles/dialog-transition.css'
-import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { onBeforeUnmount, watch } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import { pushDialog, removeDialog, isTopDialog } from '../../utils/dialogStack.js'
 
 const props = defineProps({
@@ -60,9 +61,8 @@ function onKeydown(e) {
   emit('overlay')
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown)
-  removeDialog(self)
-})
+// 键盘监听走 disposables：配对卸载自动移除，不再手写 onMounted / onBeforeUnmount 两张清单。
+const d = useDisposables()
+d.listen(window, 'keydown', onKeydown)
+onBeforeUnmount(() => removeDialog(self))
 </script>

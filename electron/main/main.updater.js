@@ -10,6 +10,8 @@
 //
 // 依赖注入：状态广播只发给主窗口，用 sendToMain(payload) 由 main.js 提供
 // （内部自带 mainWindow 空判与 isDestroyed 判空，本模块不直接持有窗口引用）。
+// registerUpdateIpc(send, { stopBackend }) 的 stopBackend 由 main.js 注入：安装前要等
+// 后端子进程退出，否则它还占着数据库文件，安装器 /CLOSEAPPLICATIONS 会替换失败。
 // =========================================================================
 
 const { app } = require('electron')
@@ -273,8 +275,9 @@ function pruneUpdateCache() {
 }
 
 // 注册版本更新相关的 IPC 通道。send(payload) 由 main.js 提供，用于向主窗口推 update-state。
-function registerUpdateIpc(send) {
+function registerUpdateIpc(send, deps = {}) {
   if (typeof send === 'function') sendToMain = send
+  const stopBackend = typeof deps.stopBackend === 'function' ? deps.stopBackend : () => Promise.resolve()
 
   pruneUpdateCache()
 
@@ -343,24 +346,42 @@ function registerUpdateIpc(send) {
       setUpdateState({ status: 'error', error: '安装包校验失败：' + (err?.message || String(err)) })
       return
     }
-    try {
-      const { spawn } = require('child_process')
-      // Inno 静默安装参数：
-      //   /SILENT             无界面安装
-      //   /CLOSEAPPLICATIONS  自动关闭占用目标文件的旧进程
-      //   /RESTARTAPPLICATIONS 安装完成后自动重启被关闭的应用
-      const child = spawn(resolved, ['/SILENT', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS'], {
-        detached: true,
-        stdio: 'ignore',
-      })
-      child.unref()
-      // 置退出标志（跳过「关闭确认/托盘存活」逻辑）并退出，释放单实例锁供安装器替换文件
-      launched = true
-      app.isQuitting = true
-      setTimeout(() => app.quit(), 500)
-    } catch (err) {
-      setUpdateState({ status: 'error', error: friendlyUpdateError(err) })
-    }
+    // spawn 的失败是**异步 error 事件**（exe 被删 / 权限不足等），同步 try/catch 抓不到：
+    // 原实现 spawn 后立刻 app.quit()，用户看到应用直接消失却没有任何错误提示。
+    // 改为等 'spawn' 确认真的起来了才走退出；'error' 先到则报错并留在应用里。
+    await new Promise((resolve) => {
+      let settled = false
+      const finish = () => { if (settled) return; settled = true; resolve() }
+      try {
+        const { spawn } = require('child_process')
+        // Inno 静默安装参数：
+        //   /SILENT             无界面安装
+        //   /CLOSEAPPLICATIONS  自动关闭占用目标文件的旧进程
+        //   /RESTARTAPPLICATIONS 安装完成后自动重启被关闭的应用
+        const child = spawn(resolved, ['/SILENT', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS'], {
+          detached: true,
+          stdio: 'ignore',
+        })
+        child.once('error', (err) => {
+          setUpdateState({ status: 'error', error: friendlyUpdateError(err) })
+          finish()
+        })
+        child.once('spawn', async () => {
+          child.unref()
+          // 先停后端：它还占着数据库文件，安装器替换文件会失败（7-4）。
+          try { await stopBackend() } catch (_) { /* 停不掉也不能卡住安装 */ }
+          launched = true
+          app.isQuitting = true
+          setTimeout(() => app.quit(), 500)
+          finish()
+        })
+        // 极端情况：既不 spawn 也不 error（底层异常），不能把 IPC 永久挂住
+        setTimeout(finish, 10000)
+      } catch (err) {
+        setUpdateState({ status: 'error', error: friendlyUpdateError(err) })
+        finish()
+      }
+    })
     } finally {
       // 成功启动安装器后保持锁住：进程虽有 500ms 后才退出，但这段窗口仍可能被再次点击
       if (!launched) installBusy = false

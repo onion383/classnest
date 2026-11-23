@@ -131,7 +131,8 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import '../../styles/dialog-transition.css'
 import DialogShell from '../base/DialogShell.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
@@ -154,7 +155,8 @@ const listVisible = ref(false)
 // 候选学生列表滚动容器（自定义滚动条的目标）
 const studentListRef = ref(null);
 const selected = ref(null);
-const hideTimer = ref(null);
+// 下拉延迟收起：可替换定时器（每次调用自动撤掉上一次），随组件卸载自动清
+const scheduleHide = useDisposables().defer();
 const quickButtons = ref(['今日全天', '今日上午', '今日下午', '今日晚修', '今日不过夜', '明天全天', '连续两天', '连续三天']);
 const form = ref({
   type: props.typeOptions[0] || '病假',
@@ -174,15 +176,14 @@ const isEdit = computed(() => {
   return !!(props.editingRecord && props.editingRecord.id != null)
 })
 
+// immediate 不能省：宿主 v-if 懒挂载时 visible 已经是 true，非 immediate 的 watcher
+// 建立时已错过这次变化 —— 首次打开表单不会预置/重置（v7 §5-3）。
 watch(() => props.visible, (v) => {
   if (v) {
     if (isEdit.value) presetFromRecord(props.editingRecord)
     else reset()
   }
-})
-
-// 下拉延迟收起定时器：弹窗关掉（组件卸载）后仍在跑就会往已销毁的实例上写状态
-onBeforeUnmount(() => clearTimeout(hideTimer.value))
+}, { immediate: true })
 
 // datetime-local 输入值格式
 function toInput(d) {
@@ -236,7 +237,10 @@ function applyQuick(name) {
   } else if (name === '今日不过夜') {
     start = at(0, 18, 0); end = at(1, 7, 0);
   } else if (name === '明天全天') {
-    start = now; end = at(2, 7, 0); // 当前时刻 → 第三天(后天)早上7点
+    // 学校日以 7 点为界（与「今日不过夜」18:00→次日 7:00 同口径）：
+    // 明天 7 点 → 后天 7 点，正好是明天这一天。原来从「此刻」开始，等于把今天剩余时间
+    // 也一起请掉、还请到后天早上（审查 v7 · #25b）。
+    start = at(1, 7, 0); end = at(2, 7, 0);
   } else if (name === '连续两天') {
     start = now; end = new Date(now.getTime() + 48 * 3600 * 1000);
   } else if (name === '连续三天') {
@@ -255,8 +259,7 @@ function selectStudent(s) {
   form.value.studentPhone = s.学生联系电话 || '';
 }
 function delayHide() {
-  clearTimeout(hideTimer.value);
-  hideTimer.value = setTimeout(() => {
+  scheduleHide(() => {
     listVisible.value = false;
   }, 150);
 }

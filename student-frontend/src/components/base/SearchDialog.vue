@@ -327,6 +327,11 @@ function scheduleRemoteSearch() {
     remoteHasMore.value = false
   }
   remoteSearching.value = true
+  // 防抖窗口（250ms）里上一次请求可能仍在途。它回来时 remoteSeq 还认它是「当前」，
+  // 会把新关键字的结果先盖成旧词的（新请求要等防抖结束才 begin）——用户能看到结果闪一下
+  // 旧内容。这里先作废序号并掐掉在途请求，旧词的结果一个都不许落地（审查 v7 · #28）。
+  remoteSeq.invalidate()
+  abortRemote()
   scheduleRemote(() => fetchRemoteSearch(q), 250)
 }
 

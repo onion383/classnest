@@ -161,7 +161,143 @@ classnest/
         ├── viewer-pan.test.js  # 查看器放大后拖动平移
         ├── vite-outdir-empty.test.js  # 构建输出目录的小批量清空
         ├── undo-sql-outlet.test.js  # 撤销域 4 个文件不许有裸 SQL（M12-B8）
-        └── zip-peek.test.js  # 「这个备份包要不要口令」的判断必须与真包一致：误判「不用口令」会让用户卡在解不出钥匙，误判「…
+        ├── zip-peek.test.js  # 「这个备份包要不要口令」的判断必须与真包一致：误判「不用口令」会让用户卡在解不出钥匙，误判「…
+        ├── about-license-timeout-recover.test.js  # 超时后又加载成功要清掉错误（#48）
+        ├── access-log.test.js  # 数据访问记录（schema.log.js / accessLogStore / 接口）
+        ├── access-timeline-total.test.js  # 访问记录时间线的「条数口径」（#33）
+        ├── account-delete-all-classes.test.js  # 删账号销毁全部班级（1-11 / #4）
+        ├── account-rename-visibility.test.js  # 多班改名后其它班仍列在登录列表（1-3 / H2）
+        ├── activities-import-undo-key.test.js  # 切标签撤销记错历史栈（3-9 / #49）
+        ├── ai-batch-cascade-undo.test.js  # AI 批量删学生的级联撤销（1-4 / 第二轮 N2）
+        ├── ai-batch-rename-cascade.test.js  # AI 批量改学生姓名级联（3-1 / #44 / 独立 M2）
+        ├── ai-busy-queue.test.js  # 忙碌队列丢附件 + 部分失败无法撤回（3-4 / #17）
+        ├── ai-checks-read-scope.test.js  # 1-6 遗留：体检 / 冲突 / 指数工具的表级读闸门
+        ├── ai-privacy-batch3.test.js  # AI 数据保护第 3 批：全出口补齐
+        ├── ai-privacy-batch4.test.js  # AI 数据保护第 4 批：按表关闭 + web_search 拦截 + 前端设置
+        ├── ai-privacy-batch5.test.js  # AI 数据保护第 5 批：电话宽松格式校验
+        ├── ai-privacy-outbound.test.js  # 脱敏异常不发原文 + 附件文件名出站替换（1-9 / #1）
+        ├── ai-privacy-wiring.test.js  # AI 数据保护第 2 批：存储开关 + 最小闭环接线
+        ├── ai-privacy.test.js  # AI 数据保护第 1 批：纯模块判据，不接线、零行为变化
+        ├── ai-read-scope-gate.test.js  # AI 读权限闸门覆盖派生读工具（1-6 / #38）
+        ├── ai-rollback-busy.test.js  # 回退会话期间忙碌锁（3-3 / #40）
+        ├── ai-score-seat-layout.test.js  # 4-9 / H4：AI 的 score_weights 座位指数
+        ├── ai-stream-class-scope.test.js  # 切班后旧 AI 流不得在新班执行提案（3-2 / #39）
+        ├── album-delete-compensation.test.js  # 删除照片双写失败补偿（2-5 / #13）
+        ├── async-scope-guard.test.js  # 旧请求覆盖当前状态（3-5 / #18 #45 #55 #27a）
+        ├── audit-coverage.test.js  # 覆盖矩阵检查器的自测与变异反证
+        ├── auth-expired-clears-user.test.js  # 401 失效必须换「人」，不能只丢 token（v7 §5-2）
+        ├── auth-recover-hash-sync.test.js  # 恢复改密必须同步账号权威哈希（1-1 / #3 / 独立 H1）
+        ├── auth-recover-revoke-all.test.js  # 恢复改密吊销账号全部班级会话（1-2 / N1 / H7）
+        ├── auth-recovery-rename-fallback.test.js  # 改名后本机恢复通道仍可用（2-2 / 第二轮 N4）
+        ├── auth-user-store-sink.test.js  # users 表「登录前路径」的 SQL 出口判据
+        ├── backend-kill-tree.test.js  # 后端子进程必须整树清理，不留孙进程
+        ├── backup-key-scrypt.test.js  # 备份包口令派生必须是有 salt 的 scrypt
+        ├── cadre-member-authority.test.js  # cadre_members 的权威字段守门
+        ├── cadre-member-provisional.test.js  # 班干部成员自己认人（P1-3）
+        ├── cadre-tree-member-remove.test.js  # 递归组件的事件转发必须带全参数（#58）
+        ├── class-scope.test.js  # 「切班不重启」接线判据
+        ├── cors-origin-null.test.js  # CORS 不许无条件信任 Origin: null
+        ├── custom-scrollbar-reflow.test.js  # 滚动条测量不许制造强制同步布局
+        ├── data-checks-dangling.test.js  # 数据体检的「孤立数据」规则
+        ├── date-column-validation.test.js  # 日期列拒绝非法日期（4-2 / #61）
+        ├── dev-subwindow-identity.test.js  # dev 子窗口加载前必须校验页面身份
+        ├── draft-release-assets.test.js  # 草稿发布的产物 glob 必须匹配实际下载层级
+        ├── duty-arrange-scope-labor.test.js  # 值日智能排表的作用域与特殊劳动（v7 §5-5）
+        ├── duty-cell-undo.test.js  # 值日表「按格撤销」
+        ├── duty-hitday-backfill.test.js  # 大扫除补存只写命中日（审查 v7 · #79）
+        ├── duty-ledger-by-id.test.js  # 值日账本按「学生身份」而不是按姓名统计
+        ├── duty-mode-snapshot.test.js  # 值日切模式不写旧数据到新模式（3-7 / #50）
+        ├── duty-student-id.test.js  # P2-2：值日格存学生 id
+        ├── duty-template-delete.test.js  # 删学生要连值日模板一起清（2-11 / #9a）
+        ├── duty-weight-mode-guard.test.js  # 值日权重表不能与设置抢跑、也不能被旧模式覆盖（v7 §5-7 / #25a）
+        ├── dynamic-table-resize-quiet.test.js  # 容器尺寸变化时行高测量必须走「安静窗口」
+        ├── filter-present-identity.test.js  # 点名候选名单按 ID 排除请假，不按姓名（v7 §5-4 / #20）
+        ├── fixture-data-dir-isolation.test.js  # 测试夹具不许继承外部 DATA_DIR
+        ├── fk-probe.test.js  # 外键探测（施工清单 P0-1）
+        ├── frontend-relative-imports.test.js  # 前端相对 import 必须指向真实存在的文件
+        ├── group-dim-naming-guard.test.js  # 维度详情加载失败自动命名改错旧维度（3-8 / #51）
+        ├── group-member-provisional.test.js  # 小组成员的每个写入口都要给姓名建档
+        ├── group-member-student-id.test.js  # P2-1：小组成员指针化（member_name → student_id）
+        ├── group-rename-undo-ref.test.js  # 撤销「分组页改名」必须按 ID 恢复引用（v7 §5-4 / #57）
+        ├── import-transaction-rollback.test.js  # 导入失败不留孤儿临时学生（2-1 / #14 / 独立 M3）
+        ├── install-warmup-no-db.test.js  # 安装器预热不许建 index.db（否则跳过首启引导）
+        ├── json-version.test.js  # JSON 列的 __v 结构版本标记
+        ├── key-pair-prewarm.test.js  # 握手临时密钥对「预生成 + 用后补齐」回归
+        ├── layout-shift-hint.test.js  # 表格冻结期间必须有「正在调整表格布局」状态提示
+        ├── layout-shift-resize.test.js  # 拖窗口改大小必须复用同一套表格冻结窗口
+        ├── lazy-dialog-first-open.test.js  # v-if 懒挂载弹窗的「首次打开」必须初始化（v7 §5-3）
+        ├── leave-provisional.test.js  # 请假里的名册外姓名（P0-2 / P0-3 口径对齐）
+        ├── leave-quick-tomorrow.test.js  # 「明天全天」= 明天 7 点 → 后天 7 点（v7 §5-7 / #25b）
+        ├── leave-timeline-search.test.js  # 时间轴「任意关键词」搜索的索引边界
+        ├── lifecycle-migration.test.js  # §5-17 生命周期批的结构判据
+        ├── login-days-sign-key.test.js  # 登录保持天数签发键（2-3 / 第二轮 N3）
+        ├── logout-toast.test.js  # 主动登出必须是「已退出登录」，不能变成红色「登录已过期」
+        ├── mcp-auto-exec.test.js  # 「自动执行提案」开关
+        ├── mcp-cross-class-scope.test.js  # MCP 令牌跨班越权 + 限流原子性（2-10 / #8）
+        ├── mcp-privacy-split.test.js  # 数据保护「分权」：AI 与 MCP 各一份配置
+        ├── mcp-privacy.test.js  # U6：数据保护真正作用于 MCP 读写（不是假开关）
+        ├── mcp-proposal-history.test.js  # 提案的「未处理 / 已处理」两栏与保留条数
+        ├── mcp-rate-limit.test.js  # 方向 B：工具调用频率闸门
+        ├── mcp-read-scope.test.js  # U7：按表「完全禁止 AI 读取」在 MCP 三处读入口强制执行
+        ├── mcp-server.test.js  # 方向 B（班集作为 MCP 服务端）端到端验证
+        ├── mcp-token-copy-status.test.js  # 复制失败不能提示成功（v7 §5-8 / #27b）
+        ├── mcp-token-store.test.js  # U4：令牌明文可复制（明文存加密班级库，core 只留索引）
+        ├── media-viewer-video-error.test.js  # 视频加载失败不能停在骨架无限等（复核 A4-03）
+        ├── multi-class.test.js  # 「一个账号多个班级」接线判据
+        ├── not-found-404.test.js  # PUT/DELETE 不存在的 id 必须 404（4-3）
+        ├── owned-electron-child.test.js  # 性能探针退出时必须关掉自己启动的 Electron
+        ├── perf-gc-all-renderers.test.js  # 「回收全部」要覆盖所有存活 renderer（#42）
+        ├── privacy-cache-invalidate.test.js  # 1-9 遗留：脱敏映射必须随库内数据自动失效
+        ├── receipt-attach-rollback.test.js  # 收据关联写库失败要回滚弹窗列表（v7 §5-9 / #28）
+        ├── receipt-media-token.test.js  # 收据预览/下载要走媒体凭据刷新（v7 §5-9 / #28）
+        ├── refresh-virtual-dir-isolation.test.js  # 虚拟相册刷新测试的目录隔离
+        ├── restore-shared-dirs.test.js  # 恢复单班备份不覆盖全局共享文件（1-8 / #11）
+        ├── restore-stops-scanner.test.js  # 整库恢复前停扫描子进程连接（2-6 / #12）
+        ├── rollcall-exclude-absent.test.js  # 「点名排除没有在校的同学」开关全链路
+        ├── row-focus-cancel-registry.test.js  # 反复跨页定位不能攒住旧闭包与 DOM（v7 §5-9 / #28）
+        ├── scan-task-key.test.js  # 扫描任务键含班级 slug（2-9 / #6）
+        ├── schedule-cells-validation.test.js  # 课表接口拒绝畸形 cells（4-1 / #60）
+        ├── schedule-import-save.test.js  # 课表 Excel 导入必须调到真的保存方法（v7 §5-7 / #25）
+        ├── score-aggregate-identity.test.js  # 成绩统计按身份聚合，不按姓名（v7 §5-4 / #20）
+        ├── search-debounce-stale.test.js  # 防抖窗口里旧词的结果不许落地（v7 §5-9 / #28）
+        ├── seat-ai-hole-image.test.js  # AI 座位图必须把「空位」画出来（4-8 / #80）
+        ├── seat-history-cache-invalidate.test.js  # 快照变更后座位账本/指数缓存必须作废（4-7 / #26）
+        ├── seat-name-preview.test.js  # AI 写座位表时「认不出的人」必须被说出来
+        ├── seat-name-provisional.test.js  # 座位格里的姓名要变成「一个人」（P1-5）
+        ├── seat-same-cell-order.test.js  # 同格快速编辑乱序落库（3-10 / #23）
+        ├── seat-snapshot-validation.test.js  # 座位快照写接口必须与座位写入口同口径（4-10）
+        ├── secure-channel-smoke-gate.test.js  # 安全通道 smoke 不许凭部分 PASS 假绿
+        ├── secure-write-proof.test.js  # 安全信道写请求强制一次性凭据（1-10 / #2）
+        ├── security-level-hash-sync.test.js  # 切换安全等级同步权威凭证（1-12 / #5a）
+        ├── select-bidi.test.js  # 下拉当前值「天 30」倒装的回归钉子
+        ├── sidebar-collapse-freeze.test.js  # 折叠侧栏时表格内部不许逐帧重排
+        ├── smart-arrange-save-guard.test.js  # 智能排表保存失败不能提示成功（4-6 / #43）
+        ├── smoke-skip-gate.test.js  # CI 不许让关键 smoke 用例静默跳过
+        ├── smoke-truthfulness.test.js  # 四处「测试工具假绿」修复的判据
+        ├── student-formal-filter.test.js  # 学生管理只列正式学生（?formal=1）
+        ├── student-lookup.test.js  # 学生「认人」的单源实现（services/studentLookup.js）
+        ├── student-provisional-visibility.test.js  # 临时学生在「点名器 / AI 找人 / AI 聚合」里可见
+        ├── student-ref-frontend-wiring.test.js  # 前端「成员提交口径」（P1-4）
+        ├── student-ref-write-paths.test.js  # 「写入路径有没有认人」的验收判据
+        ├── student-relations-namesake.test.js  # 删学生不误删同名学生的关联（1-7 / #9）
+        ├── table-drag-select-guard.test.js  # 动态表格的三处交互陷阱（v7 §5-6）
+        ├── theme-persist-after-ready.test.js  # 主题备料失败不能留下「持久态分叉」
+        ├── todo-center.test.js  # 标题栏「N 项待处理」胶囊的接线判据
+        ├── todo-realtime.test.js  # 写成功后标题栏待办要立刻重拉，不能等 10 分钟
+        ├── trash-slug-bucket.test.js  # 全局回收站归档跨班碰撞（2-8 / #7）
+        ├── undo-result-toast.test.js  # 更改审查：回退/撤销/重做的结果走提示条
+        ├── undo-rewind.test.js  # 撤销统一 B3 判据：「回退到这条记录之前」原子批量入口
+        ├── undo-source-converge.test.js  # 撤销统一 B5 判据：三入口收敛到同一原子内核
+        ├── undo-source-expected.test.js  # 撤销统一 B1+B2 判据
+        ├── unzip-path-conflict.test.js  # 离线恢复 ZIP 路径冲突不崩进程（2-7 / #35）
+        ├── unzip-safe-test-isolation.test.js  # smoke 测试不许删别人在系统 temp 的文件
+        ├── updater-spawn-gate.test.js  # 更新安装器 spawn 失败不能让应用静默消失
+        ├── upload-signature-ftyp.test.js  # 带前置盒的 MP4 不该被判「内容不是有效 mp4」
+        ├── usb-auto-open-generation.test.js  # 关闭后迟到探测不开新盘（3-6 / #41）
+        ├── usb-auto-open-persist.test.js  # USB 开关写盘失败不能假装成功（#46）
+        ├── virtual-rows.test.js  # 已处理列表的行虚拟滚动纯计算
+        ├── widget-apps-save-queue.test.js  # 桌面挂件「常用软件」保存：连续编辑必须按顺序落库（审查 v7 · #75）
+        └── write-scope-closed.test.js  # 「完全禁止」必须同时阻断写入（1-5 / #5 / M1）
 ```
 <!-- doc-tree:end -->
 
@@ -171,7 +307,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），206 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），290 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
 - **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。

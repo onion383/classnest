@@ -156,7 +156,8 @@ const PATTERNS = [
     desc: 'URL.revokeObjectURL 同步立即调用（下载 Blob 后立刻撤销 → 可能 0 字节）',
     detect: (line, file) => {
       if (!/URL\.revokeObjectURL\(/.test(line)) return false
-      if (/setTimeout|setInterval|requestAnimationFrame/.test(line)) return false
+      // 延迟回收的写法都算安全：原生定时器、rAF、以及项目的 d.timeout()（disposables）
+      if (/setTimeout|setInterval|requestAnimationFrame|\.timeout\(/.test(line)) return false
       // 只在「有下载/导出语义」的文件里查：缩略图批量回收、背景图替换不是下载场景
       const hasDownload = file.lines.some((l) => /\bdownload\b|saveBlob|a\.click\(\)|createElement\('a'\)/.test(l))
       return hasDownload
@@ -536,6 +537,8 @@ module.exports = { runSweep, PATTERNS }
 // CLI 入口
 // ---------------------------------------------------------------------------
 if (require.main === module) {
-  const r = runSweep({ only: ONLY_MODE })
-  process.exit(r.failures ? 1 : 0)
+  const r = runSweep({ only: ONLY_MODE, reportOnly: REPORT_ONLY })
+  // --report 的契约是「只出报告、不判成败」：解析了 REPORT_ONLY 却仍按 failures 退出，
+  // 会让非阻断报告脚本被命中项误判成命令失败。报告模式固定 0。
+  process.exit(REPORT_ONLY ? 0 : (r.failures ? 1 : 0))
 }

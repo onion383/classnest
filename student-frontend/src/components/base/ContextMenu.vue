@@ -26,6 +26,7 @@
 <script setup vapor>
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { claimContextMenu } from '../../utils/contextMenuRegistry.js'
+import { useDisposables } from '../../utils/disposables.js'
 
 defineOptions({ name: 'ContextMenu' })
 
@@ -75,6 +76,10 @@ const menuStyle = computed(() => {
   };
 });
 
+// 视口监听按「展开/收起」反复挂摘，所以自己存取消函数；即使漏摘，卸载时 d 也会兜底。
+const d = useDisposables();
+let cancelViewport = [];
+
 watch(() => props.visible, (v) => {
   if (!v) {
     removeViewportListeners();
@@ -115,12 +120,15 @@ function onViewportChange() {
   if (props.visible) emit('close');
 }
 function addViewportListeners() {
-  window.addEventListener('scroll', onViewportChange, true);
-  window.addEventListener('resize', onViewportChange);
+  if (cancelViewport.length) return;
+  cancelViewport = [
+    d.listen(window, 'scroll', onViewportChange, true),
+    d.listen(window, 'resize', onViewportChange),
+  ];
 }
 function removeViewportListeners() {
-  window.removeEventListener('scroll', onViewportChange, true);
-  window.removeEventListener('resize', onViewportChange);
+  for (const c of cancelViewport) c();
+  cancelViewport = [];
 }
 </script>
 <style scoped>

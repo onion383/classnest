@@ -51,7 +51,7 @@ const SECRET = resolveSecret();
 //
 // 这里刻意不再有 TOKEN_SIGN_OPTS 这样的模块级常量：天数变成按账号可配之后，
 // 任何「一次性求值、所有账号共用」的值都会在下次改设置时变成静默的错值。
-// 所有签发点一律调 authPolicy.signOptsFor(dbSlug) 现取。
+// 所有签发点一律调 authPolicy.signOptsFor(username) 现取（键是账号名，不是 dbSlug）。
 //
 // 滑动续期：剩余有效期少于该账号天数的 1/4 时，任意一次正常业务请求都会顺带续签一份
 // 完整天数的新 token。效果是「活跃用户永不过期，长期不用的账号到期失效」；sid 不变，

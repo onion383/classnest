@@ -57,7 +57,12 @@ test('[静态] AppSelect 的 Esc 由弹层自己接管，不再裸绑触发器',
     'Esc 只绑触发器会漏（焦点离开按钮就收不掉菜单），也会冒泡到 DialogShell',
   )
   assert.match(src, /consumeEscape\(e, \{ open: open\.value, self: escLayer \}\)/)
-  assert.match(src, /document\.addEventListener\('keydown', onDocKeydown\)/)
+  // 注册方式两种都收：裸 addEventListener 或经 disposables 的 d.listen。
+  // 这里的不变量是「展开时把 keydown 挂到 document 上」，不是用哪种 API。
+  assert.match(
+    src,
+    /(document\.addEventListener\('keydown', onDocKeydown\)|d\.listen\(document, 'keydown', onDocKeydown\))/,
+  )
   // 打开时要进栈，否则 DialogShell 不知道下拉是最上层
   assert.match(src, /watch\(open,[\s\S]{0,240}?pushEscLayer\(escLayer\)/)
   assert.match(src, /removeEscLayer\(escLayer\)/)

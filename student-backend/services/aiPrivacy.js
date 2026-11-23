@@ -240,8 +240,19 @@ function createStreamUnmasker(maps, maxTokenLen = 10) {
 // kind 区分「谁的开关」：'ai' = 本地助手（privacy_json），'mcp' = 外部客户端（mcp_privacy_json）。
 // 只有开关分开，映射表（seed + 名册）始终共用一份 —— 两套实例会让改名后的别名缓存各走各的，
 // 一边刷新一边不刷新，反而把新名字漏成明文。
-function createAiPrivacy({ readSeed, writeSeed, listStudents, listLeaves, readEnabled, dataDir = '' } = {}) {
+//
+// 缓存失效（v7 · 1-9 根因）：映射依赖 students / leave_records 的全量内容。此前只由设置页
+// 显式调 invalidate()，业务写入（新增学生、改名、新号码、导入、撤销、临时学生）都会让缓存
+// 停留在旧名册，新真名/新号码原样发给外部模型。逐个写路径补 invalidate 是打补丁：以后新增
+// 写入口照样会漏。这里改为**按数据库变更号自动失效**（readRevision，取连接的 totalChanges）：
+// 任何写操作（无论哪个 store、AI 批量、MCP 提案、导入、撤销）都会让变更号变化，下次取映射
+// 时自动重建，写路径无需记得通知。别名/令牌由 seed 确定性派生，重建不会改变已有代号。
+function createAiPrivacy({ readSeed, writeSeed, listStudents, listLeaves, readEnabled, readRevision, dataDir = '' } = {}) {
   const cache = new Map();
+  // 变更号读不到（纯函数测试 / 未绑定库）时返回 null，退回「只缓存不自动失效」的旧语义。
+  const revisionOf = () => {
+    try { return typeof readRevision === 'function' ? readRevision() : null } catch (_) { return null }
+  };
   // 开关读取失败（如纯函数测试未绑定 DB、或设置表暂时不可用）时当作关闭：
   // 保护模块绝不能因为读不到开关就阻断主对话。真实请求里 DB 已绑定，正常读到 true/false。
   const enabledOf = (slug, kind = 'ai') => {
@@ -250,21 +261,22 @@ function createAiPrivacy({ readSeed, writeSeed, listStudents, listLeaves, readEn
   };
   function stateOf(slug) {
     const key = slug || 'default';
-    if (cache.has(key)) return cache.get(key);
+    const revBefore = revisionOf();
+    const cached = cache.get(key);
+    if (cached && (revBefore == null || cached.rev === revBefore)) return cached;
     let seed = typeof readSeed === 'function' ? readSeed(key) : '';
     if (!seed) {
       seed = crypto.randomBytes(16).toString('hex');
       if (typeof writeSeed === 'function') writeSeed(key, seed);
     }
-    const state = {
+    const maps = buildMaps({
       seed,
-      maps: buildMaps({
-        seed,
-        students: typeof listStudents === 'function' ? listStudents(key) : [],
-        leaves: typeof listLeaves === 'function' ? listLeaves(key) : [],
-      }),
-      dataDir,
-    };
+      students: typeof listStudents === 'function' ? listStudents(key) : [],
+      leaves: typeof listLeaves === 'function' ? listLeaves(key) : [],
+    });
+    // 变更号必须在构表之后取：首次建库会写 privacy_seed（本身也是一次写入），
+    // 若沿用建表前的编号，下一次调用会误判「数据变了」而白重建一次。
+    const state = { seed, rev: revisionOf(), maps, dataDir };
     cache.set(key, state);
     return state;
   }
@@ -297,6 +309,8 @@ const aiConfigStore = require('./aiConfigStore')
 const aiStore = require('./aiStore')
 const dbManager = require('../dbManager/dbManager')
 
+// 变更号的取法（连接级 total_changes()）收在 aiStore —— 本模块约定不留裸 SQL。
+// 未绑定库（登录前 / 纯函数测试）时取变更号会抛错，由 revisionOf 吞掉并退回旧语义。
 const privacy = createAiPrivacy({
   readSeed: () => aiConfigStore.ensureSeed(),
   writeSeed: (_slug, seed) => aiConfigStore.writeSeed(seed),
@@ -305,6 +319,8 @@ const privacy = createAiPrivacy({
   // 开关按来源分：本地助手读隐私设置，外部 MCP 客户端读「MCP 数据权限」里的总开关。
   // 映射表（seed + 名册）两边共用，改名后只需要失效一处缓存。
   readEnabled: (_slug, kind) => (kind === 'mcp' ? aiConfigStore.readMcpPrivacy() : aiConfigStore.readPrivacy()).enabled === true,
+  // 变更号取法见 aiStore.privacyRevision（连接级 total_changes()）；写路径无需配合。
+  readRevision: () => aiStore.privacyRevision(),
   dataDir: dbManager.dataDir,
 })
 

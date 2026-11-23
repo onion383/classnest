@@ -85,11 +85,24 @@ function sortDesc(list) {
 // onlyAbnormal 只留「被拒 / 失败」——待确认不是异常，撤销也只是结果的一种，都不进这个筛选。
 function list({ source, onlyAbnormal = false, limit = 200 } = {}) {
   const cap = Math.max(1, Math.min(500, Number(limit) || 200));
-  const reads = accessLog.list({ source, limit: 500 }).logs.map((r) => ({ ...r, kind: 'read' }));
-  let all = [...reads, ...writeSteps(source), ...pendingProposals(source)];
-  if (onlyAbnormal) all = all.filter((r) => r.result === 'denied' || r.result === 'failed');
-  sortDesc(all);
-  return { total: all.length, logs: all.slice(0, cap) };
+  // 异常筛选下推到 SQL：在内存里筛只能筛这 500 条窗口内的，窗口外更旧的拒绝/失败
+  // 永远进不了「仅看被拒与失败」视图。合成行（写 / 提案）也照样过一遍同一个条件，
+  // 它们目前没有 denied/failed，但别把口径分开写两份。
+  const reads = accessLog.list({ source, onlyAbnormal, limit: 500 });
+  const readLogs = reads.logs.map((r) => ({ ...r, kind: 'read' }));
+  const synthetic = [...writeSteps(source), ...pendingProposals(source)]
+    .filter((r) => !onlyAbnormal || r.result === 'denied' || r.result === 'failed');
+  const all = sortDesc([...readLogs, ...synthetic]);
+  return {
+    // total 原先取的是「截断后的内存数组长度」：读侧只拉了 500 条、per_day 还会合并，
+    // 超过 500 条就以 500 封顶。改用 SQL 的 COUNT，前端「已记 N 条」才是真数。
+    total: reads.total + synthetic.length,
+    // 保留条数（keep）是全局的：AI 与 MCP 共用一张 access_log、共用一份设置，
+    // 而弹窗只看当前来源。改小 keep 时真正被删的是全表超限部分，所以前端确认框
+    // 必须按这个数判断，不能按本来源视图的 total（审查 v7 · #33）。
+    retentionTotal: accessLog.list({ limit: 1 }).total,
+    logs: all.slice(0, cap),
+  };
 }
 
 // 摘要：面板行尾那一句。reads 与 writes 分开报，被拒单列（权限生效的证据）。

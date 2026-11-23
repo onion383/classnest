@@ -72,9 +72,8 @@ export function useThumbBatch(getVisibleIds, options = {}) {
   const liveUrls = new Set()
 
   /* 空闲收缩定时器走统一资源登记表：不能自己 setTimeout 再靠人脑记得 clear。
-   * 必须用 defer 而不是 timeout —— d.timeout() 返回的「取消函数」只把清理项从表里
-   * 摘掉、并不 clearTimeout（实测回调照跑），而空闲收缩是防抖语义，每次可见区变化
-   * 都要真正取消上一次。defer 的 schedule() 每次会先清掉上一轮。 */
+   * 用 defer 而不是 timeout —— 这里要的是「可替换」语义：每次可见区变化都顶掉上一轮排期。
+   * timeout 虽然取消后也会清 timer，但它是各自独立的定时器，不会顺手清掉别的。 */
   const d = useDisposables()
   const armIdle = d.defer()
   function idleShrink() {

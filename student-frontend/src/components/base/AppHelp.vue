@@ -42,9 +42,10 @@
 </template>
 
 <script setup vapor>
-import { ref, nextTick, onBeforeUnmount, useId } from 'vue'
+import { ref, nextTick, useId } from 'vue'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import { consumeEscape } from '../../utils/dialogStack.js'
+import { useDisposables } from '../../utils/disposables.js'
 
 const props = defineProps({
   // 气泡里的说明文字（支持 \n 换行）
@@ -75,8 +76,15 @@ const wrapStyle = ref({
 
 let hovering = false
 let focused = false
-let showTimer = null
-let hideTimer = null
+// 两个「可替换」定时器：再排期自动撤掉上一次，卸载时由 d 清掉。
+// 原来用裸 setTimeout + 每个分支手写 clearTimeout，漏一处就是气泡不消失/永远不出现。
+const d = useDisposables()
+const scheduleShowTimer = d.defer()
+const scheduleHideTimer = d.defer()
+// 视口一变就收起气泡（坐标是 fixed 的，滚动后已不对应触发位置）。
+// 常驻监听 + open 判断，比「显示时挂、隐藏时摘」少一份配对负担。
+d.listen(window, 'scroll', () => { if (open.value) hideNow() }, true)
+d.listen(window, 'resize', () => { if (open.value) hideNow() })
 
 function onEnter() {
   hovering = true
@@ -96,37 +104,30 @@ function onBlur() {
 }
 
 function scheduleShow() {
-  clearTimeout(hideTimer)
-  clearTimeout(showTimer)
-  showTimer = setTimeout(showNow, props.delay)
+  scheduleHideTimer.cancel()
+  scheduleShowTimer(showNow, props.delay)
 }
 function scheduleHide() {
-  clearTimeout(showTimer)
-  clearTimeout(hideTimer)
-  hideTimer = setTimeout(() => {
+  scheduleShowTimer.cancel()
+  scheduleHideTimer(() => {
     if (hovering || focused) return
     hideNow()
   }, 40)
 }
 
 function showNow() {
-  clearTimeout(showTimer)
+  scheduleShowTimer.cancel()
   if (open.value) return
   open.value = true
   // 先挂载再量尺寸，定位写进下一次渲染，浏览器首帧就是最终位置，不会从左上角跳过来
-  nextTick(() => {
-    positionBubble()
-    window.addEventListener('scroll', hideNow, true)
-    window.addEventListener('resize', hideNow)
-  })
+  nextTick(() => { positionBubble() })
 }
 
 function hideNow() {
-  clearTimeout(showTimer)
-  clearTimeout(hideTimer)
+  scheduleShowTimer.cancel()
+  scheduleHideTimer.cancel()
   if (!open.value) return
   open.value = false
-  removeListeners()
 }
 
 // Esc 走统一协议：气泡展开时收气泡并消费事件（弹窗内的 ⓘ 不会连带关掉弹窗）；
@@ -134,11 +135,6 @@ function hideNow() {
 function onEsc(e) {
   if (!consumeEscape(e, { open: open.value })) return
   hideNow()
-}
-
-function removeListeners() {
-  window.removeEventListener('scroll', hideNow, true)
-  window.removeEventListener('resize', hideNow)
 }
 
 function positionBubble() {
@@ -178,11 +174,6 @@ function positionBubble() {
   }
 }
 
-onBeforeUnmount(() => {
-  clearTimeout(showTimer)
-  clearTimeout(hideTimer)
-  removeListeners()
-})
 </script>
 
 <style scoped>

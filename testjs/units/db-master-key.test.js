@@ -141,40 +141,53 @@ test('shouldReEncrypt：明文不变，先备份再用新密文写回', async ()
   assert.equal(fs.readFileSync(first.keyFile, 'utf8'), PREFIX + key1, '写回的密文仍应解出同一把钥匙')
 })
 
-test('解密失败：备份成功则重新生成并写盘；备份失败则只用运行期随机值、绝不覆盖原密文', async () => {
+test('解密失败：拒绝启动、保留原密文并备份，绝不用新钥匙覆盖旧库', async () => {
   const first = loadConfig()
   await first.mod.getDbMasterKey()
   const original = fs.readFileSync(first.keyFile, 'utf8')
 
-  const okBackup = loadConfig({ userData: first.userData, decryptThrows: true })
-  const regenerated = await okBackup.mod.getDbMasterKey()
-  assert.match(regenerated, HEX64)
-  assert.notEqual(regenerated, original.slice(PREFIX.length))
+  const broken = loadConfig({ userData: first.userData, decryptThrows: true })
+  await assert.rejects(broken.mod.getDbMasterKey(), /主密钥无法确认|无法解密/, '必须拒绝启动，不能返回新钥匙')
+  assert.equal(broken.state.encCalls, 0, '失败路径绝不能写新密文')
+  assert.equal(fs.readFileSync(first.keyFile, 'utf8'), original, '原密文必须一个字节不动')
   const backups = fs.readdirSync(path.dirname(first.keyFile)).filter((n) => n.startsWith('db-master.key.bak-'))
-  assert.ok(backups.length >= 1, '重新生成前必须备份旧密文')
+  assert.ok(backups.length >= 1, '应留一份备份供恢复')
+  assert.equal(fs.readFileSync(path.join(path.dirname(first.keyFile), backups[0]), 'utf8'), original)
+})
 
-  // 备份也失败：本次只能用运行期随机值，文件一个字节都不许动。
-  // 注意此时 keyFile 已是上一子场景「备份成功→重新生成」写出的新密文，故以调用前快照为准。
+test('解密失败且备份也失败：仍然拒绝启动、原密文不动', async () => {
+  const first = loadConfig()
+  await first.mod.getDbMasterKey()
   const before = fs.readFileSync(first.keyFile, 'utf8')
   const realCopy = fs.copyFileSync
   fs.copyFileSync = () => { throw new Error('模拟备份失败') }
   try {
     const badBackup = loadConfig({ userData: first.userData, decryptThrows: true })
-    const fallback = await badBackup.mod.getDbMasterKey()
-    assert.match(fallback, HEX64)
-    assert.equal(badBackup.state.encCalls, 0, '走兜底时不应写盘')
-    assert.equal(fs.readFileSync(first.keyFile, 'utf8'), before, '本次调用前后密文必须原样保留')
+    await assert.rejects(badBackup.mod.getDbMasterKey())
+    assert.equal(badBackup.state.encCalls, 0)
+    assert.equal(fs.readFileSync(first.keyFile, 'utf8'), before, '备份失败也不能动原密文')
   } finally {
     fs.copyFileSync = realCopy
   }
 })
 
-test('异步解密返回空结果：当失败处理，绝不返回空密钥', async () => {
+test('密文存在但 safeStorage 不可用：拒绝启动，不用随机值打开旧库', async () => {
   const first = loadConfig()
   await first.mod.getDbMasterKey()
+  const original = fs.readFileSync(first.keyFile, 'utf8')
+  const noStorage = loadConfig({ userData: first.userData, available: false })
+  await assert.rejects(noStorage.mod.getDbMasterKey(), /无法解密/)
+  assert.equal(noStorage.state.encCalls, 0)
+  assert.equal(fs.readFileSync(first.keyFile, 'utf8'), original)
+})
+
+test('异步解密返回空结果：当失败处理，拒绝启动且不覆盖密文', async () => {
+  const first = loadConfig()
+  await first.mod.getDbMasterKey()
+  const original = fs.readFileSync(first.keyFile, 'utf8')
   const bad = loadConfig({ userData: first.userData, decryptResult: { result: '', shouldReEncrypt: false } })
-  const key = await bad.mod.getDbMasterKey()
-  assert.match(key, HEX64, '空值必须走重新生成，不能拿空串去 fork 后端')
+  await assert.rejects(bad.mod.getDbMasterKey(), /主密钥无法确认/)
+  assert.equal(fs.readFileSync(first.keyFile, 'utf8'), original, '空结果也不许覆盖旧密文')
 })
 
 test('safeStorage 不可用：返回运行期随机值、不落明文文件', async () => {
@@ -199,5 +212,9 @@ test('静态对账：产品代码零同步调用；fork 两条分支都用预取
   assert.equal((backendSrc.match(/DB_MASTER_KEY: getDbMasterKey\(\)/g) || []).length, 0)
 
   const entrySrc = stripComments(fs.readFileSync(ENTRY, 'utf8'))
-  assert.ok(/void getDbMasterKey\(\)/.test(entrySrc), 'ready 后应与建窗并行预热，别等 fork 才解析')
+  assert.ok(/void getDbMasterKey\(\)\.catch\(/.test(entrySrc), 'ready 后应与建窗并行预热，且主密钥失败时要有 catch（否则 unhandled rejection）')
+  const configSrc2 = stripComments(fs.readFileSync(CONFIG, 'utf8'))
+  assert.ok(!/解密失败[\s\S]{0,80}重新生成/.test(configSrc2), '已有密文不可解时不许再"重新生成"覆盖')
+  assert.match(configSrc2, /DbMasterKeyUnavailableError/, '致命错误必须用专用异常穿透外层兜底')
+  assert.doesNotMatch(configSrc2, /catch[\s\S]{0,300}主密钥解析异常，使用运行期随机值/, 'getDbMasterKey 不得再吞掉失败返回随机钥匙')
 })

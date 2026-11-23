@@ -1,6 +1,6 @@
 # 后端依赖明细（`student-backend/package.json`）
 
-12 个运行时依赖，无开发期依赖（测试用根目录的 `node:test`（Node 内置测试框架））。原生模块与 `asarUnpack`（不打进 asar 包）/ `ABI`（二进制接口）重编译见 [build-and-branches.md](../topics/build-and-branches.md)。
+16 个运行时依赖，无开发期依赖（测试用根目录的 `node:test`（Node 内置测试框架））。原生模块与 `asarUnpack`（不打进 asar 包）/ `ABI`（二进制接口）重编译见 [build-and-branches.md](../topics/build-and-branches.md)。
 ## 运行时依赖
 
 ### [`express`](../../../student-backend/node_modules/express) 5.3.0 · MIT · Web 服务框架

@@ -599,7 +599,7 @@ function armSimCrash() {
     const proc = backendProcess
     if (!proc) return
     backendLog('[main] SIM：模拟后端崩溃\n')
-    try { proc.kill() } catch (_) { /* 忽略 */ }
+    killBackendTree(proc) // 模拟真崩溃要连孙进程一起没，否则残留的 worker 会被当成"后端还活着"
   }, SIM_BACKEND_CRASH_MS)
 }
 
@@ -692,10 +692,30 @@ function stopBackendProcess() {
     let settled = false
     const done = () => { if (settled) return; settled = true; resolve() }
     proc.once('exit', done)
-    try { proc.kill() } catch (_) { done() }
+    killBackendTree(proc)
     // 兜底：进程迟迟不退出也不能无限等待
     setTimeout(done, 3000)
   })
+}
+
+// 整树结束后端子进程：后端是 fork 出来的长生命周期 Node 进程，自己还会起扫描/OCR/ffmpeg
+// 孙进程。裸 proc.kill() 只杀直接子进程，孙进程残留占端口/文件句柄。
+//   · Windows：taskkill /PID /T /F 连整个进程树一起杀
+//   · POSIX：fork 没有 detached（不是组 leader），kill(-pid) 只会 ESRCH 不误伤，
+//     失败再退回单杀 —— 不会误杀别的进程组。
+// 清理路径永不抛异常（抛了会掩盖真正的错误）。
+function killBackendTree(proc) {
+  if (!proc || !proc.pid) return
+  if (proc.exitCode !== null || proc.signalCode !== null) return
+  try {
+    if (process.platform === 'win32') {
+      const { spawn } = require('child_process')
+      spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' })
+      return
+    }
+    try { process.kill(-proc.pid, 'SIGKILL'); return } catch (_) { /* 不是组 leader */ }
+    try { proc.kill('SIGKILL') } catch (_) { /* 已退出 */ }
+  } catch (_) { /* 清理路径不抛 */ }
 }
 
 // 等待后端就绪信号（主进程侧）：已就绪立即返回 true；否则等 backend-ready 上报，
@@ -723,7 +743,7 @@ function shutdownBackend() {
   app.isQuitting = true
   clearTimeout(backendRestartTimer)
   if (backendProcess) {
-    try { backendProcess.kill() } catch (_) {}
+    killBackendTree(backendProcess)
     backendProcess = null
   }
   if (backendLogStream) {
@@ -812,6 +832,7 @@ module.exports = {
   stopBackendProcess,
   shutdownBackend,
   waitForBackendReadySignal,
+  killBackendTree,
   setBootStatus,
   getBootStatusText,
   getBackendProcess,

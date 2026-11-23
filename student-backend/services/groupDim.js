@@ -299,6 +299,7 @@ function updateMember(id, { memberName, remark, studentId }) {
   if (!m) return null
   const nextName = memberName !== undefined ? String(memberName).trim() : m.member_name
   let finalName = nextName
+  let finalStudentId = m.student_id == null ? null : Number(m.student_id)
   db.transaction(() => {
     let nextStudentId = m.student_id
     if (studentId !== undefined && studentId !== null) {
@@ -314,6 +315,7 @@ function updateMember(id, { memberName, remark, studentId }) {
       const ref = resolveMemberRef(nextName, null)
       nextStudentId = ref.studentId
     }
+    finalStudentId = nextStudentId == null ? null : Number(nextStudentId)
     db.prepare('UPDATE group_members SET student_id = ?, member_name = ?, remark = ? WHERE id = ?').run(
       nextStudentId,
       finalName,
@@ -321,7 +323,9 @@ function updateMember(id, { memberName, remark, studentId }) {
       id
     )
   })()
-  return finalName
+  // 返回权威引用：撤销「改名」时不能靠姓名重新猜人（同名会歧义并把 student_id 清空，
+  // 见 v7 §5-4），调用方要把这次解析出的 id 一起记进撤销 payload。
+  return { name: finalName, studentId: finalStudentId }
 }
 
 // 删除成员并重排同组

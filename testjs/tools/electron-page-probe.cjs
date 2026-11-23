@@ -52,20 +52,35 @@ app.whenReady().then(async () => {
   const READ_OUT = "document.getElementById('out') ? document.getElementById('out').textContent : ''"
   const READ_DONE = 'window.__probeDone === true'
   let text = ''
+  let done = false
+  let evalError = ''
   const deadline = Date.now() + 5000
   for (;;) {
     try {
       text = await win.webContents.executeJavaScript(READ_OUT)
-      if (await win.webContents.executeJavaScript(READ_DONE)) break // 页面已完成
+      if (await win.webContents.executeJavaScript(READ_DONE)) { done = true; break } // 页面已完成
     } catch (e) {
-      console.log('PROBE_EVAL_FAIL ' + (e && e.message))
+      evalError = (e && e.message) || String(e)
       break
     }
-    if (Date.now() >= deadline) break // 到上限仍未完成 → 读到的就是半截（外层按失败处理）
+    if (Date.now() >= deadline) break // 到上限仍未完成 → 读到的就是半截
     await new Promise((r) => setTimeout(r, 100))
   }
   console.log('---PAGE---')
   console.log(text || '(no #out element)')
+  // 只有页面显式完成且 eval 无异常才报 DONE。原来 eval 异常/超时也照样 PROBE_DONE + exit(0)，
+  // 调用方只看 PASS|FAIL 行时会把「部分断言 PASS 后 renderer 崩了」误判成全过。
+  if (evalError) {
+    console.log('PROBE_EVAL_FAIL ' + evalError)
+    console.log('PROBE_FAIL 读取断言结果失败')
+    app.exit(5)
+    return
+  }
+  if (!done) {
+    console.log('PROBE_FAIL 断言页未在 5 秒内写完（__probeDone 未置位）')
+    app.exit(2)
+    return
+  }
   console.log('PROBE_DONE')
   app.exit(0)
 }).catch((e) => {

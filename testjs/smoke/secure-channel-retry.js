@@ -103,6 +103,11 @@ async function main() {
   const { code, out } = await runElectron()
   const lines = out.split(/\r?\n/)
   const results = lines.filter((l) => /^(PASS|FAIL)\s/.test(l))
+  // 期望条数从断言页源码动态数（done(...) 调用），不硬编码 —— 页面加断言时不会漏检。
+  const pageSrc = require('node:fs').readFileSync(PAGE_FILE, 'utf8')
+  const expected = (pageSrc.match(/\bdone\s*\(/g) || []).length
+  const badSignal = lines.find((l) => /^PROBE_(FAIL|EVAL_FAIL|TIMEOUT|LOAD_FAIL|NO_URL)/.test(l))
+  const finished = lines.some((l) => l.trim() === 'PROBE_DONE')
   if (!results.length) {
     console.log(out)
     console.log('FAIL 没有拿到断言结果（探针页没跑起来？）')
@@ -112,9 +117,21 @@ async function main() {
     process.exit(1)
   }
   for (const l of results) console.log(l)
+  // 三条独立失败条件，缺一不可：
+  //   ① 探针明确失败信号（renderer 崩溃 / eval 异常 / 超时 / 加载失败）
+  //   ② 没有 PROBE_DONE（页面没跑完，只拿到半截 PASS）
+  //   ③ 条数不等于断言页的 done() 数（少一条就说明中途断了）
+  if (badSignal || !finished || code !== 0) {
+    console.log('FAIL 探针未完成（退出码 ' + code + (badSignal ? '，信号：' + badSignal : '') + (finished ? '' : '，缺少 PROBE_DONE') + '）')
+    process.exit(1)
+  }
   const failed = results.filter((l) => l.startsWith('FAIL'))
-  if (failed.length || code !== 0) {
-    console.log('FAIL ' + failed.length + '/' + results.length + ' 条断言未通过（探针退出码 ' + code + '）')
+  if (failed.length) {
+    console.log('FAIL ' + failed.length + '/' + results.length + ' 条断言未通过')
+    process.exit(1)
+  }
+  if (results.length !== expected) {
+    console.log('FAIL 断言不完整：拿到 ' + results.length + ' 条，断言页应有 ' + expected + ' 条')
     process.exit(1)
   }
   console.log('PASS 全部 ' + results.length + ' 条断言通过')

@@ -174,7 +174,10 @@ console.log('name 表保留情况:')
 for (const [nid, label] of keep) {
   const has = names.has(nid) ? '有' : '缺'
   console.log(`  [${String(nid).padStart(2)}] ${label}: ${has}   ${names.get(nid) || ''}`)
+  if (!names.has(nid)) console.log(`  ✗ 缺少必需 nameID ${nid}（${label}）`)
 }
+// 只打印不置失败 → 许可字段被删也能 exit 0，CI 误报验证通过。收集缺失，最后合并判定。
+const missingNameIds = [...keep.keys()].filter((nid) => !names.has(nid))
 
 // 字形数 = cmap 的映射条目数（逐段/组累加区间大小，与 fontTools len(cmap) 同口径）
 function countCmap(b, tb) {
@@ -217,7 +220,7 @@ function countCmap(b, tb) {
   return c
 }
 
-let ok = true
+let ok = missingNameIds.length === 0
 // 每条调用路径的文本不同，必须各自对应一份子集来核（不能拿 A 的子集去校验 B 的文本）
 for (const [fontFile, textFile] of [
   ['subset-out.ttf', 'subset-text.txt'],
@@ -225,7 +228,12 @@ for (const [fontFile, textFile] of [
 ]) {
   const fp = path.join(TMP, fontFile)
   const tp = path.join(TMP, textFile)
-  if (!(fs.existsSync(fp) && fs.existsSync(tp))) continue
+  if (!(fs.existsSync(fp) && fs.existsSync(tp))) {
+    // 原来直接 continue：某条路径的产物没生成也能 exit 0，验证覆盖被静默缩水
+    ok = false
+    console.log(`  ✗ 缺少配对产物：${fontFile} / ${textFile}`)
+    continue
+  }
   const f2 = fs.readFileSync(fp)
   const cm2 = bestCmap(f2, parseTables(f2))
   const text = fs.readFileSync(tp, 'utf8')

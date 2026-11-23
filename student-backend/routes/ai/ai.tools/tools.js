@@ -13,6 +13,7 @@ const dbManager = require('../../../dbManager/dbManager');
 const accessLog = require('../../../services/accessLogStore');
 const { privacy, hasUnrestoredToken } = require('../../../services/aiPrivacy');
 const { writeScope } = require('../../../services/aiWriteScope');
+const { readScope } = require('../../../services/aiReadScope');
 const schema = require('./tools.schema');
 const exec = require('./tools.executors/executors');
 const { subagentTool, runSubagent } = require('./tools.subagent');
@@ -46,6 +47,30 @@ const WRITE_TOOL_TABLE_REFS = {
   // 批量提案里每个 op 各自带 table，要逐个查，不能只看第一层
   propose_batch: (a) => (Array.isArray(a && a.ops) ? a.ops.map((o) => o && o.table) : []),
 };
+
+// ===== 「完全禁止」读闸门：读类工具在派发前统一检查表是否可读 =====
+// 过去只有 query.js 内部与 describe_table 各自查 readScope，delete_impact / show_record
+// 等派生读工具把真实姓名返回给模型时完全没闸门 —— 老师设了「完全禁止」仍被读走。
+// closed_tables 是能力边界：显式关掉的表，无论身份替换开没开都不许读。
+// 注意：query / aggregate / describe_table / resolve_student / search_all 等
+// 已在各自执行器内部做了 readScope 检查，并有既定的返回契约（{error} 而非 {ok:false}）。
+// 这里只补**过去完全没闸门**的派生读工具，避免改变老工具的返回结构（会破坏前端判定）。
+const READ_TOOL_TABLE_REFS = {
+  delete_impact: (a) => [a && a.table],
+  show_record: (a) => [a && a.table],
+  // 提案类工具：完全禁止的表既不能读也不能写，生成提案前先挡（表提取与写闸门同源）
+  ...WRITE_TOOL_TABLE_REFS,
+};
+
+function readableBlockedError(name, args) {
+  const pick = READ_TOOL_TABLE_REFS[name];
+  if (!pick) return '';
+  for (const t of pick(args) || []) {
+    const key = String(t || '').trim();
+    if (key && !readScope.isTableReadable(key)) return readScope.closedError(key).error;
+  }
+  return '';
+}
 function readonlyBlockedError(name, args) {
   const pick = WRITE_TOOL_TABLE_REFS[name];
   if (!pick) return '';
@@ -71,6 +96,11 @@ async function dispatchTool(name, args, ctx) {
   // 模型拿到明确原因（而不是先拼出提案、等老师点确认时才失败）。
   const roErr = readonlyBlockedError(name, args);
   if (roErr) return { result: { ok: false, error: roErr } };
+  // 「完全禁止」读闸门：过去没做读检查的派生读工具（delete_impact/show_record/
+  // propose_*）在这里统一挡；query/describe_table 等自带闸门的工具不动，避免
+  // 改变它们既有的返回契约（{error} 而非 {ok:false}）。
+  const readErr = readableBlockedError(name, args);
+  if (readErr) return { result: { ok: false, error: readErr } };
   switch (name) {
     case 'query':
       return { result: runQuery(args) };

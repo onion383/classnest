@@ -8,7 +8,7 @@ function migrateHistory(conn) {
   // 合并为一张带 domain 的 domain_history，快照内容统一存 payload JSON：
   //   schedule → { cells, settings }
   //   duty     → { cells, settings }
-  //   seat     → { mode, rows, cols, seats, aisleCols, groupsConfig, settings }
+  //   seat     → { mode, rows, cols, seats, types, aisleCols, groupsConfig, settings }
   // 逻辑表名仍可通过只读视图读取（AI 查询、历史接口的 SELECT 无需改动）。
   conn.exec(`
     CREATE TABLE IF NOT EXISTS domain_history (
@@ -48,6 +48,7 @@ function migrateHistory(conn) {
              json_extract(payload, '$.rows') AS rows,
              json_extract(payload, '$.cols') AS cols,
              json_extract(payload, '$.seats') AS seats,
+             json_extract(payload, '$.types') AS types,
              json_extract(payload, '$.aisleCols') AS aisle_cols,
              json_extract(payload, '$.groupsConfig') AS groups_config,
              json_extract(payload, '$.settings') AS settings,

@@ -171,6 +171,9 @@ function registerDeferredIpc() {
   // 版本更新 IPC。状态广播只发给主窗口（内部自带判空 + isDestroyed），故把出口函数注入 updater。
   getUpdater().registerUpdateIpc((payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CH.FROM_MAIN, payload)
+  }, {
+    // 安装前必须等后端退出：它还占着数据库文件，安装器 /CLOSEAPPLICATIONS 会替换失败
+    stopBackend: () => backend.stopBackendProcess(),
   })
 
   // 文件/文件夹对话框与本地文件读写 IPC
@@ -567,8 +570,10 @@ app.whenReady().then(() => {
   // 46 适配：DB 主密钥改走 safeStorage 的异步 API，异步加密器要等 ready 之后才可用。
   // 这里只「发起」不 await：解密与建窗、渲染层加载并行，真正 fork（约 +89ms）时通常已解析完。
   // 不能等 fork 时才发起 —— 那会让 startBackend 完成这个打点早于实际 fork，污染启动基线。
-  // getDbMasterKey() 内部有单飞 Promise 与失败兜底，不会 reject；重复调用只会复用同一把钥匙。
-  void getDbMasterKey()
+  // 只「发起」不 await：解密与建窗并行，fork 时复用同一个 Promise。
+  // 主密钥不可确认时这里会 reject（保护旧库不被新钥匙覆盖）：预热阶段吞掉即可，
+  // 真正的 fork 会复用同一个 rejected Promise，由 startBackend 的 catch 落到启动失败态提示用户。
+  void getDbMasterKey().catch(() => {})
 
   // ========== 安装后预热（--warmup）==========
   // 由安装器在装完文件之后调用一次（见 inno/setup.iss 的 [Run] 段），随后立即退出。
@@ -582,6 +587,10 @@ app.whenReady().then(() => {
   // 与它抢单实例锁（安装器用 waituntilterminated 等它退出）。
   if (process.argv.includes('--warmup')) {
     console.log('[warmup] 进入预热模式：起一次后端后立即退出（不建窗口、不走启动计时）')
+    // 关键：预热只暖文件/模块缓存，**不许建 index.db**。后端 fork 继承 process.env，
+    // 它会据此跳过 warmup()（ensureIndex 建库）—— 否则新装机器预热完，首次真正启动时
+    // looksLikeFirstRun() 见到 index.db 存在就跳过引导向导（#47）。
+    process.env.CLASSNEST_INSTALL_WARMUP = '1'
     ;(async () => {
       try {
         backend.startBackend()

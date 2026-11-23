@@ -37,7 +37,9 @@ classnest/
         ├── album-thumbs-rebuild-batch-test.cjs  # 清理后一屏 12~40 张要能立刻长回来
         ├── album-thumbs-sweep-test.cjs  # 孤儿微缩图回收的精准性
         ├── _thumb-frames.cjs  # 批量缩略图流式响应的帧解析（共用脚手架）
-        └── unzip-safe-test.cjs  # 无
+        ├── unzip-safe-test.cjs  # 无
+        ├── late-route-flush-test.cjs  # 启动期延后路由按需注册：就绪后立刻访问不返回 404、环境变量生效
+        └── multi-class-test.cjs  # 一个账号多班：班级列表完整、各自独立库、切班数据隔离与新 token
 ```
 <!-- doc-tree:end -->
 

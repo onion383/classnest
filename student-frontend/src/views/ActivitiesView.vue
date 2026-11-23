@@ -529,12 +529,15 @@ function openCountdownExport() {
 async function onImportData({ fields, rows }) {
   importDialogVisible.value = false
   const isCountdown = activeTab.value === 'countdown'
+  // 撤销 key 必须在异步前固定：导入 + loadAll 期间用户可能切了标签，
+  // 用动态 resolveKey() 会把这次导入的撤销记到另一类数据的历史栈里（#49）。
+  const undoKey = resolveKey()
   try {
     const res = await axios.post(`${API}/${isCountdown ? 'countdowns' : 'activities'}/import`, { fields, rows })
     useNotification().success(res.data.message || '导入成功')
     await loadAll()
     // 后端回传本次真正新建的行：一次导入只记一条撤销（活动与倒计时各自独立的历史栈）
-    recordRowsBatchInsert(resolveKey(), res.data?.created)
+    recordRowsBatchInsert(undoKey, res.data?.created)
   } catch (err) {
     reportError(err, { action: isCountdown ? '导入倒计时' : '导入活动' })
   }

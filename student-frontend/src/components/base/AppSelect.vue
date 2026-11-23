@@ -56,6 +56,7 @@
 //   <AppSelect v-model="xxx" :options="[{value:'a', label:'A'}, 'B']" placeholder="请选择" />
 import '../../styles/select.css'
 import { ref, computed, watch, onMounted, onBeforeUnmount, onDeactivated } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import CustomScrollbar from './CustomScrollbar.vue'
 import { pushEscLayer, removeEscLayer, consumeEscape } from '../../utils/dialogStack.js'
@@ -91,13 +92,17 @@ function onDocKeydown(e) {
   open.value = false
   hoverIdx.value = -1
 }
+// Esc 监听只在展开时挂（收起后不该抢 Esc），但仍登记进 disposables：
+// 卸载时若还是展开态，d 会负责摘，不用再写一条「卸载时别忘了」的注释。
+const d = useDisposables()
+let cancelKeydown = null
 watch(open, (v) => {
   if (v) {
     pushEscLayer(escLayer)
-    document.addEventListener('keydown', onDocKeydown)
+    if (!cancelKeydown) cancelKeydown = d.listen(document, 'keydown', onDocKeydown)
   } else {
     removeEscLayer(escLayer)
-    document.removeEventListener('keydown', onDocKeydown)
+    if (cancelKeydown) { cancelKeydown(); cancelKeydown = null }
   }
 }, { flush: 'sync' })
 const menuPos = ref({ left: 0, top: 0, width: 0, up: false, max: 220 })
@@ -249,17 +254,14 @@ function onViewportChange() {
 }
 
 onMounted(() => {
-  document.addEventListener('click', onDocClick)
-  window.addEventListener('scroll', onViewportChange, true)
-  window.addEventListener('resize', onViewportChange)
+  d.listen(document, 'click', onDocClick)
+  d.listen(window, 'scroll', onViewportChange, true)
+  d.listen(window, 'resize', onViewportChange)
 })
 
 onBeforeUnmount(() => {
   removeEscLayer(escLayer)
-  document.removeEventListener('keydown', onDocKeydown)
-  document.removeEventListener('click', onDocClick)
-  window.removeEventListener('scroll', onViewportChange, true)
-  window.removeEventListener('resize', onViewportChange)
+  if (cancelKeydown) { cancelKeydown(); cancelKeydown = null }
 })
 
 // 页面被 <KeepAlive> 缓存时不会 unmount，带着展开的菜单切走会把它留在全局 Esc 栈里，

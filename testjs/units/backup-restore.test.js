@@ -28,7 +28,7 @@ async function makeBundle() {
   const zipPath = path.join(tmp, 'bundle.zip')
   const ws = fs.createWriteStream(zipPath)
   await writeBundle({
-    meta: { version: 3, slug: '@abc', encrypted: false, key: null },
+    meta: { version: 4, slug: '@abc', encrypted: false, key: null },
     files: [{ name: 'db/@abc.db', path: dbFile }],
     dirs: [{ prefix: 'uploads', dir: uploads }],
   }, ws)

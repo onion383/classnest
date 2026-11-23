@@ -462,7 +462,8 @@
 </style>
 
 <script setup vapor>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
+import { useDisposables } from '../../../utils/disposables.js'
 import AiProposalTable from '../../tables/AiProposalTable.vue'
 import AppSelect from '../../base/AppSelect.vue'
 import { useNotification } from '../../../composables/useNotification.js'
@@ -529,9 +530,8 @@ const PERMISSION_OPTIONS = [
   { value: AI_PERMISSION_FULL, label: '完全权限' },
 ]
 
-// 点击输入区以外的任意位置关闭浮窗用的文档级监听句柄（非响应式）
-let _onDocMouseDown = null
-let _onDocKeyDown = null
+// 点击输入区以外的任意位置关闭浮窗用的文档级监听：登记进 disposables，卸载自动摘
+const d = useDisposables()
 // 组件根 DOM（contains 判定用）：走 composerRoot 模板 ref，不再经实例代理
 
 
@@ -587,7 +587,7 @@ onMounted(() => {
   // 权限菜单被 Teleport 到 body，并不在组件根节点里，所以必须用 permMenuRef 单独判断：
   // 既要在点击菜单内部时放行（否则 mousedown 先把菜单关掉，随后的 click 落不到选项上），
   // 也要排除「权限」按钮本身（它自己用 @click 开合，否则会先关再开、点了没反应）。
-  _onDocMouseDown = (e) => {
+  const _onDocMouseDown = (e) => {
     const t = e.target
     const root = composerRoot.value
     const inRoot = !!(root && root.contains(t))
@@ -602,17 +602,11 @@ onMounted(() => {
     emit('dismiss')
   }
   // Esc 也收起权限菜单（焦点通常停在输入框里，此时也要能关）
-  _onDocKeyDown = (e) => {
+  const _onDocKeyDown = (e) => {
     if (e.key === 'Escape' && permMenuOpen.value) permMenuOpen.value = false
   }
-  document.addEventListener('mousedown', _onDocMouseDown, true)
-  document.addEventListener('keydown', _onDocKeyDown, true)
-})
-onBeforeUnmount(() => {
-  if (_onDocMouseDown) document.removeEventListener('mousedown', _onDocMouseDown, true)
-  if (_onDocKeyDown) document.removeEventListener('keydown', _onDocKeyDown, true)
-  _onDocMouseDown = null
-  _onDocKeyDown = null
+  d.listen(document, 'mousedown', _onDocMouseDown, true)
+  d.listen(document, 'keydown', _onDocKeyDown, true)
 })
 
 // 待确认提案的说明文案（顶层 import 直接供模板调用）

@@ -136,11 +136,14 @@ function list() {
 // 撤销：按短 id 或完整 hash 前缀匹配，避免明文出现在调用侧。
 // core 索引标 revoked 后 verify 会拒；同时清掉班级库里的明文，撤销了就不该还能复制出来。
 // 记录仍留在 core 索引里（revoked 标记），界面据此显示「已失效」。
-function revoke(id) {
+function revoke(id, slug) {
   if (!id || typeof id !== 'string') return false;
   const list = readAll();
   let changed = false;
   for (const x of list) {
+    // 必须限定当前班级：令牌短 id 是 hash 前缀，其它班持有者也能猜到/看到 id，
+    // 不限 slug 就能撤销别的班的令牌（跨班越权）。与 getPlain 同口径。
+    if (slug && x.slug !== slug) continue;
     if ((x.hash.slice(0, 12) === id || x.hash === id) && !x.revoked_at) {
       x.revoked_at = new Date().toISOString();
       changed = true;
@@ -155,10 +158,10 @@ function revoke(id) {
 // 彻底删除记录：从 core 索引里整条抹掉，界面列表不再显示。
 // 与 revoke 的区别：revoke 只标记失效、留条目供追溯；remove 是「去除记录」。
 // 只允许删已经撤销/过期的令牌，活着的有效令牌要先走 revoke，避免误删后失去追溯。
-function remove(id) {
+function remove(id, slug) {
   if (!id || typeof id !== 'string') return false;
   const all = readAll();
-  const hit = all.find((x) => x.hash.slice(0, 12) === id || x.hash === id);
+  const hit = all.find((x) => (x.hash.slice(0, 12) === id || x.hash === id) && (!slug || x.slug === slug));
   if (!hit || (!hit.revoked_at && !expired(hit))) return false;
   writeAll(all.filter((x) => x !== hit));
   // 明文行一般已在 revoke 时清掉；这里再兜一次，幂等无副作用。

@@ -67,14 +67,24 @@ export function createDisposables() {
     }
   }
 
-  /** 一次性定时器。返回取消函数。 */
+  /**
+   * 一次性定时器。返回**真取消函数**：清掉 timer，并从登记表摘掉自己的清理项。
+   *
+   * 注意 add() 的返回值只是「撤销登记」——它把清理函数从表里移除，并不执行它。
+   * 曾经这里直接把那个函数当取消函数返回，于是 cancel() 之后 timer 照跑、回调照触发，
+   * 而且因为清理项已被摘掉，连 dispose 都救不回来（v7 §5-1）。两者必须分开做。
+   */
   function timeout(fn, ms) {
     // 作用域已释放：不能再排期，否则会留下一个操作已卸载状态的孤儿定时器（审查 v5 · V5-006）。
     // add() 在 disposed 时只会「当场执行清理」，挡不住后面这行 setTimeout。
     if (disposed) return () => {}
     let timer = null
-    const cancel = add(() => { if (timer) { clearTimeout(timer); timer = null } })
-    timer = setTimeout(() => { timer = null; cancel(); fn() }, ms)
+    const untrack = add(() => { if (timer) { clearTimeout(timer); timer = null } })
+    const cancel = () => {
+      if (timer) { clearTimeout(timer); timer = null }
+      untrack()
+    }
+    timer = setTimeout(() => { timer = null; untrack(); fn() }, ms)
     return cancel
   }
 
@@ -100,20 +110,31 @@ export function createDisposables() {
     return schedule
   }
 
-  /** 周期定时器。返回取消函数。 */
+  /** 周期定时器。返回**真取消函数**（同 timeout：清掉 id 并撤销登记）。 */
   function interval(fn, ms) {
     if (disposed) return () => {}
     const id = setInterval(fn, ms)
-    return add(() => clearInterval(id))
+    const untrack = add(() => clearInterval(id))
+    return () => { clearInterval(id); untrack() }
   }
 
-  /** 事件监听器：登记时自动配对 removeEventListener（opts 原样传回，capture 必须一致）。 */
+  /**
+   * 事件监听器：登记时自动配对 removeEventListener（opts 原样传回，capture 必须一致）。
+   * 返回**真取消函数**：当场摘掉监听器，并从登记表摘掉自己（同 timeout，见 §5-1）。
+   * 动态监听（拖拽的 pointermove/pointerup 一对）只能靠这个返回值收尾：
+   * 只撤销登记不会摘掉监听器，回调照样触发，这正是 §5-17 里那批「配对看起来对称」的漏点。
+   */
   function listen(target, type, handler, options) {
     if (!target || typeof target.addEventListener !== 'function') return () => {}
-    target.addEventListener(type, handler, options)
-    return add(() => {
+    let live = true
+    const remove = () => {
+      if (!live) return
+      live = false
       try { target.removeEventListener(type, handler, options) } catch (e) { console.warn('[disposables] 移除监听器失败：', e) }
-    })
+    }
+    target.addEventListener(type, handler, options)
+    const untrack = add(remove)
+    return () => { remove(); untrack() }
   }
 
   /** AbortController：登记后随作用域一起 abort。 */

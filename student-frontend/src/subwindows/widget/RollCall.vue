@@ -38,6 +38,7 @@
 import { getToken } from '../../utils/authStorage.js'
 import { filterPresentStudents } from '../../utils/leaveState.js'
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import axios from 'axios'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 
@@ -57,8 +58,10 @@ const hintText = ref('准备中...')
 const currentStudent = ref({ 学号: '----', 姓名: '----' })
 // 本次点名被排除的不在校人数（开关关闭时恒为 0）
 const excludedCount = ref(0)
-let rollInterval = null
-let autoCloseTimer = null
+// 滚动定时器与「3 秒后自动关闭」都用 disposables：卸载时不用再逐个 if 判断
+const d = useDisposables()
+const scheduleAutoClose = d.defer()
+let cancelRoll = null
 // 组件可能在拉名单途中被关闭（点名器随工具面板一起卸载）
 let disposed = false
 
@@ -96,6 +99,10 @@ function pickRandomStudent() {
   return students.value[idx]
 }
 
+function stopRoll() {
+  if (cancelRoll) { cancelRoll(); cancelRoll = null }
+}
+
 async function startRoll() {
   // 加载数据
   if (students.value.length === 0) {
@@ -123,17 +130,16 @@ async function startRoll() {
   let count = 0
 
   // 开始滚动，学号姓名一起变
-  rollInterval = setInterval(() => {
+  cancelRoll = d.interval(() => {
     currentStudent.value = pickRandomStudent()
     count++
     if (count >= 25) {
-      clearInterval(rollInterval)
-      rollInterval = null
+      stopRoll()
       const finalStudent = pickRandomStudent()
       currentStudent.value = finalStudent
       isRolling.value = false
       // 3秒后自动关闭回到图标
-      autoCloseTimer = setTimeout(() => {
+      scheduleAutoClose(() => {
         emit('close')
       }, 3000)
     }
@@ -141,10 +147,7 @@ async function startRoll() {
 }
 
 function confirm() {
-  if (autoCloseTimer) {
-    clearTimeout(autoCloseTimer)
-    autoCloseTimer = null
-  }
+  scheduleAutoClose.cancel()
   emit('close')
 }
 
@@ -153,8 +156,8 @@ onMounted(startRoll)
 
 onUnmounted(() => {
   disposed = true
-  if (rollInterval) clearInterval(rollInterval)
-  if (autoCloseTimer) clearTimeout(autoCloseTimer)
+  stopRoll()
+  scheduleAutoClose.cancel()
 })
 </script>
 

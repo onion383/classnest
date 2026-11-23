@@ -40,16 +40,25 @@ const RETRY_INTERVAL = 80
 // 契约不走实例代理（getCurrentInstance）：Vapor 模式下实例代理不存在。
 export function createRowFocusHost(route, router) {
   const host = { route, router }
-  const cancels = new Set()
+  // 一次定位会产生 1~2 个清理动作（重试链 + 滚动监听）。**只保留最近一次定位的**：
+  // 长驻页面会被反复定位（每点一次搜索结果就来一次），若把这些闭包一直攒在表里，
+  // 每条闭包都拽着当时的容器元素与 DOM（runAfterScroll 的 cancel 闭包捕获 el），
+  // 卸载前一个都不放（审查 v7 · #28）。新一轮定位开始前先撤掉上一轮。
+  let cancels = []
   const d = useDisposables()
+  const clearCancels = () => {
+    for (const c of cancels) { try { c() } catch (_) { /* 已结束 */ } }
+    cancels = []
+  }
   d.add(() => {
     // 「时机未到」的内部重试定时器也要撤：否则它会继续跑 applyRouteRowFocus
     clearRetry(host)
-    for (const c of cancels) { try { c() } catch (_) { /* 已结束 */ } }
-    cancels.clear()
+    clearCancels()
   })
   // 内部登记一个「可取消的清理动作」。宿主不是本函数造的（旧写法）时安全降级。
-  host._register = (cancel) => { if (typeof cancel === 'function') cancels.add(cancel) }
+  host._register = (cancel) => { if (typeof cancel === 'function') cancels.push(cancel) }
+  // 由 applyRouteRowFocus 在开始新一轮定位时调用（同一宿主同一时刻只有一个「当前定位」）
+  host._clearFocusCancels = clearCancels
   // 组件外（非 setup 作用域）调用时没有自动释放者：给调用方一个显式入口，
   // 否则重试链与滚动监听会一直挂到进程结束（审查 v5 · V5-042）。
   host.dispose = () => d.dispose()
@@ -208,6 +217,9 @@ export function applyRouteRowFocus(host, options = {}) {
   }
   const key = String(raw)
   if (key === sigMap.get(host)) return
+  // 上一轮定位的清理动作（重试链 / 滚动监听）已经过期：先撤掉再开始新的。
+  // 不撤的话每条闭包都留着它当时的容器元素，反复定位 = 反复攒 DOM（审查 v7 · #28）。
+  if (typeof host._clearFocusCancels === 'function') host._clearFocusCancels()
   let id = key
   if (options.parse) {
     id = options.parse(key)

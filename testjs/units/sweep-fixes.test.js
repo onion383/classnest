@@ -231,13 +231,14 @@ for (const c of STATIC_CASES) {
   test(`[静态] ${c.id} —— ${c.desc}`, () => {
     for (const f of c.files) {
       const raw = readSrc(f)
-      // forbid 只看代码（去注释）；mustHave 看全文（注释里提到也算数）
+      // forbid 与 mustHave 都必须只看真实代码：mustHave 若看全文，实现被删但注释里
+      // 还留着修法特征时也会通过 —— 等于把"删实现"判成"仍修复"。
       const code = stripComments(raw)
       if (c.forbid) {
         assert.ok(!c.forbid.test(code), `${f}：不该再出现该模式（${c.forbid}）`)
       }
       if (c.mustHave) {
-        assert.ok(c.mustHave.test(raw), `${f}：应保留修法特征（${c.mustHave}）`)
+        assert.ok(c.mustHave.test(code), `${f}：应在真实代码中保留修法特征（${c.mustHave}）`)
       }
       // minCount：同一模式在文件里出现几次下限（防「只改一处、另一处照旧」）
       if (c.minCount && c.countPattern) {

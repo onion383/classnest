@@ -93,7 +93,7 @@ defineOptions({ name: 'SeatRecordSettingsDialog' })
 const props = defineProps({
   visible: { type: Boolean, default: false }
 })
-defineEmits(['close'])
+const emit = defineEmits(['close', 'changed'])
 
 const semesters = ref([])
 const semesterId = ref('')
@@ -135,9 +135,11 @@ const confirmMessage = computed(() => {
   return `确定删除 ${weekRangeText(week)} 这一周的座位记录吗？删除后不可恢复。`
 })
 
+// immediate 不能省：宿主 v-if 懒挂载时 visible 已经是 true，非 immediate 的 watcher
+// 建立时已错过这次变化，首次打开会空白（v7 §5-3）。
 watch(() => props.visible, (val) => {
   if (val) onOpen()
-})
+}, { immediate: true })
 
 // 打开弹窗：拉取学期列表 + 周列表
 async function onOpen() {
@@ -214,6 +216,9 @@ async function confirmDelete() {
     await axios.delete(`/api/seats/history/${week}`)
     useNotification().success('已删除该周记录')
     await loadWeeks()
+    // 删周改变了每日快照序列：父页面（座位页）的账本/指数缓存必须作废，
+    // 否则它按 seatDailyKey 命中旧区间，下次打开仍是删之前的数字。
+    emit('changed')
   } catch (err) {
     useNotification().error(err && err.response && err.response.data && err.response.data.error || '删除失败')
   } finally {

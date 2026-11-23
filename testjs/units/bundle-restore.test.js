@@ -71,7 +71,7 @@ async function makeBundle({ slug = '@aaaaaaaaaaaa', username = '张三', encrypt
   const dbFile = path.join(src, 'x.db')
   fs.writeFileSync(dbFile, '假库内容')
   const plan = {
-    meta: { version: 3, slug, username, encrypted, key: 'k' },
+    meta: { version: 4, slug, username, encrypted, key: 'k' },
     files: [{ name: 'db/x.db', path: dbFile }],
     texts: [{ name: 'memory.md', data: '# 记忆' }],
     dirs: dirs.map((d) => ({ prefix: d.prefix, dir: d.dir })),
@@ -104,21 +104,23 @@ function seed(dirPath, files) {
 // ---------------------------------------------------------------------------
 // ① 正常包：库、目录、记忆全落盘，旧目录进 .bak
 // ---------------------------------------------------------------------------
-test('正常包：库写入、目录替换、旧内容进 .bak（不删）、memory 覆盖', async () => {
+test('正常包：库写入、共享目录合并（旧文件保留）、memory 覆盖', async () => {
   calls.length = 0
   const up = dir('bundle-uploads')
   seed(up, { '收据A.pdf': '新收据' })
   const zip = await makeBundle({ dirs: [{ prefix: 'uploads', dir: up }] })
-  // 本机已有旧收据：恢复后必须能在 .bak 里找回来
+  // 本机已有旧收据（其它班的）：uploads 是全局共享目录，恢复后必须还在（#11）
   seed(fakeDbManager.uploadsDir, { '旧收据.pdf': '旧内容' })
 
   const recv = await unpack(zip)
   const out = await applyVerifiedBundle({ ...recv, slug: '@aaaaaaaaaaaa', username: '张三', body: {} })
 
-  assert.equal(fs.readFileSync(path.join(fakeDbManager.uploadsDir, '收据A.pdf'), 'utf8'), '新收据')
-  assert.ok(!fs.existsSync(path.join(fakeDbManager.uploadsDir, '旧收据.pdf')), '旧目录应被换走')
-  const bak = out.dirs.find((d) => d.dir === 'uploads').backup
-  assert.equal(fs.readFileSync(path.join(bak, '旧收据.pdf'), 'utf8'), '旧内容', '旧内容必须留在 .bak 里，不能删')
+  assert.equal(fs.readFileSync(path.join(fakeDbManager.uploadsDir, '收据A.pdf'), 'utf8'), '新收据', '包内文件合入')
+  assert.equal(fs.readFileSync(path.join(fakeDbManager.uploadsDir, '旧收据.pdf'), 'utf8'), '旧内容',
+    '共享目录是 merge 不是 replace：别的班的旧收据必须留在原位（#11）')
+  const upEntry = out.dirs.find((d) => d.dir === 'uploads')
+  assert.equal(upEntry.backup, undefined, '共享目录不再整体替换，不应产生 .bak')
+  assert.equal(upEntry.mergedFiles, 1)
 
   const restored = calls.find((c) => c.fn === 'restoreBundle')
   assert.ok(restored, '必须调用 restoreBundle 落库')
@@ -172,7 +174,7 @@ test('包里没有 memory.md → 不覆盖现有记忆（别把 AI 记忆清空�
   const zipPath = path.join(src, 'b.zip')
   const ws = fs.createWriteStream(zipPath)
   await writeBundle({
-    meta: { version: 3, slug: '@aaaaaaaaaaaa', username: '张三', encrypted: false },
+    meta: { version: 4, slug: '@aaaaaaaaaaaa', username: '张三', encrypted: false },
     files: [{ name: 'db/x.db', path: dbFile }],
   }, ws)
   ws.end()
@@ -196,7 +198,7 @@ test('包里没有 db/ 库文件 → 报错，且一个目录都没替换', asyn
   const ws = fs.createWriteStream(zipPath)
   // 故意只有 uploads、没有 db/ —— 用来证「先确认库文件存在，再动目录」这个顺序
   await writeBundle({
-    meta: { version: 3, slug: '@aaaaaaaaaaaa', username: '张三' },
+    meta: { version: 4, slug: '@aaaaaaaaaaaa', username: '张三' },
     texts: [{ name: 'memory.md', data: 'x' }],
     dirs: [{ prefix: 'uploads', dir: pkgUploads }],
   }, ws)

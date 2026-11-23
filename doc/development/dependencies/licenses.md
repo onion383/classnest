@@ -83,6 +83,7 @@
 | `globals` | 17.13.0 | MIT | Copyright (c) Sindre Sorhus |
 | FFmpeg | LGPL 版 | LGPL-2.1 | 全文在 [`licenses/LGPL-2.1.txt`](./licenses/LGPL-2.1.txt)（源 `resources/ffmpeg/COPYING.LGPLv2.1`） |
 | Noto Sans SC | — | SIL OFL 1.1 | 全文在 [`licenses/SIL-OFL-1.1.txt`](./licenses/SIL-OFL-1.1.txt)（源 SIL 官网 `OFL.txt`）。分发字体时须随附该许可与版权声明，不得单独以字体名售卖 |
+| harfbuzzjs | 1.6.4 | MIT | 不是 npm 依赖：`hb-subset.wasm` 直接随包（[`student-frontend/src/wasm/`](../../../student-frontend/src/wasm/)），用于 PDF 中文字体子集化；版权归 HarfBuzz contributors（https://github.com/harfbuzz/harfbuzzjs） |
 | Chromium / Electron 组件 | 随 Electron 版本 | 各自许可 | 安装包内 `third-party-licenses.zip`（由 `electron/afterPack.js` 在打包后压缩 `LICENSES.chromium.html` 生成） |
 
 ### 4. MPL-2.0 说明（DOMPurify）

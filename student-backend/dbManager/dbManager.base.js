@@ -152,40 +152,29 @@ function getUnlockSource(slug) { return unlockSources.get(slug) || null; }
 function clearUnlockedKey(slug) { unlockedKeys.delete(slug); unlockSources.delete(slug); }
 function clearAllUnlockedKeys() { unlockedKeys.clear(); unlockSources.clear(); }
 
-// ---------- 用户绑定钥匙（v2 便携备份） ----------
-// 以「用户的密码/助记词」派生一把 AES 包裹钥匙，把库钥匙加密成密文装进备份包。
-// 这样备份包不再依赖服务端主密钥：换台电脑、.env 完全不一样，只要本人知道密码/助记词即可解包。
-// 规则：密码原样参与派生；助记词先归一化(只留汉字,兼容序号/空格)再派生，保证两边一致。
-function deriveBundleWrapKey(secret) {
-  return crypto.createHash('sha256').update('bundle:' + secret).digest();
-}
-
-// wrapPlainKeyBySecret(plainKey, secret) -> base64(iv).base64(tag).base64(密文)
-function wrapKeyBySecret(plainKey, secret) {
-  const wKey = deriveBundleWrapKey(secret);
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', wKey, iv);
-  const enc = Buffer.concat([cipher.update(plainKey, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return [iv, tag, enc].map(b => b.toString('base64')).join('.');
-}
-
-function unwrapKeyBySecret(wrapped, secret) {
-  const [ivB, tagB, encB] = wrapped.split('.');
-  const wKey = deriveBundleWrapKey(secret);
-  const decipher = crypto.createDecipheriv('aes-256-gcm', wKey, Buffer.from(ivB, 'base64'));
-  decipher.setAuthTag(Buffer.from(tagB, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(encB, 'base64')), decipher.final()]).toString('utf8');
-}
-
-// 从 v2 备份包里解出库钥匙：明文 key（无密码账号）优先级最高，否则用密码或助记词任一对上即可（AES-GCM 校验失败的密文在 try 里直接跳过）。
-function decryptBundleKey({ key, wrappedByPassword, wrappedByMnemonic, password, mnemonic }) {
+// ---------- 用户绑定钥匙（v4 便携备份） ----------
+// 以「用户的密码/助记词」经 scrypt 派生 AES 包裹钥匙，把库钥匙密文装进备份包。
+// 换机只要本人知道密码/助记词即可解包，不依赖服务端主密钥。
+// 规则和隐私库一致：密码原样参与派生；助记词先归一化(只留汉字)再派生。
+// v4 起不再兼容旧的单次 SHA-256 派生包（产品尚未正式发布，无旧包需要迁移）：
+// 包裹必须的 salt 与 KDF 参数随包携带，缺失即视为包格式不对，绝不用弱 KDF 兜底。
+//
+// 从备份包里解出库钥匙：明文 key（无密码账号）优先级最高，否则用密码或助记词任一对上即可
+// （AES-GCM 校验失败的密文在 try 里直接跳过）。
+function decryptBundleKey({ key, wrappedByPassword, wrappedByMnemonic, password, mnemonic,
+  passwordSalt, mnemonicSalt, kdfParamsPassword, kdfParamsMnemonic }) {
   if (key) return key;
   if (wrappedByPassword && password) {
-    try { return unwrapKeyBySecret(wrappedByPassword, password); } catch (_) { /* 密码不对，尝试助记词 */ }
+    if (!passwordSalt) throw new Error('备份包缺少口令派生盐，无法解锁（旧格式包已不支持）');
+    try {
+      return unwrapKeyByPrivacySecret(wrappedByPassword, password, passwordSalt, kdfParamsPassword);
+    } catch (_) { /* 密码不对，尝试助记词 */ }
   }
   if (wrappedByMnemonic && mnemonic) {
-    try { return unwrapKeyBySecret(wrappedByMnemonic, normalizePhrase(mnemonic)); } catch (_) { /* 助记词不对 */ }
+    if (!mnemonicSalt) throw new Error('备份包缺少恢复词派生盐，无法解锁（旧格式包已不支持）');
+    try {
+      return unwrapKeyByPrivacySecret(wrappedByMnemonic, normalizePhrase(mnemonic), mnemonicSalt, kdfParamsMnemonic);
+    } catch (_) { /* 助记词不对 */ }
   }
   throw new Error('无法解锁备份：密码或助记词不正确');
 }
@@ -523,7 +512,6 @@ module.exports = {
   unwrapKey,
   wrapWithKey,
   unwrapWithKey,
-  wrapKeyBySecret,
   decryptBundleKey,
   // 超级隐私模式
   newPrivacySalt,

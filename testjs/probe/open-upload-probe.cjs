@@ -35,7 +35,7 @@ const electronId = require.resolve('electron')
 require.cache[electronId] = { id: electronId, filename: electronId, loaded: true, exports: fakeElectron }
 
 const { registerDialogsIpc } = require(path.join(ROOT, 'electron/main/main.dialogs.js'))
-const { resolveDataDir } = require(path.join(ROOT, 'electron/main/main.config.js'))
+const { resolveContentDir } = require(path.join(ROOT, 'electron/main/main.config.js'))
 registerDialogsIpc({ getMainWindow: () => ({ isDestroyed: () => false }) })
 
 let failed = 0
@@ -44,7 +44,9 @@ function ok(cond, msg) {
   else { failed++; console.log('  ✗ ' + msg) }
 }
 
-const uploads = path.join(resolveDataDir(), 'uploads')
+// 上传目录的真实位置是 <dataDir>/content/uploads（dbManager.paths.js 的 uploadsDir）。
+// 早先探针自己也按 <dataDir>/uploads 造夹具，于是 handler 拼错根目录也照样全绿 —— 假绿。
+const uploads = path.join(resolveContentDir(), 'uploads')
 fs.mkdirSync(uploads, { recursive: true })
 fs.writeFileSync(path.join(uploads, 'ok.pdf'), 'PDF')
 fs.writeFileSync(path.join(uploads, 'bad.exe'), 'MZ')

@@ -355,6 +355,7 @@
       v-if="historySettingsMounted"
       :visible="historySettingsVisible"
       @close="historySettingsVisible = false"
+      @changed="onHistoryChanged"
     />
 
     <!-- 补录记录弹窗：周切换 + 增加周记录（周数与日期双向联动） -->
@@ -362,7 +363,7 @@
       v-if="historyBackfillMounted"
       :visible="historyBackfillVisible"
       @close="historyBackfillVisible = false"
-      @changed="onBackfillChanged"
+      @changed="onHistoryChanged"
     />
   </div>
 </template>
@@ -1209,7 +1210,10 @@ async function applySmartArrangement(result) {
     const nextSeats = result.seats
     // 记录整块快照，撤销可一键恢复智能排表前的布局
     const before = (grid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
-    await grid.saveSeats(nextSeats)
+    // saveSeats 失败时不 throw（内部已提示并回滚界面），必须看返回值：
+    // 原来忽略返回值，写库失败也照样登记撤销 + 弹「已应用智能排表」，用户以为座位已生效。
+    const ok = await grid.saveSeats(nextSeats)
+    if (!ok) return
     recordGridSnapshotUndo('座位表', undoTable, before, nextSeats, '智能排表')
     notifySuccess('已应用智能排表')
   } catch (e) {
@@ -1664,10 +1668,14 @@ async function loadSeatLedger() {
 }
 
 // 单遍累加：同一批每日快照同时产出账本（按学生 id）与指数（按姓名）。
-// 权重矩阵仍是 weightWeights（与改造前同一套对位口径，本卡不动权重语义）。
+// 对位口径（v7 · 4-9）：历史坐标按「逻辑座位」重映射到当前布局后再取当前权重，
+// 布局插/删走廊或增删行列时指数不会串位（详见 seatDailyAggregate.js 顶部说明）。
 const seatAgg = computed(() => aggregateSeatDaily({
   days: seatDailyDays.value,
   weights: weightWeights.value,
+  weightsRows: weightRows.value,
+  weightsCols: weightCols.value,
+  weightsTypes: weightTypes.value,
   ledgerTo: seatLedgerCutoff.value,
   indexTo: seatIndexCutoff.value,
   studentName: getStudentName,
@@ -1676,10 +1684,13 @@ const seatAgg = computed(() => aggregateSeatDaily({
 // 学生 id → 截至昨日的累计权重
 const seatLedger = computed(() => seatAgg.value.ledger)
 
-// 指数行：姓名 + 累计权重，按降序排；_max 供进度条按表内最大值做相对映射
+// 指数行：姓名 + 累计权重，按降序排；_max 供进度条按表内最大值做相对映射。
+// acc 的键是身份（id:xx / name:xx），显示名取 accName —— 同名两人各占一行（v7 §5-4）。
 const seatIndexRows = computed(() => {
-  const acc = seatAgg.value.acc
-  const rows = Object.keys(acc).map(name => ({ name, value: acc[name] })).filter(r => r.value !== 0)
+  const { acc, accName } = seatAgg.value
+  const rows = Object.keys(acc)
+    .map(key => ({ key, name: accName[key] || key, value: acc[key] }))
+    .filter(r => r.value !== 0)
   rows.sort((a, b) => b.value - a.value)
   const max = Math.max(...rows.map(r => Math.abs(r.value)), 0)
   rows.forEach(r => { r._max = max || 1 })
@@ -1777,7 +1788,13 @@ async function refreshHistory() {
   } catch (e) { /* 错误已在 load 内部处理 */ }
 }
 // 补录完成后重新拉取周列表（保持当前选中周不变）
-function onBackfillChanged() { fetchHistoryWeeks() }
+// 两个记录弹窗（补录 / 管理周记录）改完快照后统一走这里：
+// 先作废账本/指数共用的每日快照缓存，再刷新周列表 —— 只刷周列表的话，
+// 账本与指数仍按 seatDailyKey 命中旧区间，用户看到的是改动前的数字（#26）。
+function onHistoryChanged() {
+  invalidateSeatDaily()
+  fetchHistoryWeeks()
+}
 
 // ---------- 座位记录导出 ----------
 const historyExportVisible = ref(false)

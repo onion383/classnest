@@ -36,7 +36,9 @@ function buildSystemPrompt(slug, attachments, summary, skills) {
   // 用户上传的文件：内容不直接塞进对话，明确告知模型可用 read_document 按需读取
   const names = (Array.isArray(attachments) ? attachments : [])
     .map((a) => String((a && a.name) || ''))
-    .filter(Boolean);
+    .filter(Boolean)
+    // 附件名也走同一出站替换：含学生姓名的「请假证明-张三.pdf」不该随每轮 system prompt 发给外部模型（#1）
+    .map((name) => out(name));
   if (names.length) {
     prompt += `\n\n【可用文件】本次对话中用户上传过的文件：${names.join('、')}。你需要查看其内容时调用 read_document 读取（无界面交互，直接返回文字）；不需要时无需调用。`;
   }

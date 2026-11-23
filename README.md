@@ -156,6 +156,8 @@ npm run dev:new            # 3.6 通道只起 Vite
 | `npm run check:boundaries` / `check:boundaries:strict` | 错误边界检查（strict 更严格）                                  |
 | `npm run docs:verify`                                  | 文档一致性校验（死链 / 覆盖 / 路由 / 依赖 / 计数）                     |
 | `npm run docs:sync`                                    | 按源码现算值同步文档里的数量类计数（只改数字，改完仍需 `docs:verify`）        |
+| `npm run check:coverage` | 生成「入口 × 不变量」覆盖矩阵并校验：PASS / GAP / UNKNOWN 明细，缺口返回非零 |
+| `npm run check:coverage:report` | 只生成覆盖矩阵报告，不做缺口校验 |
 | `npm run inp`                                          | 交互延迟（INP）测量；需 `INP_DEBUG=1` 启动应用                    |
 
 ## 构建与打包
@@ -173,7 +175,7 @@ npm run build:win:inno     # 仅生成安装包（需先完成 electron-builder 
 
 - 打包流程、剔除/保留清单与双通道机制见 [打包与分支专题](doc/development/topics/build-and-branches.md)。
 
-- CI/CD：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑测试，push 到 `main` 或手动触发时打包；一次出两份安装包（Vue 3.5 正式版 + Vue 3.6 预览版），外加免安装 ZIP、源码 ZIP，各附 `.sha256`，自动存入 Draft Release（草稿，不自动发布）。
+- CI/CD：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑测试；仅当仓库变量 `PACKAGING_ENABLED=true` 时（且非 PR）才打包，默认未设置即关闭，不是每次 push 都出包。打包时一次出两份安装包（Vue 3.5 正式版 + Vue 3.6 预览版），外加免安装 ZIP、源码 ZIP，各附 `.sha256`，自动存入 Draft Release（草稿，不自动发布）。
 
 ## 端口与环境变量
 

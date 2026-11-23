@@ -21,7 +21,13 @@ const ROOT = path.resolve(__dirname, '../..');
 const Database = require(path.join(ROOT, 'student-backend', 'node_modules', 'better-sqlite3-multiple-ciphers'));
 
 process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || '0123456789abcdef0123456789abcdef';
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'testjs', '.startup-measure', 'refresh-virtual');
+// 数据目录必须是独占临时目录：原写法把 DATA_DIR / dbFile 固定在仓库
+// testjs/.startup-measure/refresh-virtual，跑完 fs.rmSync(dataDir, {recursive:true})
+// 会把目录里其它产物一起删掉。这里一开始就建独占目录并覆盖外部 DATA_DIR，
+// 进程退出时兜底清理（异常退出也能收尾）。
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'refresh-virtual-data-'));
+process.on('exit', () => { try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch (_) {} });
+process.env.DATA_DIR = DATA_DIR;
 
 let passed = 0;
 // 注意：refreshVirtual 是 async，下面的用例里也有 async 的，
@@ -64,9 +70,8 @@ async function makeJpeg(file, exifDate) {
   const { migrateAlbum } = require(path.join(ROOT, 'student-backend', 'schema', 'schema.album.js'));
   const { THUMB_VERSION } = albumScan;
 
-  // 临时库 + 临时图片目录
-  const dataDir = path.join(ROOT, 'testjs', '.startup-measure', 'refresh-virtual');
-  fs.mkdirSync(dataDir, { recursive: true });
+  // 临时库 + 临时图片目录（全部独占，不碰仓库目录）
+  const dataDir = DATA_DIR;
   const imgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rv-img-'));
   const dbFile = path.join(dataDir, 'rv.db');
   try { fs.unlinkSync(dbFile); } catch (_) {}
@@ -181,9 +186,7 @@ const ins = db.prepare(`INSERT INTO album_photos (album_id, file_path, file_name
   db.close();
   fs.rmSync(imgDir, { recursive: true, force: true });
   fs.rmSync(tmpThumbs, { recursive: true, force: true });
-  // ⚠️ 临时库也要删：dataDir 在**仓库里**（testjs/.startup-measure/），
-  //   原来只清了 imgDir / tmpThumbs（这两个在系统 temp），rv.db 留在仓库里
-  //   → 跑一次测试就在工作区留下一个二进制文件（会进 git status）。
+  // 正常结束时清掉独占数据目录；异常退出由上面的 exit 钩子兜底。
   fs.rmSync(dataDir, { recursive: true, force: true });
   console.log(`\n通过 ${passed} 项` + (process.exitCode ? '，有失败' : '，全部通过'));
 })().catch(e => { console.error('测试崩溃:', e); process.exit(1); });

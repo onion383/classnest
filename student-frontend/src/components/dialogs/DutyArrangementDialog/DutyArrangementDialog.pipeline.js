@@ -211,7 +211,10 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
       const allNames = new Set(ctx.poolKeys.value)
       if (scope === 'all') return [{ days: allDays, participants: allNames, key: 'all' }]
       if (scope === 'bigroup') {
-        const seated = new Set(this.seatCellNames().map(c => c.name).filter(n => allNames.has(n)))
+        // seatCellNames() 返回 { r, c, key }：这里要的是 key（池子里的人用同一套 key）。
+        // 早先取的是 c.name —— 字段不存在，全被 filter 掉，于是「一大组」静默回退成全班，
+        // 公平分配把不在座位表里的学生也算进去了（v7 §5-5 / #21）。
+        const seated = new Set(this.seatCellNames().map(c => c.key).filter(k => allNames.has(k)))
         return [{ days: allDays, participants: seated.size ? seated : allNames, key: 'bigroup' }]
       }
       if (scope === 'day') {
@@ -601,12 +604,19 @@ export function useDutyArrangementPipeline(ctx, REGISTRY) {
       } else {
         ok = inItem.length === 0
         if (!ok) {
+          // 「不做某项目」：把人挪到别的项目的空槽，再把原槽清空。
+          // 挪不动（没有空槽）时必须**保留原排班**，只把这条条件记为未满足 ——
+          // 早先照样执行 assigned[idx] = ''，用户确认排表后已定的劳动安排就被删了，
+          // 而界面只显示「条件未满足」，看不出名额丢了（v7 §5-5 / #21b）。
           for (const idx of inItem) {
             const empty = slots.findIndex((s, i) => s.item !== item && !assigned[i])
-            if (empty >= 0) { assigned[empty] = name; assigned[idx] = '' }
-            else assigned[idx] = ''
+            if (empty < 0) continue
+            assigned[empty] = name
+            assigned[idx] = ''
           }
-          if (!this.findByName(slots, assigned, name).length) ok = true
+          // 达成条件 = 这个人不再出现在**该项目**的任何槽位里。
+          // 不能只看「人是否还在名单上」：挪到别的项目后他当然还在名单上（那正是期望结果）。
+          ok = !slots.some((s, i) => s.item === item && assigned[i] === name)
         }
       }
       this.trackSatisfaction(node.uid, ok ? 1 : 0, 1)

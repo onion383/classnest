@@ -155,7 +155,8 @@ router.get('/tokens/:id/plain', (req, res) => {
 
 router.post('/tokens/:id/revoke', (req, res) => {
   try {
-    const ok = tokenStore.revoke(req.params.id);
+    // 带当前 slug：只能撤销自己班的令牌，不能跨班越权（与 getPlain 同口径）。
+    const ok = tokenStore.revoke(req.params.id, slug(req));
     res.json({ ok });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -164,7 +165,8 @@ router.post('/tokens/:id/revoke', (req, res) => {
 // 与 revoke 区别：revoke 留条目显示「已失效」，remove 让列表里不再有这一行。
 router.post('/tokens/:id/remove', (req, res) => {
   try {
-    const ok = tokenStore.remove(req.params.id);
+    // 带当前 slug：只能删自己班的令牌。
+    const ok = tokenStore.remove(req.params.id, slug(req));
     if (!ok) return res.status(404).json({ error: '令牌不存在，或该令牌仍有效（请先删除配置使其失效）' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }

@@ -36,6 +36,9 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 // 结束子进程树（只杀直接子进程会残留孙进程 → 端口占用 + 进程泄漏）
 const { killTree } = require('../tools/killTree.cjs')
+const { createOwnedChild } = require('../tools/ownedChild.cjs')
+// 只登记本进程 spawn 的 Electron；复用外部实例时不登记、不误杀。
+const ownedElectron = createOwnedChild({ killTree, label: 'bench' })
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
 const OUT_DIR = path.join(ROOT, 'testjs', 'tmp')
@@ -277,6 +280,7 @@ async function ensureElectron() {
   const child = spawn(electronPath, ['.', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-features=CalculateNativeWinOcclusion'], {
     cwd: ROOT, env, stdio: 'inherit',
   })
+  ownedElectron.adopt(child)
   return { child }
 }
 
@@ -401,15 +405,17 @@ async function main() {
   }
 
   cdp.close()
-  if (child) killTree(child)
+  ownedElectron.stop()
   stopVite()
   process.exit(0)
 }
 
-process.on('SIGINT', () => { stopVite(); process.exit(0) })
-process.on('exit', stopVite)
+process.on('SIGINT', () => { ownedElectron.stop(); stopVite(); process.exit(0) })
+process.on('SIGTERM', () => { ownedElectron.stop(); stopVite(); process.exit(143) })
+process.on('exit', () => { ownedElectron.stop(); stopVite() })
 main().catch((err) => {
   console.error('[bench] 失败：' + err.message)
+  ownedElectron.stop()
   stopVite()
   process.exit(1)
 })

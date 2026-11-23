@@ -36,12 +36,13 @@ function fail(error) { return { ok: false, error: String(error) }; }
 
 // ---- 数据保护：外部 AI 读写也要走同一套混淆 ----
 // 出站：把真名/真号换成代号再交给外部 AI（开关关时 privacy 零拷贝直接返回）。
-// 失败不阻断读——保护模块故障不该让整个 MCP 读表挂掉。
 // 进 substitute 之前先剥掉 JSON 版本标记（__v）：那是库内部记账用的键，
 // 外部模型看到会当成真实列照抄回写。所有 MCP 出站结果都过这个函数，收口在这里一处即可。
+// 失败**不返回原文** —— 那是把真实姓名/电话交给外部模型（#1）。
+// 也不让整个 MCP 读表挂掉：返回不含真实数据的占位结果，让外部客户端知道数据暂不可用。
 function maskResult(result, slug) {
   try { return privacy.substitute(stripVersionDeep(result), slug, 'mcp'); }
-  catch (_) { return result; }
+  catch (_) { return { ok: false, error: '数据保护脱敏失败，本次结果暂不可用' }; }
 }
 // 入站：外部 AI 从读接口看到的是代号，写回时先还原成真值；认不出的 S-/P- 代号必须拒绝，
 // 否则会把代号写进库（与本地 AI 工具 runTool 的守卫同一口径）。

@@ -127,8 +127,10 @@ export function useAiExec(ctx) {
         const end = EXEC[m.proposal.table]
         if (!end) throw new Error('该表暂不支持 AI 写入')
         const { operation, data } = m.proposal
-        // 记录本次更改对应的撤销记录 id，供下方「撤回更改」精确回退
-        const undoIds = []
+        // 记录本次更改对应的撤销记录 id，供下方「撤回更改」精确回退。
+        // 直接绑到 proposal：逐项写入时每成功一项就登记，中途失败时已成功项也能撤回
+        // （局部变量只在全部成功才赋值，部分失败会让已写入的行既没标记也没撤销 ID）。
+        const undoIds = (m.proposal.undoIds = Array.isArray(m.proposal.undoIds) ? m.proposal.undoIds : [])
         // 批量新增：逐行写入（任一行失败即中断，已写入的行保留）
         if (operation === 'add' && m.proposal.batch) {
           const rows = Array.isArray(data && data.rows) ? data.rows : []
@@ -210,8 +212,13 @@ export function useAiExec(ctx) {
       } catch (err) {
         // 失败也把结果发回给 AI 继续处理：关闭浮窗、上报失败原因，不在此结束对话
         m.proposal.executing = false
-        m.proposal.executed = false
-        m.proposal.dismissed = true
+        // 逐项写入中途失败时，已成功项的撤销 ID 已累积在 proposal.undoIds 上：
+        // 保留 executed=true + 标 partial，让「撤回更改」能精确撤掉已落盘的部分，
+        // 否则这部分数据既没执行标记又没撤销入口 = 永久残留（#17）。
+        const partial = Array.isArray(m.proposal.undoIds) && m.proposal.undoIds.length > 0
+        m.proposal.executed = partial
+        m.proposal.partial = partial
+        m.proposal.dismissed = !partial
         const msg = err.response?.data?.error || err.message || '未知错误'
         notifyError('执行失败：' + msg)
         await ctx._sendFeedback(
@@ -337,6 +344,16 @@ export function useAiExec(ctx) {
         return ctx._pushUndo('row_update', r.table, ctx._rowName(row), { table: r.table, rowId: r.id, oldRow: r.before, newRow: r.after }, origin)
       }
       if (r.action === 'delete') {
+        // 删学生连带清了 7 处松耦合关联（请假/加分/座位/值日/小组/班干部）。
+        // 后端把 purge 的快照随结果返回（purged + undoType），这里必须登记
+        // student_cascade_delete 整包撤销；否则沿用 row_delete 只恢复主表，
+        // 6 类关联永久丢失。普通表删除仍走 row_delete，语义不变。
+        if (r.undoType === 'student_cascade_delete' && r.purged) {
+          return ctx._pushUndo('student_cascade_delete', r.table, ctx._rowName(r.row), {
+            student: r.row,
+            ...r.purged,
+          }, origin)
+        }
         return ctx._pushUndo('row_delete', r.table, ctx._rowName(r.row), { table: r.table, row: r.row }, origin)
       }
       if (r.action === 'doc') {

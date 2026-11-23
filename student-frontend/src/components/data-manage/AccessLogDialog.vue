@@ -95,7 +95,9 @@ const props = defineProps({
 const emit = defineEmits(['close', 'changed'])
 
 const notify = useNotification()
-const { logs, total, summary, config, loading, error, load, saveConfig, clear } = useAccessLog(props.source)
+const {
+  logs, total, retentionTotal, summary, config, loading, error, load, saveConfig, clear,
+} = useAccessLog(props.source)
 
 const onlyAbnormal = ref(false)
 const askClear = ref(false)
@@ -219,13 +221,16 @@ async function onGranularity(v) {
 
 // 改小且当前条数已超过目标值 → 会丢历史，先确认；否则（含改成「永久」）直接设置。
 // 下拉是受控的：不调 saveConfig 就不会改 config.keep，取消后自动停回旧值。
+// 保留条数是全局的（AI 与 MCP 共用一张表、共用一份 keep），而这个弹窗只看当前来源。
+// 所以「会不会丢历史」要按全表原始条数判断：否则只看到 20 条的 AI 面板从 500 改到 100
+// 不弹确认，后端却按全表的 800 条裁到 100（审查 v7 · #33）。
 const pendingKeep = ref(null)
 const shrinkMessage = computed(() =>
-  `当前已记 ${total.value} 条，多于要设置的 ${pendingKeep.value} 条。确认后超出的历史记录会被丢弃，无法恢复。`)
+  `全部来源共记 ${retentionTotal.value} 条，多于要设置的 ${pendingKeep.value} 条。确认后超出的历史记录会被丢弃，无法恢复。`)
 
 function onKeep(v) {
   const next = Number(v)
-  if (next > 0 && total.value > next) {
+  if (next > 0 && retentionTotal.value > next) {
     pendingKeep.value = next
     return
   }

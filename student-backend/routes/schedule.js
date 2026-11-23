@@ -5,6 +5,7 @@ const semesterStore = require('../services/semesterStore');
 const { readDocJson } = require('../utils/json');
 const { registerHistoryRoutes } = require('./historyRoutes');
 const { isDateStr } = require('../utils/sql');
+const { sanitizeField } = require('../services/sanitize');
 
 // ======================== 实行课表（临时表） ========================
 // 读取当前课表（含「空则回退主课表」「对象键规范化为数组」两步），共用于 GET / 与 /api/dashboard。
@@ -37,11 +38,23 @@ router.get('/', (req, res) => {
     res.json(readSchedule());
 });
 
+// 课表 cells 走与其他写入口同一套列规则（services/sanitize.js 的 schedule / master_schedule）。
+// 只判断「是数组」不够：[1,2,3] 也是数组，但元素是数字，前端按 .course 取值时渲染出错，
+// 而且这类脏数据会被历史快照、AI 读接口一路带下去。元素级判据（空值/文本/对象，拒绝数字
+// 与布尔）在 sanitize 的 assertSlotElements 里，这里只负责把它的错误转成 400。
+// 两处写入口都直接调用 sanitizeField（不抽包装函数）：覆盖矩阵 write.sanitize_gate 按
+// handler 体内是否出现该调用判定，间接调用会让已修的地方仍报 GAP。
+// apply-master 不重复清洗：它整份复制已经过校验的 master 文档。
 router.put('/', (req, res) => {
-    const { cells, settings } = req.body;
-  if (cells && !Array.isArray(cells)) return res.status(400).json({ error: '数据格式错误' });
+    const { cells: rawCells, settings } = req.body;
+  let cells;
+  try {
+    cells = sanitizeField(rawCells || [], 'schedule', 'cells');
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   store.setDoc('schedule', {
-    cells: JSON.stringify(cells || []),
+    cells: JSON.stringify(cells),
     settings: JSON.stringify(settings || {}),
   });
   res.json({ message: '保存成功' });
@@ -54,10 +67,15 @@ router.get('/master', (req, res) => {
 });
 
 router.put('/master', (req, res) => {
-    const { cells, settings } = req.body;
-  if (cells && !Array.isArray(cells)) return res.status(400).json({ error: '数据格式错误' });
+    const { cells: rawCells, settings } = req.body;
+  let cells;
+  try {
+    cells = sanitizeField(rawCells || [], 'master_schedule', 'cells');
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   store.setDoc('master_schedule', {
-    cells: JSON.stringify(cells || []),
+    cells: JSON.stringify(cells),
     settings: JSON.stringify(settings || {}),
   });
   res.json({ message: '一般课表保存成功' });

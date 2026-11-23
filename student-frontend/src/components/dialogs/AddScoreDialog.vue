@@ -165,7 +165,8 @@
 
 <script setup vapor>
 import axios from 'axios'
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import AppSelect from '../base/AppSelect.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
 import DialogShell from '../base/DialogShell.vue'
@@ -191,7 +192,8 @@ const listVisible = ref(false);
 // 候选学生列表滚动容器（自定义滚动条的目标）
 const studentListRef = ref(null)
 const selected = ref(null);
-const hideTimer = ref(null);
+// 下拉延迟收起：可替换定时器（每次自动撤掉上一次），随组件卸载自动清
+const scheduleHide = useDisposables().defer();
 // 小组加分所需的分组数据
 const dims = ref([]);
 const activeDimId = ref(0);
@@ -252,15 +254,14 @@ const groupOptions = computed(() => {
   ]
 })
 
+// immediate 不能省：宿主 v-if 懒挂载时 visible 已经是 true，非 immediate 的 watcher
+// 建立时已错过这次变化 —— 首次打开表单不会预置/重置（v7 §5-3）。
 watch(() => props.visible, (v) => {
   if (v) {
     if (isEdit.value) presetFromRecord(props.editingRecord)
     else reset()
   }
-})
-
-// 下拉延迟收起定时器：弹窗关掉（组件卸载）后仍在跑就会往已销毁的实例上写状态
-onBeforeUnmount(() => clearTimeout(hideTimer.value))
+}, { immediate: true })
 
 function reset() {
   keyword.value = '';
@@ -327,8 +328,7 @@ function selectStudent(s) {
   listVisible.value = false;
 }
 function delayHide() {
-  clearTimeout(hideTimer.value);
-  hideTimer.value = setTimeout(() => { listVisible.value = false; }, 150);
+  scheduleHide(() => { listVisible.value = false; }, 150);
 }
 function submit() {
   if (!isEdit.value) {

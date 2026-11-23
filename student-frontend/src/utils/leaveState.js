@@ -57,9 +57,10 @@ export function leavesOn(leaves, dateStr) {
  * 从学生名单里剔除「今天不在校」的人（工具箱点名器的候选名单）。
  * 判定仍然只走 leavesOn，不另写一份请假条件 —— 点名结果与首页「在校人数」同源。
  *
- * 请假记录有两种身份来源：新增时优先带 student_id，导入/临时姓名可能只有姓名。
- * 所以按 id 和「trim 后的姓名」双路匹配：学生改过名也能靠 id 排除，
- * 只有姓名的历史请假行也能靠规范名排除（姓名口径与名册表一致，不做模糊匹配）。
+ * 身份匹配：有 student_id 的请假记录**只按 id** 排除，不再按姓名 —— 否则名册里
+ * 两个「张子涵」时，A 请假会把在校的 B 一起排除掉（v7 §5-4 / #20）。
+ * 只有导入/历史行没有 id 时才退回按 trim 后的姓名（无法区分同名，宁可多排除一个，
+ * 也不点到一个不在校的人）。
  *
  * @returns {{ list: object[], excludedCount: number }} 剩余候选名单与被排除的人数
  */
@@ -67,9 +68,11 @@ export function filterPresentStudents(students, leaves, dateStr) {
   const ids = new Set()
   const names = new Set()
   for (const leave of leavesOn(leaves, dateStr)) {
-    if (leave.student_id !== null && leave.student_id !== undefined && leave.student_id !== '') {
-      const id = Number(leave.student_id)
-      if (Number.isFinite(id)) ids.add(id)
+    const raw = leave.student_id
+    if (raw !== null && raw !== undefined && raw !== '') {
+      const id = Number(raw)
+      // 有稳定引用就只认 id：再加姓名会把同名的在校学生一起排掉
+      if (Number.isFinite(id)) { ids.add(id); continue }
     }
     const name = String(leave.姓名 || '').trim()
     if (name) names.add(name)

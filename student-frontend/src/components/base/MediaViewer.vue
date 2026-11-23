@@ -32,6 +32,7 @@
                 @timeupdate="onTimeupdate"
                 @loadedmetadata="onLoadedmetadata"
                 @loadeddata="mediaReady = true"
+                @error="mediaReady = true"
                 @play="playing = true"
                 @pause="playing = false"
                 @ended="playing = false"

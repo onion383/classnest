@@ -7,6 +7,14 @@ const { WRITE_TABLES, JSON_WRITE_TABLES } = require('../../ai.constants');
 const { FRONT_SETTINGS, BATCH_ROW_TABLES, MAX_BATCH_OPS } = require('../tools.schema');
 const { sanitizeField } = require('../../../../services/sanitize');
 const { previewSeatNames } = require('../../../../services/seatWrite');
+const { readScope } = require('../../../../services/aiReadScope');
+
+// 提案生成前会读库核对 id / 现有值（existingIds/findRow/listIds），这些派生读
+// 同样受 closed_tables 约束：完全禁止的表连提案都不该生成，否则会泄露 id 与存在性（1-6）。
+function blockedRead(table) {
+  const key = String(table || '').trim();
+  return key && !readScope.isTableReadable(key) ? readScope.closedError(key).error : '';
+}
 
 // 提案里的「新值」必须与最终落库值一致：确认页给用户看的若是 LLM 原值，
 // 而落库时又被列级规则 clamp/改写（数值越界、日期格式化等），

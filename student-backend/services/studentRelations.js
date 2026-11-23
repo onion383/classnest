@@ -11,6 +11,7 @@
 // db 为多库代理：本模块只读写当前请求绑定的班主任库。
 const { db } = require('../db');
 const store = require('./slotStore');
+const { DUTY_TABLES } = require('../schema/tableRegistry');
 const { countDutyRefs, collectDutyRefs, removeDutyName } = require('./dutyCells');
 
 function readSeats() {
@@ -23,9 +24,12 @@ function readSeats() {
 }
 
 // ---------- 值日 cells 解析：{项目:{星期:[姓名,...]}} ----------
-function readDutyCells() {
+// 值日有两张表：当前表 duty_layout 与模板 duty_template。模板也存学生姓名/id，
+// 且 readDuty() 在当前表为空时回退模板、apply-master 会把模板整体复制到当前表
+// （routes/duty.js），所以删学生时两张表都要统计/清理，否则模板残留会被重新写回。
+function readDutyCells(table = 'duty_layout') {
   try {
-    const rec = store.getDoc('duty_layout');
+    const rec = store.getDoc(table);
     return rec ? JSON.parse(rec.cells) : {};
   } catch (_) {
     return {};
@@ -38,21 +42,21 @@ function studentRelations(student) {
   const name = student['姓名'];
   const leave = db.prepare('SELECT COUNT(*) AS c FROM leave_records WHERE student_id = ? OR (student_id IS NULL AND TRIM(姓名) = TRIM(?))').get(id, name).c;
   const score = db.prepare('SELECT COUNT(*) AS c FROM score_records WHERE student_id = ? OR (student_id IS NULL AND TRIM(姓名) = TRIM(?))').get(id, name).c;
-  // 小组只存姓名（没有 student_id），班干部两者都有：
-  // 这两处原先既不在统计里、也不在清理里，删完学生后小组和班干部里会留着已删除的人，
-  // 而删除确认框也不提 —— 用户没有任何机会知道。
-  const group = db.prepare('SELECT COUNT(*) AS c FROM group_members WHERE TRIM(member_name) = TRIM(?)').get(name).c;
-  const cadre = db.prepare('SELECT COUNT(*) AS c FROM cadre_members WHERE student_id = ? OR TRIM(student_name) = TRIM(?)').get(id, name).c;
+  // 小组/班干部：student_id 是权威引用，姓名只是展示快照（students.姓名 不唯一）。
+  // 有效 id 时只按 id 命中；只有 legacy 空 id 行才按姓名兜底，否则两名同名学生
+  // 删一个会把另一个的关联一起统计/删掉（#9）。
+  const group = db.prepare('SELECT COUNT(*) AS c FROM group_members WHERE student_id = ? OR (student_id IS NULL AND TRIM(member_name) = TRIM(?))').get(id, name).c;
+  const cadre = db.prepare('SELECT COUNT(*) AS c FROM cadre_members WHERE student_id = ? OR (student_id IS NULL AND TRIM(student_name) = TRIM(?))').get(id, name).c;
 
   // 座位预览与清理共用 seatRefCells 的同一份匹配逻辑：
   // 原先这里另写一套「ids 命中数 + names 命中数」，一个 {student_id, name} 对象格
   // 会被同时计入两次（一个座位显示成 2 个），而且与真正清理的口径慢慢就会分叉。
   const seat = seatRefCells(student).hits.length;
 
-  const cells = readDutyCells();
+  // 当前表 + 模板都统计（模板引用会在「应用模板」或当前表为空时被重新显示）。
   // cells 是 {daily,big} 打包结构，统计交给 dutyCells 逐模式遍历。
   // 传 id 一起统计：新数据存的是 id 格，只按姓名数会显示「影响 0 处」而实际有引用。
-  const duty = countDutyRefs(cells, name, id);
+  const duty = DUTY_TABLES.reduce((n, table) => n + countDutyRefs(readDutyCells(table), name, id), 0);
   return { leave, score, seat, duty, group, cadre, total: leave + score + seat + duty + group + cadre };
 }
 
@@ -100,15 +104,20 @@ function purgeSeatRelation(student) {
 // 只按姓名清的话，同名两人会一起被清掉，而且 id 格根本匹配不上 ——
 // 删了人、值日表还挂着一个编号，界面显示空白，看起来像正常空格。
 function purgeDutyRelation(student) {
-  const cells = readDutyCells();
   const name = student['姓名'];
   const sid = student.id == null ? null : Number(student.id);
-  const slots = collectDutyRefs(cells, name, sid);
-  if (!slots.length) return { removed: 0, slots: [] };
-  // daily/big 两个模式都清；只在真的清掉时才回写
-  const removed = removeDutyName(cells, name, sid);
-  if (removed) store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
-  return { removed, slots };
+  const allSlots = [];
+  let removed = 0;
+  // 当前表 + 模板都清；每个 slot 带 table，撤销/重做才能写回正确的那张表。
+  for (const table of DUTY_TABLES) {
+    const cells = readDutyCells(table);
+    const slots = collectDutyRefs(cells, name, sid);
+    if (!slots.length) continue;
+    for (const s of slots) allSlots.push({ ...s, table });
+    removed += removeDutyName(cells, name, sid);
+    store.setDoc(table, { cells: JSON.stringify(cells) });
+  }
+  return { removed, slots: allSlots };
 }
 
 // ---------- 撤销/重做「删除学生」时的座位与值日回填 ----------
@@ -141,26 +150,35 @@ function clearSeatCells(cells) {
 
 function restoreDutySlots(slots) {
   if (!Array.isArray(slots) || !slots.length) return;
-  const cells = readDutyCells();
-  // 按「同一天」分组、index 升序插回：同一天可能有多个同名项（手工录入的重复），
-  // 逐个按原索引 splice 才能把顺序还原。
-  const groups = new Map();
+  // 按表分组写回：slot.table 是清理时记下的来源表；老快照没有该字段，当当前表处理。
+  const byTable = new Map();
   for (const s of slots) {
-    const key = `${s.mode}\u0000${s.item}\u0000${s.day}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(s);
+    const table = s.table || 'duty_layout';
+    if (!byTable.has(table)) byTable.set(table, []);
+    byTable.get(table).push(s);
   }
-  for (const [key, list] of groups) {
-    const [mode, item, day] = key.split('\u0000');
-    const root = cells[mode] || (cells[mode] = {});
-    const byDay = root[item] || (root[item] = {});
-    if (!Array.isArray(byDay[day])) byDay[day] = [];
-    const arr = byDay[day];
-    for (const s of list.sort((a, b) => a.index - b.index)) {
-      arr.splice(Math.min(s.index, arr.length), 0, s.value);
+  for (const [table, tableSlots] of byTable) {
+    const cells = readDutyCells(table);
+    // 按「同一天」分组、index 升序插回：同一天可能有多个同名项（手工录入的重复），
+    // 逐个按原索引 splice 才能把顺序还原。
+    const groups = new Map();
+    for (const s of tableSlots) {
+      const key = `${s.mode}\u0000${s.item}\u0000${s.day}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
     }
+    for (const [key, list] of groups) {
+      const [mode, item, day] = key.split('\u0000');
+      const root = cells[mode] || (cells[mode] = {});
+      const byDay = root[item] || (root[item] = {});
+      if (!Array.isArray(byDay[day])) byDay[day] = [];
+      const arr = byDay[day];
+      for (const s of list.sort((a, b) => a.index - b.index)) {
+        arr.splice(Math.min(s.index, arr.length), 0, s.value);
+      }
+    }
+    store.setDoc(table, { cells: JSON.stringify(cells) });
   }
-  store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
 }
 
 // 重做「删除学生」时按 id + 姓名再清一次值日：
@@ -169,8 +187,11 @@ function clearDutySlots(student) {
   const name = student && student['姓名'];
   const sid = student && student.id != null ? Number(student.id) : null;
   if (!name && sid == null) return;
-  const cells = readDutyCells();
-  if (removeDutyName(cells, name, sid)) store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
+  // 与 purge 对齐：当前表 + 模板都清，重做后模板也不残留已删学生。
+  for (const table of DUTY_TABLES) {
+    const cells = readDutyCells(table);
+    if (removeDutyName(cells, name, sid)) store.setDoc(table, { cells: JSON.stringify(cells) });
+  }
 }
 
 // 按勾选清理关联；返回清理计数 + 撤销所需的完整快照：
@@ -206,12 +227,13 @@ function purgeStudentRelations(student, opts = {}) {
     out.dutySlots = res.slots;
   }
   if (opts.group) {
-    out.groupRows = db.prepare('SELECT * FROM group_members WHERE TRIM(member_name) = TRIM(?)').all(name);
-    out.group = db.prepare('DELETE FROM group_members WHERE TRIM(member_name) = TRIM(?)').run(name).changes;
+    // 与上面统计口径一致：优先 student_id，只有空 id 的 legacy 行才按姓名兜底
+    out.groupRows = db.prepare('SELECT * FROM group_members WHERE student_id = ? OR (student_id IS NULL AND TRIM(member_name) = TRIM(?))').all(id, name);
+    out.group = db.prepare('DELETE FROM group_members WHERE student_id = ? OR (student_id IS NULL AND TRIM(member_name) = TRIM(?))').run(id, name).changes;
   }
   if (opts.cadre) {
-    out.cadreRows = db.prepare('SELECT * FROM cadre_members WHERE student_id = ? OR TRIM(student_name) = TRIM(?)').all(id, name);
-    out.cadre = db.prepare('DELETE FROM cadre_members WHERE student_id = ? OR TRIM(student_name) = TRIM(?)').run(id, name).changes;
+    out.cadreRows = db.prepare('SELECT * FROM cadre_members WHERE student_id = ? OR (student_id IS NULL AND TRIM(student_name) = TRIM(?))').all(id, name);
+    out.cadre = db.prepare('DELETE FROM cadre_members WHERE student_id = ? OR (student_id IS NULL AND TRIM(student_name) = TRIM(?))').run(id, name).changes;
   }
 
   return out;

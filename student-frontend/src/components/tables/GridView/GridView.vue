@@ -258,6 +258,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onActivated, onBeforeUnmount, nextTick, toRef, TransitionGroup } from 'vue';
 import { useGridViewDrag } from './GridView.drag.js';
+import { useDisposables } from '../../../utils/disposables.js';
 import CustomScrollbar from '../../base/CustomScrollbar.vue';
 import IconGlyph from '../../base/IconGlyph.vue';
 
@@ -424,6 +425,9 @@ const candidatePopupX = ref(0)
 const candidatePopupY = ref(0)
 const cellRefs = ref({})
 
+// 窗口监听与测量防抖走统一登记表：卸载即释放，动态排期用 defer（自动撤上一次）
+const d = useDisposables()
+
 // 拖拽模块取组件根节点（原 $el）走 ctx.gridContainer（模板 ref），不再经实例代理
 
 // 跨模块共享的上下文：状态为 ref（模块内 .value 访问），DOM 挂载句柄等临时字段非响应式；
@@ -472,7 +476,7 @@ const ctx = {
   _colGhost: null, _colGrab: null, _colMove: null, _colUp: null, _colDropBox: null,
   _tableEnterCleanup: null,
   _rowsAnimTimer: null,
-  _measureTimer: null,
+  _measureTimer: d.defer(),
   _measureRaf: null,
   _titleHeadH: 0,
   // 内部滚动容器的最后位置（KeepAlive 切回时要靠它还原，见 onActivated 注释）
@@ -590,7 +594,7 @@ const methods = {
     // 排到「DOM 落地之后」再量：行是 TransitionGroup 挂载的，watch 触发时表格还没画完。
     // 双保险 = nextTick（等 Vue patch 完）+ rAF（等浏览器完成布局，量到的才是真实高度）。
     scheduleMeasure() {
-      if (ctx._measureTimer) clearTimeout(ctx._measureTimer);
+      ctx._measureTimer.cancel();
       if (ctx._measureRaf) cancelAnimationFrame(ctx._measureRaf);
       nextTick(() => {
         ctx._measureRaf = requestAnimationFrame(() => {
@@ -601,8 +605,7 @@ const methods = {
     },
     onWindowResize() {
       // resize 高频，用 120ms 尾巴合并；只为了重判 vScroll，无需逐帧跟手
-      if (ctx._measureTimer) clearTimeout(ctx._measureTimer);
-      ctx._measureTimer = setTimeout(() => { ctx._measureTimer = null; ctx.measureScrollState(); }, 120);
+      ctx._measureTimer(() => ctx.measureScrollState(), 120);
     },
     setCellRef(rowIdx, colIdx, el) { if (el) { if (!ctx.cellRefs.value[rowIdx]) ctx.cellRefs.value[rowIdx] = {}; ctx.cellRefs.value[rowIdx][colIdx] = el; } },
     // 行是否可拖（只看行本身类型；编辑中与否由 rowDragLocked 决定「锁定」而非「隐藏」）
@@ -852,12 +855,12 @@ function restoreGridScroll() {
 }
 
 onMounted(() => {
-  document.addEventListener('mouseup', ctx.handleGlobalMouseUp);
+  d.listen(document, 'mouseup', ctx.handleGlobalMouseUp);
   // 首屏：数据区整体从左往右弹入
   ctx.playTableEnter();
   ctx.scheduleMeasure();
   // 窗口缩放会改列宽 → 可能改行高 → 重新判定是否超高（与 DynamicTable 同款监听时机）
-  window.addEventListener('resize', ctx.onWindowResize);
+  d.listen(window, 'resize', ctx.onWindowResize);
 })
 // KeepAlive：从其它状态栏/页签切回来时重播数据区弹入动效
 onActivated(() => {
@@ -868,10 +871,8 @@ onActivated(() => {
   nextTick(() => restoreGridScroll());
 })
 onBeforeUnmount(() => {
-  document.removeEventListener('mouseup', ctx.handleGlobalMouseUp);
-  window.removeEventListener('resize', ctx.onWindowResize);
+  // mouseup / resize 监听与测量防抖由 disposables 释放（见 setup 里的 d）
   if (ctx._measureRaf) cancelAnimationFrame(ctx._measureRaf);
-  if (ctx._measureTimer) clearTimeout(ctx._measureTimer);
   ctx.clearLongPress();
   ctx.removeCellGhost();
   // 拖拽中途被卸载：停掉自动滚动并清掉让位位移

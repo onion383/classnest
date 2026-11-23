@@ -101,7 +101,29 @@ jobs:
         run: npm run build
 
       - name: 冒烟测试
-        run: npm run smoke
+        shell: pwsh
+        run: |
+          # 安全通道 smoke 的断言页用裸 ESM import('/src/...')，只有 Vite 实时转译能跑，
+          # dist 静态服务不行。CI 原先只 build 不启 Vite → 该用例永远 exit 3 被记成 SKIP，
+          # 关键 401 重试回归从未在流水线跑过。这里构建后起 Vite，跑完 smoke 再停。
+          # 前端端口取自唯一口径 ports.cjs（可被 FRONTEND_PORT 覆盖），不在这里写死
+          $port = node -e "process.stdout.write(String(require('./config/ports.cjs').frontendPort))"
+          $vite = Start-Process -FilePath node -ArgumentList 'student-frontend/dev-vite.js' -PassThru -WindowStyle Hidden
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 2
+                if ($r.StatusCode -eq 200) { $ready = $true; break }
+              } catch { Start-Sleep -Milliseconds 500 }
+            }
+            if (-not $ready) { throw 'Vite 开发服务器 30s 内未就绪，冒烟测试无法运行' }
+            # 安全通道 401 重试是关键回归，SKIP 也必须算失败（--require-pass）
+            npm run smoke -- --require-pass=secure-channel-retry
+            if ($LASTEXITCODE -ne 0) { throw "冒烟测试失败（exit $LASTEXITCODE）" }
+          } finally {
+            if (-not $vite.HasExited) { Stop-Process -Id $vite.Id -Force }
+          }
 
   # ---------------------------------------------------------------- 2. 打包
   package:
@@ -304,15 +326,22 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           TAG="v${VERSION}"
           echo "版本：${VERSION}，标签：${TAG}"
-          ls -lh artifacts
+          ls -lhR artifacts
+
+          # 产物来自 release/ 与 release36/ 两个子目录，下载到 artifacts/ 后保留层级。
+          # 不写死某一层子目录：按扩展名递归收集，打包布局以后再变也不会漏匹配。
+          mapfile -t ASSETS < <(find artifacts -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.sha256' \) -print)
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "::error::artifacts 下未找到任何可发布产物（exe/zip/sha256）"
+            exit 1
+          fi
+          printf '待挂资产：\n'; printf '  %s\n' "${ASSETS[@]}"
 
           # 空字符串 = 该标签还没有任何发布
           EXISTS=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "")
           if [ -z "$EXISTS" ]; then
             gh release create "$TAG" \
-              artifacts/*.exe \
-              artifacts/*.zip \
-              artifacts/*.sha256 \
+              "${ASSETS[@]}" \
               --draft \
               --title "班集 v${VERSION}（草稿）" \
               --target "${GITHUB_SHA}" \
@@ -329,7 +358,7 @@ jobs:
             echo "已创建草稿：$TAG"
           elif [ "$EXISTS" = "true" ]; then
             echo "草稿 $TAG 已存在，覆盖更新资产"
-            gh release upload "$TAG" artifacts/*.exe artifacts/*.zip artifacts/*.sha256 --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
           else
             echo "::warning::$TAG 已存在且已正式发布，按「不自动发布」原则跳过资产更新"
           fi

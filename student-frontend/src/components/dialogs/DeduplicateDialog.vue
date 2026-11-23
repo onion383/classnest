@@ -184,6 +184,8 @@ const selectedCount = computed(() => {
   return selectedRowKeys.value.length;
 })
 
+// immediate 不能省：宿主 v-if 懒挂载时 visible 已经是 true，非 immediate 的 watcher
+// 建立时已错过这次变化 —— 首次打开字段列表为空、全选状态不重置（v7 §5-3）。
 watch(() => props.visible, (val) => {
   if (val) {
     localFields.value = props.fields.filter(f => f.name !== 'id' && f.name !== 'position');
@@ -191,7 +193,7 @@ watch(() => props.visible, (val) => {
     sortOrder.value = 'asc';
     selectedRowKeys.value = [];
   }
-})
+}, { immediate: true })
 
 function toggleAllSelect() {
   if (isAllSelected.value) {

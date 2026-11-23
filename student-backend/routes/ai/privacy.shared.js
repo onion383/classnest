@@ -49,10 +49,12 @@ function privacyTables(settings) {
   });
 }
 
-// 改单张表的权限档。两套清单互斥（一张表只能在一个档里），所以先两边都删再按档放回：
-//   none → 进 closed_tables（读闸门用它，见 aiReadScope）
+// 改单张表的权限档。先两边都删再按档放回：
+//   none → 进 closed_tables（读闸门）+ readonly_tables（写闸门），读写一起断；
+//          两张清单在 none 档刻意重叠，否则「完全禁止」的表还能提交写提案（#5）。
 //   read → 只有「本来能写」的表才需要记进 readonly_tables（不能写的表本来就是只读）
 //   write → 两边都不出现（写闸门见 aiWriteScope）
+// 注：设档时互斥；仅 none 档同时出现在两张清单，UI 档位判定以 closed 优先。
 function setTableLevel(table, level, io) {
   const key = String(table || '').trim();
   if (!Object.prototype.hasOwnProperty.call(READ_TABLES, key)) return { error: `没有这张可读表：${key || '未指定'}` };
@@ -66,7 +68,7 @@ function setTableLevel(table, level, io) {
   const ro = new Set(Array.isArray(cur.readonly_tables) ? cur.readonly_tables : []);
   closed.delete(key);
   ro.delete(key);
-  if (lv === 'none') closed.add(key);
+  if (lv === 'none') { closed.add(key); ro.add(key); } // closed=断读，ro=断写：完全禁止必须读写一起拦
   if (lv === 'read' && supportsWrite(key)) ro.add(key);
   return io.set({ closed_tables: [...closed], readonly_tables: [...ro] });
 }

@@ -509,14 +509,18 @@ const api = (path, options = {}) =>
 
 // 记录分组管理页的单元格撤销：key 统一为 group_manage（便于 Ctrl+Z 连续撤销跨表操作），
 // table 为实际数据表名（group_members / groups / group_dimensions），需在 undo.js ALLOWED_TABLES 内。
-function recordGroupUndo(table, rowId, field, old, val) {
+function recordGroupUndo(table, rowId, field, old, val, refs) {
   // 原先这里绕开 API 层直接发登记请求，且把失败空吞：
   // 单元格改了却没登记成功时用户毫不知情。统一入口会给出「本次无法撤销」弱提示。
+  const payload = { table, rowId, field, oldValue: old, newValue: val };
+  // oldRef/newRef：改名前后各自绑定的 student_id。执行撤销时直接写回，不再按姓名猜。
+  if (refs && refs.oldRef !== undefined) payload.oldRef = refs.oldRef;
+  if (refs && refs.newRef !== undefined) payload.newRef = refs.newRef;
   return recordUndoSpec({
     key: 'group_manage',
     type: 'cell_update',
     label: `${field}：「${old == null ? '' : old}」→「${val == null ? '' : val}」`,
-    payload: { table, rowId, field, oldValue: old, newValue: val }
+    payload
   })
 }
 
@@ -803,12 +807,14 @@ async function selectDim(id) {
   try {
     const data = await api(`/${id}`);
     // 期间用户又切了维度（或触发了刷新）：这次响应已经过期，丢弃
-    if (my !== dimDetailSeq) return;
+    if (my !== dimDetailSeq) return false;
     dimensions.value = data.dimensions || [];
     active.value = { dimension: data.dimension, groups: data.groups };
+    return true;
   } catch (e) {
-    if (my !== dimDetailSeq) return;
+    if (my !== dimDetailSeq) return false;
     error(e.message);
+    return false;
   }
 }
 
@@ -824,6 +830,10 @@ function openAddDim() {
 
 async function applyAddDimNames(dimId) {
   if (addDimForm.name_rule === 'custom' || !addDimForm.group_count) return;
+  // 命名前必须确认当前详情就是刚建的那个维度：selectDim 加载失败时 active 仍是旧维度，
+  // 直接拿 active.groups 去改名会把新维度的名字写到旧维度上（#51）。
+  const current = active.value?.dimension;
+  if (!current || String(current.id) !== String(dimId)) return;
   const groups = active.value?.groups || [];
   const names = buildGroupNames(addDimForm.name_rule, addDimForm.name, groups.length);
   if (!names) return;
@@ -842,8 +852,8 @@ async function submitAddDim() {
     });
     showAddDim.value = false;
     success('添加成功');
-    await selectDim(data.id);
-    await applyAddDimNames(data.id);
+    // 详情加载失败时 selectDim 返回 false：跳过自动命名，绝不拿旧维度的组去改名
+    if (await selectDim(data.id)) await applyAddDimNames(data.id);
   } catch (e) {
     error(e.message);
   }
@@ -998,7 +1008,12 @@ function confirmDeleteGroup(g) {
 // ============ 成员 ============
 // 进入行内编辑：快照当前值，供撤销对比（仅记录一次，避免连续 @input 覆盖）
 function captureMemberOld(m) {
-  if (m._undoName === undefined) m._undoName = m.member_name;
+  if (m._undoName === undefined) {
+    m._undoName = m.member_name;
+    // 连「这一行当时绑的是哪个学生」一起快照：撤销改名要按 ID 恢复引用，
+    // 只回写姓名会让后端按姓名重新认人，同名时歧义成 null（v7 §5-4 / #57）
+    m._undoStudentId = m.student_id == null ? null : Number(m.student_id);
+  }
   if (m._undoRemark === undefined) m._undoRemark = m.remark;
 }
 function captureGroupOld(g) {
@@ -1505,23 +1520,34 @@ async function doCommitMember(m) {
   }
   const oldName = m._undoName !== undefined ? m._undoName : m.member_name;
   const oldRemark = m._undoRemark !== undefined ? m._undoRemark : m.remark;
+  // 改名前这一行绑的学生（快照优先，没进过编辑态就用当前值）
+  const oldRef = m._undoStudentId !== undefined
+    ? m._undoStudentId
+    : (m.student_id == null ? null : Number(m.student_id));
   const newName = m.member_name;
   const newRemark = m.remark;
   try {
     const body = { member_name: newName, remark: newRemark };
     // 只有「刚从名册选中的人」才带 id；手输姓名时留给后端按姓名解析。
     if (m._studentId != null) body.student_id = m._studentId;
-    await api(`/group-members/${m.id}`, {
+    const saved = await api(`/group-members/${m.id}`, {
       method: 'PUT',
       body: JSON.stringify(body),
     });
     // 保存成功后才登记撤销；失败时回滚界面到旧值，避免「撤销一个没生效的修改」（B06-04）
-    if (String(oldName ?? '') !== String(newName ?? '')) recordGroupUndo('group_members', m.id, 'member_name', oldName ?? '', newName);
+    // 同时记下后端解析出的新绑定（saved.student_id），撤销/重做都按 ID 恢复引用
+    if (String(oldName ?? '') !== String(newName ?? '')) {
+      recordGroupUndo('group_members', m.id, 'member_name', oldName ?? '', newName, {
+        oldRef,
+        newRef: saved && saved.student_id != null ? Number(saved.student_id) : null,
+      });
+    }
     if (String(oldRemark ?? '') !== String(newRemark ?? '')) recordGroupUndo('group_members', m.id, 'remark', oldRemark ?? '', newRemark);
     // 改名也可能产生新的临时学生（原名被替换）；刷新候选名册
     if (String(oldName ?? '') !== String(newName ?? '')) fetchStudents();
     m._undoName = undefined;
     m._undoRemark = undefined;
+    m._undoStudentId = undefined;
     m._studentId = null;
   } catch (e) {
     m.member_name = oldName;

@@ -33,6 +33,19 @@ export function buildIdByName(nameById) {
   return m
 }
 
+/**
+ * 业务记录（带 student_id / 姓名 两个字段，如成绩、请假、成员行）属于谁。
+ * 有稳定引用就只认 id —— 名册里两个同名的人必须各算各的；缺 id 的历史行才退回姓名。
+ * 成绩统计、请假统计、点名候选等「按人聚合」的地方统一走这里，别各自再写一份。
+ */
+export function personKeyOfRecord(r) {
+  if (!r) return ''
+  const raw = r.student_id
+  const asId = raw === null || raw === undefined || raw === '' ? NaN : Number(raw)
+  if (Number.isFinite(asId) && asId > 0) return `id:${asId}`
+  return keyOfValue(r.姓名, null) || 'name:'
+}
+
 export function keyOfValue(v, idByName) {
   if (v === null || v === undefined || v === '') return ''
   if (typeof v === 'number') return v > 0 ? `id:${v}` : ''

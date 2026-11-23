@@ -200,7 +200,11 @@ test('接线（请假页）：排序与导入都登记', () => {
 
 test('接线（加分 / 活动 / 倒计时导入）', () => {
   assert.match(bodyOf(scoreView, 'onImportData'), /recordRowsBatchInsert\('score_records'/)
-  assert.match(bodyOf(actView, 'onImportData'), /recordRowsBatchInsert\(resolveKey\(\)/)
+  // 活动/倒计时导入：撤销 key 在异步前捕获为 undoKey（#49：切标签后不能用动态 resolveKey
+  // 把撤销记到另一类数据的栈里）。旧断言 recordRowsBatchInsert(resolveKey()) 是修前的口径。
+  const actImport = bodyOf(actView, 'onImportData')
+  assert.match(actImport, /const undoKey = resolveKey\(\)/, '异步前要捕获稳定 undoKey')
+  assert.match(actImport, /recordRowsBatchInsert\(undoKey,/)
 })
 
 test('契约（后端）：五个导入端点都回传 created 完整行', () => {

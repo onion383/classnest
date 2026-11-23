@@ -7,7 +7,8 @@ function readAll() {
 }
 
 function removeById(id) {
-  db.prepare('DELETE FROM countdowns WHERE id = ?').run(id)
+  // 返回 Result（含 changes）：路由靠它判断 id 是否存在，删 0 行要回 404 而不是「删除成功」
+  return db.prepare('DELETE FROM countdowns WHERE id = ?').run(id)
 }
 
 // 批量导入：整批一个事务，返回新建 id（供路由回传 created 完整行）。

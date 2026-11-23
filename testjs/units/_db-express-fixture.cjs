@@ -39,10 +39,14 @@ const ROOT = path.resolve(__dirname, '../..')
 const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
 
 // 建临时数据目录，并登记「进程退出时删掉」。
-// 为什么不在 fx.close() 里删：同一进程里多次 createBackendDb 会复用同一个 DATA_DIR
-// （见下面 env 那行），先 close 的那个一删，后面的夹具就写进虚空。放到进程退出时删，
+// 为什么不在 fx.close() 里删：同一进程里多次 createBackendDb 会共享同一个测试专用 DATA_DIR
+// （见 testDataDir()），先 close 的那个一删，后面的夹具就写进虚空。放到进程退出时删，
 // 既不影响用例，也不会让 %TEMP% 每次跑测试留下一百多个目录。
 // 只注册一次 exit 监听（用集合收集）：每个文件建好几个夹具时不至于撞 MaxListeners。
+//
+// 【数据安全】默认目录绝不继承调用方的 process.env.DATA_DIR：那可能是真实用户数据目录，
+// 而单测里有大量 fs.rmSync(FILE) / rmSync(dir, {recursive:true})（如 mcp-token-store、refresh-virtual），
+// 继承等于把删除范围开到真实数据。目录名带 pid + mkdtemp 随机后缀，多进程并行也不撞名。
 const tempDirs = new Set()
 process.on('exit', () => {
   for (const dir of tempDirs) {
@@ -50,9 +54,16 @@ process.on('exit', () => {
   }
 })
 function makeTempDataDir(label) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${label}-`))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${label}-${process.pid}-`))
   tempDirs.add(dir)
   return dir
+}
+// 同一测试进程内共享，保持「多次 createBackendDb 指向同一 DATA_DIR」的既有语义；
+// 但这个值只由夹具自己造，外部给的 DATA_DIR 永远不参与。
+let sharedTestDataDir = null
+function testDataDir() {
+  if (!sharedTestDataDir) sharedTestDataDir = makeTempDataDir('unit-data')
+  return sharedTestDataDir
 }
 // 原生模块，加载与环境变量无关，可以提前取：调用方造「老库迁移」这类特殊库时要用
 const Database = backendRequire('better-sqlite3-multiple-ciphers')
@@ -107,7 +118,8 @@ function makeFaultyDb(conn, fault) {
  * 同步部分：造内存库 + 装好进程级 stub。返回 { conn, base, router, mount, call, reset, close }。
  * @param {{ label: string, currentSlug?: string, dataDir?: string,
  *           extraDbExports?: Object, dbKey?: string, faults?: boolean }} opts
- *   dataDir        —— 有些老测试要用自己的临时目录（放快照/附件），不覆盖它的选择
+ *   dataDir        —— 有些老测试要用自己的临时目录（放快照/附件），不覆盖它的选择。
+ *                     不传时一律用夹具独占的临时目录，绝不继承外部 process.env.DATA_DIR。
  *   extraDbExports —— db.js 除 db / getFields 外还要替换的导出（如 renumber）
  *   dbKey          —— 主密钥默认值，默认用 label 派生
  *   faults         —— 打开故障注入（fx.inject / fx.clearFaults 才有意义）
@@ -115,7 +127,8 @@ function makeFaultyDb(conn, fault) {
 function createBackendDb({ label, currentSlug, dataDir, extraDbExports, dbKey, faults } = {}) {
   if (!label) throw new Error('createBackendDb 需要 label（用于临时目录与密钥，避免串库）')
   process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || (dbKey || `${label}-test-key`)
-  process.env.DATA_DIR = dataDir || process.env.DATA_DIR || makeTempDataDir(label)
+  // 只有显式 dataDir（调用方自己造的独占临时目录）才覆盖；默认永远用夹具自己的目录。
+  process.env.DATA_DIR = dataDir || testDataDir()
 
   const { initSchema } = require('../../student-backend/schema/schema')
 

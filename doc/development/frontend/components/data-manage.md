@@ -66,6 +66,38 @@ classnest/
 - **内部实现**：按范围导出（全部 / 仅用户 / 仅 AI / 仅最后输出 / 仅思维链）。
 - **使用方**：`DataManageDialog`。
 
+### [AccessLogDialog.vue](../../../../student-frontend/src/components/data-manage/AccessLogDialog.vue) · 数据访问记录弹窗
+- **定位**：AI 与 MCP 两个入口共用的访问记录时间线，读与写合成一条，`source` 固定各自一侧。
+- **内部实现**：已执行的写来自 `undo_history`，未执行的来自 MCP 提案，同一件事只出现一次。
+
+### [AiPrivacyPanel.vue](../../../../student-frontend/src/components/data-manage/AiPrivacyPanel.vue) · AI 数据保护面板
+- **定位**：总开关、敏感信息混淆与每张表权限档的面板，由 `AiPrivacyDialog` 装进弹窗。
+- **内部实现**：读写、乐观更新与回滚全走 `usePrivacyConfig(scope)`，面板只负责排版与文案。
+
+### [McpPermissionsDialog.vue](../../../../student-frontend/src/components/data-manage/McpPermissionsDialog.vue) · MCP 数据权限弹窗
+- **定位**：MCP 侧的表级权限与混淆开关，配置与 AI 助手那份相互独立。
+- **内部实现**：复用 `usePrivacyConfig('mcp')`，不自己发请求。
+
+### [McpProposalsDialog.vue](../../../../student-frontend/src/components/data-manage/McpProposalsDialog.vue) · MCP 提案弹窗
+- **定位**：外部 AI 写入提案的确认入口，分「未处理 / 已处理」两栏。
+- **内部实现**：打开时拉取一次并支持手动刷新，关闭后设置页不再为它维持轮询。
+
+### [McpSettingsPanel.vue](../../../../student-frontend/src/components/data-manage/McpSettingsPanel.vue) · MCP 服务设置面板
+- **定位**：启用开关加令牌 / 数据权限 / 提案 / 访问记录四个入口，只展示状态摘要。
+- **内部实现**：具体操作各自进入独立弹窗；加载与写入带序号守卫，旧响应不覆盖新状态。
+
+### [McpTokensDialog.vue](../../../../student-frontend/src/components/data-manage/McpTokensDialog.vue) · MCP 令牌弹窗
+- **定位**：令牌列表、新增、复制、失效与去除记录都在这一处。
+- **内部实现**：加载按序号守卫，关闭即作废在途响应。
+
+### [PrivacyToggles.vue](../../../../student-frontend/src/components/data-manage/PrivacyToggles.vue) · 敏感信息混淆开关组
+- **定位**：姓名、电话、本地路径三个混淆项一行排布，总开关关闭时标注「暂不生效」。
+- **内部实现**：纯展示，读写与回滚都在 `usePrivacyConfig`。
+
+### [TableScopeList.vue](../../../../student-frontend/src/components/data-manage/TableScopeList.vue) · 表权限档清单
+- **定位**：每张表一行（中文名、解释与档位下拉）的权限清单。
+- **内部实现**：纯展示，档位判定与保存都在 `usePrivacyConfig`。
+
 ---
 
 ## 注意事项

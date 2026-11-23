@@ -15,7 +15,10 @@ const DEFAULT_CONFIG = { keep: 500, granularity: 'per_call' }
 
 export function useAccessLog(source) {
   const logs = ref([])
+  // total：当前来源视图的条数（「已记 N 条」）。retentionTotal：全表原始条数 ——
+  // 保留条数是全局设置（AI 与 MCP 共用一张表），改小 keep 会不会丢历史要按它判断。
   const total = ref(0)
+  const retentionTotal = ref(0)
   const summary = ref({ ...EMPTY_SUMMARY })
   const config = ref({ ...DEFAULT_CONFIG })
   const loading = ref(false)
@@ -29,6 +32,7 @@ export function useAccessLog(source) {
       const r = await axios.get('/api/access-log', { params: { source, ...opts } })
       logs.value = Array.isArray(r.data.logs) ? r.data.logs : []
       total.value = r.data.total || 0
+      retentionTotal.value = r.data.retentionTotal ?? total.value
       summary.value = r.data.summary || { ...EMPTY_SUMMARY }
       if (r.data.config) config.value = { ...DEFAULT_CONFIG, ...r.data.config }
       loaded.value = true
@@ -69,6 +73,7 @@ export function useAccessLog(source) {
       const r = await axios.delete('/api/access-log', { params: { source } })
       logs.value = []
       total.value = 0
+      retentionTotal.value = 0
       summary.value = { ...EMPTY_SUMMARY, days: summary.value.days }
       return r.data.removed || 0
     } catch (e) {
@@ -77,5 +82,8 @@ export function useAccessLog(source) {
     }
   }
 
-  return { logs, total, summary, config, loading, error, loaded, load, loadSummary, saveConfig, clear }
+  return {
+    logs, total, retentionTotal, summary, config, loading, error, loaded,
+    load, loadSummary, saveConfig, clear,
+  }
 }

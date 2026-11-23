@@ -169,7 +169,12 @@ test('接线：删账号走全量吊销，登出仍走单点且注释写明取�
   const account = read('student-backend/routes/account.js')
   const del = handlersOf(account).find((h) => h.startsWith("router.delete('/'"))
   assert.ok(del, '没找到 DELETE / handler')
-  assert.match(del, /revokeAccountSessions\(req\.user\.userId,\s*req\.user\.dbSlug\)/)
+  // 删账号要销毁全部班级：先收集所有 slug 逐个删库，再按**全部 slug** 吊销会话。
+  // 旧断言是 revokeAccountSessions(userId, req.user.dbSlug)（只吊销当前班），
+  // 那会让别的班窗口的旧 token 在账号删除后继续可用（#4）。
+  assert.match(del, /registryFindAllByUsername\(/, '删账号必须先收集该账号全部班级')
+  assert.match(del, /for \(const slug of slugs\) dbManager\.deleteTeacher\(slug\)/, '要逐个删除全部班级')
+  assert.match(del, /revokeAccountSessions\(u\.userId,\s*slugs\)/, '吊销必须覆盖全部班级')
 
   const auth = read('student-backend/routes/auth.js')
   const logout = handlersOf(auth).find((h) => h.startsWith("router.post('/logout'"))

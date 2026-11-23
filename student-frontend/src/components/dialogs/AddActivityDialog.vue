@@ -72,12 +72,14 @@ const form = ref({ time: formatDateTimeLocal(new Date()), theme: '', location: '
 const isEdit = computed(() => !!(props.editingRecord && props.editingRecord.id != null))
 const title = computed(() => isEdit.value ? '编辑活动' : '新增活动')
 
+// immediate 不能省：宿主 v-if 懒挂载时 visible 已经是 true，非 immediate 的 watcher
+// 建立时已错过这次变化 —— 首次打开表单不会预置/重置（v7 §5-3）。
 watch(() => props.visible, (v) => {
   if (v) {
     if (isEdit.value) presetFromRecord(props.editingRecord)
     else reset()
   }
-})
+}, { immediate: true })
 
 function reset() {
   form.value = { time: formatDateTimeLocal(new Date()), theme: '', location: '', participants: '', summary: '' }

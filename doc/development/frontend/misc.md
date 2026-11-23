@@ -130,13 +130,13 @@ classnest/
 - `beforeEach`（路由前置守卫）：本地校验 `JWT`（登录令牌）`exp`（过期时间）、无 `token` 跳 `/login`、首次请求 `/api/me`、进首页 `ensureDashboardData()`（确保首页数据）。
 - 导出 `prefetchRoutes()`（预取路由）：空闲时逐条预热懒加载 `chunk`（代码分包）。
 
-### 3. 样式（`src/styles/`，12 个文件：10 个 CSS + 2 个 JS）
+### 3. 样式（`src/styles/`，15 个文件：13 个 CSS + 2 个 JS）
 
 | 文件 | 作用 |
 | --- | --- |
 | [`index.css`](../../../student-frontend/src/styles/index.css) | 样式入口：导入 Tailwind 与主题、注册 `@theme`（主题变量声明）、全局 `user-select:none`（禁止选中文本）、复选框动画、`no-animations`（关闭动画类）开关、number spinner（数字输入框上下箭头）淡入规则 |
 | [`theme-base.css`](../../../student-frontend/src/styles/theme-base.css) | 基础主题（默认）：`:root` 变量与半透明主区 |
-| [`theme-base-accent.css`](../../../student-frontend/src/styles/theme-base-accent.css) | base 的 B 方案覆盖（深蓝主色 + 工具栏琥珀暖色），并内含 base 的夜间规则（随入口常驻） |
+| [`theme-base-accent.css`](../../../student-frontend/src/styles/theme-base-accent.css) | base 的 B 方案覆盖（深蓝主色 + 工具栏琥珀暖色）；夜间规则已拆到 `theme-base-night.css`，仅在「base + 夜间」时按需加载 |
 | [`theme-glass.css`](../../../student-frontend/src/styles/theme-glass.css) | 毛玻璃：蓝灰底 + 薄白玻璃 + 荧光描边 + 光斑/内置背景图 |
 | [`theme-glass2.css`](../../../student-frontend/src/styles/theme-glass2.css) | 新毛玻璃：薰衣草冷雾、漂移柔光斑、分层阴影，透明度由 `--glass-opacity` 驱动 |
 | [`theme-base-night.css`](../../../student-frontend/src/styles/theme-base-night.css) | base 的夜间配色层：全部规则以 `:root[data-theme="base"][data-mode="night"]` 限定，日间与其它主题不生效；自包含（硬编码色值，无外部 var/url），加载顺序不影响结果 |
@@ -148,7 +148,7 @@ classnest/
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，64 个）
+### 4. 工具（`src/utils/`，66 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |
@@ -212,6 +212,12 @@ classnest/
 | [`fastStartup.js`](../../../student-frontend/src/utils/fastStartup.js) | 「快速启动」偏好的唯一来源：`FAST_STARTUP_KEY`（`fastStartup`）、`readFastStartup`（默认开）、`writeFastStartup`。`main.js` 在启动关键路径上**同步**读 localStorage（走接口会变成「先等一个接口才知道要不要等接口」），设置页性能面板负责写；读写共用这里的 key | `main.js`、`SettingsView` 性能面板、`DashboardView` |
 | [`thumbCachePolicy.js`](../../../student-frontend/src/utils/thumbCachePolicy.js) | 缩略图缓存淘汰策略：`MAX_KEEP`（1500 个真 blob）、`IDLE_KEEP`、`MISS_MAX`（3000 个空标记）、`IDLE_AFTER_MS`、`planEviction({ urls, keepIds, liveCount, lastUsed, idle })`。**判据只看真 blob 数**，`''` 标记按条数单独封顶 —— 混在一起算时，攒够几千个空标记后每次滚动都会把几乎所有非可见 blob 撤光，滚回去重新 `createObjectURL` 就是一串闪动 | `useThumbBatch` |
 | [`viewerPan.js`](../../../student-frontend/src/utils/viewerPan.js) | 查看器拖动平移的纯计算：`PAN_MIN_ZOOM`、`panBounds({ mediaW, mediaH, stageW, stageH, zoom, rotation })`、`clampPanValue(x, y, bounds)`。图片在 flex 里居中，两侧可露出余量 = （缩放后尺寸 − 舞台尺寸）÷ 2；旋转 90/270 时视觉宽高互换，要换着算 | `useViewerPan` |
+| [`classScope.js`](../../../student-frontend/src/utils/classScope.js) | 切班的渲染代次：`classScopeKey` 与 `bumpClassScope()`，作废 KeepAlive 缓存实例 | 各业务视图的 KeepAlive key |
+| [`dutyPersonKey.js`](../../../student-frontend/src/utils/dutyPersonKey.js) | 值日排表里「人」的统一标识：`id:<学生id>` 与 `name:<姓名>`，只在此处转换 | 值日排表、指数账本 |
+| [`rowReorder.js`](../../../student-frontend/src/utils/rowReorder.js) | 表格行拖拽按行对象定位落位，过滤或排序后不会改到看不见的行 | `DynamicTable` 的父级 |
+| [`scoreAggregate.js`](../../../student-frontend/src/utils/scoreAggregate.js) | 成绩统计按 `student_id` 认人聚合，历史记录没有 id 时才退回姓名 | 成绩统计、首页人数 |
+| [`todoInvalidator.js`](../../../student-frontend/src/utils/todoInvalidator.js) | 写成功后广播事件，通知中心收到即重拉待办，不新增 IPC 通道 | `httpClient` 成功拦截器 |
+| [`virtualRows.js`](../../../student-frontend/src/utils/virtualRows.js) | 固定行高的可见行窗口纯计算，供卡片列表虚拟滚动 | 相册等长列表 |
 
 ### 5. 指令
 

@@ -595,6 +595,10 @@ async function onReceiptChange({ items, removed }) {
       }
     }
   } catch (err) {
+    // 关联没写进库：把弹窗里的列表拉回库里的真实内容。不还原的话用户看到的是「已附上」，
+    // 刷新后凭空消失（文件在磁盘上，但库里没有这条关联）（审查 v7 · #28）。
+    // d.row['收据'] 只在成功分支才更新，所以它此刻仍是库里的值。
+    d.items = normalizeReceipts(d.row['收据'])
     notifyError(err.response?.data?.error || '保存收据失败')
   }
 }

@@ -12,6 +12,7 @@
 <script setup vapor>
 import { ref, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
 import { pad2 } from '../utils/dateTime.js'
+import { useDisposables } from '../utils/disposables.js'
 
 const props = defineProps({
   // 时间模板，占位符（大写补零、小写不补零）：{H}/{h}时 {M}/{m}分 {S}/{s}秒
@@ -58,9 +59,12 @@ const timeChars = ref([])
 const dateChars = ref([])
 let prevTime = ''
 let prevDate = ''
-let timeAnimTimer = null
-let dateAnimTimer = null
-let timer = null
+// 数字翻动结束后复位动画标记的两个「可替换」定时器，外加走时定时器。
+// 全部登记进 d：卸载/KeepAlive 切走都不会留下在跑的定时器。
+const d = useDisposables()
+const scheduleTimeAnim = d.defer()
+const scheduleDateAnim = d.defer()
+let cancelTick = null
 
 function applyTime(d) {
   const str = format(props.timeFormat, d, 'time')
@@ -68,8 +72,7 @@ function applyTime(d) {
   prevTime = str
   timeChars.value = arr
   if (arr.some(c => c.anim)) {
-    if (timeAnimTimer) clearTimeout(timeAnimTimer)
-    timeAnimTimer = setTimeout(() => {
+    scheduleTimeAnim(() => {
       timeChars.value = timeChars.value.map(c => ({ char: c.char, anim: false }))
     }, 400)
   }
@@ -81,8 +84,7 @@ function applyDate(d) {
   prevDate = str
   dateChars.value = arr
   if (arr.some(c => c.anim)) {
-    if (dateAnimTimer) clearTimeout(dateAnimTimer)
-    dateAnimTimer = setTimeout(() => {
+    scheduleDateAnim(() => {
       dateChars.value = dateChars.value.map(c => ({ char: c.char, anim: false }))
     }, 400)
   }
@@ -99,10 +101,10 @@ function tick() {
 // （看不见却在持续占 CPU / 产生垃圾），所以在 deactivated 停、activated 恢复。
 function startTicking() {
   stopTicking()
-  timer = setInterval(tick, 1000)
+  cancelTick = d.interval(tick, 1000)
 }
 function stopTicking() {
-  if (timer) { clearInterval(timer); timer = null }
+  if (cancelTick) { cancelTick(); cancelTick = null }
 }
 
 onMounted(() => {
@@ -120,8 +122,6 @@ onDeactivated(stopTicking)
 
 onUnmounted(() => {
   stopTicking()
-  if (timeAnimTimer) clearTimeout(timeAnimTimer)
-  if (dateAnimTimer) clearTimeout(dateAnimTimer)
 })
 </script>
 

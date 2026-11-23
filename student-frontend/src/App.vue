@@ -205,6 +205,7 @@ import { useNotification } from './composables/useNotification'
 import { useSeatDraft } from './composables/useSeatDraft'
 import { useAlbumTaskResume } from './composables/useAlbumTaskResume'
 import { ref, computed, watch, onMounted, onBeforeUnmount, defineAsyncComponent, h } from 'vue'
+import { useDisposables } from './utils/disposables.js'
 import { useRoute, useRouter } from 'vue-router'
 import { prefetchRoutes } from './router'
 import { prefetch } from './utils/dialogPrefetch'
@@ -253,6 +254,9 @@ const ShutdownMenuDialog = defineAsyncComponent(loadShutdownMenuDialog)
 const route = useRoute()
 const router = useRouter()
 const themeStore = useThemeStore()
+// 根组件常驻到窗口关闭，但这些监听/兜底定时器仍按同一套规矩登记：
+// 卸载时就地释放，不依赖「有人在 onBeforeUnmount 里记得 remove」。
+const disposables = useDisposables()
 
 // 彩色色块主题的「模块色」：每个页面一个主色，写进 <html data-page>，
 // 由 theme-base.css 换算成该页的标题条、表头、行号与主按钮颜色。
@@ -496,9 +500,13 @@ function onDocMouseDown(e) {
 // 避免浮窗先露出「加载中…」占位再跳成正式内容
 async function openAssistant() {
   if (assistantOpening.value || assistantOpen.value) return
+  const scopeAtStart = classScopeKey.value
   assistantOpening.value = true
   try { await loadAiAssistant() } catch (_) {}
+  // 加载期间切了班：这份内容属于上一个班，不能在新班弹出来
+  if (classScopeKey.value !== scopeAtStart) { assistantOpening.value = false; return }
   await new Promise((r) => requestAnimationFrame(r))
+  if (classScopeKey.value !== scopeAtStart) { assistantOpening.value = false; return }
   const el = aiIcon.value
   if (el) assistantPos.value = computeAssistantAttachPos(el.getBoundingClientRect())
   assistantOpen.value = true
@@ -610,8 +618,11 @@ async function checkSeatDraft() {
   // 未登录（登录页）没有 token，接口会 401，直接跳过；查过就不再重复查（就绪事件可能多次到达）
   if (seatDraftChecked.value || !getToken()) return
   seatDraftChecked.value = true
+  const scopeAtStart = classScopeKey.value
   const { draft, fetchDraft } = useSeatDraft()
   await fetchDraft()
+  // 草稿属于发起查询时的班级：期间切班就别在新班弹「恢复草稿」
+  if (classScopeKey.value !== scopeAtStart) return
   if (draft.exists) seatDraftPromptVisible.value = true
 }
 
@@ -619,12 +630,15 @@ async function checkSeatDraft() {
 async function loadAiEnabled() {
   // 未登录（登录页）没有 token，接口会 401，直接跳过
   if (!getToken()) return
+  const scopeAtStart = classScopeKey.value
   try {
     const { data } = await axios.get('/api/ai/config')
+    if (classScopeKey.value !== scopeAtStart) return
     const d = (data && data.success && data.data) || {}
     aiEnabled.value = !!d.enabled
     aiFloatingEnabled.value = d.floatingEnabled !== false
   } catch (_) {
+    if (classScopeKey.value !== scopeAtStart) return
     aiEnabled.value = false
   }
   // 若浮窗正开着而此时 AI 已被停用或小窗已关闭，一并收起，避免留下一个打不开的窗口
@@ -639,8 +653,10 @@ function onAiConfigChanged() {
 // 而且登录前也没必要建浮窗。读不到就不建：多弹一个窗口比少弹一个更烦。
 async function applyToolboxPreference() {
   if (!getToken()) return
+  const scopeAtStart = classScopeKey.value
   try {
     const { data } = await axios.get('/api/widget-settings')
+    if (classScopeKey.value !== scopeAtStart) return
     const on = !!(data && data.success && data.data && data.data.toolboxEnabled)
     window.electron?.send(SEND.WIDGET_SET_SESSION_VISIBLE, on)
   } catch (_) {}
@@ -767,7 +783,7 @@ fetchPendingNotification()
 // 后端确认就绪后顺带查一次智能排表草稿（此时接口才可用，避免启动瞬间静默失败）。
 window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) { backendEverReady.value = true; checkSeatDraft(); loadAiEnabled(); applyToolboxPreference() } }).catch(() => {})
 // AI 设置变更（启用/停用、换模型）后刷新图标显隐
-window.addEventListener('ai-config-changed', onAiConfigChanged)
+disposables.listen(window, 'ai-config-changed', onAiConfigChanged)
 
 // 切班（classScopeKey +1）后整套内容都换了：滚动位置留着会让用户停在新班的半截处。
 // 滚动容器 <main> 在 KeepAlive 外面，不随视图重建而重置，所以必须在这里手动归零。
@@ -796,9 +812,9 @@ watch(() => route.path, (to, from) => {
 })
 
 onMounted(() => {
-  window.addEventListener('resize', onWindowResize)
+  disposables.listen(window, 'resize', onWindowResize)
   // 点击浮窗/图标以外的区域自动收起（与工具箱一致）
-  document.addEventListener('mousedown', onDocMouseDown)
+  disposables.listen(document, 'mousedown', onDocMouseDown)
   // 启动回报「桌面小组件启用状态」：主进程据此按需创建工具箱浮窗与（如启用）桌面小组件。
   // 时机：推迟到占位页消失（首屏真正可用）之后 —— 主进程建这两个窗口有约 40ms 的同步开销，
   // 早于此前它会紧压在「后端就绪」的处理之前，占用启动关键路径的时间。
@@ -811,12 +827,11 @@ onMounted(() => {
   // 占位页移除时由渲染层入口广播 app-visible（见 src/main.js 的 dropSplash）。
   // 兜底 5s：后端起不来时占位页会常驻（它是失败提示的载体），此时照旧把小组件建出来。
   let widgetsReported = false
-  let widgetsFallback = null
+  let cancelWidgetsFallback = null
   const reportWidgetsOnce = () => {
     if (widgetsReported) return
     widgetsReported = true
-    if (widgetsFallback) clearTimeout(widgetsFallback)
-    window.removeEventListener('app-visible', reportWidgetsOnce)
+    if (cancelWidgetsFallback) { cancelWidgetsFallback(); cancelWidgetsFallback = null }
     // 首屏已可见（或走 5s 兜底）：这时才挂载标题栏那几个异步弹窗，
     // 让它们的 chunk 下载/解析落在首屏之后。
     chromeReady.value = true
@@ -832,9 +847,8 @@ onMounted(() => {
     // 恢复扫描是重活（读目录 + 生成缩略图），绝不能压在启动关键路径上。
     albumTaskResume.schedule()
   }
-  window.addEventListener('app-visible', reportWidgetsOnce)
-  widgetsFallback = setTimeout(reportWidgetsOnce, 5000)
-  // 空闲预热其余页面路由 chunk：让侧边栏跳转不再等 chunk 下载/解析。
+  disposables.listen(window, 'app-visible', reportWidgetsOnce)
+  cancelWidgetsFallback = disposables.timeout(reportWidgetsOnce, 5000)  // 空闲预热其余页面路由 chunk：让侧边栏跳转不再等 chunk 下载/解析。
   // 未登录（登录页）时不预热业务页面，避免无谓的后台解析。
   const startIdlePrefetch = () => {
     if (route.path === '/login') return
@@ -857,19 +871,20 @@ onMounted(() => {
   // 不设 timeout：宁可一直不预热，也不用兜底强制把 chunk 解析插进启动/交互的忙碌期。
   // app-visible 由渲染层入口在占位移除的下一帧派发（见 src/main.js 的 dropSplash），
   // 必定晚于本组件 mounted，故此处注册不会漏。
+  let prefetchScheduled = false
   const onAppVisiblePrefetch = () => {
-    window.removeEventListener('app-visible', onAppVisiblePrefetch)
+    // 只排一次：app-visible 之后不会再派发，但别把「只执行一次」押在别人的派发次数上
+    if (prefetchScheduled) return
+    prefetchScheduled = true
     window.requestIdleCallback(startIdlePrefetch)
   }
-  window.addEventListener('app-visible', onAppVisiblePrefetch)
+  disposables.listen(window, 'app-visible', onAppVisiblePrefetch)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', onWindowResize)
-  window.removeEventListener('ai-config-changed', onAiConfigChanged)
-  document.removeEventListener('mousedown', onDocMouseDown)
   albumTaskResume?.cancel()
   stopUnitDrag()
   teardownShutdownIpc()
+  // 监听器与兜底定时器由 disposables 统一释放（resize / mousedown / ai-config-changed / app-visible）
 })
 </script>
 

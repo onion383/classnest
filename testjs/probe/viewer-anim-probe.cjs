@@ -115,8 +115,10 @@ function htmlFor(variant, imgSrc) {
     r.imgLoad = rel(performance.now())
     if (cfg.waitLoad) { media.classList.remove('media-waiting'); media.classList.add('media-in') }
   }
-  // 安全阀：8 秒还没跑完就交卷，别让探针挂死
-  setTimeout(() => { r.ok = true }, 8000)
+  // 安全阀：8 秒还没跑完就交卷，别让探针挂死。
+  // 原写法 r.ok = true 把超时伪装成成功 —— 动画根本没起跑也照样出一行"成功"数据，
+  // 外层 waitFor 看到 ok 就 resolve，超时当成功。必须打失败标记让外层识别。
+  setTimeout(() => { r.ok = true; r.timedOut = true }, 8000)
 })()
 </script>
 </body></html>`
@@ -128,6 +130,7 @@ function waitFor(win, ms) {
     const tick = async () => {
       try {
         const r = await win.webContents.executeJavaScript('window.__r || null')
+        if (r && r.timedOut) return reject(new Error('页面 8 秒安全阀超时（动画未完成）'))
         if (r && r.ok) return resolve(r)
       } catch { /* 页面还没就绪 */ }
       if (Date.now() - started > ms) return reject(new Error('超时'))

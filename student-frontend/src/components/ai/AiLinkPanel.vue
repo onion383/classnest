@@ -34,7 +34,8 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 
 defineOptions({ name: 'AiLinkPanel' })
 
@@ -62,10 +63,9 @@ const safeUrl = computed(() => {
 // 模板 ref：webview 元素由 Vue 创建/销毁，这里只拿引用挂事件监听
 const wv = ref(null)
 
-let _onTitle = null
-let _onStart = null
-let _onStop = null
-let _onFail = null
+// webview 上的 4 个事件监听登记进 disposables：元素销毁时自动摘，不需要在
+// 卸载钩子里再按 ref 取一遍节点（那时 ref 可能已被置空 —— 审查 v7 · lifecycle）。
+const d = useDisposables()
 
 // 抽屉已打开时切换链接：src 由模板绑定驱动（Vue 更新属性即触发导航），这里只清旧标题
 watch(() => props.url, () => {
@@ -76,30 +76,19 @@ onMounted(() => {
   const el = wv.value
   if (!el) return
   // 标题/加载态：webview 支持的三个标准事件
-  _onTitle = (e) => { pageTitle.value = (e && e.title) || '' }
-  _onStart = () => { loading.value = true; failed.value = false }
-  _onStop = () => { loading.value = false }
-  _onFail = (e) => {
+  const _onTitle = (e) => { pageTitle.value = (e && e.title) || '' }
+  const _onStart = () => { loading.value = true; failed.value = false }
+  const _onStop = () => { loading.value = false }
+  const _onFail = (e) => {
     loading.value = false
     // errorCode -3（ABORTED）多出现在重定向/被取消场景，忽略；其余主框架失败才提示
     if (e && e.errorCode !== -3 && e.isMainFrame !== false) failed.value = true
   }
-  el.addEventListener('page-title-updated', _onTitle)
-  el.addEventListener('did-start-loading', _onStart)
-  el.addEventListener('did-stop-loading', _onStop)
-  el.addEventListener('did-fail-load', _onFail)
+  d.listen(el, 'page-title-updated', _onTitle)
+  d.listen(el, 'did-start-loading', _onStart)
+  d.listen(el, 'did-stop-loading', _onStop)
+  d.listen(el, 'did-fail-load', _onFail)
   loading.value = true
-})
-
-onBeforeUnmount(() => {
-  const el = wv.value
-  if (!el) return
-  // 元素本身由 Vue 卸载，这里只摘监听，避免持有已销毁节点
-  if (_onTitle) el.removeEventListener('page-title-updated', _onTitle)
-  if (_onStart) el.removeEventListener('did-start-loading', _onStart)
-  if (_onStop) el.removeEventListener('did-stop-loading', _onStop)
-  if (_onFail) el.removeEventListener('did-fail-load', _onFail)
-  _onTitle = _onStart = _onStop = _onFail = null
 })
 
 function hostOf(url) {

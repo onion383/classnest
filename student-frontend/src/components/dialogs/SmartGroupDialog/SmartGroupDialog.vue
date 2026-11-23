@@ -140,7 +140,7 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, watch, nextTick, onBeforeUnmount, toRef } from 'vue'
+import { ref, computed, watch, nextTick, toRef } from 'vue'
 import '../../../styles/dialog-transition.css'
 import DialogShell from '../../base/DialogShell.vue'
 import NewComerConfirm from '../NewComerConfirm.vue'
@@ -148,6 +148,7 @@ import AppSelect from '../../base/AppSelect.vue'
 import IconGlyph from '../../base/IconGlyph.vue'
 import { useSmartGroupPipeline, buildRoster } from './SmartGroupDialog.pipeline.js'
 import { useSmartGroupConditions } from './SmartGroupDialog.conditions.js'
+import { useDisposables } from '../../../utils/disposables.js'
 import { useSmartGroupPreview } from './SmartGroupDialog.preview.js'
 import { useRowSortDrag } from '../../../composables/useRowSortDrag.js'
 
@@ -232,8 +233,9 @@ const ctx = {
   _dragIdx: null,
   _overIdx: null,
   _pendingType: null,
-  // 提示条自动消失的定时器
-  _rejectTimer: null,
+  // 提示条自动消失：可替换定时器，随组件卸载自动清（原来是个裸 setTimeout，
+  // 靠 onBeforeUnmount 里 clearTimeout 兜着）
+  scheduleRejectClear: useDisposables().defer(),
   emit,
 }
 const { buildAssignment } = useSmartGroupPipeline(ctx)
@@ -347,9 +349,6 @@ watch(stages, () => {
   arranged.value = false
   lastResult.value = null
 }, { deep: true })
-
-// 提示条自动消失的定时器：弹窗关闭后仍在跑会往已销毁的实例写 rejectText
-onBeforeUnmount(() => { clearTimeout(ctx._rejectTimer) })
 </script>
 
 <style scoped>

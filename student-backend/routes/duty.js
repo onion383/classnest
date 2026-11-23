@@ -360,15 +360,22 @@ router.post('/history/week', (req, res) => {
       settings: layout ? unpackMode(layout.settings, mode) : {},
     };
 
-    let inserted = 0;
+    let inserted = 0
+    let noHit = 0
+    // 大扫除只在命中日补：命中日判定与自动补存共用 services/dutyWrite 的同一份实现，
+    // 否则「手动补录整周」会把 7 天全写上，历史列表多出空记录、按快照计数的
+    // 值日指数偏高（审查 v7 · #79）。
+    const isHit = dutyWrite.hitDayMatcher(mode)
     for (let i = 0; i < 7; i++) {
       const date = shiftDateStr(weekStart, i);
+      if (isHit && !isHit(date)) { noHit++; continue }
       if (store.histFind('duty', date, mode)) continue;
       const src = store.histPrev('duty', date, mode);
       const payload = src ? { cells: src.payload.cells || {}, settings: src.payload.settings || {} } : layoutPayload;
       store.histInsert('duty', { weekStart, snapDate: date, mode, payload });
       inserted++;
     }
+    if (!inserted && noHit === 7) return res.json({ message: '该周没有大扫除日，未生成记录', inserted });
     res.json({ message: inserted ? `已生成 ${inserted} 天记录` : '该周记录已完整，无需补录', inserted });
   } catch (err) {
     res.status(500).json({ error: err.message });

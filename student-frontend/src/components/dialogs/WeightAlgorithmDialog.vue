@@ -185,7 +185,9 @@ const flatPreview = computed(() => {
   return out
 })
 
-watch(() => props.visible, (v) => { if (v) resetDefaults() })
+// immediate 不能省：宿主 v-if 懒挂载时 visible 已经是 true，非 immediate 的 watcher
+// 建立时已错过这次变化，首开不会重置 → 中心点停在初始 (1,1) 而不是网格正中（v7 §5-3）。
+watch(() => props.visible, (v) => { if (v) resetDefaults() }, { immediate: true })
 
 // 把输入规整到 0–1（非数字按 0 处理）
 function _rate(v) {

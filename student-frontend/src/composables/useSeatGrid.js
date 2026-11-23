@@ -145,11 +145,18 @@ export function useSeatGrid(apiBase, options = {}) {
     return true
   }
 
+  // 同格快速编辑的提交队列：把每次 onCellsUpdate 的提交串行化。
+  // 原来每次调用各自起一个 IIFE 并发 PATCH，同一格两次编辑 slow-first/fast-second 时
+  // 后端先收到新值再收到旧值，最终库里留下旧值（#23）。串行后最后一次提交必为最终值。
+  let commitQueue = Promise.resolve()
+
   async function onCellsUpdate(newRows) {
     // 计算新座位矩阵并逐格对比旧值，只对发生变化的格子做单格提交 + 撤销记录
     const prev = seats.value.map(r => [...r])
     syncCellsToSeats(newRows)
-    const next = seats.value
+    // next 必须是快照而非 seats.value 引用：提交被排队后，后续编辑会改同一个数组，
+    // 引用会让本次提交/撤销记录读到后来才设的值（#23）。
+    const next = seats.value.map(r => [...r])
     const changed = []
     const maxR = Math.max(prev.length, next.length)
     for (let r = 0; r < maxR; r++) {
@@ -167,7 +174,9 @@ export function useSeatGrid(apiBase, options = {}) {
       // 串行提交每个格子，避免并发 PATCH 到达顺序乱序导致数据覆盖。
       // 撤销记录必须在**该格保存成功之后**再登记：原实现先登记后保存，
       // 保存失败时按 Ctrl+Z 会「撤销」一个根本没落库的改动（B12-06）。
-      ;(async () => {
+      // 排到队列尾：与同格的其它提交串行，避免乱序落库（#23）。
+      // 用 .catch 兜底，前面某次提交抛错不能让整条队列断掉、后续编辑永远不提交。
+      commitQueue = commitQueue.catch(() => {}).then(async () => {
         for (const [r, c] of changed) {
           const ok = await saveSingleCell(r, c, next[r]?.[c] ?? null)
           if (!ok) {
@@ -179,7 +188,7 @@ export function useSeatGrid(apiBase, options = {}) {
         }
         // 批次登记期间不逐条刷状态，全部登记完统一刷一次（见 flushUndoStatus）
         if (undoBatch) flushUndoStatus()
-      })()
+      })
     } else {
       const ok = await save()
       if (!ok) {

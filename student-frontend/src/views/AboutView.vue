@@ -439,6 +439,9 @@ async function loadLicenseTexts(token) {
     const { LICENSE_TEXTS } = await import('../utils/licenseDocs.js')
     // await 之后、写状态之前必判：快速连点或中途关窗都不能让旧结果覆盖当前弹窗。
     if (!licenseLatest.isCurrent(token) || !activeLicense.value) return
+    // 兜底定时器可能已经置过「加载超时」：文本既然到了就要清掉，否则模板的
+    // v-if="licenseError" 会一直挡住正文，用户只能关掉重开（审查 v7 · #48）。
+    licenseError.value = ''
     // 整体替换而非逐字段赋值：确保 Vapor 模板一定能观察到 sections 变化。
     activeLicense.value = {
       ...activeLicense.value,

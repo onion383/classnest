@@ -31,6 +31,11 @@ export function createSerialSaver(saveFn, options = {}) {
   let waiters = []
   // 最后一次 request() 的时刻（静默期以它为基准）
   let lastRequestAt = 0
+  // 最近一次 request 传入的**快照**（可选）。saveFn 优先收到它，而不是在防抖后
+  // 再去读可能已被其它操作改掉的全局状态。值日切模式时尤其关键：编辑时的 mode/cells
+  // 必须在那一刻固定，否则延迟执行时 reloadAll 已经把全局换成新模式的了（#50）。
+  let latestPayload
+  let hasPayload = false
 
   const settle = (ok) => {
     const ws = waiters
@@ -71,7 +76,9 @@ export function createSerialSaver(saveFn, options = {}) {
         // 这一轮存完就没有待存的了（除非 saveFn 执行期间又有新输入）。
         dirty = false
         try {
-          await saveFn()
+          // 有快照就传快照（固定提交那一刻的状态）；没传则保持旧行为（saveFn 自己读最新）
+          if (hasPayload) await saveFn(latestPayload)
+          else await saveFn()
           lastError = null
         } catch (e) {
           lastError = e
@@ -87,10 +94,12 @@ export function createSerialSaver(saveFn, options = {}) {
   }
 
   return {
-    // 请求一次保存；返回 boolean（不 reject，调用方漏写 catch 也不会产生未处理拒绝）
-    request() {
+    // 请求一次保存；返回 boolean（不 reject，调用方漏写 catch 也不会产生未处理拒绝）。
+    // 可选 payload：提交那一刻的状态快照，saveFn 会收到它（合并轮次取最后一次的快照）。
+    request(payload) {
       dirty = true
       lastRequestAt = Date.now()
+      if (arguments.length > 0) { latestPayload = payload; hasPayload = true }
       return drain()
     },
     get busy() { return inFlight },

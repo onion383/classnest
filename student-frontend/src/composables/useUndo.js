@@ -1,4 +1,5 @@
-import { onMounted, onUnmounted, onActivated, onDeactivated, reactive, watch } from 'vue'
+import { onMounted, onActivated, onDeactivated, reactive, watch } from 'vue'
+import { useDisposables } from '../utils/disposables.js'
 import { pushUndo, undoStatus, applyUndo } from '../api/undo'
 import { reportError } from '../utils/reportError.js'
 import { useNotification } from './useNotification.js'
@@ -340,7 +341,7 @@ export function useUndoShortcut(key, options = {}) {
 
   // 路由视图外层被 <KeepAlive> 包裹：切换页面不会触发 onUnmounted/onMounted。
   // 因此用 onActivated/onDeactivated 来维护「当前激活视图」的正确性（KeepAlive 也会在首次挂载时触发一次 onActivated），
-  // onMounted 仅负责注册全局 keydown 监听，onUnmounted 负责移除。
+  // onMounted 负责注册全局 keydown 监听（移除交给 disposables）。
   const setActive = () => {
     activeCtx = { pageId: myId, resolveKey, onAfterUndo, onAfterRedo }
     refreshUndoStatus(true)
@@ -355,10 +356,14 @@ export function useUndoShortcut(key, options = {}) {
   // 页内动态 key（如活动/倒计时 tab 切换）：key 变化时刷新可用态
   watch(resolveKey, () => { if (activeCtx && activeCtx.pageId === myId) refreshUndoStatus(true) })
 
-  onMounted(() => { setActive(); window.addEventListener('keydown', onKeydown) })
+  // 全局 keydown 登记进 disposables：卸载自动摘，不必再维护一串「记得 remove」的钩子
+  const d = useDisposables()
+  // d.add(clearActive)：卸载时把「当前激活视图」也交还出去（原来写在 onUnmounted 里）。
+  // 只删监听是不够的 —— activeCtx 是模块级单例，留着会指向已销毁的页面。
+  d.add(clearActive)
+  onMounted(() => { setActive(); d.listen(window, 'keydown', onKeydown) })
   onActivated(setActive)
   onDeactivated(clearActive)
-  onUnmounted(() => { clearActive(); window.removeEventListener('keydown', onKeydown) })
 
   return { undoCombo: onKeydown }
 }

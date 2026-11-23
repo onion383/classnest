@@ -97,6 +97,7 @@
 
 <script setup vapor>
 import { ref, computed, onUnmounted } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import { pad2 } from '../../utils/dateTime.js'
 
 // 声明本组件会往上抛的事件（关闭按钮）；宏的返回值无需接收
@@ -112,7 +113,9 @@ const settings = ref({ hours: 0, minutes: 5, seconds: 0 })
 // 正计时累计秒数 / 倒计时剩余秒数
 const totalSeconds = ref(0)
 
-let interval = null
+// 走时定时器：cancel 由 d.interval 返回，pause() 与卸载都走同一条停表路径
+const d = useDisposables()
+let cancelInterval = null
 
 const display = computed(() => {
   const t = totalSeconds.value
@@ -171,7 +174,7 @@ function start() {
 
   const startedAt = Date.now()
   const baseTotal = totalSeconds.value
-  interval = setInterval(() => {
+  cancelInterval = d.interval(() => {
     const elapsed = Math.floor((Date.now() - startedAt) / 1000)
     if (mode.value === 'countup') {
       totalSeconds.value = baseTotal + elapsed
@@ -188,9 +191,9 @@ function start() {
 
 function pause() {
   running.value = false
-  if (interval) {
-    clearInterval(interval)
-    interval = null
+  if (cancelInterval) {
+    cancelInterval()
+    cancelInterval = null
   }
 }
 

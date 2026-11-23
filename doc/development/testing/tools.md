@@ -29,7 +29,9 @@ classnest/
         ├── radius-audit.js  # 圆角使用审计（主题一致性）
         ├── seed-test-data.js  # 灌测试数据（幂等，按业务键去重；产出账号「测试班主任 / test1234」）
         ├── template-binding-audit.mjs  # 模板绑定审计（未定义变量/悬空 ref）
-        └── verify-batch.mjs  # 一把跑批验证：把 6 项验证（单元测试 / 模式扫描探针 / ESLint / 文档一致性 …
+        ├── verify-batch.mjs  # 一把跑批验证：把 6 项验证（单元测试 / 模式扫描探针 / ESLint / 文档一致性 …
+        ├── audit-coverage.mjs  # 「入口 × 不变量」覆盖矩阵生成器：PASS / GAP / UNKNOWN 分流，缺口返回非零
+        └── ownedChild.cjs  # 本脚本自己启动的子进程统一登记与幂等清理，区分自有与借用实例
 ```
 <!-- doc-tree:end -->
 
@@ -73,6 +75,7 @@ classnest/
 | [`electron-page-probe.cjs`](../../../testjs/tools/electron-page-probe.cjs) | 用 Electron 打开指定页面并跑探针（供 secure-channel-retry 等复用） | 需 Vite 开发服务器 |
 | [`schema-snapshot-gen.cjs`](../../../testjs/tools/schema-snapshot-gen.cjs) | 从空库跑一遍真实建表，重新生成 `student-backend/migrations/snapshot.js`（结构清单）；改了 `schema/` 之后必跑 | 直接运行 |
 | [`schema-drift-check.cjs`](../../../testjs/tools/schema-drift-check.cjs) | 结构清单与建库结果对账，有差异退出码 1。迁移体系的体检，**不在 CI 里**（清单过期时应当重生成，而不是为了变绿改断言） | 直接运行 |
+| [`audit-coverage.mjs`](../../../testjs/tools/audit-coverage.mjs) | **覆盖矩阵生成器**：按「入口 × 不变量」扫描守卫证据，输出 PASS / GAP / UNKNOWN；GAP 与 UNKNOWN 都返回非零，避免「报告写完就算覆盖」 | `node testjs/tools/audit-coverage.mjs`；`--report-only` 只出报告；`--out-dir=` / `--date=` 指定产物位置与日期 |,| [`ownedChild.cjs`](../../../testjs/tools/ownedChild.cjs) | **自有子进程登记**：探针启动的 Electron / Vite 在成功、异常、Ctrl+C 各路径都能幂等清理；复用的外部实例不登记、不误杀 | `const owned = createOwnedChild({ killTree, label })`；`owned.adopt(child)` |
 
 ---
 

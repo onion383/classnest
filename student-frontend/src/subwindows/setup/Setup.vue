@@ -463,6 +463,7 @@
 <script setup vapor>
 import { setToken, setCurrentUser, getToken } from '../../utils/authStorage.js'
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import axios from 'axios'
 import { useThemeStore } from '../../stores/theme'
 import { waitForBackendReady } from '../../utils/backendReady'
@@ -525,6 +526,8 @@ const props = defineProps({
 })
 
 const themeStore = useThemeStore()
+// 引导窗口里的延迟回收定时器走统一登记表：卸载即释放，不留孤儿定时器
+const d = useDisposables()
 
 // 当前画面：'warning'（低版本提示）| 'welcome'（欢迎）| 'wizard'（引导步骤）
 const screen = ref(props.initialScreen) // 首屏由主进程计划决定
@@ -708,10 +711,15 @@ function applyWarmup(w) {
     done: !!w.done,
   }
 }
+// 预热进度有两个来源：挂载时主动 invoke 一次 + 主进程推送 setup-warmup 事件。
+// 两者可能乱序到达（推送比首次 invoke 的响应更新），所以给「推送」记版本号：
+// 首次 invoke 回来后若已经收到过更新的推送，就不能拿旧快照把进度条拉回去。
+let warmupGeneration = 0
 async function loadWarmup() {
+  const at = warmupGeneration
   try {
     const w = await window.electron?.invoke(INVOKE.GET_SETUP_WARMUP)
-    if (w) applyWarmup(w)
+    if (w && warmupGeneration === at) applyWarmup(w)
   } catch (_) {}
 }
 // ---------- 储存设置 ----------
@@ -958,7 +966,7 @@ function downloadPhrase() {
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  d.timeout(() => URL.revokeObjectURL(url), 1000)
   recovery.value.saved = true
   errorMsg.value = ''
 }
@@ -1123,7 +1131,7 @@ onMounted(() => {
   const api = window.electron
   // 存下 on() 返回的 wrapper 作为订阅句柄，卸载时按句柄退订
   _onMain = api.on(RECEIVE.FROM_MAIN, (payload) => {
-    if (payload && payload.type === 'setup-warmup') applyWarmup(payload)
+    if (payload && payload.type === 'setup-warmup') { warmupGeneration += 1; applyWarmup(payload) }
   })
   // 通知主进程渲染层已就绪
   api.send(SEND.SETUP_READY)

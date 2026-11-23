@@ -46,6 +46,7 @@
 
 <script setup vapor>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 
 /* 轨道宽度必须与 <style> 里的 .custom-scrollbar / .is-compact 保持一致：
    fixed 模式要靠它算 left（right - 轨道宽）。 */
@@ -87,12 +88,17 @@ const hoverTarget = ref(false)
 const dragging = ref(false)
 const scrolling = ref(false)
 
-let boundEl = null
 let resizeObserver = null
 let mutationObserver = null
 let observedChild = null
 let rafId = 0
-let hideTimer = 0
+// 悬停淡入的定时器、窗口监听、以及「绑定目标元素」与「拖拽中」两批监听
+// 统一登记进 disposables：目标元素会随 props.target 换（bind/unbind 反复调），
+// 每批取消函数自己持有，漏摘的那一份由 d 在作用域结束兜底。
+const d = useDisposables()
+const scheduleHide = d.defer()
+let cancelBound = []
+let cancelDrag = []
 let dragState = null
 
 const isIdle = computed(() => (
@@ -206,8 +212,7 @@ function scheduleUpdate() {
 function showTemporarily() {
   if (!props.autoHide) return
   scrolling.value = true
-  clearTimeout(hideTimer)
-  hideTimer = setTimeout(() => { scrolling.value = false }, 700)
+  scheduleHide(() => { scrolling.value = false }, 700)
 }
 
 function onTargetScroll() {
@@ -242,13 +247,12 @@ function bind(el) {
     updateThumb()
     return
   }
-  boundEl = el
   /* 滚动 / 尺寸变化都走 rAF 合并：滚动事件本身每帧一次，再叠加 mutation 回调时
      如果各自同步读 scrollHeight，会把一帧里的多次布局读取放大。 */
-  el.addEventListener('scroll', onTargetScroll, { passive: true })
+  cancelBound = [d.listen(el, 'scroll', onTargetScroll, { passive: true })]
   if (props.autoHide) {
-    el.addEventListener('pointermove', onTargetPointerMove, { passive: true })
-    el.addEventListener('pointerleave', onTargetPointerLeave)
+    cancelBound.push(d.listen(el, 'pointermove', onTargetPointerMove, { passive: true }))
+    cancelBound.push(d.listen(el, 'pointerleave', onTargetPointerLeave))
   }
   resizeObserver = new ResizeObserver(scheduleUpdate)
   resizeObserver.observe(el)
@@ -264,17 +268,13 @@ function bind(el) {
 }
 
 function unbind() {
-  if (boundEl) {
-    boundEl.removeEventListener('scroll', onTargetScroll)
-    boundEl.removeEventListener('pointermove', onTargetPointerMove)
-    boundEl.removeEventListener('pointerleave', onTargetPointerLeave)
-  }
+  for (const c of cancelBound) c()
+  cancelBound = []
   if (resizeObserver) resizeObserver.disconnect()
   if (mutationObserver) mutationObserver.disconnect()
   resizeObserver = null
   mutationObserver = null
   observedChild = null
-  boundEl = null
 }
 
 function scrollByStep(direction) {
@@ -303,8 +303,10 @@ function onThumbPointerDown(e) {
   dragState = { y: e.clientY, top: thumbTop.value }
   dragging.value = true
   e.preventDefault()
-  window.addEventListener('pointermove', onThumbPointerMove)
-  window.addEventListener('pointerup', onThumbPointerUp, { once: true })
+  cancelDrag = [
+    d.listen(window, 'pointermove', onThumbPointerMove),
+    d.listen(window, 'pointerup', onThumbPointerUp, { once: true }),
+  ]
 }
 
 function onThumbPointerMove(e) {
@@ -326,8 +328,8 @@ function onThumbPointerMove(e) {
 function onThumbPointerUp() {
   dragState = null
   dragging.value = false
-  window.removeEventListener('pointermove', onThumbPointerMove)
-  window.removeEventListener('pointerup', onThumbPointerUp)
+  for (const c of cancelDrag) c()
+  cancelDrag = []
 }
 
 function onTrackPointerDown(e) {
@@ -347,9 +349,9 @@ function onTrackPointerDown(e) {
 
 onMounted(() => {
   nextTick(() => bind(props.target))
-  window.addEventListener('resize', scheduleUpdate)
+  d.listen(window, 'resize', scheduleUpdate)
   /* fixed 目标会随页面滚动改变视口位置，需要跟着重算 */
-  if (props.fixed) window.addEventListener('scroll', scheduleUpdate, true)
+  if (props.fixed) d.listen(window, 'scroll', scheduleUpdate, true)
 })
 
 watch(() => props.target, (el) => {
@@ -357,11 +359,8 @@ watch(() => props.target, (el) => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', scheduleUpdate)
-  if (props.fixed) window.removeEventListener('scroll', scheduleUpdate, true)
-  window.removeEventListener('pointermove', onThumbPointerMove)
-  window.removeEventListener('pointerup', onThumbPointerUp)
-  clearTimeout(hideTimer)
+  // 窗口监听、悬停定时器由 disposables 释放；这里只剩「rAF 句柄」和 observer/元素监听
+  // （后者要立刻断开而不是等作用域释放，unbind 里做）。
   if (rafId) cancelAnimationFrame(rafId)
   rafId = 0
   unbind()

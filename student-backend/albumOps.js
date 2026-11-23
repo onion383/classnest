@@ -22,8 +22,21 @@ const THUMB_DIR = dbManager.thumbsDir;
 const TRASH_DIR = dbManager.trashDir;
 try { fs.mkdirSync(TRASH_DIR, { recursive: true }); } catch (_) {}
 
-// 照片归档到回收站的确定性路径（按 id 命名保留原扩展名）
+// 照片归档到回收站的确定性路径（按 id 命名保留原扩展名）。
+// 必须按 slug 分桶：各库的 album_photos.id 都从 1 自增，两班同 id + 同名照片归档到
+// 同一个全局路径会互相覆盖（后删的把先删的原文件冲掉，撤销再也还原不了）。
+// slug 取当前请求的库上下文 —— 删除时与 undo 执行时都在同一个班，算出的路径一致。
 function trashPathFor(photo) {
+  const base = photo && photo.id != null ? `${photo.id}_` : '';
+  const name = (photo && photo.file_name) || 'file';
+  const slug = String(dbManager.currentSlug() || '').replace(/[^\w@-]/g, '');
+  return slug
+    ? path.join(TRASH_DIR, slug, base + name)
+    : path.join(TRASH_DIR, base + name);
+}
+
+// 旧版归档（无 slug 分桶）的兼容路径：升级前删的照片在撤销时可能还在旧位置。
+function legacyTrashPathFor(photo) {
   const base = photo && photo.id != null ? `${photo.id}_` : '';
   const name = (photo && photo.file_name) || 'file';
   return path.join(TRASH_DIR, base + name);
@@ -50,7 +63,12 @@ async function moveToTrash(photo) {
 // 撤销删除照片：把文件从回收站搬回原路径。原目录若不存在则创建（同样兼容跨设备）。
 async function restoreToOriginal(photo) {
   if (!photo || !photo.file_path) return false;
-  const src = trashPathFor(photo);
+  let src = trashPathFor(photo);
+  // 兼容升级前没有 slug 分桶的归档：新路径找不到时退回旧的全局路径。
+  if (!fs.existsSync(src)) {
+    const legacy = legacyTrashPathFor(photo);
+    if (fs.existsSync(legacy)) src = legacy;
+  }
   if (!fs.existsSync(src)) return false;
   await fsp.mkdir(path.dirname(photo.file_path), { recursive: true });
   try {
@@ -76,4 +94,4 @@ async function deleteThumb(photo, slug) {
   await fsp.unlink(tp).catch(() => {});
 }
 
-module.exports = { THUMB_DIR, TRASH_DIR, trashPathFor, moveToTrash, restoreToOriginal, deleteThumb };
+module.exports = { THUMB_DIR, TRASH_DIR, trashPathFor, legacyTrashPathFor, moveToTrash, restoreToOriginal, deleteThumb };

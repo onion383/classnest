@@ -217,6 +217,26 @@ classnest/
 - **注意点**：`kind` 必须是归一后的 `office`（后端按魔数分出 `ooxml` / `ole`，见 4-1）；`viewMode` 同时兼容旧值，否则历史 Office 收据点开没反应。
 - **使用方**：`FeeManagement`（懒加载）。
 
+### [AddClassDialog.vue](../../../../student-frontend/src/components/dialogs/AddClassDialog.vue) · 新增班级
+- **定位**：从「班级信息设置」再开一层的二级弹窗，层级比 `ClassInfoDialog` 高一级。
+- **内部实现**：`Esc` 由 `DialogShell` 的层级栈判断，只让最上层响应。
+
+### [AiPrivacyDialog.vue](../../../../student-frontend/src/components/dialogs/AiPrivacyDialog.vue) · AI 数据保护弹窗
+- **定位**：AI 助手页标题栏「数据保护」按钮的落地层，只做外壳与滚动区。
+- **内部实现**：开关与文案全在 `AiPrivacyPanel`，逻辑不重复一份。
+
+### [CreateTokenDialog.vue](../../../../student-frontend/src/components/dialogs/CreateTokenDialog.vue) · 令牌选项
+- **定位**：新建 MCP 令牌前的选项弹窗。
+- **内部实现**：busy 期间只允许单次提交，防重复创建。
+
+### [ProvisionalStudentsDialog.vue](../../../../student-frontend/src/components/dialogs/ProvisionalStudentsDialog.vue) · 临时学生
+- **定位**：值日、座位、分组、加分里直接填名字时自动建的档，在这里统一转正。
+- **内部实现**：学生管理工具栏的独立入口，列表来自 `GET /api/students/provisional`。
+
+### [TodoCenterDialog.vue](../../../../student-frontend/src/components/dialogs/TodoCenterDialog.vue) · 待处理中心
+- **定位**：标题栏待办胶囊点开后的通知中心，汇总销假与临时学生两类待办。
+- **内部实现**：数据来自 `useTodoCenter`，点条目跳转到对应页面处理。
+
 ---
 
 ## 注意事项

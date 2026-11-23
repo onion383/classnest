@@ -7,6 +7,7 @@ const store = require('../../services/slotStore');
 const { sanitizeField } = require('../../services/sanitize');
 const { validateRow } = require('../../services/businessRules');
 const { purgeStudentRelations } = require('../../services/studentRelations');
+const { renameStudentRefs } = require('../../services/studentRename');
 const { applyRowStudentRef } = require('../../services/provisionalStudents');
 const { resolveNameCellsDetailed } = require('../../services/seatWrite');
 const dbManager = require('../../dbManager/dbManager');
@@ -264,7 +265,16 @@ router.post('/apply-batch', (req, res) => {
           const keys = Object.keys(row);
           aiStore.updateColumns(table, id, keys, keys.map((k) => serializeColVal(row[k])));
           const after = aiStore.findRow(table, id);
-          results.push({ action: 'update', table, id, before: old, after });
+          // 改学生姓名必须级联六张关联表（值日/座位/请假/加分/小组/班干部 + 历史 payload）：
+          // 普通编辑（tableService.updateRowWithRename）与 MCP 提案（mcpProposalExec）都做了，
+          // 只有 AI 批量这条漏了 —— 改完同一人在不同表叫不同名字。带 id 避免同名两人互踩。
+          // 整段在 run 事务内，改名与级联同生共死；撤销侧 row_update 已有反向级联。
+          let renamed = null;
+          if (table === 'students' && old && old['姓名'] != null && after && after['姓名'] != null
+              && old['姓名'] !== after['姓名']) {
+            renamed = renameStudentRefs(old['姓名'], after['姓名'], id);
+          }
+          results.push({ action: 'update', table, id, before: old, after, ...(renamed ? { renamed } : {}) });
         } else if (action === 'delete') {
           const id = Number(op.id);
           if (!Number.isInteger(id) || id <= 0) throw new Error(`${at}：缺少有效的记录 id`);
@@ -274,11 +284,17 @@ router.post('/apply-batch', (req, res) => {
           // 界面上删学生走的是 purgeStudentRelations，AI 这条路径原先只删主表，
           // 于是留下「指向不存在学生的孤儿记录」——值日指数、名单统计全被污染，
           // 而且用户看不见（审查 v4 · B03-01）。
+          // 保留 purge 的七处快照随结果返回：前端据此登记 student_cascade_delete
+          // 撤销记录（而不是只恢复主表的 row_delete），否则撤销后 6 类关联永久丢失。
+          let purged = null;
           if (table === 'students') {
-            purgeStudentRelations(old, { leave: true, score: true, seat: true, duty: true, group: true, cadre: true });
+            purged = purgeStudentRelations(old, { leave: true, score: true, seat: true, duty: true, group: true, cadre: true });
           }
           aiStore.deleteRow(table, id);
-          results.push({ action: 'delete', table, id, row: old });
+          results.push({
+            action: 'delete', table, id, row: old,
+            ...(purged ? { purged, undoType: 'student_cascade_delete' } : {}),
+          });
         } else {
           throw new Error(`${at}：未知操作类型「${action}」`);
         }
@@ -320,6 +336,8 @@ router.post('/snapshot/restore', (req, res) => {
     // evictConn 默认会跳过「仍有请求在用」的连接，这里必须强制关：
     // 本请求自己就持有计数，默认行为会静默跳过 → 文件覆盖了但连接还指着旧句柄，
     // 表现为「回滚成功但界面没变」。（这条是 B05-04 加守卫后冒烟立即抓出来的）
+    // 同样要先通知扫描子进程关掉该库连接，否则它可能在覆盖文件期间读写旧库（#12）。
+    try { require('../../scanWorker').lockDb(slug); } catch (_) { /* 子进程未启动 */ }
     dbManager.evictConn(slug, { force: true });
     fs.copyFileSync(src, target);
     for (const suffix of ['-wal', '-shm']) {

@@ -74,6 +74,7 @@ import { INVOKE } from '../../electronChannels.js'
 import { useNotification } from '../../composables/useNotification.js'
 import { formatDate } from '../../utils/dateTime.js'
 import { backendOrigin } from '../../utils/backendOrigin.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import DialogShell from '../base/DialogShell.vue'
 import AppHelp from '../base/AppHelp.vue'
 import ConfirmDialog from '../base/ConfirmDialog.vue'
@@ -91,6 +92,9 @@ const loading = ref(false)
 const busy = ref(false)
 const showCreate = ref(false)
 const removeTarget = ref(null) // 待确认「去除记录」的令牌行
+// 令牌列表「只认最后一次读取」：连续撤销/去除时，先发的慢响应不能把已删的令牌画回来
+const tokensSeq = createLatest()
+const launchSeq = createLatest()
 // 「复制配置」里的路径由主进程给（软件自己知道装在哪）；拿不到时才退到占位符
 const launchInfo = ref(null)
 
@@ -109,9 +113,12 @@ watch(() => props.visible, (v) => {
 
 // 从主进程取真实路径；网页预览等没有桥接的场景留空，配置退回占位符。
 async function loadLaunchInfo() {
+  const my = launchSeq.begin()
   try {
     if (window.electron?.invoke) {
-      launchInfo.value = await window.electron.invoke(INVOKE.GET_MCP_LAUNCH_INFO) || null
+      const info = await window.electron.invoke(INVOKE.GET_MCP_LAUNCH_INFO) || null
+      if (!launchSeq.isCurrent(my)) return
+      launchInfo.value = info
     }
   } catch (_) { /* 取不到不影响弹窗其他功能 */ }
 }
@@ -163,12 +170,14 @@ function expiryText(t) {
 function close() { emit('close') }
 
 async function loadTokens() {
+  const my = tokensSeq.begin()
   loading.value = true
   try {
     const r = await axios.get('/api/mcp/tokens')
+    if (!tokensSeq.isCurrent(my)) return
     tokens.value = r.data.tokens || []
   } catch (_) { /* 读不到就留空列表，不阻断新增 */ }
-  finally { loading.value = false }
+  finally { if (tokensSeq.isCurrent(my)) loading.value = false }
 }
 
 // 增删成功后同步面板摘要
@@ -186,14 +195,16 @@ async function onCreated() {
 async function copyConfig(id) {
   try {
     const r = await axios.get(`/api/mcp/tokens/${encodeURIComponent(id)}/plain`)
-    await copy(configFor(r.data.token))
+    // 剪贴板被系统拒绝时不能报「已复制」——用户会以为配置在剪贴板里，
+    // 粘到 Claude Desktop 才发现是空的（审查 v7 · #27b）
+    if (!await copy(configFor(r.data.token))) return notify.error('复制失败：系统不允许访问剪贴板，请稍后重试')
     notify.success('配置已复制')
   } catch (e) { notify.error('复制配置失败：' + (e.response?.data?.error || e.message)) }
 }
 async function copyPlain(id) {
   try {
     const r = await axios.get(`/api/mcp/tokens/${encodeURIComponent(id)}/plain`)
-    await copy(r.data.token)
+    if (!await copy(r.data.token)) return notify.error('复制失败：系统不允许访问剪贴板，请稍后重试')
     notify.success('令牌已复制')
   } catch (e) { notify.error('复制失败：' + (e.response?.data?.error || e.message)) }
 }
@@ -221,8 +232,10 @@ async function doRemove() {
   } catch (e) { notify.error('去除记录失败：' + (e.response?.data?.error || e.message)) }
   finally { busy.value = false }
 }
+// 写剪贴板。返回值 = 是否真的写进去了：navigator.clipboard 在非安全上下文、
+// 权限策略拒绝、窗口失焦等情况下会 reject，吞掉异常就等于向用户谎报成功。
 async function copy(text) {
-  try { await navigator.clipboard.writeText(text); } catch (_) { /* 剪贴板不可用时用户可手动选中 */ }
+  try { await navigator.clipboard.writeText(text); return true } catch (_) { return false }
 }
 </script>
 

@@ -20,6 +20,8 @@
     "test:units": "node testjs/run-units.js",
     "check:boundaries": "node testjs/tools/error-boundary-check.cjs",
     "check:boundaries:strict": "node testjs/tools/error-boundary-check.cjs --strict",
+    "check:coverage": "node testjs/tools/audit-coverage.mjs",
+    "check:coverage:report": "node testjs/tools/audit-coverage.mjs --report-only",
     "docs:verify": "node testjs/tools/docs-verify.mjs",
     "docs:sync": "node testjs/tools/docs-sync.mjs",
     "channels:gen": "node testjs/tools/gen-channels.mjs",

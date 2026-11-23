@@ -173,6 +173,7 @@
 
 <script setup vapor>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useDisposables } from '../utils/disposables.js'
 import { useNotification } from '../composables/useNotification.js'
 import { INVOKE } from '../electronChannels.js'
 import { hitBand, hitRow, hitPieSlice, hitLegendRow } from '../utils/chartHit.js'
@@ -231,7 +232,7 @@ let _tipPos = { x: 0, y: 0 }
 let _wrapW = 0
 let _tipVisible = false
 let _ro = null
-let _onViewportChange = null
+const d = useDisposables()
 
 const type = computed(() => ['bar', 'barh', 'pie', 'line'].includes(props.data.type) ? props.data.type : 'bar')
 const title = computed(() => props.data.title || '')
@@ -398,12 +399,14 @@ onMounted(() => {
     danger: cssVar('--color-danger', c.value.danger),
     success: cssVar('--color-success', c.value.success),
   }
-  // 图表尺寸/位置变化（窗口缩放、聊天区滚动、布局变化）时让缓存矩形失效
-  _onViewportChange = () => { _rect = null }
-  window.addEventListener('scroll', _onViewportChange, { capture: true, passive: true })
-  window.addEventListener('resize', _onViewportChange)
+  // 图表尺寸/位置变化（窗口缩放、聊天区滚动、布局变化）时让缓存矩形失效。
+  // 监听与 observer 都登记进 disposables：配对释放不靠这里手写 remove。
+  const _onViewportChange = () => { _rect = null }
+  d.listen(window, 'scroll', _onViewportChange, { capture: true, passive: true })
+  d.listen(window, 'resize', _onViewportChange)
   if (typeof ResizeObserver !== 'undefined') {
     _ro = new ResizeObserver(_onViewportChange)
+    d.add(() => { if (_ro) _ro.disconnect() })
     if (wrap.value) _ro.observe(wrap.value)
     if (svg.value) _ro.observe(svg.value)
   }
@@ -414,9 +417,6 @@ onBeforeUnmount(() => {
   stopAnim()
   if (_moveRaf) cancelAnimationFrame(_moveRaf)
   _moveRaf = 0
-  window.removeEventListener('scroll', _onViewportChange, { capture: true })
-  window.removeEventListener('resize', _onViewportChange)
-  if (_ro) _ro.disconnect()
 })
 
 // ===== 命中测试 =====

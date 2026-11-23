@@ -250,6 +250,9 @@ const COLUMN_RULES = {
     状态: { kind: 'enum', values: ['请假中', '已返校', '已取消'] },
     开始时间: { kind: 'date' },
     结束时间: { kind: 'date' },
+    // 销假时间是 now() 写的「YYYY-MM-DD HH:mm」；严格日期规则保留时间部分，
+    // 只拒绝「2026-13-45」「abc」这类解析不出来的串（原先按类型宽松归一，原样落库）。
+    返校时间: { kind: 'date' },
     家长联系电话: { kind: 'phone' },
     学生联系电话: { kind: 'phone' },
   },
@@ -257,6 +260,15 @@ const COLUMN_RULES = {
   score_records: {
     类型: { kind: 'enum', values: ['加分', '扣分'] },
     分值: { kind: 'number', min: 0, max: 100000 },
+    // POST 的默认值是 now()（带时分），严格规则照样接受；它同时拒绝非法日期，
+    // 否则「2026-13-45」会原样落库，导出排序时才炸。
+    加分时间: { kind: 'date' },
+  },
+  // —— 活动 ——
+  // 只声明时间：其它列都是自由文本。（导入 Excel 的 '2026年11月5日'、'2026/11/5'
+  // 这类写法由 LOOSE_DATE_RE 归一，不会因为收紧而整批导不进去。）
+  activities: {
+    时间: { kind: 'date' },
   },
   // —— 倒计时 ——
   countdowns: {

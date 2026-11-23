@@ -34,21 +34,22 @@
 
 见 [backend.md](./backend.md)。均为 MIT / BSD / Apache-2.0，无 GPL 类强传染许可（FFmpeg 为 LGPL，单独随包）。
 
-#### 3.根依赖（运行时 2个  开发期 9个）
+#### 3.根依赖（运行时 1 个，开发期 11 个）
 
 | 依赖                  | 版本      | 类型                    | 许可证 | 用途                                               |
 | ------------------- | ------- | --------------------- | --- | ------------------------------------------------ |
 | `koffi`             | 3.3.3   | 运行时（原生 `FFI`（外部函数接口）） | MIT | 调 `pdh.dll`/`user32`（专用工作集、窗口置底）                 |
-| `ui-ux-pro-max-cli` | 2.15.0  | 运行时（开发辅助）             | MIT | 安装 UI/UX Pro Max 技能给 AI 编码助手（`uipro` 命令），应用源码不引用 |
 | `electron`          | 45.2.3  | 开发期                   | MIT | 桌面运行时                                            |
 | `electron-builder`  | 26.17.0 | 开发期                   | MIT | 打包（`--dir`）                                      |
 | `@electron/rebuild` | 4.2.1   | 开发期                   | MIT | 原生模块按 Electron ABI 重编译                           |
 | `concurrently`      | 10.0.6  | 开发期                   | MIT | 并行跑 Vite + Electron                              |
 | `wait-on`           | 9.5.1   | 开发期                   | MIT | 等待端口就绪                                           |
+| `esbuild`           | 0.28.2  | 开发期                   | MIT | 后端单 bundle 打包（`build.bundle.mjs`）                |
 | `eslint`            | 10.13.0 | 开发期                   | MIT | 代码检查                                             |
 | `@eslint/js`        | 10.0.1  | 开发期                   | MIT | ESLint 官方配置包                                     |
 | `eslint-plugin-vue` | 10.11.1 | 开发期                   | MIT | Vue 规则                                           |
 | `globals`           | 17.13.0 | 开发期                   | MIT | 全局变量定义                                           |
+| `ui-ux-pro-max-cli` | 2.15.0  | 开发期（开发辅助）             | MIT | 安装 UI/UX Pro Max 技能给 AI 编码助手（`uipro` 命令），应用源码不引用 |
 
 ###  随包资源（非npm 依赖的其他资源）
 
@@ -56,6 +57,7 @@
 | --- | --- | --- | --- |
 | FFmpeg（LGPL 版） | [`resources/ffmpeg/`](../../../resources/ffmpeg/) | LGPL-2.1 | 视频封面抓帧；`COPYING.LGPLv2.1` 随目录 |
 | Noto Sans SC | [`student-frontend/public/NotoSansSC-6.ttf(.gz)`](../../../student-frontend/public/) | SIL OFL 1.1 | PDF 中文嵌入；OFL 全文见 [`licenses/SIL-OFL-1.1.txt`](./licenses/SIL-OFL-1.1.txt) |
+| harfbuzzjs（wasm） | [`student-frontend/src/wasm/hb-subset.wasm`](../../../student-frontend/src/wasm/) | MIT | PDF 中文字体子集化；非 npm 依赖，wasm 随包 |
 | 安装器素材 | [`electron/installer-assets/`](../../../electron/installer-assets/) | 自有 | 图标、协议文本、背景图 |
 | 第三方许可声明 | 安装包内 `third-party-licenses.zip` | Chromium 各组件的许可 | 由 `afterPack.js` 压缩原 `LICENSES.chromium.html` |
 

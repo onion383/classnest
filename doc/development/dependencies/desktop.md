@@ -12,12 +12,7 @@
 - 打包：`*.node` 走 `asarUnpack`；`electron-builder.json` 剔除 `koffi/vendor` 与 `cnoke.cjs`。
 - **备注**：`decode(ptr, type, length)` 第三参是长度；Win32 BOOL 非 0 为成功（`Set/GetSecurityInfo` 例外）。
 
-#### [`ui-ux-pro-max-cli`](../../../node_modules/ui-ux-pro-max-cli) 2.15.0 · MIT（包内未附 LICENSE 文件，按 `package.json` 声明） · UI/UX 技能安装器
-- 用途：给 AI 编码助手安装 UI/UX Pro Max 技能的 CLI（bin `uipro`）。
-- 使用位置：仅根 `package.json` 声明，应用源码与构建脚本未引用。
-- **备注**：属于开发辅助；不影响打包产物。
-
-### 开发期（10 个，均 MIT，不进产物）
+### 开发期（11 个，均 MIT，不进产物）
 
 | 依赖 | 版本 | 用途 | 使用位置 |
 | --- | --- | --- | --- |
@@ -31,6 +26,7 @@
 | [`@eslint/js`](../../../node_modules/@eslint/js) | 10.0.1 | ESLint 官方配置 | [`eslint.config.mjs`](../../../eslint.config.mjs) |
 | [`eslint-plugin-vue`](../../../node_modules/eslint-plugin-vue) | 10.11.1 | Vue 规则 | 同上 |
 | [`globals`](../../../node_modules/globals) | 17.13.0 | 全局变量定义 | 同上 |
+| [`ui-ux-pro-max-cli`](../../../node_modules/ui-ux-pro-max-cli) | 2.15.0 | 给 AI 编码助手安装 UI/UX Pro Max 技能的 CLI（bin `uipro`），开发辅助 | 应用源码与构建脚本未引用 |
 
 ---
 

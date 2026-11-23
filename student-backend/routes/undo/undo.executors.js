@@ -64,9 +64,23 @@ const GRID_SOURCES = {
 // payload 各动作字段在下方 executors 定义。
 // 成员姓名是快照、student_id 才是引用：单独回写姓名之后必须把引用拉回一致，
 // 否则撤销一次「分组页改名」会留下「姓名旧、id 指着新名那个人」的分叉。
-function setCellValueKeepingRef(table, field, value, rowId) {
+//
+// refId 是撤销 payload 里记下的「当时这一行绑的是谁」：
+//   · undefined → 老 payload 没有这个信息，只能按姓名重新认人（历史上就是这么做的）；
+//   · null      → 当时确实没绑定，撤销就该回到未绑定；
+//   · 数字      → 直接写回这个 ID。
+// 不能一律走「按姓名重认」：同名学生存在时 resolveOne 会歧义返回 null，
+// 撤销就把一个本来有主的成员改成未绑定（v7 §5-4 / #57）。
+function setCellValueKeepingRef(table, field, value, rowId, refId) {
   undoStore.setCellValue(table, field, value, rowId)
-  if (table === 'group_members' && field === 'member_name') undoStore.resyncGroupMemberRef(rowId)
+  if (table !== 'group_members' || field !== 'member_name') return
+  if (refId === undefined) {
+    undoStore.resyncGroupMemberRef(rowId)
+    return
+  }
+  // payload 来自库里的 JSON，别假设它一定是整数：非数字一律按「未绑定」写，不往列里塞脏值
+  const ref = refId === null ? null : Number(refId)
+  undoStore.setCellValue(table, 'student_id', Number.isFinite(ref) ? ref : null, rowId)
 }
 
 const executors = {
@@ -78,8 +92,8 @@ const executors = {
       if (!cols.includes(field)) return '字段无效'
       return null
     },
-    undo({ table, rowId, field, oldValue }) { setCellValueKeepingRef(table, field, oldValue, rowId) },
-    redo({ table, rowId, field, newValue }) { setCellValueKeepingRef(table, field, newValue, rowId) },
+    undo({ table, rowId, field, oldValue, oldRef }) { setCellValueKeepingRef(table, field, oldValue, rowId, oldRef) },
+    redo({ table, rowId, field, newValue, newRef }) { setCellValueKeepingRef(table, field, newValue, rowId, newRef) },
     // 生成展示文案：撤销时反向（new→old），重做时正向（old→new）
     describe({ field, oldValue, newValue }, mode) {
       const old = oldValue == null ? '' : oldValue

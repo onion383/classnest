@@ -26,13 +26,16 @@ router.post('/', (req, res) => {
 router.put('/:id', (req, res) => {
     const row = cleanUp(req.body || {}, EDITABLE, 'countdowns');
   if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
-  buildUpdate('countdowns', row, req.params.id);
+  // 同 activities：buildUpdate 命中 0 行时原先照样回「修改成功」，要显式 404。
+  const result = buildUpdate('countdowns', row, req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: '倒计时不存在' });
   res.json({ message: '修改成功' });
 });
 
 // DELETE /api/countdowns/:id 删除
 router.delete('/:id', (req, res) => {
-    countdownStore.removeById(Number(req.params.id));
+    const result = countdownStore.removeById(Number(req.params.id));
+  if (result.changes === 0) return res.status(404).json({ error: '倒计时不存在' });
   renumber('countdowns');
   res.json({ message: '删除成功' });
 });

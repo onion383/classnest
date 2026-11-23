@@ -23,6 +23,21 @@ function clearTableColumnsCache(table) {
   })
 }
 
+// ---------- 脱敏映射的变更号（连接级累计写入行数） ----------
+// aiPrivacy 用它在每次取映射前判断「名册是否变了」。放在这里而不是 aiPrivacy：
+// 该模块的约定是不含裸 SQL，所有语句都从 services 出。
+// 语句按连接缓存，避免 substitute 高频调用时反复 prepare。
+const revStmtCache = new WeakMap()
+function privacyRevision() {
+  const conn = dbManager.current()
+  let stmt = revStmtCache.get(conn)
+  if (!stmt) {
+    stmt = conn.prepare('SELECT total_changes() AS n')
+    revStmtCache.set(conn, stmt)
+  }
+  return stmt.get().n
+}
+
 // ---------- 学生 id → 姓名 ----------
 function studentIdNameMap() {
   const map = {}
@@ -136,9 +151,12 @@ function readSeatWeight() {
   return db.prepare('SELECT weights FROM seat_weight WHERE id = 1').get()
 }
 function readSeatHistory(fromD, toD) {
+  // types/cols 也要取：座位指数按「当前布局重算」，历史坐标要先还原成逻辑座位
+  // （跳过当时的走廊行列）再对到当前权重上，只有 seats 无法完成重映射。
+  const cols = 'seats, types, cols';
   return fromD
-    ? db.prepare('SELECT seats FROM seat_history WHERE snap_date >= ? AND snap_date <= ? ORDER BY snap_date').all(fromD, toD)
-    : db.prepare('SELECT seats FROM seat_history WHERE snap_date <= ? ORDER BY snap_date').all(toD)
+    ? db.prepare(`SELECT ${cols} FROM seat_history WHERE snap_date >= ? AND snap_date <= ? ORDER BY snap_date`).all(fromD, toD)
+    : db.prepare(`SELECT ${cols} FROM seat_history WHERE snap_date <= ? ORDER BY snap_date`).all(toD)
 }
 function readDutyWeight() {
   return db.prepare('SELECT weights FROM duty_weight WHERE id = 1').get()
@@ -177,6 +195,7 @@ function listIds(table, limit = 2) {
 module.exports = {
   tableColumns,
   clearTableColumnsCache,
+  privacyRevision,
   studentIdNameMap,
   listPrivacyStudents,
   listPrivacyLeaves,

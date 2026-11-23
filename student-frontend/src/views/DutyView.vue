@@ -630,9 +630,14 @@ function reconstructCells(newRows, dayList) {
   return cells
 }
 
+// 设置读取与 loadWeight 是并发发出的，两者都按 dutyMode 取数：快速切模式时先发的
+// 响应后回来，会把新模式的列名/项目/权重覆盖成旧模式的（#25a）。各自一张「只认最后一次」守卫。
+const settingsLoadGuard = createLatest()
 async function fetchSettings() {
+  const token = settingsLoadGuard.begin()
   try {
     const res = await axios.get(`${API_BASE}/duty/settings?mode=${dutyMode.value}`)
+    if (!settingsLoadGuard.isCurrent(token)) return
     // 列名按模式不同：日常值日=星期几，大扫除=分组名+全部。
     // 大扫除的列名由后端返回（后端保证内置的「全部」列在末尾），这里原样采用。
     // 设置读回来就**如实采用**（含空数组）：空代表「没有值日列」，由页面出引导页。
@@ -661,8 +666,10 @@ function onDutyModeChange() {
 async function reloadAll() {
   // 加载期间行保持可见（骨架屏移除后 loaded 只在首次就绪前为假），数据到位后原地替换，
   // 避免下方表格出现"清空→内容"的闪动
-  // 四项互不依赖，一并并发，省掉原先 fetchSettings 单独先跑的一个来回
-  await Promise.all([fetchSettings(), loadActive(), loadMaster(), loadWeight()])
+  // 四项互不依赖，一并并发，省掉原先 fetchSettings 单独先跑的一个来回；
+  // 权重空表的初始矩阵要读设置，把这份设置 promise 交给它自己等（见 loadWeight）
+  const settingsReady = fetchSettings()
+  await Promise.all([settingsReady, loadActive(), loadMaster(), loadWeight(settingsReady)])
 }
 
 // 跨页定位：标题栏全局搜索 / AI 改动明细点「值日」结果跳转 /duty?focus=duty:<mode>:<行>:<列>
@@ -856,22 +863,22 @@ useUndoShortcut('值日表', {
 // 保存器：连续编辑时保证「同一时刻只有一个 PUT 在途」，在途期间的改动合并成一轮、
 // 用**最新状态**再存一次。不能只靠请求序号——保存是写操作，两个 PUT 都会落库，
 // 先发后到就会把新数据覆盖成旧的（序号只能丢弃响应，拦不住写）。
-const activeSaver = createSerialSaver(() => axios.put(`${API_BASE}/duty`, {
-  cells: activeCells.value, mode: dutyMode.value,
-}))
-const masterSaver = createSerialSaver(() => axios.put(`${API_BASE}/duty/template`, {
-  cells: masterCells.value, mode: dutyMode.value,
-}))
-const weightSaver = createSerialSaver(() => axios.put(`${API_BASE}/duty/weight`, {
-  weights: dutyWeights.value, mode: dutyMode.value,
-}))
+// saveFn 用 request 时传入的快照，不在防抖后重读全局 —— 切模式期间 reloadAll 会改
+// cells/mode，延迟读会把旧编辑写成新模式（#50）。无快照时（兼容旧调用）退回读全局。
+const activeSaver = createSerialSaver((snap) => axios.put(`${API_BASE}/duty`,
+  snap || { cells: activeCells.value, mode: dutyMode.value }))
+const masterSaver = createSerialSaver((snap) => axios.put(`${API_BASE}/duty/template`,
+  snap || { cells: masterCells.value, mode: dutyMode.value }))
+const weightSaver = createSerialSaver((snap) => axios.put(`${API_BASE}/duty/weight`,
+  snap || { weights: dutyWeights.value, mode: dutyMode.value }))
 
 // 保存当前值日表。
 // 失败时界面已就地改过、库里没改 —— 必须重新拉取把界面拉回真实状态，
 // 否则用户以为保存成功，刷新后改动「凭空消失」（与 persistSettingsSafe 同一口径）。
 // 已知取舍：撤销记录不会跟着撤掉（useUndo 没有删除入口），用户点撤销会发现「没变化」。
 async function persistActive(action = '保存') {
-  const ok = await activeSaver.request()
+  // 快照固定提交那一刻的 cells + mode：切模式期间 reloadAll 会改全局，不能延迟读
+  const ok = await activeSaver.request({ cells: activeCells.value, mode: dutyMode.value })
   if (ok) return true
   console.error('[duty] 保存失败', activeSaver.error)
   notifyError(`${action}失败，改动未保存`)
@@ -897,7 +904,7 @@ async function onArrangeConfirm({ cells }) {
 
 // 保存值日模板（口径同 persistActive）
 async function persistMaster(action = '保存') {
-  const ok = await masterSaver.request()
+  const ok = await masterSaver.request({ cells: masterCells.value, mode: dutyMode.value })
   if (ok) return true
   console.error('[duty] 模板保存失败', masterSaver.error)
   notifyError(`${action}失败，改动未保存`)
@@ -923,7 +930,8 @@ function persistSettings(extra) {
 // 设置类改动往往「就地改过界面」（改表头、删项目、pruneCells 删格子），
 // 只提示不回滚的话，用户继续编辑就会把没保存成功的中间状态一起写进库里。
 async function reloadAllFromServer() {
-  await Promise.all([fetchSettings(), loadActive(), loadMaster(), loadWeight()])
+  const settingsReady = fetchSettings()
+  await Promise.all([settingsReady, loadActive(), loadMaster(), loadWeight(settingsReady)])
 }
 
 // 拖拽排序后的即时保存：原来是 fire-and-forget，请求失败时界面已改、库里没改，
@@ -1263,14 +1271,23 @@ function onWeightAlgoDimensionChange(v) {
 function onWeekdayWeightedChange(v) {
   isWeekdayWeighted.value = v
 }
-async function loadWeight() {
+const weightLoadGuard = createLatest()
+// settingsReady：本次 reloadAll/onMounted 同时发出的设置读取 promise。
+// 权重为空时要按 items[].difficulty × days 铺初始矩阵，不先等设置落定就会用
+// 空 items/空 days 生成空矩阵（冷启动几乎必现，#25a）。刷新类调用不用传：那时设置早已在。
+async function loadWeight(settingsReady) {
+  const token = weightLoadGuard.begin()
   try {
     const res = await axios.get(`${API_BASE}/duty/weight?mode=${dutyMode.value}`)
+    if (!weightLoadGuard.isCurrent(token)) return
     const w = (res.data && res.data.weights) || {}
     if (Object.keys(w).length > 0) {
       dutyWeights.value = w
     } else {
       // 首次加载：用 items[].difficulty 铺出初始权重矩阵（整行同权重，按 difficulty）
+      if (settingsReady) { try { await settingsReady } catch (_) { /* 设置失败：按当前（可能为空的）设置铺 */ } }
+      // 等设置的这段时间里可能已经切了模式：此时 items/days 已换成新模式，不能再写
+      if (!weightLoadGuard.isCurrent(token)) return
       const init = {}
       settingsItems.value.forEach(it => {
         init[it.name] = {}
@@ -1280,7 +1297,12 @@ async function loadWeight() {
       dutyWeights.value = init
     }
     weightError.value = false
-  } catch (e) { console.error(e); weightError.value = true } finally { weightLoaded.value = true }
+  } catch (e) {
+    if (!weightLoadGuard.isCurrent(token)) return
+    console.error(e); weightError.value = true
+  } finally {
+    if (weightLoadGuard.isCurrent(token)) weightLoaded.value = true
+  }
 }
 async function refreshWeight() {
   try { await loadWeight(); notifySuccess('已刷新值日项目权重表') } catch (_) { /* 已在 load 内处理 */ }
@@ -1289,7 +1311,7 @@ async function refreshWeight() {
 // 原来失败只 console.error：用户既看不到提示、界面也保持已改的样子，刷新后才发现丢了。
 // 现在与 persistActive 同口径：串行保存 + 失败提示 + 重新拉取回滚。
 async function saveWeight() {
-  const ok = await weightSaver.request()
+  const ok = await weightSaver.request({ weights: dutyWeights.value, mode: dutyMode.value })
   if (ok) return true
   console.error('[duty] 权重保存失败', weightSaver.error)
   notifyError('权重保存失败，改动未保存')
@@ -1731,7 +1753,8 @@ async function silentBackfill() {
 
 onMounted(async () => {
   // 学生名册与学生相关请求共用同一批：值日人名同步要先有学生名册才能判断「是否为新名字」
-  await Promise.all([fetchSettings(), loadActive(), loadMaster(), primeStudentsOnce(), loadWeight()])
+  const settingsReady = fetchSettings()
+  await Promise.all([settingsReady, loadActive(), loadMaster(), primeStudentsOnce(), loadWeight(settingsReady)])
   silentBackfill()
   // 跨页定位：带 ?focus= 进入本页时定位到目标格子
   _applyRowFocus()

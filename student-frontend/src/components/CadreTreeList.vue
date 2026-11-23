@@ -100,7 +100,7 @@
           @add-child="$emit('add-child', $event)"
           @edit="$emit('edit', $event)"
           @remove="$emit('remove', $event)"
-          @remove-member="$emit('remove-member', $event)"
+          @remove-member="(childNode, member) => $emit('remove-member', childNode, member)"
           @drop-move="onDropBubble($event)"
         />
       </div>

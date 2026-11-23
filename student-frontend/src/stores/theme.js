@@ -294,23 +294,35 @@ export const useThemeStore = defineStore('theme', () => {
     // ① 状态先行：卡片高亮当帧就变（与 commitMode 的 pendingMode 同理）。
     //    此刻 data-theme 仍是旧值，页面配色等 ② 备齐后再落，避免「点下去没反应」。
     //    之所以能这样做，是因为 currentTheme 已不再有 watch 自动写 DOM（见文件末尾）。
+    const prevTheme = currentTheme.value
     currentTheme.value = themeId
-    localStorage.setItem(THEME_KEY, themeId)
     const token = themeSwap.begin()
 
     // ② 先把目标主题的 CSS 与底图备齐，再改 data-theme。
     //    反过来会「按旧 CSS 全量重算一次 + CSS 注入后再整篇重算一次」，首次切到
     //    尚未加载过的主题时尤其明显 —— 这正是 commitMode 里已经避开的顺序
     //    （themeLoader.js 的空闲预热会缓存全部主题 CSS，命中时这里只是一个微任务）。
-    const targetMode = mode.value
-    await loadThemeStyles(themeId, targetMode)
-    await preloadModeBackground(targetMode, themeId)
-    // 备料期间日/夜若变了：补等新组合的 CSS（命中缓存时只是一个微任务），
-    // 免得落地后 applyTheme 再异步注入一份、又付一次全量重算。
-    if (mode.value !== targetMode) await loadThemeStyles(themeId, mode.value)
+    try {
+      const targetMode = mode.value
+      await loadThemeStyles(themeId, targetMode)
+      await preloadModeBackground(targetMode, themeId)
+      // 备料期间日/夜若变了：补等新组合的 CSS（命中缓存时只是一个微任务），
+      // 免得落地后 applyTheme 再异步注入一份、又付一次全量重算。
+      if (mode.value !== targetMode) await loadThemeStyles(themeId, mode.value)
+    } catch (err) {
+      // 备料失败 → data-theme 根本没落到 DOM。此时若已把 THEME_KEY 改成新主题，
+      // 「持久态」就和实际配色分叉了：下次启动还去加载那个从没成功过的主题
+      // （审查 v7 · B2-06）。回退卡片高亮，保持原主题。
+      if (themeSwap.isCurrent(token)) currentTheme.value = prevTheme
+      console.error('[theme] 主题样式加载失败，保持原主题', err)
+      return
+    }
     // 等待期间用户又选了别的主题：交给后来那次落地
     if (!themeSwap.isCurrent(token)) return
 
+    // 真正落地前才写持久态：写早了，上面任何一步失败都会留下「设置里是新主题、
+    // 界面上是旧配色」的持久分叉。
+    localStorage.setItem(THEME_KEY, themeId)
     // ③ 与日/夜切换共用同一段快照淡入：浏览器在改属性前后各拍一张整屏快照，
     //    两帧之间只动快照层 opacity（合成器单层动画，成本与 DOM 规模无关）。
     //    performThemeSwap 内部会用 withInstantStyles 把元素级过渡瞬时化 ——

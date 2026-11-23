@@ -54,13 +54,15 @@ const localRows = ref(props.rows)
 const localCols = ref(props.cols)
 const localMode = ref(props.mode)
 
+// immediate：宿主 v-if 懒挂载时 visible 已经是 true（v7 §5-3）。ref 初始值虽然取自
+// props，但 immediate 让「挂载即同步」成为显式约定，不依赖初始化求值顺序。
 watch(() => props.visible, (val) => {
   if (val) {
     localRows.value = props.rows
     localCols.value = props.cols
     localMode.value = props.mode
   }
-})
+}, { immediate: true })
 // 同桌模式下列数必须为偶数（每两列为一组）；切到同桌时自动把奇数取整为偶数
 watch(localMode, (val) => {
   if (val === 'double' && localCols.value % 2 !== 0) {

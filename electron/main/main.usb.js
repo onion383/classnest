@@ -30,8 +30,15 @@ function loadUsbAutoOpenConfig() {
   }
 }
 
+// 写盘结果必须回传：吞掉异常会让「设置已启用」只活在内存里，
+// 重启后 loadUsbAutoOpenConfig 读不到文件又回退成 false，用户的选择静默丢失（#46）。
 function saveUsbAutoOpenConfig(enabled) {
-  try { fs.writeFileSync(getUsbConfigPath(), JSON.stringify({ enabled })) } catch (_) {}
+  try {
+    fs.writeFileSync(getUsbConfigPath(), JSON.stringify({ enabled }))
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) }
+  }
 }
 
 // 遍历 A-Z，返回当前所有存在的盘符集合（fs.access 探测，零依赖）。
@@ -53,19 +60,25 @@ async function getDriveLetters() {
 // 基线是否就绪 / 是否有一轮探测正在跑（存在慢盘符时防止探测堆积）
 let usbBaselineReady = false
 let usbProbing = false
+// 代次令牌：getDriveLetters 是异步的（慢盘符可达数百 ms）。探测期间用户关闭开关
+// （或快速关开）时，旧的 await 回来后不能再打开新盘、也不能覆盖新代的 knownDrives（#41）。
+let usbGeneration = 0
 
 function startUsbWatch() {
   if (usbPollTimer || !usbAutoOpenEnabled) return
+  const gen = ++usbGeneration
   // 用启动瞬间已挂载的盘做基线，避免把「本就在」的 U 盘误打开一次。
   // 基线改为异步获取：取到之前不做比对（否则第一次 tick 会误报）。
   usbBaselineReady = false
-  readDriveLettersBaseline()
+  readDriveLettersBaseline(gen)
   usbPollTimer = setInterval(async () => {
     // 基线未就绪、或上一轮还没探完（说明有慢盘符）就跳过本轮，避免并发探测叠加
     if (!usbBaselineReady || usbProbing) return
     usbProbing = true
     try {
       const current = await getDriveLetters()
+      // 探测期间开关被关/被重新打开：这一轮属于旧代，绝不能用过期结果开新盘
+      if (gen !== usbGeneration) return
       for (const drive of current) {
         if (!knownDrives.has(drive)) {
           console.log(`[main] 检测到新存储设备：${drive}，自动打开`)
@@ -78,15 +91,16 @@ function startUsbWatch() {
   }, 1500)
 }
 
-function readDriveLettersBaseline() {
+function readDriveLettersBaseline(gen) {
   getDriveLetters().then((set) => {
-    if (!usbPollTimer) return // 期间已被 stop，别覆盖状态
+    if (gen !== usbGeneration) return // 期间被关掉/重开，旧基线不能覆盖新代状态
     knownDrives = set
     usbBaselineReady = true
-  }).catch(() => { usbBaselineReady = true })
+  }).catch(() => { if (gen === usbGeneration) usbBaselineReady = true })
 }
 
 function stopUsbWatch() {
+  usbGeneration++   // 作废所有在途探测（含已 await 到一半的 getDriveLetters）
   clearInterval(usbPollTimer)
   usbPollTimer = null
   usbBaselineReady = false
@@ -103,13 +117,18 @@ function registerUsbIpc() {
   // 读取开关状态（供设置页初始化）
   IPC.handle(CH.GET_USB_AUTO_OPEN, () => ({ enabled: usbAutoOpenEnabled }))
 
-  // 设置开关：持久化并实时启停监听
+  // 设置开关：持久化并实时启停监听。
+  // 先落盘、后改运行时状态：写盘失败时不能假装已启用（界面显示开着、重启后变回关闭）。
   IPC.handle(CH.SET_USB_AUTO_OPEN, (event, enabled) => {
-    usbAutoOpenEnabled = !!enabled
-    saveUsbAutoOpenConfig(usbAutoOpenEnabled)
-    if (usbAutoOpenEnabled) startUsbWatch()
+    const next = !!enabled
+    const saved = saveUsbAutoOpenConfig(next)
+    if (!saved.ok) {
+      return { enabled: usbAutoOpenEnabled, saved: false, error: saved.error }
+    }
+    usbAutoOpenEnabled = next
+    if (next) startUsbWatch()
     else stopUsbWatch()
-    return { enabled: usbAutoOpenEnabled }
+    return { enabled: usbAutoOpenEnabled, saved: true }
   })
 }
 

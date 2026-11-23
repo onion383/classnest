@@ -6,8 +6,15 @@ import { SEND, INVOKE } from '../../electronChannels.js'
 import { readFastStartup, writeFastStartup } from '../../utils/fastStartup.js'
 import { getToken, setToken } from '../../utils/authStorage.js'
 import { storeMediaToken } from '../../utils/apiUrl'
+import { createLatest } from '../../utils/latestOnly.js'
 
 export function useSettingsAppearance(ctx) {
+  // 工具箱设置的读写都需要顺序：
+  //   · 读：重复进入设置页时，慢响应不能把刚改的值盖回旧值；
+  //   · 写：连续切换多个开关会各发一条 PUT，请求到达顺序不保证，最后落库的可能是旧快照。
+  //     这里按「调用顺序」串成一条链，并让每次写入携带调用时刻的快照。
+  const widgetLoadSeq = createLatest()
+  let widgetSaveChain = Promise.resolve()
   return {
     // Theme
     onThemeSelect() {
@@ -106,8 +113,10 @@ export function useSettingsAppearance(ctx) {
     },
     // ==================== 工具箱设置 ====================
     async loadWidgetSettings() {
+      const my = widgetLoadSeq.begin()
       try {
         const res = await axios.get('/api/widget-settings')
+        if (!widgetLoadSeq.isCurrent(my)) return
         if (res.data.success) {
           ctx.toolboxEnabled.value = res.data.data.toolboxEnabled
           ctx.rollcallExcludeAbsent.value = !!res.data.data.rollcallExcludeAbsent
@@ -118,24 +127,29 @@ export function useSettingsAppearance(ctx) {
       } catch (err) {
         console.error('加载工具箱设置失败:', err)
       } finally {
-        ctx.loaded.value = true
+        if (widgetLoadSeq.isCurrent(my)) ctx.loaded.value = true
       }
     },
-    async saveWidgetSettings() {
-      try {
-        await axios.put('/api/widget-settings', {
-          toolboxEnabled: ctx.toolboxEnabled.value,
-          rollcallExcludeAbsent: ctx.rollcallExcludeAbsent.value,
-          rollcallIncludeProvisional: ctx.rollcallIncludeProvisional.value,
-          noteSavePath: ctx.noteSavePath.value,
-          screenshotSavePath: ctx.screenshotSavePath.value
-        })
-        window.electron?.send(SEND.TO_WIDGET, { type: 'settings-changed' })
-      } catch (err) {
-        // 工具箱开关/保存路径失败必须可感知：界面已切换、库里没改，静默会在重启后"设置回滚"
-        console.error('保存工具箱设置失败:', err)
-        ctx.notifyError('工具箱设置保存失败，改动未保存')
+    saveWidgetSettings() {
+      // 快照在调用时刻取：排队期间用户再改，后续那次写入会带上更新的值
+      const payload = {
+        toolboxEnabled: ctx.toolboxEnabled.value,
+        rollcallExcludeAbsent: ctx.rollcallExcludeAbsent.value,
+        rollcallIncludeProvisional: ctx.rollcallIncludeProvisional.value,
+        noteSavePath: ctx.noteSavePath.value,
+        screenshotSavePath: ctx.screenshotSavePath.value
       }
+      widgetSaveChain = widgetSaveChain.then(async () => {
+        try {
+          await axios.put('/api/widget-settings', payload)
+          window.electron?.send(SEND.TO_WIDGET, { type: 'settings-changed' })
+        } catch (err) {
+          // 工具箱开关/保存路径失败必须可感知：界面已切换、库里没改，静默会在重启后"设置回滚"
+          console.error('保存工具箱设置失败:', err)
+          ctx.notifyError('工具箱设置保存失败，改动未保存')
+        }
+      })
+      return widgetSaveChain
     },
     onToolboxChange(value) {
       ctx.toolboxEnabled.value = !!value
@@ -170,10 +184,18 @@ export function useSettingsAppearance(ctx) {
       window.electron?.send(SEND.DESKTOP_WIDGET_ENABLED, ctx.desktopWidgetEnabled.value)
     },
     async onUsbAutoOpenChange(value) {
+      const prev = ctx.usbAutoOpen.value
       ctx.usbAutoOpen.value = !!value
       try {
-        await window.electron?.invoke(INVOKE.SET_USB_AUTO_OPEN, ctx.usbAutoOpen.value)
+        const res = await window.electron?.invoke(INVOKE.SET_USB_AUTO_OPEN, ctx.usbAutoOpen.value)
+        // 主进程写盘失败时不会改自己的开关状态，这里也要回滚：
+        // 显示成「已启用」但重启后变回关闭，比当场报错更难排查（#46）。
+        if (res && res.saved === false) {
+          ctx.usbAutoOpen.value = prev
+          ctx.notifyError(`保存 U 盘自动打开设置失败：${res.error || '无法写入配置文件'}`)
+        }
       } catch (_) {
+        ctx.usbAutoOpen.value = prev
         console.error('保存U盘自动打开设置失败')
       }
     },

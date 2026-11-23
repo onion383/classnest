@@ -69,7 +69,12 @@ function registryListValid() {
     try {
       const resolved = resolveByUsername(rec.username);
       if (!resolved) continue; // 登记表有账号但缺 slug 映射
-      const row = resolved.conn.prepare('SELECT 1 FROM users WHERE username = ?').get(rec.username);
+      // 校验「库内确实有账号行」防幽灵账号即可。这里不能按 registry.username 匹配：
+      // 多班改名只同步 registry 与 accounts，其它班库内 users.username 故意留旧名
+      // （挨个开库改名要 N 次 KDF）。按新名精确匹配会把那些班从登录列表里抹掉。
+      // resolveByUsername 已按 registry 名定位到正确库并打开，库内单班主任账号，
+      // 有任意用户行就说明这个班有效（登录路径同样用 findFirstUser 兜底）。
+      const row = resolved.conn.prepare('SELECT 1 FROM users LIMIT 1').get();
       if (row) valid.push({ slug: rec.slug, username: rec.username });
     } catch (err) {
       // 主密钥不匹配 / 库文件损坏 / 打开失败 → 该数据库无效，跳过

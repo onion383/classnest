@@ -4,6 +4,7 @@ const {
   findRow, countReferences, sampleReferences, readSeatDoc, readDutyDoc,
 } = require('../../../../services/aiStore');
 const { READ_TABLES } = require('../../ai.constants');
+const { readScope } = require('../../../../services/aiReadScope');
 // JSON 列解析复用单源实现（此前本文件自抄了一份 parseJsonOr，与 executors.common.js 的 aiParseJson 逐字相同）
 const { safeJson } = require('../../../../utils/json');
 
@@ -73,6 +74,8 @@ function impactOfRow(table, id) {
 
 function runDeleteImpact({ table, id, ids } = {}) {
   if (!READ_TABLES[table]) return { error: `不存在的表：${table}` };
+  // 删除影响预估会把真实姓名/引用样本回给模型：完全禁止的表一律不许派生读（1-6）
+  if (!readScope.isTableReadable(table)) return { error: readScope.closedError(table).error };
   const list = (Array.isArray(ids) ? ids : [id])
     .map((v) => Number(v))
     .filter((n) => Number.isInteger(n) && n > 0)

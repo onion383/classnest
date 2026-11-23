@@ -178,3 +178,112 @@ test('V5-006：dispose 之后 timeout / defer / interval 都不再排期', async
   assert.equal(deferFired, 0, 'defer 的排期同样要挡掉')
   assert.equal(intervalFired, 0, '周期定时器也不能在释放后继续跑')
 })
+
+// ——————————————————— §5-1：返回值必须是「真取消」，不能只是撤销登记 ———————————————————
+//
+// add() 返回的函数只把清理项从表里摘掉、并不执行它。timeout/interval 曾经直接把
+// 那个函数当取消函数返回：cancel() 之后 timer 照跑、回调照触发，而且清理项已被摘掉，
+// 连 dispose() 都救不回来。这三条判据卡的就是「取消 = 资源真的停了」。
+
+test('§5-1：timeout 的取消函数必须真的清掉定时器（不只是摘掉登记项）', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  let fired = 0
+  const cancel = d.timeout(() => { fired++ }, 10)
+  assert.equal(d.size, 1, '排期后应有一条待释放项')
+  cancel()
+  assert.equal(d.size, 0, '取消后登记项应被摘掉（不留死项）')
+  await wait(40)
+  assert.equal(fired, 0, '取消之后回调不能触发（旧实现这里会触发）')
+})
+
+test('§5-1：timeout 一旦取消，dispose 也不会再动它（不该重复清理已结束的资源）', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  let fired = 0
+  const cancel = d.timeout(() => { fired++ }, 10)
+  cancel()
+  d.dispose()
+  await wait(40)
+  assert.equal(fired, 0, '取消 + dispose 之后仍不该触发')
+})
+
+test('§5-1：timeout 已触发后调用取消函数是无害的空操作', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  let fired = 0
+  const cancel = d.timeout(() => { fired++ }, 5)
+  await wait(25)
+  assert.equal(fired, 1, '正常到点应触发一次')
+  assert.doesNotThrow(() => cancel(), '触发后再取消不能抛错')
+  cancel()
+  await wait(20)
+  assert.equal(fired, 1, '重复取消不该产生副作用')
+})
+
+test('§5-1：interval 的取消函数同样必须真的停掉周期定时器', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  let fired = 0
+  const stop = d.interval(() => { fired++ }, 5)
+  await wait(20)
+  assert.ok(fired > 0, '周期定时器本该在跑')
+  stop()
+  const seen = fired
+  assert.equal(d.size, 0, '取消后登记项应被摘掉')
+  await wait(30)
+  assert.equal(fired, seen, '取消之后不应再有新的触发（旧实现这里还会继续跑）')
+})
+
+// ——————————————— §5-17：listen 的返回值也必须是「真取消」 ———————————————
+//
+// 拖拽这类动态监听没法等到卸载才收尾：pointermove/pointerup 必须松手就摘。
+// 旧实现的 listen 返回的仍是 add() 的「撤销登记」，调用方以为摘掉了监听器，
+// 实际上回调照旧触发（只把清理项从表里删了，连 dispose 都救不回来）。
+
+test('§5-17：listen 的取消函数必须真的摘掉监听器（不只是摘掉登记项）', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  const t = fakeTarget()
+  const onX = () => {}
+  const cancel = d.listen(t, 'pointermove', onX, { capture: true })
+  assert.equal(t.added.length, 1, '应注册了一个监听器')
+  cancel()
+  assert.equal(t.removed.length, 1, '取消必须调用 removeEventListener（旧实现这里是 0 次）')
+  assert.equal(t.removed[0].handler, onX, '移除的必须是同一个 handler')
+  assert.equal(t.removed[0].options.capture, true, 'capture 必须原样传回')
+  assert.equal(d.size, 0, '取消后登记项应被摘掉（不留死项）')
+})
+
+test('§5-17：listen 取消后再 dispose 不重复移除；重复取消是空操作', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  const t = fakeTarget()
+  const cancel = d.listen(t, 'pointerup', () => {})
+  cancel()
+  cancel()
+  d.dispose()
+  assert.equal(t.removed.length, 1, '同一个监听器只该被摘一次')
+})
+
+test('§5-17：dispose 仍负责摘掉没被手动取消的监听器', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  const t = fakeTarget()
+  const onX = () => {}
+  d.listen(t, 'resize', onX)
+  d.dispose()
+  assert.equal(t.removed.length, 1, '没手动取消的监听器由 dispose 兜底摘掉')
+  assert.equal(t.removed[0].handler, onX)
+})
+
+test('§5-17：已 dispose 之后再 listen → 立刻摘掉，不留活监听', async () => {
+  const { createDisposables } = await load('disposables.js')
+  const d = createDisposables()
+  const t = fakeTarget()
+  d.dispose()
+  const cancel = d.listen(t, 'scroll', () => {})
+  assert.equal(t.removed.length, 1, '死作用域里新登记的监听器必须当场摘掉')
+  assert.doesNotThrow(() => cancel(), '再取消一次不能抛错')
+  assert.equal(t.removed.length, 1, '重复取消不该产生第二次移除')
+})

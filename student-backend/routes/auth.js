@@ -35,7 +35,10 @@ const albumThumbs = require('../albumThumbs');
 function issueSession(req, user, extra = {}) {
   const sid = sessions.create(user.userId, user.dbSlug);
   const payload = { userId: user.userId, username: user.username, role: user.role, dbSlug: user.dbSlug, sid, ...extra };
-  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(user.dbSlug));
+  // 登录保持天数按账号名存（authPolicy 的键是 username，不是 dbSlug）。
+  // 传 dbSlug 会查不到键 → 一律退回默认 30 天，用户设的 180 天静默失效。
+  // 其余 7 处签发点全用 username，这里不能是例外。
+  const token = useJwt().sign(payload, SECRET, authPolicy.signOptsFor(user.username));
   if (req.sessionId) secureChannel.bindAuth(req.sessionId, token);
   return { token, mediaToken: signMediaToken(payload) };
 }
@@ -126,21 +129,34 @@ router.post('/db-recover', (req, res) => {
   const wantedUsername = req.body && typeof req.body.username === 'string' ? req.body.username.trim() : '';
   try {
     const r = dbManager.resolveByDbFile(file);
-    const resolved = dbManager.resolveByUsername(r.username);
+    // 改名只同步 registry + accounts，各库 users.username 故意留旧名（见登录分支）。
+    // r.username 来自库内 users 表，可能已是旧名 —— 拿它 resolveByUsername 会查不到
+    // 登记表（现名）而返回 null → 本机恢复在改名班里失效。改用可靠的文件名 slug：
+    // registry 行的 username 始终是当前账号名，按它定位与登录同口径。
+    const rec = dbManager.registryFindBySlug(r.slug);
+    const registryName = (rec && rec.username) || r.username;
+    const resolved = dbManager.resolveByUsername(registryName);
     if (!resolved) return res.status(400).json({ error: '数据库内没有可用账号' });
-    const user = userStore.findByUsername(resolved.conn, r.username);
+    // 库内按当前名查不到（旧名未同步）时退回第一条 —— 一个库只有一个班主任账号，
+    // 与登录的 pickUser 兜底同口径。
+    const user = userStore.findByUsername(resolved.conn, r.username)
+      || userStore.findFirstUser(resolved.conn);
     if (!user) return res.status(400).json({ error: '数据库内没有可用账号' });
-    if (wantedUsername && user.username !== wantedUsername) {
+    // 前端传的 username 来自 /api/accounts（registry 的当前名），库内用户行可能还是旧名，
+    // 所以要拿账号维度名比对，不能用 user.username —— 否则改名后恢复被误判「没有这个账号」。
+    if (wantedUsername && registryName !== wantedUsername) {
       return res.status(400).json({ error: '该数据库中没有这个账号' });
     }
     const dbSlug = user.db_slug || r.slug;
     const securityLevel = resolveSecurityLevel(resolved.conn, {
-      dbSlug, username: user.username, userId: user.id,
+      dbSlug, username: registryName, userId: user.id,
     });
     // 只有「本来就有登录密码」的档位需要先改密；其余直接是完整登录态
     const mustChangePassword = securityLevel === 'password';
+    // token 里的 username 必须是账号维度名：用库内旧名会让切班的归属校验
+    // （rec.username === u.username）把用户自己的另一个班判成「不存在」。与登录分支同口径。
     const { token, mediaToken } = issueSession(req, {
-      userId: user.id, username: user.username, role: user.role, dbSlug,
+      userId: user.id, username: registryName, role: user.role, dbSlug,
     }, mustChangePassword ? { recover: true } : {});
     setAuthCookie(res, token);
     res.json({
@@ -149,7 +165,7 @@ router.post('/db-recover', (req, res) => {
       token,
       mediaToken,
       user: {
-        id: user.id, username: user.username, role: user.role, dbSlug,
+        id: user.id, username: registryName, role: user.role, dbSlug,
         hasPassword: !!user.password,
       },
     });
@@ -450,6 +466,20 @@ function findAccountsByPhrase(phrase) {
   return hits;
 }
 
+// 恢复改密后要吊销该账号名下**所有**班级的会话：一个账号多个班时，
+// 各班窗口签发的 token 带各自的 dbSlug，只吊销当前班那一个，另一班旧 token
+// 在 JWT 有效期内仍可读写 —— 等于密码没改。口径与 account.js 的
+// accountSlugsForRevoke 一致（当前班排首位），复用到 revokeAccountSessions 的数组入参。
+function accountSlugsForRevoke(username, currentSlug) {
+  let list = [];
+  try {
+    list = dbManager.listClasses(username).map((c) => c.slug);
+  } catch (_) { /* 登记表读不到就退回单班，不影响改密本身 */ }
+  const rest = list.filter((s) => s !== currentSlug);
+  const all = [currentSlug, ...rest].filter(Boolean);
+  return all.length ? all : currentSlug;
+}
+
 router.post('/recover-password', async (req, res) => {
   const { username, phrase, newPassword } = req.body || {};
   if (!phrase || !newPassword) {
@@ -480,12 +510,21 @@ router.post('/recover-password', async (req, res) => {
       // 哈希是异步的：先算完再写库，避免把 Promise 对象写进 password 列
       const newHash = await bcryptHash(String(newPassword), 10);
       userStore.setPasswordByName(resolved.conn, name, newHash);
+      // 多班级：登录以 accounts.password_hash 为权威（见登录分支 hashSource），
+      // 恢复改密必须同步写过去，否则新密码登录仍被旧哈希判 401 → 账号锁死。
+      // 口径与普通改密一致：库内 users.password 保持自洽，账号表另写一份。
+      try {
+        const acc = dbManager.accountFindByUsername(name);
+        if (acc) dbManager.accountSetPassword(acc.id, newHash);
+      } catch (err) {
+        console.warn('[auth] 恢复改密同步账号密码失败:', err.message);
+      }
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
-    // 密码已重置：该账号在其它窗口的旧 token 立即失效，要求重新登录
+    // 密码已重置：该账号在其它班级/窗口的旧 token 立即失效，要求重新登录。
     const row = userStore.findByUsername(resolved.conn, name);
-    revokeAccountSessions(row && row.id, resolved.slug);
+    revokeAccountSessions(row && row.id, accountSlugsForRevoke(name, resolved.slug));
     return res.json({ message: '密码已重置，可用新密码登录', username: name });
   }
 
@@ -507,9 +546,16 @@ router.post('/recover-password', async (req, res) => {
 
   const passwordHash = await bcryptHash(String(newPassword), 10);
   userStore.setPasswordByName(resolved.conn, user.username, passwordHash);
+  // 同上：权威哈希在 accounts 表，不同步的话新密码在登录校验时会被旧哈希拒绝。
+  try {
+    const acc = dbManager.accountFindByUsername(user.username);
+    if (acc) dbManager.accountSetPassword(acc.id, passwordHash);
+  } catch (err) {
+    console.warn('[auth] 恢复改密同步账号密码失败:', err.message);
+  }
   // 「请重新登录」以前只是一句提示：改完密码旧 token 的 sid 仍在名单里，30 天内照用。
-  // 这里真正吊销该账号全部会话，提示才与服务端状态一致。
-  revokeAccountSessions(user.id, resolved.slug);
+  // 这里真正吊销该账号**全部班级**的会话，提示才与服务端状态一致。
+  revokeAccountSessions(user.id, accountSlugsForRevoke(user.username, resolved.slug));
   res.json({ message: '密码已重置，请重新登录', username: user.username });
 });
 

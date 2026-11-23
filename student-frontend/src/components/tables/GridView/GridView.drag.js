@@ -815,6 +815,10 @@ export function useGridViewDrag(ctx) {
     // ---------- 列拖拽 ----------
     onColHandleDown(event, colIndex) {
       if (ctx.editingCell.value) return;
+      // 与行拖动入口对称：上一次列拖动若没正常收尾（窗口外松开、切窗口失焦），
+      // mousemove/mouseup 监听与虚影会留在 window 上，再拖就是在旧状态上叠加，
+      // 且卸载时也拿不到这些监听（v7 §5-6 / #22a）。
+      if (ctx._colGhost || ctx._colEls) ctx._abortColDrag();
       if (ctx.colHeaders.value[colIndex] === '走廊') return;
       const table = ctx.gridContainer.value.querySelector('table');
       const ths = ctx.colHeaderEls();
@@ -1018,6 +1022,28 @@ export function useGridViewDrag(ctx) {
         if (d < min) { min = d; best = colIdx; }
       }
       return best;
+    },
+    // 强制中止一次列拖动：清理监听/虚影/让位位移，但**不提交**换列（与 _abortRowDrag 对称）。
+    // 入口的「上一次没正常收尾」兜底就靠它；没有它，残留的 window 监听既不会被卸载流程移除，
+    // 也会让下一次拖动的落点计算基于旧几何。
+    _abortColDrag() {
+      if (ctx._colMove) window.removeEventListener('mousemove', ctx._colMove);
+      if (ctx._colUp) window.removeEventListener('mouseup', ctx._colUp);
+      ctx._colMove = null;
+      ctx._colUp = null;
+      if (ctx._colRaf) { cancelAnimationFrame(ctx._colRaf); ctx._colRaf = null; }
+      ctx._colPending = null;
+      ctx._colGeom = null;
+      ctx._colGeomContainer = null;
+      ctx._colGrab = null;
+      if (ctx._colAutoScroll) { ctx._colAutoScroll.stop(); ctx._colAutoScroll = null; }
+      if (ctx._colGhost) { ctx._colGhost.remove(); ctx._colGhost = null; }
+      if (ctx._colSlotGhost) { ctx._colSlotGhost.remove(); ctx._colSlotGhost = null; }
+      ctx._colSlotSig = null;
+      if (ctx._colDropBox) { ctx._colDropBox.remove(); ctx._colDropBox = null; }
+      ctx.colDragIdx.value = null;
+      ctx.colDragOverIdx.value = null;
+      ctx._clearColShiftFx();
     },
     finishColDrag() {
       if (ctx._colMove) window.removeEventListener('mousemove', ctx._colMove);

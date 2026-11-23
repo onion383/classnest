@@ -23,6 +23,10 @@ classnest/
     │   │   │   ├── tools.js  # 工具注册表与 runTool 分发（query / propose_* / 图表 / 体检 …
     │   │   │   ├── tools.schema.js  # 各工具的 JSON schema（入参 / 出参定义）与枚举（CHART_TYPES（图表类…
     │   │   │   └── tools.subagent.js  # 子代理（子模型）执行入口：复用只读白名单并在执行前校验
+    │   │   ├── mcp/
+    │   │   │   ├── mcp.routes.js  # /api/mcp 教师侧管理接口（提案 / 令牌 / 启停 / 偏好）
+    │   │   │   └── mcp.server.js  # 外部客户端的 Streamable HTTP 端点（挂 /mcp）
+    │   │   ├── privacy.shared.js  # 数据保护配置的读写语义（字段白名单 / 表清单 / 单档权限）
     │   │   ├── ai.budget.js  # AI 调用预算闸门：主对话与子助手共用的用量记账与限额
     │   │   ├── ai.config.js  # GET/PUT /config（读取/保存配置）、GET /models（模型列表）、POS…
     │   │   ├── ai.constants.js  # 读写表白名单
@@ -39,7 +43,9 @@ classnest/
     │   │   ├── undo.executors.js
     │   │   ├── undo.helpers.js  # 记录构造/方向切换辅助
     │   │   ├── undo.js
+    │   │   ├── undo.expected.js  # 撤销前的期望状态快照校验
     │   │   └── undo.records.js  # undo_history 读写、裁剪与 redo 侧失效
+    │   ├── accessLog.js  # /api/access-log（数据访问记录）
     │   ├── account.js  # 挂载 /api/account
     │   ├── activities.js
     │   ├── album.js
@@ -150,6 +156,10 @@ flowchart TD
 | GET / POST | `/login-policy` | 读取/设置登录保持天数（按账号，1~365 天，默认 30）。POST 会按新策略**重签当前 token** 并随响应返回（`token` / `mediaToken`），使「改成 1 天」当场生效；不发吊销，其它窗口的旧 token 仍按原 `exp` 走完。存储与派生规则见 [`services/authPolicy.js`](./services.md) |
 | GET | `/privacy` | 查询超级隐私状态 |
 | POST | `/privacy/enable` / `/privacy/disable` | 开启（需密码 + 恢复词）/ 关闭超级隐私 |
+| GET | `/classes` | 当前账号可切换的班级列表（含库标识与班级名） |
+| POST | `/class` | 新建班级：一班一库，独立加密库并在 `registry` 登记 |
+| POST | `/switch-class` | 切换当前班级并换发新 token（`dbSlug` 写在 JWT 里） |
+| DELETE | `/class` | 删除班级库（不可撤销，需前端二次确认） |
 | DELETE | `/` | 删除账号（不清理共享目录） |
 
 ### 3. 表格类（动态列）
@@ -271,6 +281,10 @@ flowchart TD
 | POST | `/:id/undo` | 撤销指定记录 |
 | POST | `/:id/redo` | 重做指定记录 |
 | DELETE | `/:id` | 删除单条记录 |
+| GET | `/stale` | 返回某 key 下已失效记录的 id 与原因（`staleReason`） |
+| POST | `/:id/only` | 只撤这一条格子级记录；这一格后来被改过就拒绝 |
+| POST | `/:id/rewind` | 回退到这条记录之前：撤销它及之后全部可撤销记录，整批原子 |
+| POST | `/:id/replay` | 重做到这条记录：重做它及之前全部可重做记录 |
 | DELETE | `/` | 按 key 清空（`?key=all|key`） |
 
 执行器（[`undo.executors.js`](../../../student-backend/routes/undo/undo.executors.js)）按 `type` 注册 `validate/undo/redo/describe`：`cell_update`、`row_insert/update/delete`、`rows_batch_insert/delete`（一次导入 / 勾选删除整批一条记录）、`row_reorder`（按 `[{id,position}]` 精确回槽位）、`grid_cell`、`grid_snapshot`、`doc_update`、`album_order`、`group_snapshot`、`group_dimension_delete`、`student_cascade_delete`、`album_merge`、`cadre_delete`、`cadre_order`、`cadre_import`、`photo_trash`、`album_delete/add`、`album_photo_move`。表名受 `ALLOWED_TABLES` 与 `GRID_SOURCES` 约束。
@@ -287,7 +301,7 @@ flowchart TD
 
 | 文件 | 主要接口 |
 | --- | --- |
-| [`ai.config.js`](../../../student-backend/routes/ai/ai.config.js)（模型配置接口） | `GET/PUT /config`（读取/保存配置）、`GET /models`（模型列表）、`POST /models`（新增模型）、`PUT /models/:id/active`（启用模型）、`DELETE /models/:id`（删除模型）、`POST /models/discover`（发现模型）、`GET /models/:id/models`（模型清单）、`PUT /models/:id`（更新模型）、`PUT /models/:id/reasoning`（推理参数）、`POST /config/test`（连通测试） |
+| [`ai.config.js`](../../../student-backend/routes/ai/ai.config.js)（模型配置接口） | `GET/PUT /config`（读取/保存配置）、`GET /models`（模型列表）、`POST /models`（新增模型）、`PUT /models/:id/active`（启用模型）、`DELETE /models/:id`（删除模型）、`POST /models/discover`（发现模型）、`GET /models/:id/models`（模型清单）、`PUT /models/:id`（更新模型）、`PUT /models/:id/reasoning`（推理参数）、`GET/PUT /privacy`（数据保护配置）、`POST /config/test`（连通测试） |
 | [`ai.conversations.js`](../../../student-backend/routes/ai/ai.conversations.js)（对话与 SSE 接口） | `POST /chat/stream`（流式对话，`SSE`（服务器推送））、`POST /conversations`（新建会话）、`GET /conversations`（会话列表）、`DELETE /conversations/:id`（删除会话）、`GET /conversations/:id/messages`（消息列表）、`POST /conversations/:id/messages`（新增消息）、`PUT /conversations/:id/messages/:mid`（更新消息）、`DELETE /conversations/:id/messages/last-assistant`（删最后一条助手消息）、`POST /conversations/:id/messages/delete`（批量删消息） |
 | [`ai.dataRoutes.js`](../../../student-backend/routes/ai/ai.dataRoutes.js)（数据与快照接口） | `GET /records/:table`（读表）、`POST /doc`（生成文档）、`POST /apply-batch`（批量落库）、`POST /snapshot`（创建快照）、`GET /snapshots`（快照列表）、`POST /snapshot/restore`（恢复快照） |
 | [`ai.memory.js`](../../../student-backend/routes/ai/ai.memory.js)（记忆接口） | `GET/PUT /memory`（读取/保存长期记忆） |
@@ -337,6 +351,25 @@ flowchart TD
 - 所有写接口都要登记撤销（表格走 `useTableCRUD` 的 `/api/undo`，网格走 `recordGridSnapshotUndo`，相册/分组的撤销由路由自己写）。
 - 新增接口必须同时更新 [frontend/views.md](../frontend/views.md) 的接口列与本文档。
 - 不在路由里直接拼表名；统一走 `tableService` 或固定白名单。
+
+### 11. MCP 管理接口（[`routes/ai/mcp/mcp.routes.js`](../../../student-backend/routes/ai/mcp/mcp.routes.js)，`/api/mcp`）
+
+班集作为 MCP 服务端（方向 B）的教师侧管理接口，全部走 `auth(['teacher'])`；外部客户端的 Streamable HTTP 端点 `/mcp` 由 [`mcp.server.js`](../../../student-backend/routes/ai/mcp/mcp.server.js) 挂在同一 Express 上，复用 Host 校验与 CORS 白名单。
+
+| 方法 | 路径 | 处理要点 |
+| --- | --- | --- |
+| GET | `/enabled` | 查询 MCP 服务是否启用 |
+| PUT | `/enabled` | 启停 MCP 服务；启用时才对外提供 `/mcp` |
+| GET / PUT | `/prefs` | 读取 / 保存 MCP 侧偏好 |
+| PUT | `/privacy` | 保存 MCP 数据权限（与 AI 助手那份独立） |
+| POST | `/tokens` | 生成访问令牌，明文只在创建时返回一次 |
+| GET | `/tokens` | 令牌列表（不含明文） |
+| GET | `/tokens/:id/plain` | 取回令牌明文（仅本机教师可用） |
+| POST | `/tokens/:id/revoke` | 失效令牌 |
+| POST | `/tokens/:id/remove` | 去除已失效令牌的记录 |
+| GET | `/proposals` | 待处理 / 已处理写提案列表 |
+| GET | `/proposals/:id` | 单条提案的人读视图（改哪一行、改成哪个值） |
+| POST | `/proposals/:id/decide` | 确认或拒绝提案；确认后走既有写入链路 |
 
 ---
 

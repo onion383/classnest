@@ -41,7 +41,8 @@
 </template>
 
 <script setup vapor>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
 import {
   clamp, maxScrollOf, thumbHeightOf, thumbRangeOf, thumbTopOf, markTopOf, seekOf,
 } from './AlbumYearRuler.math.js'
@@ -206,11 +207,25 @@ function onThumbPointerDown(e) {
   startDrag()
 }
 
+// 拖动期间才挂的三个 window 监听：用 disposables 登记并自己持有取消函数，
+// 松手时摘掉；万一漏摘（比如拖动中被切走），卸载时 d 兜底，不会挂着已销毁组件的 handler。
+const d = useDisposables()
+let cancelDrag = []
+
 function startDrag() {
   dragging.value = true
-  window.addEventListener('pointermove', onPointerMove)
-  window.addEventListener('pointerup', onPointerUp)
-  window.addEventListener('pointercancel', onPointerUp)
+  if (!cancelDrag.length) {
+    cancelDrag = [
+      d.listen(window, 'pointermove', onPointerMove),
+      d.listen(window, 'pointerup', onPointerUp),
+      d.listen(window, 'pointercancel', onPointerUp),
+    ]
+  }
+}
+
+function stopDragListeners() {
+  for (const c of cancelDrag) c()
+  cancelDrag = []
 }
 
 function onPointerMove(e) {
@@ -228,9 +243,7 @@ function onPointerMove(e) {
 function onPointerUp() {
   if (!dragging.value) return
   dragging.value = false
-  window.removeEventListener('pointermove', onPointerMove)
-  window.removeEventListener('pointerup', onPointerUp)
-  window.removeEventListener('pointercancel', onPointerUp)
+  stopDragListeners()
   // 内容不足一屏：没有真实滚动位置可留，复位到顶部。
   // 复位不是瞬间跳回 —— `.album-ruler-thumb--free` 上挂了 top 过渡（拖动时由 --active 关掉，
   // 保证跟手不拖影），所以这里只把值改回 0，视觉上是一段平滑的滑回。
@@ -243,20 +256,13 @@ function onResize() {
 
 onMounted(() => {
   measure()
-  window.addEventListener('resize', onResize)
+  d.listen(window, 'resize', onResize)
   // 父容器高度变化（窗口缩放之外的场景：工具栏折行、侧栏开合）只有 ResizeObserver 看得到
   if (trackRef.value && typeof ResizeObserver !== 'undefined') {
     resizeObs = new ResizeObserver(() => measure())
     resizeObs.observe(trackRef.value)
+    d.add(() => { resizeObs?.disconnect(); resizeObs = null })
   }
-})
-onBeforeUnmount(() => {
-  resizeObs?.disconnect()
-  resizeObs = null
-  window.removeEventListener('resize', onResize)
-  window.removeEventListener('pointermove', onPointerMove)
-  window.removeEventListener('pointerup', onPointerUp)
-  window.removeEventListener('pointercancel', onPointerUp)
 })
 
 // 数据到位 / 布局重算后轨道高度可能才拿到，补测一次

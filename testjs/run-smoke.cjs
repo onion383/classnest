@@ -11,6 +11,8 @@
 //   node testjs/run-smoke.cjs --list         只列出会跑哪些
 //   node testjs/run-smoke.cjs --only=auth    只跑文件名含 auth 的（可重复传）
 //   node testjs/run-smoke.cjs --skip=pdf     跳过文件名含 pdf 的（可重复传）
+//   node testjs/run-smoke.cjs --require-pass=secure-channel-retry
+//                                            点名关键用例：SKIP 或未收集也算失败（可重复传）
 //   node testjs/run-smoke.cjs --bail         第一个失败就停
 //
 // 设计说明：
@@ -65,12 +67,13 @@ const ORDER_HINT = new Map([
 
 // ---------- 参数 ----------
 const args = process.argv.slice(2)
-const opt = { list: false, bail: false, only: [], skip: [] }
+const opt = { list: false, bail: false, only: [], skip: [], requirePass: [] }
 for (const a of args) {
   if (a === '--list') opt.list = true
   else if (a === '--bail') opt.bail = true
   else if (a.startsWith('--only=')) opt.only.push(a.slice(7))
   else if (a.startsWith('--skip=')) opt.skip.push(a.slice(7))
+  else if (a.startsWith('--require-pass=')) opt.requirePass.push(a.slice(15))
   else if (a === '-h' || a === '--help') {
     console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(2, 24).join('\n').replace(/^\/\/ ?/gm, ''))
     process.exit(0)
@@ -168,6 +171,11 @@ function runOne(file) {
   const pass = results.filter((r) => r.code === 0)
   const fail = results.filter((r) => r.code !== 0 && r.code !== null)
   const skip = results.filter((r) => r.code === null)
+  // 被点名的「必须通过」用例若没跑（SKIP）或没被收集到，算失败 —— 关键回归不许悄悄跳过。
+  // CI 用 --require-pass=secure-channel-retry 保证 401 重试真的跑过。
+  const missingRequired = opt.requirePass.filter((key) =>
+    !results.some((r) => r.file.includes(key) && r.code === 0)
+  )
 
   console.log('\n' + '='.repeat(56))
   console.log(`冒烟汇总：通过 ${pass.length} / 失败 ${fail.length} / 跳过 ${skip.length}（共 ${results.length}）`)
@@ -179,7 +187,11 @@ function runOne(file) {
     console.log('\n跳过项：')
     skip.forEach((r) => console.log(`  - ${r.file}  ${r.reason || '缺少运行时'}`))
   }
+  if (missingRequired.length) {
+    console.log('\n未运行的关键用例（--require-pass）：')
+    missingRequired.forEach((k) => console.log(`  ✗ ${k}  被跳过或未收集`))
+  }
   console.log('='.repeat(56))
   await removeTmpRoot()
-  process.exit(fail.length ? 1 : 0)
+  process.exit(fail.length || missingRequired.length ? 1 : 0)
 })()

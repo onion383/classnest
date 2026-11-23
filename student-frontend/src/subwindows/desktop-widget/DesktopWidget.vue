@@ -1012,17 +1012,26 @@ function slideAppIntoSlot(idx, release, grab) {
   )
 }
 
+// 保存串行队列。PUT /apps 是「整体覆写」，而添加/删除/排序各自会调一次保存，
+// 连续操作就产生重叠请求；较早的请求若处理更慢、后到达，会把新列表写回旧状态
+// （删掉的图标重开挂件又出现、排序回退）。串起来发即保证落库顺序 = 编辑顺序
+// （审查 v7 · #75）。
+let appsSaveQueue = Promise.resolve()
+
 function saveApps(attempt = 0) {
   // 未成功读取过就绝不写入：否则会把数据库里有、但本次还没读到的旧列表覆盖掉
-  if (!appsLoaded.value) return
-  // 每次重试都读当前列表，用户中途又改了也不会写回旧快照
-  axios.put('/api/widget-settings/apps', { desktopApps: apps.value.slice(0, MAX_APPS) }).catch(() => {
+  if (!appsLoaded.value) return appsSaveQueue
+  // 快照在任务真正发出时才取：排队期间用户可能又改了，重试更不能写回旧快照
+  const put = () => axios.put('/api/widget-settings/apps', { desktopApps: apps.value.slice(0, MAX_APPS) })
+  // 前一个成功与否都继续排队（catch 吞掉），否则一次失败会把后续保存全卡死
+  appsSaveQueue = appsSaveQueue.catch(() => {}).then(put).catch(() => {
     if (attempt < 2) {
-      setTimeout(() => saveApps(attempt + 1), 2000)
+      disposables.timeout(() => saveApps(attempt + 1), 2000)
     } else {
       showHint('常用软件保存失败，请稍后重试')
     }
   })
+  return appsSaveQueue
 }
 
 // 上一轮是否还在飞。后端卡住时 axios 没有超时，Promise.all 可能长时间不返回，

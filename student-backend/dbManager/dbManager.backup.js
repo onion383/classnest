@@ -59,6 +59,10 @@ function restoreBundle({ slug, username, data, srcPath, dbKey, encrypted = true 
   // 反过来的话，旧连接还开着时 Windows 上写同名文件会 EBUSY；即便写成功，
   // 旧连接的 -wal 之后仍可能被重放到新库上，两份数据交错（审查 v4 · B05-03）。
   // 恢复属维护窗口操作，强制关（force）——此时不应有人在写。
+  // 主进程连接由 evictConn 关；扫描子进程另持一份连接，必须先通知它关闭并丢弃钥匙，
+  // 否则它可能在恢复期间继续读旧库/写 -wal，触发 SQLITE_BUSY 或数据交错（#12）。
+  // 惰性 require：scanWorker 顶层依赖 dbManager，不能在此模块顶层引入（循环依赖）。
+  try { require('../scanWorker').lockDb(slug); } catch (_) { /* 子进程未启动 */ }
   evictConn(slug, { force: true });
 
   // 先写临时文件并校验完整性，**通过后才覆盖现有库**：

@@ -470,6 +470,7 @@
 
 <script setup vapor>
 import { ref, computed, watch, onMounted, onUnmounted, defineAsyncComponent, nextTick, toRef } from 'vue'
+import { useDisposables } from '../utils/disposables.js'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { useNotification } from '../composables/useNotification.js'
@@ -544,6 +545,11 @@ const msgBox = ref(null)
 const composer = ref(null)
 
 // ===== 状态 =====
+// document 级监听（选区截屏的 Esc、抽屉外点击）登记进 disposables：
+// 两处都是「按需挂、条件满足才摘」，自己持有取消函数，漏摘由作用域兜底。
+const d = useDisposables()
+let cancelRegionKey = null
+let cancelOutside = null
 const _unmounted = ref(false) // 卸载后异步回调（markdown 预加载）不再写组件状态
 const enabled = ref(null) // null=加载中, false=未启用, true=已启用
 const busy = ref(false)
@@ -738,7 +744,7 @@ async function captureScreenshot() {
     await nextTick()
     await new Promise((r) => requestAnimationFrame(r))
     await window.electron.invoke(INVOKE.SCREENSHOT_REGION_SHOW)
-    document.addEventListener('keydown', onRegionKey)
+    if (!cancelRegionKey) cancelRegionKey = d.listen(document, 'keydown', onRegionKey)
   } catch (err) {
     await endRegionSelect()
     notifyError('截屏失败：' + (err.message || '未知错误'))
@@ -820,7 +826,7 @@ function cancelRegion() {
 }
 // 结束选区：先让主进程把窗口还原到截屏前状态，再清掉遮罩（顺序反了会露出铺满整屏的界面）
 async function endRegionSelect() {
-  document.removeEventListener('keydown', onRegionKey)
+  if (cancelRegionKey) { cancelRegionKey(); cancelRegionKey = null }
   try {
     if (window.electron && window.electron.invoke) await window.electron.invoke(INVOKE.SCREENSHOT_REGION_END)
   } catch (_) { /* 忽略 */ }
@@ -859,9 +865,9 @@ function isHttpLink(t) {
 // 任一侧抽屉打开时挂 document 级监听，两扇都收起后摘除（同一函数引用，重复 add 为幂等）
 function updateOutsideListener() {
   if (linkDrawerOpen.value || changeDrawerOpen.value) {
-    document.addEventListener('mousedown', onDocMouseDown, true)
-  } else {
-    document.removeEventListener('mousedown', onDocMouseDown, true)
+    if (!cancelOutside) cancelOutside = d.listen(document, 'mousedown', onDocMouseDown, true)
+  } else if (cancelOutside) {
+    cancelOutside(); cancelOutside = null
   }
 }
 // 点抽屉外部关闭：命中面板内、或点击的是消息链接 / 改动总结条上的「↗」时都不关闭
@@ -1022,6 +1028,10 @@ onMounted(() => {
 })
 onUnmounted(() => {
   _unmounted.value = true
+  // 切班会销毁本组件；若流还在跑，必须 abort —— 否则旧流在 finally 里用换发的新 token
+  // 执行旧班的提案，把数据写进新班（#39）。abort 后 aiChat 会标 interrupted，提案不执行。
+  // 代次校验（classScopeKey）是第二道防线，防 abort 与提案执行之间的窗口。
+  if (abortCtrl.value) { try { abortCtrl.value.abort() } catch (_) { /* 已结束 */ } }
   // 贴底跟随的观察器必须断开，否则销毁后回调仍持有已卸载的 msgBox 引用
   _stickOn = false
   if (_stickRo) { _stickRo.disconnect(); _stickRo = null }
@@ -1029,6 +1039,5 @@ onUnmounted(() => {
   _stickTargets.clear()
   // 卸载时若仍在选区截屏，先把窗口还原，避免主窗口停在铺满整屏的状态
   if (regionShot.value) endRegionSelect()
-  document.removeEventListener('mousedown', onDocMouseDown, true)
 })
 </script>

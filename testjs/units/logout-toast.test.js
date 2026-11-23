@@ -30,15 +30,19 @@ test('authStorage：静默窗口存在，且登录成功会立即解除', () => 
   assert.ok(atClear > atSetAuth && (atNext < 0 || atClear < atNext), 'setAuth 里必须调用 clearLoggingOut()')
 })
 
-test('全局 401 处理：登出窗口内直接静默，且早于清 token', () => {
+test('全局 401 处理：登出窗口内直接静默，且早于清登录态', () => {
   const src = read('student-frontend/src/main.js')
   const atHandler = src.indexOf('onAuthExpired:')
   assert.ok(atHandler > 0, '没找到 onAuthExpired')
   const seg = src.slice(atHandler, src.indexOf('onUnreachable:', atHandler))
   const atQuiet = seg.indexOf('isLoggingOut()')
-  const atClearToken = seg.indexOf('clearToken()')
+  // 清登录态可能是 clearToken()（只清 token）或 clearAuth()（连用户与用户级缓存一起清，
+  // 401 路径自 v7 §5-2 起用后者）。判据只要求「清」发生在静默判断之后，不钉具体函数。
+  const candidates = [seg.indexOf('clearToken()'), seg.indexOf('clearAuth()')].filter((i) => i >= 0)
+  assert.ok(candidates.length > 0, '401 处理里没有清登录态（clearToken / clearAuth）')
+  const atClearToken = Math.min(...candidates)
   assert.ok(atQuiet > 0, '登出窗口内必须静默（否则正常登出会弹「登录已过期」）')
-  assert.ok(atQuiet < atClearToken, '静默判断必须在清 token 之前')
+  assert.ok(atQuiet < atClearToken, '静默判断必须在清登录态之前')
   assert.match(seg, /return/, '命中窗口要直接 return，不能继续弹提示/跳转')
 })
 

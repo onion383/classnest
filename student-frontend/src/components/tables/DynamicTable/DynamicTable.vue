@@ -1270,8 +1270,10 @@ function handleGlobalEnter(e) {
       if (!ctx.hasNewRow.value) return
       const t = e.target
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
-      // 焦点在「取消」按钮上时按回车应取消而非保存
-      if (t && t.tagName === 'BUTTON' && /取消/.test(t.textContent || '')) return
+      // 焦点在任意按钮上时都交给按钮自己的 Enter→click：全局监听抢先 emit 一次，
+      // 浏览器随后原生 click 再 emit 一次，等于按一下就保存两遍（请假页会并发建两条记录）。
+      // 「取消」按钮也因此天然被排除，不需要再按文案判断（v7 §5-6 / #22b）。
+      if (t && t.tagName === 'BUTTON') return
       emit('saveNewRow')
     }
 function handleClickOutside(event) {
@@ -1295,9 +1297,20 @@ function toggleRowSelect(rowKey) {
     }
 function toggleAllSelect() {
       if (ctx.readonly.value) return;
-      // 全选只作用于「当前可见行」：筛选态下不应把被过滤掉的行也勾上
-      const normalRows = (ctx.bodyRows.value || []).filter(r => !r._isSeparator && !r._isNew);
-      ctx.selectedRowKeys.value = ctx.isAllSelected.value ? [] : normalRows.map(r => r._rowKey);
+      // 全选只作用于「当前可见行」，但**不能整体替换**已选集合：
+      // 筛选态下把 selectedRowKeys 换成就地重算的可见行，会让被过滤掉的已选行静默丢失
+      // （取消全选时更是直接把隐藏行的选择一起清空）——v7 §5-6 / #22。
+      const visibleKeys = (ctx.bodyRows.value || [])
+        .filter(r => !r._isSeparator && !r._isNew)
+        .map(r => r._rowKey)
+      if (ctx.isAllSelected.value) {
+        const drop = new Set(visibleKeys)
+        ctx.selectedRowKeys.value = ctx.selectedRowKeys.value.filter(k => !drop.has(k))
+      } else {
+        const next = new Set(ctx.selectedRowKeys.value)
+        for (const k of visibleKeys) next.add(k)
+        ctx.selectedRowKeys.value = [...next]
+      }
     }
 function clearSelection() { ctx.selectedRowKeys.value = []; }
 function getReceiptCount(row) {

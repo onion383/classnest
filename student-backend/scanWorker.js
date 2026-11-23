@@ -46,11 +46,15 @@ let restartTimer = null;      // 崩溃重建定时器
 //（继续扫库写库、占磁盘 IO，而前端已显示「后端已关闭」）。
 let expectExit = false;
 
-// albumId → true：本进程已派活出去、正在跑的扫描。
+// 任务键必须包含 slug：各库的 albumId 独立自增，两班同号相册用裸 id 建键会互串。
+// 复合键单点定义在 utils/scanTaskKey，主进程与 worker 共用，避免两处各写一遍分叉。
+const { scanTaskKey: taskKey } = require('./utils/scanTaskKey');
+
+// taskKey → true：本进程已派活出去、正在跑的扫描。
 // 只用于「同相册不重复起」（真正跨进程的状态真源在 album_scan_tasks 表）。
 const dispatched = new Map();
 
-// albumId → 任务视图（主进程视角）：进度缓存 + 暂停/取消标记。
+// taskKey → 任务视图（主进程视角）：进度缓存 + 暂停/取消标记。
 // 由派活时创建、progress 消息更新、done/error/worker 退出时清除。
 const active = new Map();
 
@@ -124,7 +128,7 @@ function onWorkerMessage(msg) {
     case 'progress': {
       // 进度真源本来就是库表 album_scan_tasks（/status 读表），这里只更新一个内存计数
       // 供 /status 与 /tasks 快速展示用；不必每次都发事件到渲染进程（前端自己会轮询 /status）。
-      const t = active.get(msg.albumId);
+      const t = active.get(taskKey(msg.slug, msg.albumId));
       if (t) {
         t.scanned = msg.scanned || 0;
         t.total = msg.total || 0;
@@ -150,8 +154,8 @@ function onWorkerMessage(msg) {
       }
       break;
     case 'done':
-      dispatched.delete(msg.albumId);
-      active.delete(msg.albumId);
+      dispatched.delete(taskKey(msg.slug, msg.albumId));
+      active.delete(taskKey(msg.slug, msg.albumId));
       scheduleIdleShutdown();
       break;
     case 'demand-done':
@@ -159,8 +163,8 @@ function onWorkerMessage(msg) {
       scheduleIdleShutdown();
       break;
     case 'error':
-      dispatched.delete(msg.albumId);
-      active.delete(msg.albumId);
+      dispatched.delete(taskKey(msg.slug, msg.albumId));
+      active.delete(taskKey(msg.slug, msg.albumId));
       console.error('[scanWorker] 扫描出错:', msg.message);
       scheduleIdleShutdown();
       break;
@@ -202,14 +206,15 @@ function claimTask(albumId, mode, token, resumeFrom) {
 
 // 派一个扫描任务给 worker。返回 true 表示已派出。
 function dispatchScan(slug, albumId, mode, resumeFrom) {
-  // 同相册不重复起
-  if (dispatched.has(albumId)) return false;
+  const key = taskKey(slug, albumId);
+  // 同相册不重复起（按账号+相册，不是裸相册号）
+  if (dispatched.has(key)) return false;
   if (!child) spawnWorker();
   // 取消空闲退出（又开始干活了）
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-  dispatched.set(albumId, true);
+  dispatched.set(key, true);
   const token = nextToken();
-  active.set(albumId, {
+  active.set(key, {
     albumId,
     slug,
     token,
@@ -230,8 +235,8 @@ function dispatchScan(slug, albumId, mode, resumeFrom) {
   try {
     child.send({ cmd: 'start', slug, albumId, token, mode: mode || 'incremental', resumeFrom: resumeFrom || '', dbKey: dbManager.getUnlockedKey(slug) });
   } catch (_) {
-    dispatched.delete(albumId);
-    active.delete(albumId);
+    dispatched.delete(key);
+    active.delete(key);
     return false;
   }
   return true;
@@ -240,16 +245,16 @@ function dispatchScan(slug, albumId, mode, resumeFrom) {
 // 派一批续扫任务（断点续扫）。
 function dispatchResume(tasks) {
   if (!tasks || !tasks.length) return 0;
-  const list = tasks.filter(t => !dispatched.has(t.albumId));
+  const list = tasks.filter(t => !dispatched.has(taskKey(t.slug, t.albumId)));
   if (!list.length) return 0;
   if (!child) spawnWorker();
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   for (const t of list) {
-    dispatched.set(t.albumId, true);
+    dispatched.set(taskKey(t.slug, t.albumId), true);
     // 续扫同样换新 token：这是一次新的扫描归属，断点（done_path）保留。
     const token = nextToken();
     claimTask(t.albumId, t.mode || 'incremental', token, t.donePath || '');
-    active.set(t.albumId, {
+    active.set(taskKey(t.slug, t.albumId), {
       albumId: t.albumId,
       slug: t.slug,
       token,
@@ -270,7 +275,7 @@ function dispatchResume(tasks) {
     })) });
     return list.length;
   } catch (_) {
-    for (const t of list) { dispatched.delete(t.albumId); active.delete(t.albumId); }
+    for (const t of list) { dispatched.delete(taskKey(t.slug, t.albumId)); active.delete(taskKey(t.slug, t.albumId)); }
     return 0;
   }
 }
@@ -279,7 +284,8 @@ function dispatchResume(tasks) {
 // conn 可选：调用方能给出当前请求的连接就给出（避免依赖 ALS 上下文）；
 // 拿不到就退回 dbManager.current()，再拿不到就跳过（IPC 那条路仍然有效）。
 function requestStop(slug, albumId, conn) {
-  const token = (active.get(albumId) || {}).token || 0;
+  const key = taskKey(slug, albumId);
+  const token = (active.get(key) || {}).token || 0;
   if (child) { try { child.send({ cmd: 'stop', slug, albumId, token }); } catch (_) {} }
   const c = conn || safeCurrentConn();
   if (c) {
@@ -292,20 +298,21 @@ function requestStop(slug, albumId, conn) {
       albumScan.persistScanClear(c, albumId, token);
     } catch (_) { /* 未登录/连接不可用等场景忽略，IPC 那条路仍然有效 */ }
   }
-  dispatched.delete(albumId);
-  const t = active.get(albumId);
+  dispatched.delete(key);
+  const t = active.get(key);
   if (t) t.cancelled = true;
 }
 
 // 设置暂停/继续。
 function requestPause(slug, albumId, paused, conn) {
-  const token = (active.get(albumId) || {}).token || 0;
+  const key = taskKey(slug, albumId);
+  const token = (active.get(key) || {}).token || 0;
   if (child) { try { child.send({ cmd: 'pause', slug, albumId, token, paused: !!paused }); } catch (_) {} }
   const c = conn || safeCurrentConn();
   if (c) {
     try { albumScan.setScanState(c, albumId, paused ? 'paused' : 'running', token); } catch (_) {}
   }
-  const t = active.get(albumId);
+  const t = active.get(key);
   if (t) t.paused = !!paused;
 }
 
@@ -332,9 +339,9 @@ function forwardDemand(slug, ids) {
   }
 }
 
-// 是否真的在跑这个相册（内存记录，仅主进程视角）。
-function isDispatched(albumId) {
-  return dispatched.has(albumId);
+// 是否真的在跑这个相册（内存记录，仅主进程视角）。必须带 slug 区分跨班同号相册。
+function isDispatched(slug, albumId) {
+  return dispatched.has(taskKey(slug, albumId));
 }
 
 // 主进程视角的任务列表（给 /status 与 /tasks 用）。
@@ -342,8 +349,8 @@ function listActive() {
   return Array.from(active.values());
 }
 
-function getActive(albumId) {
-  return active.get(albumId) || null;
+function getActive(slug, albumId) {
+  return active.get(taskKey(slug, albumId)) || null;
 }
 
 // 主动关闭 worker（软件退出时用）。

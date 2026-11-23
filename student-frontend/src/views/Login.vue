@@ -533,6 +533,8 @@ async function pickZipFile(file) {
 async function restoreFromZip(confirm) {
   const file = restoreZip.value;
   if (!file) return useNotification().warning('请先选择备份包');
+  // 覆盖式恢复会替换本机同名账号的数据，成功提示要如实说明，避免用户以为只是「恢复了一份副本」
+  const overwrite = !!confirm;
   // 包需要口令却两样都空：直接上传只会白跑一趟（大包尤其明显）
   const f = restoreFields.value;
   if (f.password || f.mnemonic) {
@@ -553,10 +555,11 @@ async function restoreFromZip(confirm) {
       setToken(res.data.token);
       storeMediaToken(res.data.mediaToken);
       setCurrentUser(res.data.user);
+      useNotification().success(overwrite ? '已覆盖本机数据，恢复完成' : '恢复成功');
       router.push('/');
       return;
     }
-    useNotification().success('恢复成功');
+    useNotification().success(overwrite ? '已覆盖本机数据，恢复完成' : '恢复成功');
   } catch (err) {
     const data = (err.response && err.response.data) || {};
     if (data.needConfirm) {

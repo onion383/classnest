@@ -135,8 +135,10 @@ const dailyTableRows = computed(() => {
   return rows
 })
 
-// 打开弹窗时才拉取数据
-watch(() => props.visible, (v) => { if (v) onOpen() })
+// 打开弹窗时才拉取数据。
+// immediate 不能省：宿主是 v-if 懒挂载，挂载那一刻 visible 已经是 true，
+// 非 immediate 的 watcher 建立时就已经错过了这次变化，首次打开会是一片空白（v7 §5-3）。
+watch(() => props.visible, (v) => { if (v) onOpen() }, { immediate: true })
 
 // 每次打开重置状态并加载周列表
 async function onOpen() {

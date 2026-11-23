@@ -190,6 +190,14 @@ classnest/
 - **内部实现**：上一周/下一周按钮 emit `direction`，下拉选择 emit `update:currentWeek`。
 - **使用方**：`SeatView`、`ScheduleView`、`DutyView`。
 
+### [MoreMenu.vue](../../../../student-frontend/src/components/base/MoreMenu.vue) · 更多操作菜单
+- **定位**：工具栏放不下时收进「更多」的悬浮菜单，触发按钮带 `aria-expanded` / `aria-controls`。
+- **内部实现**：菜单项由调用方传入，组件只负责展开、点外部关闭与 `Esc` 让位，不内置业务动作。
+
+### [TodoBell.vue](../../../../student-frontend/src/components/base/TodoBell.vue) · 待处理胶囊
+- **定位**：标题栏右侧的待办入口，`total > 0` 才渲染，点击 emit `open`。
+- **内部实现**：放在 `window-controls` 内复用其 `no-drag`；数据由 `useTodoCenter` 提供，组件自身不拉取。
+
 ---
 
 ## 注意事项

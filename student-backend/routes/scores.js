@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { db } = require('../db');
 const { now, cleanUp, buildInsert, buildUpdate } = require('../utils/sql');
 const { sanitizeField, normNumber } = require('../services/sanitize');
 const { readRowsByIds } = require('../services/createdRows');
@@ -97,7 +98,10 @@ router.post('/', (req, res) => {
     const result = buildInsert('score_records', data);
     res.json({ id: result.lastInsertRowid, message: '添加加分成功' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // 400 而不是 500：这个 handler 里只有入参清洗、跨列校验和一条插入，
+    // 失败原因基本都是入参（与 PUT /:id、导入接口同口径）。加分时间加了严格日期规则后，
+    // 「2026-13-45」会走到这里 —— 回 500 会让前端只看到「服务器错误」。
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -176,57 +180,66 @@ router.post('/import', (req, res) => {
       }
     };
 
-    const list = rows.map((row, idx) => {
-      const rowNo = idx + 1;
-      const groupName = cell(row, ['小组', '小组名', 'group_name']);
-      const name = cell(row, ['姓名']);
-      const xuehao = cell(row, ['学号']);
-      const isGroup = mode === 'group' || (!mode && groupName);
-      if (isGroup && !groupName) throw new Error(`第 ${rowNo} 行缺少「小组」`);
-      if (!isGroup && !name) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
+    // 整批（认人建档 + 校验 + 写记录）必须在同一个事务里。
+    // 关键：tryResolve 在 rows.map 阶段即时 INSERT 临时学生，若在事务外，
+    // 后面某行校验 throw 会让整批 400，但前面已建的临时学生残留、无法撤销。
+    // 与请假导入、班干部导入同一口径。
+    const run = db.transaction(() => {
+      const list = rows.map((row, idx) => {
+        const rowNo = idx + 1;
+        const groupName = cell(row, ['小组', '小组名', 'group_name']);
+        const name = cell(row, ['姓名']);
+        const xuehao = cell(row, ['学号']);
+        const isGroup = mode === 'group' || (!mode && groupName);
+        if (isGroup && !groupName) throw new Error(`第 ${rowNo} 行缺少「小组」`);
+        if (!isGroup && !name) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
 
-      let student = null;
-      if (!isGroup) {
-        // 学号不唯一（可空、可重复）：只有「恰好 1 条」才能定人。
-        // 撞到 2 条就退回按姓名认人，绝不静默取第一条。
-        if (xuehao) {
-          const byXuehao = scoreStore.findStudentsByXuehao(xuehao);
-          if (byXuehao.length === 1) student = byXuehao[0];
+        let student = null;
+        if (!isGroup) {
+          // 学号不唯一（可空、可重复）：只有「恰好 1 条」才能定人。
+          // 撞到 2 条就退回按姓名认人，绝不静默取第一条。
+          if (xuehao) {
+            const byXuehao = scoreStore.findStudentsByXuehao(xuehao);
+            if (byXuehao.length === 1) student = byXuehao[0];
+          }
+          if (!student && name) {
+            // 重名（正式名单 ≥2 个同名）刻意不抛错：导入是整批一个事务，抛错会让整批失败，
+            // 而原行为只是「这一行 student_id 留空」。需要用户决策的歧义交给选人那条路，
+            // 不让批量导入替用户猜。
+            const r = tryResolve(name);
+            if (r && r.id) student = scoreStore.findStudentById(r.id) || { id: r.id, 姓名: r.name };
+          }
         }
-        if (!student && name) {
-          // 重名（正式名单 ≥2 个同名）刻意不抛错：导入是整批一个事务，抛错会让整批失败，
-          // 而原行为只是「这一行 student_id 留空」。需要用户决策的歧义交给选人那条路，
-          // 不让批量导入替用户猜。
-          const r = tryResolve(name);
-          if (r && r.id) student = scoreStore.findStudentById(r.id) || { id: r.id, 姓名: r.name };
-        }
-      }
 
-      const type = sanitizeField(cell(row, ['类型']) || '加分', 'score_records', '类型');
-      const scoreRaw = cell(row, ['分值']);
-      const fen = scoreRaw === '' ? 0 : sanitizeField(scoreRaw, 'score_records', '分值');
-      const time = sanitizeField(cell(row, ['加分时间']) || now(), 'score_records', '加分时间', '日期');
-      const memberCount = isGroup ? (normNumber(cell(row, ['成员数']), '成员数') ?? 0) : 0;
+        const type = sanitizeField(cell(row, ['类型']) || '加分', 'score_records', '类型');
+        const scoreRaw = cell(row, ['分值']);
+        const fen = scoreRaw === '' ? 0 : sanitizeField(scoreRaw, 'score_records', '分值');
+        const time = sanitizeField(cell(row, ['加分时间']) || now(), 'score_records', '加分时间', '日期');
+        const memberCount = isGroup ? (normNumber(cell(row, ['成员数']), '成员数') ?? 0) : 0;
 
-      return {
-        student_id: isGroup ? null : (student ? student.id : null),
-        姓名: isGroup ? null : (name || (student && student.姓名) || null),
-        学号: isGroup ? null : (xuehao || (student && student.学号) || null),
-        类型: type,
-        项目: cell(row, ['项目']) || null,
-        分值: fen ?? 0,
-        原因: cell(row, ['原因']) || null,
-        加分时间: time,
-        created_at: now(),
-        source: isGroup ? 'group' : 'personal',
-        group_name: isGroup ? groupName : null,
-        成员数: memberCount,
-      };
+        return {
+          student_id: isGroup ? null : (student ? student.id : null),
+          姓名: isGroup ? null : (name || (student && student.姓名) || null),
+          学号: isGroup ? null : (xuehao || (student && student.学号) || null),
+          类型: type,
+          项目: cell(row, ['项目']) || null,
+          分值: fen ?? 0,
+          原因: cell(row, ['原因']) || null,
+          加分时间: time,
+          created_at: now(),
+          source: isGroup ? 'group' : 'personal',
+          group_name: isGroup ? groupName : null,
+          成员数: memberCount,
+        };
+      });
+
+      const ids = scoreStore.insertMany(list);
+      return { count: list.length, ids };
     });
 
-    const ids = scoreStore.insertMany(list);
+    const { count, ids } = run();
     // created = 本次真正新建的行，供前端登记一条可撤销的批量导入（Q2-06）
-    res.json({ message: `成功导入 ${list.length} 条加分记录`, created: readRowsByIds('score_records', ids) });
+    res.json({ message: `成功导入 ${count} 条加分记录`, created: readRowsByIds('score_records', ids) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

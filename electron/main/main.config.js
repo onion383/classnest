@@ -118,6 +118,9 @@ let dbMasterKey = null
 // 后者写回文件后旧库就再也打不开了。
 let dbMasterKeyPromise = null
 
+// 「已有密钥不可确认」是致命错误：必须穿透外层兜底，绝不能被降级成运行期随机值。
+class DbMasterKeyUnavailableError extends Error {}
+
 async function resolveDbMasterKey() {
   // 主密钥文件与数据库同目录存放，随数据目录一起迁移；解析用配置后的 dataDir，保证两者一致
   const keyFile = resolveDbMasterKeyPath()
@@ -146,17 +149,22 @@ async function resolveDbMasterKey() {
         }
         return result
       } catch (err) {
-        // 解密失败可能只是瞬时故障（DPAPI 异常/文件损坏）。覆盖旧文件会让原密钥永久丢失，
-        // 因此先留一份带时间戳的备份；备份失败则宁可本次用运行期随机值也不覆盖。
+        // 已有密文不可解 = 旧库钥匙无法确认。生成新钥匙覆盖会让所有加密班级永久打不开 —
+        // 绝不覆盖。只复制一份带时间戳的备份留排查，然后抛错让启动落到失败态提示用户恢复。
         const backupFile = `${keyFile}.bak-${Date.now()}`
         try {
           fs.copyFileSync(keyFile, backupFile)
-          console.error('[main] DB 主密钥解密失败，已备份旧密钥文件后重新生成:', err?.message || err, '→', backupFile)
+          console.error('[main] DB 主密钥解密失败，已保留原密文并备份:', err?.message || err, '→', backupFile)
         } catch (backupErr) {
-          console.error('[main] DB 主密钥解密失败且备份失败，为避免覆盖原密钥，本次使用运行期随机值:', backupErr?.message || backupErr)
-          return randomKey()
+          console.error('[main] DB 主密钥解密失败，备份也失败（原密文未动）:', backupErr?.message || backupErr)
         }
+        throw new DbMasterKeyUnavailableError('数据库主密钥无法确认：已保留原密钥文件，请用备份恢复后重试', { cause: err })
       }
+    }
+    // 已有密文文件但 safeStorage 不可用：无法确认它是不是旧库的钥匙。
+    // 生成一个新随机值会让旧库打不开 —— 拒绝启动，提示用户恢复环境。
+    if (fs.existsSync(keyFile) && !available) {
+      throw new DbMasterKeyUnavailableError('数据库主密钥密文存在，但当前环境无法解密：请在支持安全存储的环境中启动')
     }
     const key = randomKey()
     if (available) {
@@ -169,6 +177,8 @@ async function resolveDbMasterKey() {
     }
     return key
   } catch (err) {
+    // 已有密钥不可确认必须穿透，否则外层兜底又给一把新钥匙 → 旧库永久打不开
+    if (err instanceof DbMasterKeyUnavailableError) throw err
     console.error('[main] DB 主密钥初始化失败，使用运行期随机值:', err?.message || err)
     return randomKey()
   }
@@ -177,14 +187,14 @@ async function resolveDbMasterKey() {
 async function getDbMasterKey() {
   if (dbMasterKey) return dbMasterKey
   if (!dbMasterKeyPromise) {
-    // resolveDbMasterKey 内部已兜住所有已知失败，这里再兜一层意外 reject：
-    // 关键是所有等待者拿到同一把钥匙，且失败后不要把 Promise 清掉重新解析出第二把。
+    // 必须与所有等待者共享同一个 Promise；失败时保持 rejected（清掉会重新解析出第二把）。
+    // 已知失败降级只在 resolveDbMasterKey 内部处理；这里不再给"意外失败"发随机钥匙 —
+    // 那会让调用方拿错误 key fork 后端，把已有加密库判成损坏。
     dbMasterKeyPromise = resolveDbMasterKey()
       .then((key) => { dbMasterKey = key; return key })
       .catch((err) => {
-        console.error('[main] DB 主密钥解析异常，使用运行期随机值:', err?.message || err)
-        dbMasterKey = crypto.randomBytes(32).toString('hex')
-        return dbMasterKey
+        console.error('[main] DB 主密钥解析失败，后端启动中止:', err?.message || err)
+        throw err
       })
   }
   return dbMasterKeyPromise

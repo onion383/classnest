@@ -237,6 +237,9 @@ export function useDynamicTableDrag(ctx) {
 
     onRowHandleDown(event, index) {
       if (ctx.noRowDrag.value || ctx.readonly.value) return;
+      // 上一次拖动若没正常收尾（窗口外松开、切窗口失焦），window 上的 mousemove/mouseup
+      // 与虚影会留着：再拖就叠在旧位移上，卸载时也拿不到这些监听（v7 §5-6 / #22a）。
+      if (ctx._rowGhost || ctx._rowEls) ctx._abortRowDrag();
       // index 是「渲染顺序」下标（列筛选后与 rows 下标不一致），回查行对象须走 rowAt
       const row = ctx.rowAt(index);
       if (!row || row._isNew || row._isSeparator) return;
@@ -399,6 +402,30 @@ export function useDynamicTableDrag(ctx) {
       }
       ctx.updateRowDropBox();
     },
+    // 强制中止一次行拖动：只清理，不提交换位（口径与 GridView._abortRowDrag 一致）。
+    // 入口的兜底靠它；正常路径仍走 finishRowDrag（那里才 emit swapRows）。
+    _abortRowDrag() {
+      if (ctx.virtualFrozen.value) {
+        ctx.virtualFrozen.value = false;
+        nextTick(() => ctx.recalcWindow());
+      }
+      if (ctx._rowMove) window.removeEventListener('mousemove', ctx._rowMove);
+      if (ctx._rowUp) window.removeEventListener('mouseup', ctx._rowUp);
+      ctx._rowMove = null;
+      ctx._rowUp = null;
+      if (ctx._rowRaf) { cancelAnimationFrame(ctx._rowRaf); ctx._rowRaf = null; }
+      ctx._rowPending = null;
+      ctx._rowGeom = null;
+      ctx._rowGeomContainer = null;
+      if (ctx._rowAutoScroll) { ctx._rowAutoScroll.stop(); ctx._rowAutoScroll = null; }
+      if (ctx._rowGhost) { ctx._rowGhost.remove(); ctx._rowGhost = null; }
+      if (ctx._rowSlotGhost) { ctx._rowSlotGhost.remove(); ctx._rowSlotGhost = null; }
+      if (ctx._rowDropBox) { ctx._rowDropBox.remove(); ctx._rowDropBox = null; }
+      ctx.dragIndex.value = null;
+      ctx.dragOverIndex.value = null;
+      ctx._suppressCellClick = false;
+      ctx._clearRowShiftFx();
+    },
     finishRowDrag() {
       // 解冻虚拟滚动窗口：松手后按当前滚动位置重新算可见窗口（拖行期间它是锁死的）
       if (ctx.virtualFrozen.value) {
@@ -499,6 +526,8 @@ export function useDynamicTableDrag(ctx) {
     // ==================== 手动列拖拽（不用原生 HTML5 drag，完全可控，无浏览器居中问题） ====================
     onColHandleDown(event, colIndex) {
       if (ctx.readonly.value || ctx.editingCell.value) return;
+      // 同行拖动：先清掉上一次没正常收尾留下的监听/浮层（v7 §5-6 / #22a）
+      if (ctx._colGhost || ctx._colActive) ctx._abortColDrag();
       event.preventDefault();
       ctx.colDragIndex.value = colIndex;
       ctx.colDragOverIndex.value = colIndex;
@@ -698,6 +727,28 @@ export function useDynamicTableDrag(ctx) {
         if (d < minDist) { minDist = d; best = i - off; }
       }
       return best; // 落在间隙，取最近邻列
+    },
+    // 强制中止一次列拖动：清理监听/浮层/让位位移，不 emit swapColumns（与行拖动对称）
+    _abortColDrag() {
+      if (ctx._colMove) window.removeEventListener('mousemove', ctx._colMove);
+      if (ctx._colUp) window.removeEventListener('mouseup', ctx._colUp);
+      ctx._colMove = null;
+      ctx._colUp = null;
+      if (ctx._colRaf) { cancelAnimationFrame(ctx._colRaf); ctx._colRaf = null; }
+      ctx._colPending = null;
+      ctx._colGeom = null;
+      ctx._colGeomContainer = null;
+      ctx._colGrab = null;
+      ctx._colActive = false;
+      if (ctx._colAutoScroll) { ctx._colAutoScroll.stop(); ctx._colAutoScroll = null; }
+      if (ctx._colDropBox) { ctx._colDropBox.remove(); ctx._colDropBox = null; }
+      if (ctx._colGhost) { ctx._colGhost.remove(); ctx._colGhost = null; }
+      if (ctx._colSlotGhost) { ctx._colSlotGhost.remove(); ctx._colSlotGhost = null; }
+      ctx._clearColShiftFx();
+      ctx.colDragIndex.value = null;
+      ctx.colDragOverIndex.value = null;
+      // 与 finishColDrag 的收尾一致：中止也要恢复表头 FLIP，否则下次拖动前表头动画是关着的
+      nextTick(() => { ctx.colAnimDone.value = true; });
     },
     finishColDrag() {
       if (ctx._colMove) window.removeEventListener('mousemove', ctx._colMove);

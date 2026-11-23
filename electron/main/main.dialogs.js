@@ -256,7 +256,9 @@ function registerDialogsIpc(opts = {}) {
   //   · 只认 uploads 根目录下的文件名（basename 压平，穿越不出去）
   //   · 挡掉可执行扩展名（见 BLOCKED_OPEN_EXTS）
   IPC.handle(CH.OPEN_UPLOAD_FILE, contract.safe(async (event, { relPath } = {}) => {
-    const root = path.resolve(path.join(resolveDataDir(), 'uploads'))
+    // 上传目录在 v2 布局里是 content/uploads（dbManager.paths.js 的 uploadsDir），
+    // 原先按 <dataDir>/uploads 拼，路径永远不存在 → 打开收据 PDF 一律「文件不存在」。
+    const root = path.resolve(path.join(resolveContentDir(), 'uploads'))
     const name = path.basename(String(relPath || ''))
     if (!name || name === '.' || name === '..') return contract.fail('缺少文件路径')
     const abs = path.join(root, name)

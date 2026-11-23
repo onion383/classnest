@@ -105,6 +105,20 @@ function saveAll(mode, { days, items, config, active, master } = {}) {
   })()
 }
 
+// 命中日判定：**两条补存路径共用的唯一实现**（自动补存 backfillHistory 与
+// 手动补录 POST /history/week）。规则与 GET /big-dates 同源（services/dutyCycle），
+// 否则界面列出的日期与实际落库的快照对不上。
+// 返回 null 表示「该模式不需要过滤」：日常值日每天都有，学期开始日期没设时
+// 无法算「第几周」也就无法判定命中日（此时不猜，保持逐日补的原行为）。
+function hitDayMatcher(mode) {
+  if (mode !== 'big') return null
+  const config = dutyConfig.readConfig('big')
+  const { start } = store.semesterRange()
+  const baseMonday = start ? mondayOf(start) : null
+  if (!baseMonday) return null
+  return (dateStr) => dutyCycle.isHitDate(dateStr, config, baseMonday)
+}
+
 // 历史补齐：从 start 到 upper 逐日补快照，整批要么全成、要么全不成
 // （逐日 INSERT 各自提交时中途失败会留下「补了 37 天」这种半截结果）。
 // 大扫除只在命中日补 —— 它的「周期 + 星期几」决定发生频率，逐日补会让值日指数
@@ -118,21 +132,22 @@ function backfillHistory({ mode, start, upper, today, includeToday } = {}) {
     settings: layout ? unpackMode(layout.settings, mode) : {},
   }
 
-  const hitConfig = mode === 'big' ? dutyConfig.readConfig('big') : null
-  const baseMonday = mondayOf(start)
-  const isHit = (dateStr) => (hitConfig ? dutyCycle.isHitDate(dateStr, hitConfig, baseMonday) : true)
+  const hit = hitDayMatcher(mode)
+  const isHit = hit || (() => true)
 
   let inserted = 0
   db.transaction(() => {
     let cur = start
     while (cur <= upper) {
-      const isToday = cur === today
-      const exists = store.histFind('duty', cur, mode)
-      // 大扫除：非命中日一律不补（今天例外：今天是大扫除日就该有记录）
-      if (!(isToday && includeToday) && !isHit(cur)) {
+      // 命中日判断必须在前：includeToday 只表示「今天要用当前值日表覆盖」，
+      // 不表示「今天无条件写」。放在后面会让非大扫除日也留下今天的快照
+      // （历史列表多出空记录、按快照计数的值日指数偏高 —— 审查 v7 · #79）。
+      if (!isHit(cur)) {
         cur = shiftDateStr(cur, 1)
         continue
       }
+      const isToday = cur === today
+      const exists = store.histFind('duty', cur, mode)
       if (isToday && includeToday) {
         // 今天：总是覆盖为当前值日表
         if (exists) store.histUpdateByDate('duty', cur, mode, layoutPayload)
@@ -156,5 +171,6 @@ module.exports = {
   saveLayout,
   saveTemplate,
   saveAll,
+  hitDayMatcher,
   backfillHistory,
 }

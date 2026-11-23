@@ -49,9 +49,16 @@ function getHandler() {
         try {
           // 频率闸门排在工具执行之前：超限的请求不该走到 SQL / 提案写入。
           // 闸门自己出错就放行——限流不该让老师的 AI 停摆；真有问题下面的业务调用会报真实错误。
+          // read/search 用 checkAndConsume 在检查处原子预占：原 check/consume 分离时，
+          // 两者之间隔着 await，并发请求会同时通过 check 再各自 consume，突破 perMin。
+          // write 仍需 await 查 DB 的 pending 数，且只在建出提案后计数，保持 check 路径。
           let gate = { ok: true };
           try {
-            gate = (await dbManager.withDb(slug, () => mcpRateLimit.check(slug, meta.rate))) || gate;
+            if (meta.rate && meta.rate !== 'write') {
+              gate = mcpRateLimit.checkAndConsume(slug, meta.rate) || gate;
+            } else {
+              gate = (await dbManager.withDb(slug, () => mcpRateLimit.check(slug, meta.rate))) || gate;
+            }
           } catch (_) { gate = { ok: true }; }
           if (!gate.ok) {
             // 被挡住也要留痕：否则页面上只看到「AI 今天没干活」，看不到被挡了几百次。
@@ -69,10 +76,10 @@ function getHandler() {
             };
           }
           const result = await dbManager.withDb(slug, () => fn(args || {}, { slug }));
-          // 计额度：读/搜索无论成败都算一次（它确实查了库）；写只算真的建出提案的，
-          // 参数错被拒的不占额度——否则 AI 改两遍字段名就把自己锁死了。
-          if (meta.rate && (meta.rate !== 'write' || (result && result.ok && result.proposal_id))) {
-            mcpRateLimit.consume(slug, meta.rate);
+          // 计额度：读/搜索已在闸门处原子预占，这里不再重复计；
+          // 写只算真的建出提案的，参数错被拒的不占额度——否则 AI 改两遍字段名就把自己锁死了。
+          if (meta.rate === 'write' && result && result.ok && result.proposal_id) {
+            mcpRateLimit.consume(slug, 'write');
           }
           if (meta.logRead) {
             // 记录失败绝不影响这次工具调用（观测不能反过来打断业务）

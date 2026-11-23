@@ -72,6 +72,19 @@ function parseTypesForWrite(raw, rows, cols) {
   }
 }
 
+// 把规范化后的 seats 裁剪/补齐到 rows×cols。
+// PUT / 与 POST /snapshot 共用：快照写进历史后会被座位指数与历史回看消费，
+// 尺寸与 rows/cols 写脱节就会错位，而且事后没有自动修正的机会。
+function fitSeatsToGrid(normSeats, rows, cols) {
+  const trimmed = normSeats.slice(0, rows).map((r) => {
+    const row = Array.isArray(r) ? r.slice(0, cols) : [];
+    while (row.length < cols) row.push(null);
+    return row;
+  });
+  while (trimmed.length < rows) trimmed.push(Array(cols).fill(null));
+  return trimmed;
+}
+
 // 桌型序列：每张桌坐几人（1 或 2），对应**座位列**而不是网格列。
 // 只做元素级校验，不校验长度：长度由前端按座位列数派生（deskPatternOf 会兜底），
 // 后端再算一遍座位列数就等于维护第二份几何口径 —— 改一处忘另一处就开始拒合法数据。
@@ -145,12 +158,7 @@ router.put('/', (req, res) => {
     let normSeats;
     try { normSeats = normalizeSeats(seats, 'seats'); } catch (e) { return res.status(400).json({ error: e.message }); }
     // 确保 seats 尺寸与 rows/cols 匹配
-    const trimmed = normSeats.slice(0, rows).map(r => {
-      const row = Array.isArray(r) ? r.slice(0, cols) : [];
-      while (row.length < cols) row.push(null);
-      return row;
-    });
-    while (trimmed.length < rows) trimmed.push(Array(cols).fill(null));
+    const trimmed = fitSeatsToGrid(normSeats, rows, cols);
 
     const parsedTypes = parseTypesForWrite(types, rows, cols);
     if (parsedTypes.error) return res.status(400).json({ error: parsedTypes.error });
@@ -511,6 +519,21 @@ router.post('/snapshot', (req, res) => {
   // 快照日期直接落库并据此推导周一：非法串会生成 NaN 周键，历史列表出现幽灵周
   if (!isDateStr(snap_date)) return res.status(400).json({ error: '快照日期格式不正确（应为 YYYY-MM-DD）' });
 
+  // 与 PUT / 同口径做形状校验（4-10）。快照不是「随手存档」：它会被座位指数逐日累加、
+  // 被历史回看渲染，行列数越界或 types 尺寸不符会直接把结算算错位，
+  // 而且写进历史后没有任何自动修正的机会（不像当前布局还能重存一次）。
+  if (!Number.isInteger(rows) || !Number.isInteger(cols) || !Array.isArray(seats)) {
+    return res.status(400).json({ error: '参数格式错误' });
+  }
+  const sizeError = validateSeatSize(rows, cols);
+  if (sizeError) return res.status(400).json({ error: sizeError });
+  let normSeats;
+  try { normSeats = normalizeSeats(seats, 'seats'); } catch (e) { return res.status(400).json({ error: e.message }); }
+  const trimmed = fitSeatsToGrid(normSeats, rows, cols);
+  // types 不传 = 老调用方没有这个字段（保持原行为存空数组）；传了就必须是 rows×cols 的合法格型矩阵
+  const parsedTypes = parseTypesForWrite(types, rows, cols);
+  if (parsedTypes.error) return res.status(400).json({ error: parsedTypes.error });
+
   store.histUpsert('seat', {
     weekStart: mondayOf(snap_date),
     snapDate: snap_date,
@@ -519,10 +542,10 @@ router.post('/snapshot', (req, res) => {
       mode: mode || 'single',
       rows,
       cols,
-      seats,
+      seats: trimmed,
       // 走廊已是 seats 里的真实列，几何必须随 payload 一起存 ——
       // 只存 seats 的话回看历史时走廊列会被当成空座位，座位指数也会跟着错位。
-      types: Array.isArray(types) ? types : [],
+      types: parsedTypes.skip ? [] : parsedTypes.value,
       aisleCols: [],
       groupsConfig: [],
       settings,

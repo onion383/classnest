@@ -77,6 +77,8 @@
 import { getToken } from '../../utils/authStorage.js'
 import { reportError } from '../../utils/reportError.js'
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { useDisposables } from '../../utils/disposables.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import axios from 'axios'
 import DialogShell from '../base/DialogShell.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
@@ -104,7 +106,9 @@ const queuePaused = ref(false)
 // waitScan 内部的轮询定时器也由本实例持有（别名避免与本文件「停止所有扫描」的 stopAll 重名）
 const { waitScan, stopAll: stopScanPolling } = useAlbumScan()
 
-let pollTimer = 0
+// 任务列表轮询：interval 走 disposables，stopPolling() 仍然只停这一条
+const d = useDisposables()
+let cancelPoll = null
 let pumping = false
 
 const token = () => getToken() || ''
@@ -168,19 +172,29 @@ const allProgressText = computed(() => {
 // 「继续」还是「暂停」：只要队列被暂停，或所有在跑的任务都处于暂停态，就认为整体是暂停的
 const allPaused = computed(() => queuePaused.value || (allRunning.value && runningTasks.value.every(t => t.paused)))
 
+// 任务列表 800ms 轮询：请求可能重叠，慢响应回来时不能把进度条拉回旧值；
+// 相册列表同理（关闭弹窗时 invalidate，迟到的响应直接作废）。
+const tasksSeq = createLatest()
+const albumsSeq = createLatest()
+
 async function loadAlbums() {
+  const my = albumsSeq.begin()
   const res = await axios.get('/api/album', { headers: authHeaders() })
+  if (!albumsSeq.isCurrent(my)) return
   // 虚拟相册没有绑定文件夹、索引来自别的相册，没有可扫描的内容，不参与这里的任务
   albums.value = (res.data.data || []).filter(a => a.kind !== 'virtual')
 }
 
 async function fetchTasks() {
+  const my = tasksSeq.begin()
   try {
     const res = await axios.get('/api/album/tasks', { headers: authHeaders() })
+    if (!tasksSeq.isCurrent(my)) return
     const map = {}
     for (const t of (res.data.data || [])) map[t.albumId] = t
     tasks.value = map
   } catch (_) {
+    if (!tasksSeq.isCurrent(my)) return
     tasks.value = {}
   }
 }
@@ -188,11 +202,11 @@ async function fetchTasks() {
 function startPolling() {
   stopPolling()
   fetchTasks()
-  pollTimer = setInterval(fetchTasks, 800)
+  cancelPoll = d.interval(fetchTasks, 800)
 }
 
 function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = 0 }
+  if (cancelPoll) { cancelPoll(); cancelPoll = null }
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -316,13 +330,15 @@ watch(() => props.visible, async (v) => {
     startPolling()
     try { await loadAlbums() } catch (_) { useNotification().error('读取相册列表失败') }
   } else {
+    tasksSeq.invalidate()
+    albumsSeq.invalidate()
     stopPolling()
     tasks.value = {}
   }
 }, { immediate: true })
 
 // 卸载时连 waitScan 的轮询定时器一起停掉，避免关掉弹窗后还在发 /status 请求
-onBeforeUnmount(() => { stopPolling(); stopScanPolling() })
+onBeforeUnmount(() => { tasksSeq.invalidate(); albumsSeq.invalidate(); stopPolling(); stopScanPolling() })
 </script>
 
 <style scoped>

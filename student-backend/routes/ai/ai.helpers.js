@@ -42,7 +42,10 @@ function toolResultContent(result, slug) {
   // 主闸门：主对话与子助手都传了显式 slug；MCP 方向 B 不传，保持原样（单列处理）。
   // 替换放在截断之后：截断口径不变，只是多出的代号会占几个字符。
   if (slug) {
-    try { text = privacy.substitute(text, slug); } catch (_) { /* 保护模块故障不能吞掉整条工具结果 */ }
+    // 脱敏失败绝不能回退原文 —— 那是把真实姓名/电话直接发给外部模型（#1）。
+    // 也不让整条工具结果挂掉：返回一条不含任何真实数据的占位，让模型知道结果暂不可用。
+    try { text = privacy.substitute(text, slug); }
+    catch (_) { text = JSON.stringify({ error: '数据保护脱敏失败，工具结果暂不可用，请勿猜测内容' }); }
   }
   return text;
 }

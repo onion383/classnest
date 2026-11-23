@@ -96,7 +96,10 @@ test('Q2-03 复现：级联删除会把七处一起抹掉，且快照必须包�
   assert.equal(removed.groupRows.length, 1)
   assert.equal(removed.cadreRows.length, 1)
   assert.deepEqual(removed.seatCells, [{ row: 0, col: 0, cell: 1 }])
-  assert.deepEqual(removed.dutySlots, [{ mode: 'daily', item: '扫地', day: '周一', index: 0, value: '张三' }])
+  // 值日 slot 现在带 table 字段（#9a：模板也要统计/清理/撤销）；当前表场景是 duty_layout。
+  assert.deepEqual(removed.dutySlots, [
+    { mode: 'daily', item: '扫地', day: '周一', index: 0, value: '张三', table: 'duty_layout' },
+  ])
 })
 
 test('撤销：一个 student_cascade_delete 命令把七处一起恢复', () => {

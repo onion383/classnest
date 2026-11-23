@@ -7,6 +7,7 @@ import { ASK_OTHER_KEY, AI_PERMISSION_FULL } from './aiConstants.js'
 import { apiFetch } from '../../utils/apiUrl.js'
 import { normalizeAsk } from './aiMessages.js'
 import { encodeStreamRequest, decodeStreamEvent, clearSession, safe } from '../secureChannel.js'
+import { classScopeKey } from '../../utils/classScope.js'
 import { nextTick } from 'vue'
 
 // 流式思维链在时间轴里的临时步骤 id：本轮思考结束前用它占位，后端下发完整
@@ -139,6 +140,10 @@ export function useAiChat(ctx) {
     // 先存完整快照，供「撤销回退 / 重做回退」在两种状态间来回切（undoRollback / redoRollback）。
     async rollbackFrom(i) {
       if (ctx.busy.value || !ctx.isRollbackable(i)) return
+      // 回退要逐个 await undoById / 删消息 / 落库，期间必须占住 busy：
+      // 否则用户能再发消息或再点回退，两轮并发操作同一批 undoIds → 重复撤回/乱序。
+      // 与 send 一样用 finally 统一释放，异常路径也不留死 busy（#40）。
+      ctx.busy.value = true
       const { success: notify } = useNotification()
       const list = ctx.messages.value
       // 起点往前找最近一条真实用户提问，连它一起删（否则会留下没有回复的孤立提问）
@@ -208,6 +213,8 @@ export function useAiChat(ctx) {
         await ctx.loadConversationList()
       } catch (err) {
         reportError(err, { action: '回退' })
+      } finally {
+        ctx.busy.value = false
       }
     },
     // 后悔药是否还能用：会话一致、且消息条数仍是那次回退后的期望值
@@ -303,6 +310,9 @@ export function useAiChat(ctx) {
         ctx.queuedMessages.value.push({
           id: `q${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           text,
+          // 附件/图片必须随队列一起存：原实现只存 text，排队期间用户附的文件在
+          // sendNextQueued 时被丢掉，等轮到它发送已经没有 file 了（#17）。
+          file: file || null,
           conversationId: ctx.conversationId.value || 0,
         })
         ctx.input.value = ''
@@ -372,10 +382,12 @@ export function useAiChat(ctx) {
       // 会话已切换：丢弃不属于当前会话的排队消息，继续找下一条
       if (q.conversationId !== (ctx.conversationId.value || 0)) return ctx.sendNextQueued()
       ctx.input.value = q.text
+      // 恢复排队时一起存下的附件/图片（send 从 attachedFile 读），否则附件丢失
+      ctx.attachedFile.value = q.file || null
       try {
         await ctx.send()
       } catch (e) {
-        // 发送失败不要把用户写的话弄丢：放回队首
+        // 发送失败不要把用户写的话弄丢：放回队首（附件仍在 q.file 里）
         ctx.queuedMessages.value.unshift(q)
         reportError(e, { action: '发送排队消息' })
       }
@@ -387,6 +399,9 @@ export function useAiChat(ctx) {
     // 向 /api/ai/chat/stream 发起请求，把回复流式写入目标助手消息（发送 / 重试共用；不传则取最后一条助手）
     async _streamReply(target) {
       ctx.busy.value = true
+      // 捕获发起本流的班级代次：切班/新建班级会 bumpClassScope 并销毁本组件，
+      // 但流可能还在跑；finally 里若代次已变，绝不能用新 token 把旧班的提案写进新班（#39）。
+      const myScope = classScopeKey.value
       // 全权限自动执行提案会在 finally 里嵌套发起续跑，用层数区分「整条任务链结束」
       // 与「中间某一轮结束」：只有最外层归零才能消费等待队列。
       ctx.streamDepth.value++
@@ -623,7 +638,11 @@ export function useAiChat(ctx) {
         //   发下一条消息 → 两轮同时写同一张表 → 数据竞态。
         //   执行收尾的 _sendFeedback 是自动反馈轮，send 对 auto 放行 busy 闸门，
         //   因此它能在写库期间接着续跑（写回思维链 + 让 AI 说明结果），用户仍插不了队。
-        if (ctx.permissionMode.value === AI_PERMISSION_FULL
+        // 代次校验：切班/新建班级后 myScope 已过期（组件被销毁、token 换成新班），
+        // 旧流的提案绝不能在新班执行 —— 那是用旧班的意图写新班的库（#39）。
+        const scopeStillCurrent = classScopeKey.value === myScope
+        if (scopeStillCurrent
+          && ctx.permissionMode.value === AI_PERMISSION_FULL
           && last && last.proposal && last.proposal.kind !== 'skill'
           && !last.proposal.executed && !last.proposal.dismissed && !last.interrupted) {
           try {
@@ -638,7 +657,7 @@ export function useAiChat(ctx) {
         ctx.streamDepth.value--
         // 只有最外层回复结束才发送队列下一条：内层（自动执行提案后的续跑）结束就发，
         // 新流会和外层的收尾重叠，且内层已把 busy 复位，等于并发两条回复。
-        if (ctx.streamDepth.value === 0 && !ctx.busy.value) {
+        if (scopeStillCurrent && ctx.streamDepth.value === 0 && !ctx.busy.value) {
           ctx.sendNextQueued().catch((e) => console.error('[aiChat] 发送排队消息失败', e))
         }
       }

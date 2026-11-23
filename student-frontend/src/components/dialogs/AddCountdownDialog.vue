@@ -62,9 +62,11 @@ const form = ref({ name: '', deadline: formatDate(new Date()), includeDay: false
 const isEdit = computed(() => !!(props.editingRecord && props.editingRecord.id != null))
 const title = computed(() => isEdit.value ? '编辑倒计时' : '添加倒计时')
 
+// immediate 不能省：宿主 v-if 懒挂载时 visible 已经是 true，非 immediate 的 watcher
+// 建立时已错过这次变化 —— 首次打开表单不会预置/重置（v7 §5-3）。
 watch(() => props.visible, (v) => {
   if (v) form.value = isEdit.value ? presetFromRecord(props.editingRecord) : reset()
-})
+}, { immediate: true })
 
 function reset() {
   return { name: '', deadline: formatDate(new Date()), includeDay: false }

@@ -20,6 +20,7 @@
 import { getToken } from '../utils/authStorage.js'
 import { ref } from 'vue'
 import axios from 'axios'
+import { createLatest } from '../utils/latestOnly.js'
 import { useNotification } from './useNotification.js'
 
 // 启动完成后延迟多久才去查待恢复任务（毫秒）
@@ -33,6 +34,9 @@ export function useAlbumTaskResume() {
 
   let timer = null
   let started = false
+  // 只认最后一次「查-续跑」：手动触发与启动延迟触发可能重叠，旧响应不能覆盖新状态，
+  // 也不能在 cancel（登出/卸载）之后继续把任务续起来。
+  const runSeq = createLatest()
 
   const token = () => getToken() || ''
   const authHeaders = () => ({ Authorization: 'Bearer ' + token() })
@@ -40,14 +44,17 @@ export function useAlbumTaskResume() {
   // 查待恢复任务并续跑。返回续跑的任务数。
   async function checkAndResume() {
     if (!token()) return 0
+    const my = runSeq.begin()
     try {
       const res = await axios.get('/api/album/tasks/pending', { headers: authHeaders() })
+      if (!runSeq.isCurrent(my)) return 0
       const list = (res.data && res.data.data) || []
       if (!list.length) { hasPending.value = false; pendingCount.value = 0; return 0 }
       hasPending.value = true
       pendingCount.value = list.length
       // 续跑：交给后端按断点接着扫
       const rr = await axios.post('/api/album/tasks/resume', { albumIds: list.map(t => t.albumId) }, { headers: authHeaders() })
+      if (!runSeq.isCurrent(my)) return 0
       const n = (rr.data && rr.data.resumed) || 0
       resumed.value = n > 0
       if (n > 0) {
@@ -73,6 +80,7 @@ export function useAlbumTaskResume() {
   // 取消（组件卸载时）
   function cancel() {
     started = true
+    runSeq.invalidate() // 作废在途的「查-续跑」，登出/卸载后不再把任务续起来
     if (timer) { clearTimeout(timer); timer = null }
   }
 

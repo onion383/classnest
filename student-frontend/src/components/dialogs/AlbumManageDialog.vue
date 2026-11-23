@@ -68,6 +68,7 @@ import CustomScrollbar from '../base/CustomScrollbar.vue'
 import ConfirmDialog from '../base/ConfirmDialog.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { recordUndo as recordUndoSpec } from '../../utils/undoRecorder.js'
+import { createLatest } from '../../utils/latestOnly.js'
 import { INVOKE } from '../../electronChannels.js'
 import '../../styles/dialog-transition.css'
 
@@ -86,6 +87,9 @@ const busyAdd = ref(false)
 const confirmDelete = ref(null)
 const albumListRef = ref(null)
 let sortableInstance = null
+// 列表加载「只认最后一次」：快速关闭-重开或添加后刷新时，慢响应不能把列表与拖拽实例
+// 退回旧状态（关闭时 invalidate，迟到响应直接作废）
+const loadSeq = createLatest()
 
 const token = () => getToken() || ''
 const authHeaders = () => ({ Authorization: 'Bearer ' + token() })
@@ -98,15 +102,21 @@ async function loadAlbums() {
 // 打开时重新拉一次列表（页面上可能刚加过相册），并初始化拖拽排序
 // immediate：首次打开时组件是随 v-if 一起挂载的（visible 直接为 true），不 immediate 会漏掉这次加载
 watch(() => props.visible, async (v) => {
-  if (!v) { destroySortable(); return }
+  const my = loadSeq.begin()
+  if (!v) { loadSeq.invalidate(); destroySortable(); return }
   confirmDelete.value = null
   try { await loadAlbums() } catch (_) { useNotification().error('读取相册列表失败') }
-  nextTick(() => initSortable())
+  if (!loadSeq.isCurrent(my) || !props.visible) return
+  nextTick(() => { if (loadSeq.isCurrent(my) && props.visible) initSortable() })
 }, { immediate: true })
 
+// 连点「选择文件夹」时只认最后一次：先发起的慢响应不能把后选的路径顶掉
+const pickSeq = createLatest()
 async function pickFolder() {
+  const my = pickSeq.begin()
   try {
     const result = await window.electron.invoke(INVOKE.SELECT_FOLDER)
+    if (!pickSeq.isCurrent(my)) return
     if (result && result.filePaths && result.filePaths.length > 0) {
       newPath.value = result.filePaths[0]
       // 相册名缺省取文件夹名
@@ -135,8 +145,10 @@ async function addAlbum() {
     })
     newName.value = ''
     newPath.value = ''
+    const my = loadSeq.begin()
     await loadAlbums()
-    nextTick(() => initSortable())
+    if (!loadSeq.isCurrent(my) || !props.visible) return
+    nextTick(() => { if (loadSeq.isCurrent(my) && props.visible) initSortable() })
     emit('changed')
   } catch (err) {
     reportError(err, { action: '添加' })
@@ -244,6 +256,7 @@ async function openFolder(a) {
 }
 
 onBeforeUnmount(() => {
+  loadSeq.invalidate()
   destroySortable()
 })
 </script>

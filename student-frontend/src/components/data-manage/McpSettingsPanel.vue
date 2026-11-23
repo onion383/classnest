@@ -80,6 +80,7 @@ import McpPermissionsDialog from './McpPermissionsDialog.vue'
 import McpProposalsDialog from './McpProposalsDialog.vue'
 import AccessLogDialog from './AccessLogDialog.vue'
 import { useAccessLog } from '../../composables/useAccessLog.js'
+import { createLatest } from '../../utils/latestOnly.js'
 
 // 定时器统一走 disposables：组件卸载自动释放（项目红线：不许裸 setInterval）
 const d = useDisposables()
@@ -149,15 +150,32 @@ const rows = computed(() => [
   { key: 'logs', title: 'MCP 访问记录', summary: logSummaryText.value, warn: logSummary.value.denied > 0, action: '查看' },
 ])
 
+// 每个异步字段各自一个「只认最后一次」守卫：
+//   · xSeq  —— 同一字段的多次读取，慢响应不能盖掉新响应；
+//   · xWrite —— 本地开关的写入代次，读取结果只在「取数后没有发生过写入」时才落回界面，
+//     否则会拿旧值把用户刚切换的开关弹回去（这块是乐观更新）。
+const enabledSeq = createLatest()
+const enabledWrite = createLatest()
+const prefsSeq = createLatest()
+const prefsWrite = createLatest()
+const tokensSeq = createLatest()
+const proposalsSeq = createLatest()
+
 async function loadEnabled() {
+  const my = enabledSeq.begin()
+  const writeAt = enabledWrite.current()
   try {
     const r = await axios.get('/api/mcp/enabled')
+    if (!enabledSeq.isCurrent(my) || enabledWrite.current() !== writeAt) return
     mcpEnabled.value = !!r.data.enabled
   } catch (_) { /* 读不到按关闭显示，不阻断面板 */ }
 }
 async function loadPrefs() {
+  const my = prefsSeq.begin()
+  const writeAt = prefsWrite.current()
   try {
     const r = await axios.get('/api/mcp/prefs')
+    if (!prefsSeq.isCurrent(my) || prefsWrite.current() !== writeAt) return
     // 严格等于 true 才算开启：后端也用同一口径，脏值当关闭
     autoConfirm.value = r.data.auto_confirm === true
   } catch (_) { /* 读不到按关闭显示 */ }
@@ -174,37 +192,47 @@ function confirmAuto() {
 }
 async function setAutoConfirm(v) {
   const prev = autoConfirm.value
+  const my = prefsWrite.begin()
   autoConfirm.value = v // 乐观更新，避免等回包时开关闪回
   try {
     const r = await axios.put('/api/mcp/prefs', { auto_confirm: v })
+    if (!prefsWrite.isCurrent(my)) return // 期间又切过：以最后一次为准
     autoConfirm.value = r.data.auto_confirm === true
     notify.success(v ? '已开启自动执行' : '已关闭自动执行')
   } catch (e) {
+    if (!prefsWrite.isCurrent(my)) return
     autoConfirm.value = prev
     notify.error('保存自动执行设置失败：' + (e.response?.data?.error || e.message))
   }
 }
 async function setMcpEnabled(v) {
   const prev = mcpEnabled.value
+  const my = enabledWrite.begin()
   mcpEnabled.value = v // 乐观更新，避免等待回包时开关闪回
   try {
     const r = await axios.put('/api/mcp/enabled', { enabled: v })
+    if (!enabledWrite.isCurrent(my)) return
     mcpEnabled.value = !!r.data.enabled
   } catch (e) {
+    if (!enabledWrite.isCurrent(my)) return
     mcpEnabled.value = prev
     notify.error('保存启用状态失败：' + (e.response?.data?.error || e.message))
   }
 }
 
 async function loadTokens() {
+  const my = tokensSeq.begin()
   try {
     const r = await axios.get('/api/mcp/tokens')
+    if (!tokensSeq.isCurrent(my)) return
     tokens.value = r.data.tokens || []
   } catch (_) { /* 摘要读不到就保持「还没有令牌」，点进去会重拉 */ }
 }
 async function loadProposals() {
+  const my = proposalsSeq.begin()
   try {
     const r = await axios.get('/api/mcp/proposals', { params: { status: 'pending' } })
+    if (!proposalsSeq.isCurrent(my)) return
     pendingCount.value = (r.data.proposals || []).length
   } catch (_) { /* 保留上次条数，不闪成 0 */ }
 }

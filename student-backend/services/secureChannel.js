@@ -217,10 +217,19 @@ function responseEncrypt(req, res, next) {
 // 凭据里的 sid 必须与请求体加密用的会话一致，避免「凭据用一个会话、回包用另一个会话」。
 function requestAuthProof(req, res, next) {
   if (!hasMaster()) return next();
-  const raw = req.headers['x-auth-proof'];
-  if (!raw) return next();
-
   const fail = (status, payload) => res.status(status).set('X-Auth-Required', '1').json(payload);
+  const raw = req.headers['x-auth-proof'];
+  if (!raw) {
+    // 安全信道里的写请求必须带 proof（#2）：否则攻击者抓到一份加密写报文后，
+    // 可以去掉凭据头原样重放 —— nonce 校验只在有 proof 时跑，缺凭据就完全绕过了。
+    // 登录/注册是明文请求（requestDecrypt 不会设 sessionId），不受此限；
+    // 读请求也不强制，保持既有兼容。
+    const writeMethod = req.method === 'POST' || req.method === 'PUT'
+      || req.method === 'PATCH' || req.method === 'DELETE';
+    if (req.sessionId && writeMethod) return fail(401, { error: '写请求缺少安全凭据' });
+    return next();
+  }
+
   const parts = String(raw).split('.');
   if (parts.length !== 4) return fail(401, { error: '凭据格式错误' });
 

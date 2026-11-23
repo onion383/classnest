@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { renumber } = require('../db');
+const { db, renumber } = require('../db');
 const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../utils/sql');
 const { sanitizeField } = require('../services/sanitize');
 const { validateRow } = require('../services/businessRules');
@@ -226,60 +226,69 @@ router.post('/import', (req, res) => {
 
     const startPos = maxPosition('leave_records');
 
-    const list = rows.map((row, idx) => {
-      const rowNo = idx + 1;
-      const name = cell(row, ['姓名']);
-      const xuehao = cell(row, ['学号']);
-      let student = null;
-      if (xuehao) {
-        // 学号不唯一（可空、可重复）：只有「恰好 1 条」才能定人。
-        // 撞到 2 条就退回按姓名认人，绝不静默取第一条 —— 那会把整张表记到同一个学生头上。
-        const byXuehao = leaveStore.findStudentsByXuehao(xuehao);
-        if (byXuehao.length === 1) student = byXuehao[0];
-      }
-      if (!student && name) {
-        // 学号没命中就按姓名认人；名册里查不到的名字在这里落一条临时学生（与新增请假、
-        // 加减分同一套解析）。否则这条记录只剩下一个字符串，后续改名、统计都会对不上人。
-        //
-        // 重名（名册里 ≥2 个同名）刻意不抛错：导入整批一个事务，抛错会让整批失败，
-        // 而原行为只是「这一行 student_id 留空」。不为了补 id 把能导的行一起废掉 ——
-        // 需要用户决策的同名歧义交给「选人」那条路（AddLeaveDialog 直接传 studentId），
-        // 不让批量导入替用户猜。
-        const r = tryResolve(name);
-        if (r && r.id) {
-          // 命中后按 id 重查一次：正式学生带得出联系方式，临时学生这两列是 null
-          student = leaveStore.findStudentById(r.id) || { id: r.id, 姓名: r.name };
+    // 整批（认人建档 + 校验 + 写记录）必须在同一个事务里。
+    // 关键：tryResolve 建档是在 rows.map 阶段即时 INSERT 临时学生的，若在事务外，
+    // 后面某行校验 throw 会让整批 400，但前面已建的临时学生残留、没有 created 可撤销。
+    // 与班干部导入（cadres.js）同一口径：解析/建档也纳入事务，失败整批回滚。
+    const run = db.transaction(() => {
+      const list = rows.map((row, idx) => {
+        const rowNo = idx + 1;
+        const name = cell(row, ['姓名']);
+        const xuehao = cell(row, ['学号']);
+        let student = null;
+        if (xuehao) {
+          // 学号不唯一（可空、可重复）：只有「恰好 1 条」才能定人。
+          // 撞到 2 条就退回按姓名认人，绝不静默取第一条 —— 那会把整张表记到同一个学生头上。
+          const byXuehao = leaveStore.findStudentsByXuehao(xuehao);
+          if (byXuehao.length === 1) student = byXuehao[0];
         }
-      }
+        if (!student && name) {
+          // 学号没命中就按姓名认人；名册里查不到的名字在这里落一条临时学生（与新增请假、
+          // 加减分同一套解析）。否则这条记录只剩下一个字符串，后续改名、统计都会对不上人。
+          //
+          // 重名（名册里 ≥2 个同名）刻意不抛错：导入整批一个事务，抛错会让整批失败，
+          // 而原行为只是「这一行 student_id 留空」。不为了补 id 把能导的行一起废掉 ——
+          // 需要用户决策的同名歧义交给「选人」那条路（AddLeaveDialog 直接传 studentId），
+          // 不让批量导入替用户猜。
+          const r = tryResolve(name);
+          if (r && r.id) {
+            // 命中后按 id 重查一次：正式学生带得出联系方式，临时学生这两列是 null
+            student = leaveStore.findStudentById(r.id) || { id: r.id, 姓名: r.name };
+          }
+        }
 
-      const finalName = name || (student && student.姓名) || '';
-      if (!finalName) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
-      const start = sanitizeField(cell(row, ['开始时间']), 'leave_records', '开始时间');
-      const end = sanitizeField(cell(row, ['结束时间']), 'leave_records', '结束时间');
-      if (!start || !end) throw new Error(`第 ${rowNo} 行缺少「开始时间」或「结束时间」`);
+        const finalName = name || (student && student.姓名) || '';
+        if (!finalName) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
+        const start = sanitizeField(cell(row, ['开始时间']), 'leave_records', '开始时间');
+        const end = sanitizeField(cell(row, ['结束时间']), 'leave_records', '结束时间');
+        if (!start || !end) throw new Error(`第 ${rowNo} 行缺少「开始时间」或「结束时间」`);
 
-      validateRow('leave_records', { 开始时间: start, 结束时间: end });
+        validateRow('leave_records', { 开始时间: start, 结束时间: end });
 
-      return {
-        position: startPos + idx + 1,
-        student_id: student ? student.id : null,
-        姓名: finalName,
-        类型: sanitizeField(cell(row, ['类型']) || '其他', 'leave_records', '类型'),
-        开始时间: start,
-        结束时间: end,
-        家长联系电话: cell(row, ['家长联系电话']) || (student && student.家长联系电话) || null,
-        学生联系电话: cell(row, ['学生联系电话']) || (student && student.学生联系电话) || null,
-        状态: sanitizeField(cell(row, ['状态']) || '请假中', 'leave_records', '状态'),
-        返校时间: cell(row, ['返校时间']) ? sanitizeField(cell(row, ['返校时间']), 'leave_records', '返校时间', '日期') : null,
-        备注: cell(row, ['备注']) || null,
-        created_at: now(),
-      };
+        return {
+          position: startPos + idx + 1,
+          student_id: student ? student.id : null,
+          姓名: finalName,
+          类型: sanitizeField(cell(row, ['类型']) || '其他', 'leave_records', '类型'),
+          开始时间: start,
+          结束时间: end,
+          家长联系电话: cell(row, ['家长联系电话']) || (student && student.家长联系电话) || null,
+          学生联系电话: cell(row, ['学生联系电话']) || (student && student.学生联系电话) || null,
+          状态: sanitizeField(cell(row, ['状态']) || '请假中', 'leave_records', '状态'),
+          返校时间: cell(row, ['返校时间']) ? sanitizeField(cell(row, ['返校时间']), 'leave_records', '返校时间', '日期') : null,
+          备注: cell(row, ['备注']) || null,
+          created_at: now(),
+        };
+      });
+
+      const ids = leaveStore.insertMany(list);
+      renumber('leave_records');
+      return { count: list.length, ids };
     });
 
-    const ids = leaveStore.insertMany(list);
-    renumber('leave_records');
+    const { count, ids } = run();
     // created = 本次真正新建的行（撤销导入的唯一 inverse 来源，见 services/createdRows）
-    res.json({ message: `成功导入 ${list.length} 条请假记录`, created: readRowsByIds('leave_records', ids) });
+    res.json({ message: `成功导入 ${count} 条请假记录`, created: readRowsByIds('leave_records', ids) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

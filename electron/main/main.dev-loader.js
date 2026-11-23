@@ -25,25 +25,39 @@ const SPLASH_HTML_PATH = path.join(__dirname, '..', '..', 'student-frontend', 's
 function loadUrlWithRetry(win, url, retries = 150, intervalMs = 200) {
   if (!win || win.isDestroyed()) return
   const http = require('http')
-  const req = http.get(url, (res) => {
-    res.resume() // 消耗响应体，避免内存泄漏
-    if (win.isDestroyed()) return
-    console.log(`[Electron] 开发服务器就绪，开始加载 ${url}`)
-    backend.setBootStatus('开发服务器已就绪，正在加载界面…')
-    win.loadURL(url).catch((err) => {
-      console.error(`[Electron] 加载 ${url} 失败:`, err.message)
-    })
-  })
-  req.on('error', () => {
+  const retry = (label) => {
     if (win.isDestroyed()) return
     if (retries > 0) {
       // 200ms 一次的高频重试不再逐条打日志，每 25 次提示一次进度（约 5s）
       if (retries % 25 === 0) console.log(`[Electron] 等待 ${url} 就绪，剩余重试 ${retries}...`)
       setTimeout(() => loadUrlWithRetry(win, url, retries - 1, intervalMs), intervalMs)
     } else {
-      console.error(`[Electron] 无法加载 ${url}: 开发服务器未就绪`)
+      console.error(`[Electron] 无法加载 ${url}: ${label}`)
     }
+  }
+  const req = http.get(url, (res) => {
+    let body = ''
+    res.setEncoding('utf8')
+    // dev 子页面只有几 KB：读够判据就停止累积，但仍继续消费流（避免占着 socket）
+    res.on('data', (chunk) => { if (body.length < 16 * 1024) body += chunk })
+    res.on('end', () => {
+      // 只认 HTTP 200 会在 dev 端口被别的程序占住时把**第三方页面**加载进来，
+      // 而 preload 已注入 window.electron（含 get-master-key）—— 能力暴露给陌生页面。
+      // 各 dev 子页面都带 Vite 的 /src/... 模块入口，第三方页面一般没有；
+      // 校验不过就继续等，绝不导航过去（与主窗口 pollViteAndNavigate 同一条防线）。
+      if (res.statusCode !== 200 || !looksLikeOurVitePage(body)) {
+        retry(`HTTP ${res.statusCode}，但不是本项目的开发页面（端口可能被占用）`)
+        return
+      }
+      if (win.isDestroyed()) return
+      console.log(`[Electron] 开发服务器就绪，开始加载 ${url}`)
+      backend.setBootStatus('开发服务器已就绪，正在加载界面…')
+      win.loadURL(url).catch((err) => {
+        console.error(`[Electron] 加载 ${url} 失败:`, err.message)
+      })
+    })
   })
+  req.on('error', () => retry('开发服务器未就绪'))
   req.end()
 }
 
@@ -97,6 +111,13 @@ ${css}
 // 极难归因（窗口里跑着别的应用）。宁可当作未就绪继续等，也不导航过去。
 function looksLikeOurVite(html) {
   return /id=["']app["']/.test(html) && /\/src\/main\.js/.test(html)
+}
+
+// 子窗口（setup / migration / widget / desktop-widget）加载的是各自的子页面，
+// 没有 id="app"，但有共同的 Vite 开发入口：type="module" src="/src/..."。
+// 用它挡住「dev 端口被占 → 把第三方页面加载进来 + preload 已注入 window.electron」。
+function looksLikeOurVitePage(html) {
+  return /<script[^>]+type=["']module["'][^>]+src=["']\/src\//.test(html)
 }
 
 function pollViteAndNavigate(win, retries = 100, slow = false) {

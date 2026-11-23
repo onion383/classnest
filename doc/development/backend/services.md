@@ -326,6 +326,25 @@ classnest/
 - **撤销域（B8）的额外一条**：带文件系统副作用的顺序留在执行器 —— 照片「先搬文件再插索引」「先删索引再搬文件」、相册删缩略图、加相册后派发扫描；`undoStore` 只提供 `insertPhotoIndex` / `deletePhotoIndex` / `insertAlbumWithPhotos` 这类纯 DB 段，事务由 `runInTransaction` 提供。
 - **守卫**：每条下沉过的路由都有「不许出现 `db.prepare(`，且必须真的调用对应 store」的判据（`leaves-paging`、`seat-cell-write`、`ai-doc-transaction`、`semester-crud`、`group-manage`、`album-paging`），逐条做过变异反证。
 
+### 其他服务与工具模块
+
+| 文件 | 职责 |
+| --- | --- |
+| [`services/accessLogStore.js`](../../../student-backend/services/accessLogStore.js) | 数据访问记录的持久层；只在 Store 里写 SQL，写入失败不影响主流程 |
+| [`services/accessTimeline.js`](../../../student-backend/services/accessTimeline.js) | 访问记录弹窗的合并视图：读来自 `access_log`，已执行的写来自 `undo_history`，未执行的写来自 MCP 提案 |
+| [`services/aiPrivacy.js`](../../../student-backend/services/aiPrivacy.js) | 发给第三方模型前的身份替换：姓名可逆别名、电话可逆令牌、本地路径不可逆归一 |
+| [`services/aiReadScope.js`](../../../student-backend/services/aiReadScope.js) | 按表关闭的读闸门单一作用域：`effectiveReadTables()` 与 `isTableReadable()` |
+| [`services/aiWriteScope.js`](../../../student-backend/services/aiWriteScope.js) | 只读 / 读写档的唯一判定点：合并 `readonly_tables` 与 `closed_tables` |
+| [`services/dutyWrite.js`](../../../student-backend/services/dutyWrite.js) | 值日域写入的事务唯一出口，供路由、AI 工具与撤销执行器复用 |
+| [`services/mcpProposalStore.js`](../../../student-backend/services/mcpProposalStore.js) | MCP 写提案的持久层，只存意图，SQL 只在这里 |
+| [`services/mcpProposalExec.js`](../../../student-backend/services/mcpProposalExec.js) | 执行已确认的 MCP 提案，复用本地 AI 的写入原语与学生引用保护 |
+| [`services/mcpProposalView.js`](../../../student-backend/services/mcpProposalView.js) | 提案的人读视图：把表名 / 操作 / 字段翻成老师能判断的说明 |
+| [`services/mcpRateLimit.js`](../../../student-backend/services/mcpRateLimit.js) | MCP 工具调用频率闸门：防止跑飞或脚本批量驱动堆满待确认提案 |
+| [`services/mcpTokenStore.js`](../../../student-backend/services/mcpTokenStore.js) | MCP 访问令牌存储（`core/.mcp-tokens.json`，应用级配置） |
+| [`services/mcpTools.js`](../../../student-backend/services/mcpTools.js) | 暴露给外部客户端的工具实现；写操作只生成提案不落库 |
+| [`services/studentLookup.js`](../../../student-backend/services/studentLookup.js) | 在 `students` 里认人的单源实现：按 id / 学号 / 姓名带出学生，列清单由调用方点单 |
+| [`utils/scanTaskKey.js`](../../../student-backend/utils/scanTaskKey.js) | 扫描任务键的单一实现：`slug:albumId`，避免两班同号相册互相塌缩 |
+
 ---
 
 ## 注意事项

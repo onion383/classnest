@@ -107,7 +107,7 @@
           :bar-class="barColor"
           :value-text="valueText"
           :value-class="valueColor"
-          :row-key="(row) => statMode + '-' + row.name"
+          :row-key="(row) => statMode + '-' + (row.key || row.name)"
           :empty-text="'暂无' + (isGroup ? '小组' : '个人') + '加分记录'"
         />
       </div>
@@ -193,6 +193,7 @@
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
 import { ref, reactive, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
+import { useDisposables } from '../utils/disposables.js'
 import { useRoute, useRouter } from 'vue-router'
 import { reportError } from '../utils/reportError.js'
 import axios from 'axios'
@@ -202,6 +203,7 @@ import LeaveTimeline from '../components/base/LeaveTimeline.vue'
 import StatBarList from '../components/base/StatBarList.vue'
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import { zhCollator } from '../utils/collator.js'
+import { aggregatePersonal, countDistinctPeople } from '../utils/scoreAggregate.js'
 import { useNotification } from '../composables/useNotification.js'
 import { recordCellUndo, recordRowInsert, recordRowDelete, recordRowUpdate, recordRowsBatchInsert, useUndoShortcut } from '../composables/useUndo.js'
 import { formatDate } from '../utils/dateTime.js'
@@ -316,8 +318,12 @@ const todayAddRecords = computed(() => todayRecords.value.filter(r => r.类型 !
 const todaySubRecords = computed(() => todayRecords.value.filter(r => r.类型 === '扣分'))
 const todayAddItems = computed(() => new Set(todayAddRecords.value.map(r => r.项目).filter(Boolean)).size)
 const todaySubItems = computed(() => new Set(todaySubRecords.value.map(r => r.项目).filter(Boolean)).size)
-const todayAddPeople = computed(() => new Set(todayAddRecords.value.map(r => isGroup.value ? r.group_name : r.姓名)).size)
-const todaySubPeople = computed(() => new Set(todaySubRecords.value.map(r => isGroup.value ? r.group_name : r.姓名)).size)
+const todayAddPeople = computed(() => isGroup.value
+  ? new Set(todayAddRecords.value.map(r => r.group_name)).size
+  : countDistinctPeople(todayAddRecords.value))
+const todaySubPeople = computed(() => isGroup.value
+  ? new Set(todaySubRecords.value.map(r => r.group_name)).size
+  : countDistinctPeople(todaySubRecords.value))
 const addPeopleLabel = computed(() => isGroup.value ? '加分小组' : '加分人数')
 const subPeopleLabel = computed(() => isGroup.value ? '扣分小组' : '扣分人数')
 const allRecords = computed(() => activeData.value.slice().sort((a, b) => zhCollator.compare(String(b.加分时间), String(a.加分时间))))
@@ -332,28 +338,16 @@ const statRows = computed(() => {
       else byGroup[name].add += Number(r.分值) || 0
     }
     const rows = Object.values(byGroup)
-      .map(o => ({ name: o.name, value: statMode.value === 'sub' ? o.sub : statMode.value === 'net' ? o.add - o.sub : o.add }))
+      .map(o => ({ key: `group:${o.name}`, name: o.name, value: statMode.value === 'sub' ? o.sub : statMode.value === 'net' ? o.add - o.sub : o.add }))
       .filter(o => o.value !== 0)
       .sort((a, b) => b.value - a.value)
     const max = Math.max(...rows.map(r => Math.abs(r.value)))
     rows.forEach(r => { r._max = max || 1 })
     return rows
   }
-  // 个人模式：按个人聚合
-  const byId = {}
-  for (const r of scores.value) {
-    const name = r.姓名 || '未命名'
-    if (!byId[name]) byId[name] = { name, add: 0, sub: 0 }
-    if (r.类型 === '扣分') byId[name].sub += Number(r.分值) || 0
-    else byId[name].add += Number(r.分值) || 0
-  }
-  const rows = Object.values(byId)
-    .map(o => ({ name: o.name, value: statMode.value === 'sub' ? o.sub : statMode.value === 'net' ? o.add - o.sub : o.add }))
-    .filter(o => o.value !== 0)
-    .sort((a, b) => b.value - a.value)
-  const max = Math.max(...rows.map(r => Math.abs(r.value)))
-  rows.forEach(r => { r._max = max || 1 })
-  return rows
+  // 个人模式：按**身份**聚合（student_id 优先），姓名只用于显示。
+  // 原先按姓名聚合会把名册里两个同名学生的加减分合成一条（v7 §5-4 / #20）。
+  return aggregatePersonal(scores.value, statMode.value)
 })
 const exportRows = computed(() => {
   if (exportKind.value === 'stats') {
@@ -413,14 +407,17 @@ onDeactivated(() => { _stopDayWatch() })
 onBeforeUnmount(() => { _stopDayWatch() })
 
 // 「今日」口径的跨天刷新：每分钟对一次日期即可（不必精确卡 00:00），
-// 组件被 KeepAlive 缓存时 deactivated 停掉定时器，回到页面再启动
+// 组件被 KeepAlive 缓存时 deactivated 停掉定时器，回到页面再启动。
+// 取消函数由 d.interval 返回 —— 卸载时即使漏了 _stopDayWatch 也不会留下在跑的定时器。
+const d = useDisposables()
+let _cancelDay = null
 function _startDayWatch() {
-  if (_dayTimer) return
+  if (_cancelDay) return
   todayKey.value = formatDate(new Date())
-  _dayTimer = setInterval(() => { todayKey.value = formatDate(new Date()) }, 60000)
+  _cancelDay = d.interval(() => { todayKey.value = formatDate(new Date()) }, 60000)
 }
 function _stopDayWatch() {
-  if (_dayTimer) { clearInterval(_dayTimer); _dayTimer = null }
+  if (_cancelDay) { _cancelDay(); _cancelDay = null }
 }
 // 跨页定位：命中记录在个人/小组哪一份数据里，就切到对应加分对象与「加分统计」页签，
 // 再滚动到目标行并高亮闪动。数据尚未加载时返回 null，由 helper 安排重试。

@@ -1,6 +1,6 @@
 // ===== 智能分组：流水线条件操作 + 拖拽交互 =====
 // 纯代码搬运自 SmartGroupDialog.vue 的 methods，未改写逻辑；经 ctx 闭包调用（script setup）。
-// ctx 契约：{ stages, satisfaction, rejectText, _dragIdx, _overIdx, _pendingType, _rejectTimer, addStage }
+// ctx 契约：{ stages, satisfaction, rejectText, _dragIdx, _overIdx, _pendingType, scheduleRejectClear, addStage }
 // （状态为 ref，模块内用 .value；临时字段与跨模块方法直接挂在 ctx 上）。
 // nextKey 由主组件以参数传入，避免循环依赖。
 import { nextTick } from 'vue'
@@ -64,8 +64,7 @@ export function useSmartGroupConditions(ctx, nextKey) {
     },
     showReject(text) {
       ctx.rejectText.value = text
-      clearTimeout(ctx._rejectTimer)
-      ctx._rejectTimer = setTimeout(() => { ctx.rejectText.value = '' }, 2500)
+      ctx.scheduleRejectClear(() => { ctx.rejectText.value = '' }, 2500)
     },
   }
 }

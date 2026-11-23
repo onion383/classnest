@@ -36,7 +36,7 @@ const EXT_TO_KIND = (() => {
 
 const ALLOWED_EXT_RE = new RegExp(`\\.(${Object.keys(EXT_TO_KIND).join('|')})$`, 'i');
 
-// 各类的字节签名。前 16 字节够覆盖全部判据。
+// 各类的字节签名。前 32 字节够覆盖全部判据（mp4 的 ftyp 盒可能被前置盒推后）。
 function sniff(buf) {
   if (!buf || buf.length < 4) return null;
   // jpeg
@@ -58,12 +58,18 @@ function sniff(buf) {
   if (buf[0] === 0xd0 && buf[1] === 0xcf && buf[2] === 0x11 && buf[3] === 0xe0) return 'ole';
   // webm / mkv：EBML 头
   if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return 'video';
-  // mp4 / mov：offset 4 起是 'ftyp'
-  if (buf.length >= 12 && buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70) return 'video';
+  // mp4 / mov：'ftyp' 盒。标准文件是第一个盒（size 4 字节 + type 4 字节 → offset 4），
+  // 但带前置 `free`/`skip`/`wide` 盒的文件（部分手机的直出视频、QuickTime 封装）
+  // 'ftyp' 会落在后面 —— 只看 offset 4 会把它们判成「内容不是有效的 mp4」。
+  // 盒的 type 字段按 4 字节对齐，所以在前 32 字节里按 4 逐步找即可（审查 v7 · A1-13）。
+  for (let i = 4; i + 4 <= buf.length && i < 32; i += 4) {
+    if (buf[i] === 0x66 && buf[i + 1] === 0x74 && buf[i + 2] === 0x79 && buf[i + 3] === 0x70) return 'video';
+  }
   return null;
 }
 
-function readHead(filePath, len = 16) {
+// 默认读 32 字节：ftyp 盒查找用得上（见上），纯文本那条路径自己传 512。
+function readHead(filePath, len = 32) {
   let fd;
   try {
     fd = fs.openSync(filePath, 'r');

@@ -16,7 +16,7 @@ const dbManager = require('../dbManager/dbManager')
 // 跟着落盘一起做：拆给调用方去调，就等于又留了一个「谁忘了调」的坑。
 // ai.helpers 只依赖 db + dbManager，不依赖本文件，不存在循环。
 const aiHelpers = require('../routes/ai/ai.helpers')
-const { extractAndVerify, replaceDir } = require('./backupArchive')
+const { extractAndVerify, replaceDir, mergeDir } = require('./backupArchive')
 
 // 上传落地的临时文件 → 解到数据目录下的 .restore-<时间戳> → 逐项校验清单。
 // **这一步不碰任何现有数据**：包坏、缺项、名字不安全全在这里失败，用户的库和文件还是原样。
@@ -37,13 +37,16 @@ function dropTmp(tmpDir, filePath) {
   if (filePath) { try { fs.rmSync(filePath, { force: true }) } catch (_) { /* 同上 */ } }
 }
 
-// 包里的目录 → 本机落点。顺序即替换顺序，旧目录一律改名成 .bak-<stamp>，不删。
+// 包里的目录 → 本机落点。顺序即替换顺序。
+// merge=true 的是**全局共享目录**（所有班级共用）：恢复时只合并、不整体替换，
+// 否则恢复 A 班的备份会把 B 班引用的 uploads/收据/相册回收文件一起抹掉（#11）。
+// per-slug 目录（ai-skills/snapshots）仍整体替换，它们本就属于单个班。
 function dirPlanOf(slug) {
   return [
-    { prefix: 'uploads', dest: dbManager.uploadsDir },
+    { prefix: 'uploads', dest: dbManager.uploadsDir, merge: true },
     { prefix: 'ai-skills', dest: dbManager.skillsDir(slug) },
-    { prefix: 'album-trash', dest: dbManager.trashDir },
-    { prefix: 'receipt-trash', dest: dbManager.receiptTrashDir },
+    { prefix: 'album-trash', dest: dbManager.trashDir, merge: true },
+    { prefix: 'receipt-trash', dest: dbManager.receiptTrashDir, merge: true },
     { prefix: 'snapshots', dest: dbManager.snapshotsDir(slug) },
   ]
 }
@@ -77,6 +80,10 @@ async function applyVerifiedBundle({ tmpDir, meta, manifest, slug, username, bod
       key: meta.key,
       wrappedByPassword: meta.wrappedByPassword,
       wrappedByMnemonic: meta.wrappedByMnemonic,
+      passwordSalt: meta.passwordSalt,
+      mnemonicSalt: meta.mnemonicSalt,
+      kdfParamsPassword: meta.kdfParamsPassword,
+      kdfParamsMnemonic: meta.kdfParamsMnemonic,
       password: body && body.password,
       mnemonic: body && body.mnemonic,
     })
@@ -97,7 +104,12 @@ async function applyVerifiedBundle({ tmpDir, meta, manifest, slug, username, bod
     let has = false
     try { has = fs.statSync(src).isDirectory() && fs.readdirSync(src).length > 0 } catch (_) { has = false }
     if (!has) continue
-    replaced.push({ dir: it.prefix, backup: replaceDir(src, it.dest, stamp) })
+    if (it.merge) {
+      // 共享目录：合并而非替换，保住其它班的文件（#11）
+      replaced.push({ dir: it.prefix, mergedFiles: mergeDir(src, it.dest) })
+    } else {
+      replaced.push({ dir: it.prefix, backup: replaceDir(src, it.dest, stamp) })
+    }
   }
 
   // AI 长期记忆：包里有就覆盖（v3 把它放在根目录 memory.md）

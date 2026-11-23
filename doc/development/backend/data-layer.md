@@ -116,7 +116,7 @@ flowchart LR
 #### 座位几何的默认值 · 建表即网格形态
 
 - **现在的做法**：`schema.seat.js` 建库时直接写入 6×13 的满矩阵（`seats[r][c]` 按网格下标），走廊列 `types=1`、`seats=null`，`weight` 行也写一份 `types` 作为几何标记。**没有**一次性搬运脚本。
-- **为什么必须在建表时写对**：座位指数是跨天把 `domain_history` 里每天的 `seats[r][c]` 与权重矩阵**按同一下标**累加出来的。`seats` 是网格而下标按 dense 读（或反之），会从第一天起整体错位，且不报错、界面正常。库与模板可以重建，**历史快照不能**。
+- **必须在建表时写对的原因**：座位指数是跨天把 `domain_history` 里每天的 `seats[r][c]` 与权重矩阵**按同一下标**累加出来的。`seats` 是网格而下标按 dense 读（或反之），会从第一天起整体错位，且不报错、界面正常。库与模板可以重建，**历史快照不能**。
 - **将来真要改几何**：走 `migrations/` 的一条 `data()` 步骤，幂等判据是「`types` 是否为非空满矩阵」，按数据本身判断，不建「已迁移」标记表（标记与数据可能不一致，中途崩溃会迁一半）。
 
 #### [`schema/tableRegistry.js`](../../../student-backend/schema/tableRegistry.js) · 表名的唯一名单
@@ -131,6 +131,15 @@ flowchart LR
 - 备份包 v2：`encrypted` 标记来源是否加密库；`key`（明文库钥匙）/ `wrappedByPassword` / `wrappedByMnemonic` 三选一，`decryptBundleKey` 按「明文 key → 密码 → 助记词」顺序尝试。
 - `convertDbEncryption(slug, encrypt, onProgress)` 严格顺序：关连接 → 退 WAL → 完整性预检 → 备份 → rekey → 转换后校验 → 回写登记 → 删备份；任一步失败从备份回滚，不留中间态。接口以 NDJSON 流上报步骤进度。
 - 删除账号不清理共享目录（`uploads/`、缩略图、回收站）。
+
+### 7. 其余 schema 与探测模块
+
+| 文件 | 职责 |
+| --- | --- |
+| [`schema/foreignKeySpec.js`](../../../student-backend/schema/foreignKeySpec.js) | 外键声明的唯一契约清单，DDL、探测与单测共用一份，避免各抄一份后漂移 |
+| [`schema/foreignKeyProbe.js`](../../../student-backend/schema/foreignKeyProbe.js) | 探测某个已是 `CREATE TABLE IF NOT EXISTS` 的库实际有没有外键保护 |
+| [`schema/schema.log.js`](../../../student-backend/schema/schema.log.js) | 数据访问记录表（AI / MCP 读了哪张表、哪份文档） |
+| [`schema/schema.mcp.js`](../../../student-backend/schema/schema.mcp.js) | MCP 外部写提案表 `mcp_proposals`：先存意图，老师确认后才执行 |
 
 ---
 

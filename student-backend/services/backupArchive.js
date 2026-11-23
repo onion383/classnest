@@ -145,13 +145,22 @@ function extractZip(zipPath, destDir) {
         if (target !== root && !target.startsWith(root + path.sep)) {
           return reject(new Error(`备份包条目越界：${rawName}`))
         }
-        fs.mkdirSync(path.dirname(target), { recursive: true })
-        zip.openReadStream(entry, (e, rs) => {
-          if (e) return reject(e)
-          pipeline(rs, fs.createWriteStream(target))
-            .then(() => { entries += 1; zip.readEntry() })
-            .catch(reject)
-        })
+        // entry 回调由 yauzl 在事件循环里调用，这里同步抛错不会进 Promise 的 reject，
+        // 会变成 uncaughtException 直接崩掉后端（路径冲突：目标是已存在的文件/权限问题等）。
+        // 必须就地 catch 转成 rejection，让调用方拿到 400 而不是整个进程挂掉。
+        try {
+          fs.mkdirSync(path.dirname(target), { recursive: true })
+          zip.openReadStream(entry, (e, rs) => {
+            if (e) return reject(e)
+            try {
+              pipeline(rs, fs.createWriteStream(target))
+                .then(() => { entries += 1; zip.readEntry() })
+                .catch(reject)
+            } catch (err) { reject(err) }
+          })
+        } catch (err) {
+          reject(err)
+        }
       })
       zip.on('end', () => resolve({ entries }))
       zip.readEntry()
@@ -195,7 +204,8 @@ async function extractAndVerify(zipPath, destDir) {
     return JSON.parse(fs.readFileSync(abs, 'utf8'))
   }
   const meta = readJson(META_ENTRY)
-  if (meta.version !== 3) throw new Error(`不支持的备份包版本：${meta.version}`)
+  // v4：库钥匙包裹改用 scrypt（salt + 参数随包）；v3 的单次 SHA-256 包不再支持。
+  if (meta.version !== 4) throw new Error(`不支持的备份包版本：${meta.version}`)
   const manifest = readJson(MANIFEST_ENTRY)
   const problems = await verifyManifest(destDir, manifest)
   if (problems.length) {
@@ -221,4 +231,29 @@ function replaceDir(srcDir, destDir, stamp) {
   return bak
 }
 
-module.exports = { writeBundle, listFiles, RECONSTRUCTIBLE, extractZip, extractAndVerify, verifyManifest, replaceDir, isUnsafeName, META_ENTRY, MANIFEST_ENTRY }
+/**
+ * 把 srcDir 的文件合并进 destDir：同名覆盖，dest 里 src 没有的文件原样保留。
+ * 用于恢复**全局共享目录**（uploads / album-trash / receipt-trash）：这些目录
+ * 被所有班级共用，用 replaceDir 整体替换会让别的班引用的文件凭空消失（#11）。
+ * 递归逐文件复制，不做删除；旧文件不改名成 .bak（合并是可叠加的，不需要回滚壳）。
+ * @returns {number} 复制的文件数
+ */
+function mergeDir(srcDir, destDir) {
+  fs.mkdirSync(destDir, { recursive: true })
+  let count = 0
+  const walk = (from, to) => {
+    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      const src = path.join(from, entry.name)
+      const dest = path.join(to, entry.name)
+      if (entry.isDirectory()) { walk(src, dest); continue }
+      if (!entry.isFile()) continue
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.copyFileSync(src, dest)
+      count += 1
+    }
+  }
+  if (fs.existsSync(srcDir)) walk(srcDir, destDir)
+  return count
+}
+
+module.exports = { writeBundle, listFiles, RECONSTRUCTIBLE, extractZip, extractAndVerify, verifyManifest, replaceDir, mergeDir, isUnsafeName, META_ENTRY, MANIFEST_ENTRY }

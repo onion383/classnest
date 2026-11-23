@@ -277,6 +277,7 @@
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
 import { ref, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
+import { useDisposables } from '../utils/disposables.js'
 import { useRoute, useRouter } from 'vue-router'
 import { reportError } from '../utils/reportError.js'
 import axios from 'axios'
@@ -286,6 +287,7 @@ import AppSelect from '../components/base/AppSelect.vue'
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import LeaveTimeline from '../components/base/LeaveTimeline.vue'
 import { zhCollator } from '../utils/collator.js'
+import { personKeyOfRecord } from '../utils/dutyPersonKey.js'
 import StatBarList from '../components/base/StatBarList.vue'
 import { useNotification } from '../composables/useNotification.js'
 import { recordCellUndo, recordRowDelete, recordRowInsert, recordRowUpdate, recordRowReorder, recordRowsBatchInsert, newUndoBatchId, flushUndoStatus, useUndoShortcut } from '../composables/useUndo.js'
@@ -450,22 +452,31 @@ const exportFilename = computed(() => {
   if (exportKind.value === 'stats') return '请假统计'
   return '请假记录'
 })
-// 请假统计：按学生汇总请假次数（病假 / 事假 / 其他），合计降序、同数按姓名排
+// 请假统计：按**身份**汇总（student_id 优先，姓名只作显示）。
+// 按姓名当 key 会把名册里两个同名学生的假合成一条（v7 §5-4 / #20）。
 const leaveStatRows = computed(() => {
   const map = new Map()
   leaves.value.forEach(l => {
-    const name = l.姓名 || '未知'
-    let row = map.get(name)
+    const key = personKeyOfRecord(l)
+    let row = map.get(key)
     if (!row) {
-      row = { 姓名: name, 病假: 0, 事假: 0, 其他: 0, 合计: 0 }
-      map.set(name, row)
+      row = { key, 姓名: String(l.姓名 || '').trim() || '未知', 病假: 0, 事假: 0, 其他: 0, 合计: 0 }
+      map.set(key, row)
     }
     if (l.类型 === '病假') row.病假++
     else if (l.类型 === '事假') row.事假++
     else row.其他++
     row.合计++
   })
-  return [...map.values()].sort((a, b) => b.合计 - a.合计 || zhCollator.compare(a.姓名, b.姓名))
+  const rows = [...map.values()]
+  // 同名不同人：补 #id，否则统计表里两行一模一样（请假表没有学号列可用）
+  const nameCount = new Map()
+  for (const r of rows) nameCount.set(r.姓名, (nameCount.get(r.姓名) || 0) + 1)
+  for (const r of rows) {
+    if (nameCount.get(r.姓名) <= 1) continue
+    if (String(r.key).startsWith('id:')) r.姓名 = `${r.姓名}（#${String(r.key).slice(3)}）`
+  }
+  return rows.sort((a, b) => b.合计 - a.合计 || zhCollator.compare(a.姓名, b.姓名))
 })
 // 统计条长度基准：出现次数最多的学生
 const maxLeaveStat = computed(() => leaveStatRows.value.reduce((m, r) => Math.max(m, r.合计), 0))
@@ -505,18 +516,20 @@ watch(() => route.query.overdue, async (v) => {
 })
 
 // 非响应式实例状态
-let _overdueTimer = null
+// 逾期检查的 interval：取消函数由 d.interval 返回，stop/卸载走同一条路径
+const d = useDisposables()
+let _cancelOverdue = null
 // 请假时段展示的行对象缓存（WeakMap），行对象随每次加载重建，缓存自然失效
 let _rangeCache = null
 
 function _startOverdueTimer() {
   _stopOverdueTimer()
-  _overdueTimer = setInterval(() => checkOverdue(), 10 * 60 * 1000)
+  _cancelOverdue = d.interval(() => checkOverdue(), 10 * 60 * 1000)
 }
 function _stopOverdueTimer() {
-  if (_overdueTimer) {
-    clearInterval(_overdueTimer)
-    _overdueTimer = null
+  if (_cancelOverdue) {
+    _cancelOverdue()
+    _cancelOverdue = null
   }
 }
 // 跨页定位：切到「请假记录」页签后滚动到目标并高亮闪动。

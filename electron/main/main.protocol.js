@@ -195,7 +195,7 @@ function setupAppProtocol() {
   //    就要重算对应 hash。忘了改不会有任何报错，只会让打包版静默失去基础样式 / 深色防闪白
   //    （单测 packaged-csp 会把两个 hash 与源内容对账，改漏一处就红）。
   const CSS_ONLOAD_HASH = 'sha256-MhtPZXr7+LpJUY5qtMutB+qWfQtMaPccfe7QXtCcEYc='
-  const SPLASH_SCRIPT_HASH = 'sha256-WLc7cp/RKX95aLX2rMwaWD5aJ5PbXZ6yw3+iOa9Nwys='
+  const SPLASH_SCRIPT_HASH = 'sha256-rVHzHsM5DtQmvpEA7PBBkwvJUz0kFUVxVIzF5Zu/1bg='
   const SCRIPT_SRC = `script-src 'self' 'unsafe-hashes' 'wasm-unsafe-eval' '${CSS_ONLOAD_HASH}' '${SPLASH_SCRIPT_HASH}'`
   // frame-src 必须显式写出：CSP 没写 frame-src 时由 default-src 回落，而 default-src 'self'
   // 只认同源 app://，会把 <iframe> 一律拦掉。全库唯一在应用内使用 iframe 的地方是

@@ -402,6 +402,9 @@ if (splashEl) {
   const setBackendFailed = (failed) => {
     backendFailed = !!failed
     if (!splashEl.isConnected) return
+    // 失败态已有「重启后端 / 退出应用」两条出路，藏掉常驻的「取消启动」避免两颗按钮并列
+    const cancelBtn = splashEl.querySelector('#cancel-boot')
+    if (cancelBtn) cancelBtn.style.display = backendFailed ? 'none' : ''
     // 失败态把转圈图标换成蓝色感叹号三角（与运行期异常页同一套观感）
     splashEl.classList.toggle('is-failed', backendFailed)
     const box = splashEl.querySelector('.fail-box')

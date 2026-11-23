@@ -1,6 +1,6 @@
 <template>
   <DialogShell :visible="visible" :z-index="10001" @overlay="$emit('cancel')">
-    <div class="bg-surface p-5 rounded-xl w-[440px] max-w-full shadow-lg dialog-card class-switch-card" @keydown="onKeydown">
+    <div class="bg-surface p-5 rounded-xl w-[440px] max-w-full shadow-lg dialog-card" @keydown="onKeydown">
       <h3 class="text-lg font-bold mb-4 text-text">{{ switchOnly ? '班级切换' : '班级信息设置' }}</h3>
 
       <!-- 班级切换 + 重命名。切班换的是整个库（学生/座位/班费/相册全都不同），
@@ -256,24 +256,9 @@ function submit() {
 </script>
 
 <style scoped>
-/* 入场动画：通用 dialogCardIn 在 70% 关键帧会放到 101.5%，切班/建班会让整个视图
-   重建、本弹窗「原地恢复」，那段过冲就会重播一次 —— 看起来正是弹窗被微微撑大。
-   这里改成单调放大的短动画（不过冲），关闭动画自补一份：外层 Transition 的
-   .dialog-leave-active .dialog-card 会被上面的 animation 简写盖掉。 */
-.class-switch-card {
-  animation: classSwitchCardIn 0.22s ease-out;
-}
-@keyframes classSwitchCardIn {
-  from { opacity: 0; transform: scale(0.985); }
-  to { opacity: 1; transform: scale(1); }
-}
-.dialog-leave-active .class-switch-card {
-  animation: classSwitchCardOut 0.22s ease-in forwards;
-}
-@keyframes classSwitchCardOut {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(0.97); }
-}
+/* 进场/离场一律走通用 dialog-transition.css 的 dialogCardIn/dialogCardOut。
+   原先这里自写了一套极轻微的 scale(0.985) 动画盖掉通用动画，各主题下观感不一致
+   （glass 有回弹、base/glass2 几乎看不出），且切班重建时还要自补离场。删掉后三主题统一。 */
 
 /* 「＋ 新建班级」暖色毛玻璃按钮。
    底色不写死：取主题的 warning 色阶（各主题都是琥珀/暖橙系），用 color-mix 调成
@@ -360,7 +345,7 @@ function submit() {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
   color: var(--color-text-secondary);
-  background-color: transparent;
+  background-color: var(--color-surface);
   transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
 }
 .rename-btn:hover {

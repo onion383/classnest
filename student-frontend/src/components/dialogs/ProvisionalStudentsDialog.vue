@@ -5,16 +5,17 @@
       <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="close">
         <div class="bg-surface rounded-lg border border-border shadow-card dialog-card flex flex-col p-5 relative ps-card">
           <div class="flex items-center justify-between mb-2 flex-shrink-0">
-            <h3 class="text-lg font-bold">临时学生</h3>
+            <h3 class="text-lg font-bold flex items-center gap-1.5">
+              临时学生
+              <!-- 口径说明收进 ⓘ：转正只改状态位、不搬数据，属于「想知道再看」的信息，不占弹窗常驻空间 -->
+              <AppHelp
+                :text="helpText"
+                aria-label="临时学生说明"
+                :z-index="10002"
+              />
+            </h3>
             <button class="dlg-close" title="关闭" @click="close">✕</button>
           </div>
-
-          <!-- 口径说明：转正只改状态位，不搬数据；资料（学号等）要自己补 -->
-          <p class="text-xs text-text-muted leading-relaxed mb-3 flex-shrink-0">
-            这些名字是在值日、座位、分组或加分里直接填写、名册中没有的姓名，系统自动建的档。
-            转为正式学生只改成员状态，所有引用（值日 / 座位 / 分组 / 加减分）保持不变；学号等资料需要你补全。
-            若名册里已经有同名的人，转正后会变成两条同名记录。
-          </p>
 
           <div v-if="loading" class="text-sm text-text-muted py-8 text-center">正在加载…</div>
 
@@ -23,7 +24,14 @@
             <button class="ps-btn ml-2" @click="load">重试</button>
           </div>
 
-          <div v-else-if="!rows.length" class="text-sm text-text-muted py-8 text-center">没有临时学生</div>
+          <EmptySnapshot
+            v-else-if="!rows.length"
+            icon="students"
+            icon-size="32"
+            text="暂无"
+            min-height="180px"
+            bare
+          />
 
           <template v-else>
             <div class="flex items-center justify-between px-1 pb-2 flex-shrink-0">
@@ -74,9 +82,18 @@
 import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 import { useNotification } from '../../composables/useNotification'
+import AppHelp from '../base/AppHelp.vue'
+import EmptySnapshot from '../base/EmptySnapshot.vue'
 import '../../styles/dialog-transition.css'
 
 defineOptions({ name: 'ProvisionalStudentsDialog' })
+
+// ⓘ 气泡内容：口径说明（转正只改状态位、不搬数据，资料要自己补）。\n 在气泡里换行。
+const helpText = [
+  '这些名字是在值日、座位、分组或加分里直接填写、名册中没有的姓名，系统自动建的档。',
+  '转为正式学生只改成员状态，所有引用（值日 / 座位 / 分组 / 加减分）保持不变；学号等资料需要你补全。',
+  '若名册里已经有同名的人，转正后会变成两条同名记录。',
+].join('\n')
 
 const props = defineProps({
   visible: { type: Boolean, default: false },

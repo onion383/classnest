@@ -10,6 +10,11 @@
   background: linear-gradient(160deg, #eef2ff 0%, #e2e8ff 100%);
 }
 .app-splash .ring .spin { animation: rotate 1.4s linear infinite; transform-origin: center; }
+/* 圈圈的 class="ring" 与 Tailwind 的 .ring 工具类撞名。主 CSS 非阻塞加载，加载完成那一刻
+   Tailwind 的 .ring 会给这个 svg 套一圈 currentcolor 的 box-shadow（深色下就是「黑框」），
+   且因为紧接着占位页就被移除，看起来像「最后一刻才冒出来」。占位页不需要 ring 效果，
+   用更高特异性（.app-splash .ring，0-2-0 > Tailwind .ring 的 0-1-0）显式关掉。 */
+.app-splash .ring { box-shadow: none; }
 /* 失败态：转圈换成蓝色感叹号三角，与运行期异常页保持一致 */
 .app-splash .warn-icon { display: none; }
 .app-splash.is-failed .ring { display: none; }
@@ -28,7 +33,7 @@
 .app-splash .fail-btn:disabled { opacity: .5; cursor: default; }
 @keyframes rotate { to { transform: rotate(360deg); } }
 
-/* ============ 深色模式适配（仅 glass / glass2 实现了夜间配色，口径见 src/stores/theme.js） ============
+/* ============ 深色模式适配（base / glass / glass2 都有夜间配色，口径见 src/stores/theme.js） ============
    占位页在 Vue 挂载前绘制，拿不到主题仓库；由 splash.html 顶部那段脚本先把 localStorage 里的
    主题 / 模式写到 <html> 上，下面这组规则据此在首帧即生效，避免深色模式下启动闪一下浅色。
    底色与弥散光斑刻意与 theme-night.css 的 glass 夜间（body / main）取同一组值，
@@ -40,32 +45,43 @@
     radial-gradient(ellipse 40% 30% at 90% 10%, rgba(99, 102, 241, 0.16) 0%, transparent 60%),
     radial-gradient(ellipse 45% 35% at 50% 95%, rgba(56, 132, 222, 0.14) 0%, transparent 60%);
 }
+/* base（彩色色块）夜间是纯色底 #0b1220、没有光斑（theme-base-night.css 的 body/main），
+   所以单独给一份，不能套上面玻璃的渐变底色，否则占位页→应用首屏会变色。
+   文字色也按 base 夜间的 --color-text-muted(#718096) 取，见下方 tip 规则。 */
+:root[data-mode="night"][data-theme="base"] .app-splash {
+  background: #0b1220;
+}
 /* 转圈：轨道更淡、进度弧改用夜间主色（glass 夜间 --color-primary = #60a5fa） */
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .app-splash .ring circle:not(.spin) {
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) .app-splash .ring circle:not(.spin) {
   stroke: rgba(96, 165, 250, 0.25);
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .app-splash .ring .spin {
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) .app-splash .ring .spin {
   stroke: #60a5fa;
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .app-splash .warn-icon {
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) .app-splash .warn-icon {
   stroke: #60a5fa;
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .app-splash .logo {
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) .app-splash .logo {
   color: #60a5fa;
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .app-splash .tip {
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) .app-splash .tip {
   color: #7f8ea6;
 }
+/* base 夜间的次要文字取自己的 --color-text-muted，避免玻璃档的 #7f8ea6 在 #0b1220 上偏亮。
+   放在通用规则之后覆盖；glass / glass2 不受影响。 */
+:root[data-mode="night"][data-theme="base"] .app-splash .tip {
+  color: #718096;
+}
 /* 启动失败兜底（后端一直起不来）同样跟随夜间 */
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .app-splash .fail-msg {
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) .app-splash .fail-msg {
   color: #f87171;
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .app-splash .fail-btn {
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) .app-splash .fail-btn {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(96, 165, 250, 0.35);
   color: #60a5fa;
 }
-:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .app-splash .fail-btn.primary {
+:root[data-mode="night"]:is([data-theme="base"], [data-theme="glass"], [data-theme="glass2"]) .app-splash .fail-btn.primary {
   background: #3b82f6;
   border-color: #3b82f6;
   color: #fff;

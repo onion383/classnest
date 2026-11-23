@@ -6,94 +6,11 @@
     </div>
 
     <!-- 双 tab -->
-    <Tabs :tabs="tabs" v-model="activeTab" />
+    <Tabs :tabs="tabs" v-model="activeTab" @hover="onTabHover" />
 
-    <!-- ==================== 日常活动 ==================== -->
-    <div v-if="activeTab === 'daily'">
-      <!-- 工具栏 -->
-      <div class="mb-4 flex items-center gap-3 opbar">
-        <button @mouseenter="prefetch(loadAddActivityDialog)" @click="openAddActivity" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">＋ 新增活动</button>
-        <button @click="refreshActivities" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
-        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
-        </button>
-        <button @mouseenter="prefetch(loadExportExcel)" @click="openActivityExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme"><IconGlyph name="download" :size="14" tint="current" /> 导出活动</button>
-      </div>
-
-      <!-- 活动时间轴（带状态标签） -->
-      <LeaveTimeline
-        :nodes="activityTimelineNodes"
-        :node-types="activityNodeTypes"
-        :title="'活动时间轴'"
-        :max-height="640"
-        align-right
-      >
-        <template #content="{ node }">
-          <div class="text-sm text-text">
-            <span class="font-medium">{{ node.subject }}</span>
-            <span v-if="node.location" class="text-text-secondary"> · {{ node.location }}</span>
-            <span v-if="node.participants" class="text-text-secondary text-xs ml-1 inline-flex items-center">· <IconGlyph name="users" :size="13" tint="current" /> {{ node.participants }}</span>
-          </div>
-        </template>
-        <template #ops="{ node }">
-          <div class="flex items-center gap-1.5">
-            <button @click="openEditActivity(activityByKey(node.key))" class="bg-info hover:bg-blue-700 text-text-inverse px-2.5 py-0.5 rounded text-xs transition-theme">编辑</button>
-            <button @click="goAlbum" class="bg-surface-hover hover:bg-border text-text-secondary px-2.5 py-0.5 rounded text-xs border border-border transition-theme">查看相册</button>
-            <button @click="askDeleteActivity(activityByKey(node.key))" class="bg-danger hover:bg-red-700 text-text-inverse px-2.5 py-0.5 rounded text-xs transition-theme">删除</button>
-          </div>
-        </template>
-      </LeaveTimeline>
-    </div>
-
-    <!-- ==================== 倒计时 ==================== -->
-    <div v-if="activeTab === 'countdown'">
-      <!-- 数据看板（最近 3 个） -->
-      <div v-if="topCountdowns.length" class="grid grid-cols-3 gap-4 mb-6">
-        <div v-for="cd in topCountdowns" :key="cd.id" class="bg-surface shadow-md rounded-xl border border-border p-4 text-center" :class="{ 'opacity-70': cd.days < 0 }">
-          <div class="text-sm text-text-secondary truncate">距离 {{ cd.名称 }}</div>
-          <div class="text-4xl font-bold mt-1" :class="cd.days >= 0 ? 'text-info' : 'text-text-muted'">{{ Math.abs(cd.days) }}</div>
-          <div class="text-sm text-text-secondary">{{ cd.days >= 0 ? '还有 ' + cd.days + ' 天' : '天（已过去）' }}</div>
-          <div class="text-xs text-text-muted mt-1">截止 {{ cd.截止日 }}</div>
-        </div>
-      </div>
-      <div v-else class="bg-surface border border-border rounded-xl py-8 text-center text-text-muted text-sm mb-6">暂无倒计时，点击「添加倒计时」开始</div>
-
-      <!-- 工具栏 -->
-      <div class="mb-4 flex items-center gap-3 opbar">
-        <button @mouseenter="prefetch(loadAddCountdownDialog)" @click="openAddCountdown" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">＋ 添加倒计时</button>
-        <button @click="refreshCountdowns" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
-        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
-        </button>
-        <button @mouseenter="prefetch(loadExportExcel)" @click="openCountdownExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme"><IconGlyph name="download" :size="14" tint="current" /> 导出 EXCEL 表格</button>
-      </div>
-
-      <!-- 倒计时时间轴 -->
-      <LeaveTimeline
-        :nodes="countdownTimelineNodes"
-        :node-types="countdownNodeTypes"
-        :title="'倒计时列表'"
-        :max-height="640"
-        :search-extras="countdownSearchText"
-        align-right
-      >
-        <template #content="{ node }">
-          <div class="text-sm text-text">
-            <span class="font-medium">{{ node.name }}</span>
-            <span class="text-text-muted text-xs ml-2">截止日 {{ node.deadline }}</span>
-            <span class="ml-1" :class="node.days >= 0 ? 'text-info' : 'text-danger'">
-              {{ node.days >= 0 ? `距离该事件还有 ${node.days} 天` : `已经过去了 ${Math.abs(node.days)} 天` }}
-            </span>
-          </div>
-        </template>
-        <template #ops="{ node }">
-          <div class="flex items-center gap-1.5">
-            <button @click="openEditCountdown(countdownByKey(node.key))" class="bg-info hover:bg-blue-700 text-text-inverse px-2.5 py-0.5 rounded text-xs transition-theme">编辑</button>
-            <button @click="askDeleteCountdown(countdownByKey(node.key))" class="bg-danger hover:bg-red-700 text-text-inverse px-2.5 py-0.5 rounded text-xs transition-theme">删除</button>
-          </div>
-        </template>
-      </LeaveTimeline>
-    </div>
+    <!-- 日常活动 / 倒计时：异步分块，hover 预取 -->
+    <ActivitiesDailyTab v-if="activeTab === 'daily'" :ctx="tabCtx" />
+    <ActivitiesCountdownTab v-else-if="activeTab === 'countdown'" :ctx="tabCtx" />
 
     <!-- 新增/编辑活动弹窗 -->
     <AddActivityDialog
@@ -154,7 +71,7 @@
       @update:is-visible="cntExportVisible = $event"
     />
 
-    <!-- 从 Excel 导入（按当前页签切换活动 / 倒计时的表头） -->
+    <!-- 从表格导入（按当前页签切换活动 / 倒计时的表头） -->
     <ImportExcel
       v-if="importMounted"
       :visible="importDialogVisible"
@@ -169,11 +86,11 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
+import { isAddActionForRoute } from '../utils/addActionRoute.js'
 import axios from 'axios'
-import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Tabs from '../components/base/Tabs.vue'
-import LeaveTimeline from '../components/base/LeaveTimeline.vue'
 import { useNotification } from '../composables/useNotification.js'
 import { reportError } from '../utils/reportError.js'
 import { recordRowInsert, recordRowUpdate, recordRowDelete, recordRowsBatchInsert, useUndoShortcut } from '../composables/useUndo.js'
@@ -190,6 +107,16 @@ const loadExportExcel = () => import('../components/import-export/ExportExcel/Ex
 const ExportExcel = defineAsyncComponent(loadExportExcel)
 const loadImportExcel = () => import('../components/import-export/ImportExcel.vue')
 const ImportExcel = defineAsyncComponent(loadImportExcel)
+
+// 两个 tab 整块异步化：首次切过去才下载对应 chunk，悬停标签即预取
+const loadDailyTab = () => import('./ActivitiesDailyTab.vue')
+const ActivitiesDailyTab = defineAsyncComponent(loadDailyTab)
+const loadCountdownTab = () => import('./ActivitiesCountdownTab.vue')
+const ActivitiesCountdownTab = defineAsyncComponent(loadCountdownTab)
+function onTabHover(value) {
+  if (value === 'daily') prefetch(loadDailyTab)
+  else if (value === 'countdown') prefetch(loadCountdownTab)
+}
 
 const API = '/api'
 
@@ -361,6 +288,30 @@ watch(() => confirm.value.visible, (n) => { if (n) confirmMounted.value = true }
 watch(() => route.query.focus, () => { _applyRowFocus() })
 // 桌面小组件点倒计时：/activities?tab=countdown 直达倒计时页签
 watch(() => route.query.tab, () => { _applyTabQuery() })
+// 首页空态「去添加活动 / 去添加倒计时」：?action=add 直接打开对应新增弹窗。
+// 倒计时入口另带 ?tab=countdown，据此区分开哪个弹窗；页签本身交给 _applyTabQuery，这里不碰，
+// 免得与下方 activeTab→URL 的反向同步互相打架。清 action 时保留 tab：用户仍停在倒计时页签。
+watch(() => route.query.action, () => {
+  if (!isAddActionForRoute(route, 'activities')) return
+  const countdown = route.query.tab === 'countdown'
+  router.replace({ path: route.path, query: { ...route.query, action: undefined } })
+  if (countdown) openAddCountdown()
+  else openAddActivity()
+}, { immediate: true })
+// 异步 tab 子组件共享的 reactive 上下文：字段都是本组件的 ref / 函数，
+// reactive 解包后子组件模板读写 ctx.xxx 等价于本组件 xxx.value。
+// 数据加载 / focus / undo / 共享 ImportExcel 全留父组件，这里只做透传。
+const tabCtx = reactive({
+  prefetch, loadAddActivityDialog, loadAddCountdownDialog, loadImportExcel, loadExportExcel,
+  openAddActivity, refreshActivities, openActivityExport, openEditActivity, activityByKey,
+  askDeleteActivity, goAlbum,
+  openAddCountdown, refreshCountdowns, openCountdownExport, openEditCountdown, countdownByKey,
+  askDeleteCountdown,
+  importDialogVisible,
+  activityTimelineNodes, activityNodeTypes,
+  topCountdowns, countdownTimelineNodes, countdownNodeTypes, countdownSearchText,
+})
+
 // 页签反向同步到 URL：用户手动切回「日常活动」后，组件再点倒计时仍能重新跳转
 // （否则 URL 一直停在 ?tab=countdown，主窗口收到同路径导航时就无法区分当前页签）
 watch(activeTab, (val) => {
@@ -423,7 +374,7 @@ async function refreshCountdowns() {
 }
 // ---------- 活动 CRUD ----------
 function openAddActivity() { editingActivity.value = null; actDialogVisible.value = true }
-// 新增活动弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+// 新增活动弹窗右上角（标题行右端）的「从表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
 function openImportFromActivityAdd() {
   actDialogVisible.value = false
   importMounted.value = true
@@ -470,7 +421,7 @@ async function deleteActivity(id) {
 }
 // ---------- 倒计时 CRUD ----------
 function openAddCountdown() { editingCountdown.value = null; cntDialogVisible.value = true }
-// 添加倒计时弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+// 添加倒计时弹窗右上角（标题行右端）的「从表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
 function openImportFromCountdownAdd() {
   cntDialogVisible.value = false
   importMounted.value = true

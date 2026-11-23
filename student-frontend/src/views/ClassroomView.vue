@@ -5,13 +5,15 @@
     </div>
 
     <!-- 学生信息 / 班干部管理 Tab 切换 -->
-    <Tabs :tabs="tabsList" v-model="activeTab" class="mb-4" />
+    <Tabs :tabs="tabsList" v-model="activeTab" class="mb-4" @hover="onTabHover" />
 
-    <!-- 班干部管理 -->
-    <CadreManage v-if="activeTab === 'cadres'" ref="cadreRef" />
+    <!-- 班干部管理：v-show 保活，来回切 tab 不卸载 →
+         不再重新挂载、不重复拉接口，也不闪「还没有任何职务」空态，选中/折叠/滚动状态保留。
+         （Vapor 下 KeepAlive 包 v-if 异步组件会编译崩溃，故用 v-show） -->
+    <CadreManage v-show="activeTab === 'cadres'" ref="cadreRef" />
 
-    <!-- 学生信息 -->
-    <template v-else>
+    <!-- 学生信息：v-show 与班干部分支共存、互不卸载（切回不重建表格） -->
+    <div v-show="activeTab !== 'cadres'">
     <!-- 工具栏按钮 -->
     <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
       <button @click="openAddDialog" @mouseenter="prefetch(loadAddStudentDialog)" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">
@@ -24,7 +26,7 @@
         <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
       </button>
       <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        <IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入
       </button>
       <button
         @click="openExport"
@@ -86,7 +88,7 @@
       :newRow="newRow"
       :protectedColumns="['学号', '姓名']"
       emptyLabel="学生"
-      empty-import-text="从 Excel 表格批量导入"
+      empty-import-text="从表格批量导入"
       :load-error="loadError"
       error-text="学生名单加载失败"
       @retry="fetchStudents"
@@ -155,7 +157,7 @@
       @import="openBatchImportFromAdd"
       @cancel="addDialogVisible = false"
     />
-    </template>
+    </div>
    </div>
 </template>
 
@@ -198,7 +200,12 @@ const loadAddStudentDialog = () => import('../components/dialogs/AddStudentDialo
 const AddStudentDialog = defineAsyncComponent(loadAddStudentDialog)
 
 // 班干部管理：切到该 Tab 时才下载其代码 chunk 并实例化（v-if 控制挂载）
-const CadreManage = defineAsyncComponent(() => import('../components/CadreManage.vue'))
+const loadCadreManage = () => import('../components/CadreManage.vue')
+const CadreManage = defineAsyncComponent(loadCadreManage)
+// 悬停「班干部管理」标签即预取 chunk，首次切换不再等下载
+function onTabHover(value) {
+  if (value === 'cadres') prefetch(loadCadreManage)
+}
 
 const exportDialogVisible = ref(false)
 const addDialogVisible = ref(false)
@@ -379,7 +386,7 @@ function openAddDialog() {
   addDialogVisible.value = true
 }
 
-// 添加学生弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+// 添加学生弹窗右上角（标题行右端）的「从表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
 function openBatchImportFromAdd() {
   addDialogVisible.value = false
   importMounted.value = true
@@ -418,8 +425,8 @@ async function onSubmitStudent(data) {
   }
 }
 
-// 表格空态里的「从 Excel 表格批量导入」：先预取导入弹窗 chunk，再打开。
-// 空表是首次使用最常见的入口，用户不必回工具栏再找一遍「从 Excel 表格批量导入」。
+// 表格空态里的「从表格批量导入」：先预取导入弹窗 chunk，再打开。
+// 空表是首次使用最常见的入口，用户不必回工具栏再找一遍「从表格批量导入」。
 function openImportDialog() {
   prefetch(loadImportExcel)
   importDialogVisible.value = true

@@ -844,4 +844,32 @@
   color: #fde68a;
   background: rgba(245, 158, 11, 0.26);
 }
+/* ---------- 工具栏暖色按钮（.btn-search：搜索 / 临时学生 / 更多操作）夜间适配 ----------
+   白天 theme-glass.css / theme-glass2.css 里 .btn-search 硬编码淡琥珀底 + 深棕字，且带 !important；
+   夜间没有对应规则，于是深色下仍是一块刺眼的米黄。这里按上面警告按钮的同款夜间配方
+   （深琥珀半透明底 + 浅琥珀字）压回去，!important 与白天规则同权重、夜间层后加载故胜出。
+   glass2 同样有 .btn-search 的白天硬编码（theme-glass2.css），一并覆盖。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .btn-search {
+  background-color: rgba(245, 158, 11, 0.28) !important;
+  color: #fde68a !important;
+  border-color: rgba(245, 158, 11, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 1px 4px rgba(0, 0, 0, 0.3) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .btn-search:hover {
+  background-color: rgba(245, 158, 11, 0.4) !important;
+  color: #fef3c7 !important;
+}
+/* ---------- 「更多操作」下拉菜单项夜间适配 ----------
+   白天 theme-glass.css:1366 把 danger 菜单项写死成深红 #b91c1c，夜间没有覆盖 →
+   深色底上暗红几乎看不清。禁用项则叠了 --color-text-muted(#7f8ea6) + opacity-50，
+   对比更低。这里把 danger 提到浅红、禁用项提亮并抬高不透明度。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .more-menu-popup .more-menu-item.text-danger {
+  color: #fca5a5 !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .more-menu-popup .more-menu-item:disabled {
+  color: #cbd5e1 !important;
+  opacity: 0.85;
+}
 

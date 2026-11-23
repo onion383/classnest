@@ -24,7 +24,7 @@
               <button @click="openArrange(dutyView)" @mouseenter="prefetch(loadArrangementDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="brain" :size="14" tint="current" /> 智能排表</button>
               <button @click="dutyView === 'active' ? refreshActive() : refreshMaster()" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="openImport(dutyView)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> {{ dutyView === 'active' ? '从模板导入' : '从实行导入' }}</button>
-              <button @click="openExcelImport(dutyView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
+              <button @click="openExcelImport(dutyView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入</button>
               <button @click="dutyView === 'active' ? openActiveExport() : openMasterExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出值日表</button>
             </div>
 
@@ -41,7 +41,7 @@
                 min-height="200px"
                 action-text="去设置"
                 action-icon="settings"
-                secondary-action-text="从 Excel 表格批量导入"
+                secondary-action-text="从表格批量导入"
                 secondary-action-icon="download"
                 @action="settingsVisible = true"
                 @secondary-action="openExcelImport('active')"
@@ -86,7 +86,7 @@
                 min-height="200px"
                 action-text="去设置"
                 action-icon="settings"
-                secondary-action-text="从 Excel 表格批量导入"
+                secondary-action-text="从表格批量导入"
                 secondary-action-icon="download"
                 @action="settingsVisible = true"
                 @secondary-action="openExcelImport('master')"
@@ -121,7 +121,7 @@
               <ExportExcel v-if="masterExportMounted" :is-visible="masterExportVisible" :rows="masterExportRows" :fields="exportFields" defaultFilename="值日模板" @update:is-visible="masterExportVisible = $event" />
             </template>
 
-            <!-- 从 Excel 导入（按「劳动项目 + 星期列」匹配当前显示的值日矩阵） -->
+            <!-- 从表格导入（按「劳动项目 + 星期列」匹配当前显示的值日矩阵） -->
             <ImportExcel
               v-if="importMounted"
               :visible="importVisible"
@@ -346,10 +346,12 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
+import { isAddActionForRoute } from '../utils/addActionRoute.js'
 import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { shiftDateStr, localDateStr } from '../utils/dateTime.js'
+import { shouldReloadHistory } from '../utils/historyLoadGuard.js'
 import { buildWeekDateMap } from '../utils/weekDates.js'
 import { useWeekDates } from '../composables/useWeekDates.js'
 import { getSemesterStart } from '../utils/semesterStart.js'
@@ -705,6 +707,12 @@ function _applyRowFocus() {
 }
 watch(() => route.query.focus, _applyRowFocus)
 onActivated(_applyRowFocus)
+// 首页空态「去设置值日」：?action=add 直接打开值日设置弹窗，随后清 query 防重复触发（KeepAlive 缓存页）
+watch(() => route.query.action, () => {
+  if (!isAddActionForRoute(route, 'duty')) return
+  router.replace({ path: route.path, query: { ...route.query, action: undefined } })
+  settingsVisible.value = true
+}, { immediate: true })
 
 // 学生名册是否已就绪。未就绪时同步值日人名会把已有学生误判为「新名字」逐个提交，
 // 故同步前必须先补齐；并发调用共用同一个请求
@@ -1105,7 +1113,7 @@ function openMasterExport() {
   masterExportVisible.value = true
 }
 
-// ==================== 从 Excel 导入（按「劳动项目 + 星期列」匹配当前显示的值日矩阵） ====================
+// ==================== 从表格导入（按「劳动项目 + 星期列」匹配当前显示的值日矩阵） ====================
 // 只覆盖文件里出现的「项目 × 星期」格：多人用顿号/逗号/空格分隔；
 // 文件里空白的格子会清空该格名单，未出现在文件里的项目保持原样。
 const importVisible = ref(false)
@@ -1206,17 +1214,20 @@ async function onImportData({ fields, rows }) {
 
   const prev = cellsRef.value
   cellsRef.value = next
-  const ok = isMaster ? await persistMaster('从 Excel 导入') : await persistActive('从 Excel 导入')
+  const ok = isMaster ? await persistMaster('从表格导入') : await persistActive('从表格导入')
   if (!ok) return
-  recordGridSnapshotUndo('值日表', isMaster ? 'duty_template' : 'duty_layout', prev, next, '从 Excel 导入')
+  recordGridSnapshotUndo('值日表', isMaster ? 'duty_template' : 'duty_layout', prev, next, '从表格导入')
   const matchedTip = fuzzyNotes.length
     ? `（已自动匹配：${fuzzyNotes.slice(0, 3).join('、')}${fuzzyNotes.length > 3 ? ' 等' : ''}）`
     : ''
-  notifySuccess(`已从 Excel 导入${isMaster ? '值日模板' : '当前值日表'}${matchedTip}`)
+  notifySuccess(`已从表格导入${isMaster ? '值日模板' : '当前值日表'}${matchedTip}`)
 }
 
 // ==================== 历史记录 ====================
 const historyWeeks = ref([])
+// 周列表是按哪个 mode 拉的：切 mode 后周列表属旧维度，必须重拉（接口带 ?mode=）
+// 用 ref 而非普通变量，是为了让 guard 判定与响应式状态同源、避免闭包读到旧值
+const historyWeeksScope = ref('')
 const historyCurrentWeek = ref('')
 const historySnapshot = ref(null)
 const historyLoading = ref(false)
@@ -1610,6 +1621,7 @@ async function fetchHistoryWeeks(options = {}) {
   try {
     const res = await axios.get(`${API_BASE}/duty/history?mode=${dutyMode.value}`)
     historyWeeks.value = res.data || []
+    historyWeeksScope.value = dutyMode.value
     if (historyCurrentWeek.value && !historyWeeks.value.some(w => w.week_start === historyCurrentWeek.value)) {
       historyCurrentWeek.value = ''
     }
@@ -1743,7 +1755,23 @@ function openHistoryExport() {
   historyExportVisible.value = true
 }
 
-watch(activeTab, (newTab) => { if (newTab === 'history') fetchHistoryWeeks() })
+// 切到历史页签：数据已在就不重复拉周列表+快照（避免来回切 tab 反复请求）。
+// Duty 的周列表按 mode 区分，故判定要带 scope：切 mode 后必须重拉，否则拿旧 mode 的周发新 mode 的请求。
+// 刷新按钮仍走 refreshHistory() 强制拉。
+watch(activeTab, (newTab) => {
+  if (newTab !== 'history') return
+  if (shouldReloadHistory({
+    weeks: historyWeeks.value,
+    currentWeek: historyCurrentWeek.value,
+    loadedScope: historyWeeksScope.value,
+    scope: dutyMode.value,
+  })) {
+    fetchHistoryWeeks()
+  } else if (!historyCurrentWeek.value || !historyWeeks.value.some(w => w.week_start === historyCurrentWeek.value)) {
+    historyCurrentWeek.value = historyWeeks.value[0]?.week_start || ''
+    if (historyCurrentWeek.value) loadHistorySnapshot()
+  }
+})
 
 // 启动时静默补存：把今天及之前的快照补齐（失败静默，不影响正常使用）
 async function silentBackfill() {

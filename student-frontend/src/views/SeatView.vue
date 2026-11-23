@@ -43,7 +43,7 @@
                   <button @click="enterHoleModeFor(seatView)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="layoutGrid" :size="14" tint="current" /> 设置空位</button>
                   <button @click="seatView === 'active' ? refreshActive() : refreshMaster()" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
                   <button @click="openImport(seatView)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> {{ seatView === 'active' ? '从模板导入' : '从实行导入' }}</button>
-                  <button @click="openExcelImport(seatView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
+                  <button @click="openExcelImport(seatView)" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入</button>
                   <button @click="seatView === 'active' ? openActiveExport() : openMasterExport()" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
                 </div>
               </Transition>
@@ -116,7 +116,7 @@
               <ExportExcel v-if="masterExportMounted" :is-visible="masterExportVisible" :rows="masterExportRows" :fields="masterExportFields" defaultFilename="座位模板" @update:is-visible="masterExportVisible = $event" />
             </template>
 
-            <!-- 从 Excel 导入（按「行号 + 列名」匹配当前显示的座位矩阵） -->
+            <!-- 从表格导入（按「行号 + 列名」匹配当前显示的座位矩阵） -->
             <ImportExcel
               v-if="importMounted"
               :visible="importVisible"
@@ -374,6 +374,7 @@ import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } fr
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { shiftDateStr, localDateStr } from '../utils/dateTime.js'
+import { shouldReloadHistory } from '../utils/historyLoadGuard.js'
 import { getSemesterStart } from '../utils/semesterStart.js'
 import { aggregateSeatDaily, unionCutoff } from '../utils/seatDailyAggregate.js'
 import GridView from '../components/tables/GridView/GridView.vue'
@@ -1120,7 +1121,7 @@ function openMasterExport() {
   masterExportVisible.value = true
 }
 
-// ==================== 从 Excel 导入（按「行号 + 列名」匹配当前显示的矩阵） ====================
+// ==================== 从表格导入（按「行号 + 列名」匹配当前显示的矩阵） ====================
 // 导入是在现有座位表上覆盖文件里出现的格子：文件里的空单元格会清空对应座位，
 // 文件未包含的行保持原样。行号/列名必须与当前页面一致，避免把数据写到错误的座位。
 const importVisible = ref(false)
@@ -1196,8 +1197,8 @@ async function onImportData({ fields, rows }) {
   const before = (grid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
   const ok = await grid.saveSeats(next)
   if (!ok) return
-  recordGridSnapshotUndo('座位表', importTarget.value === 'master' ? 'seat_template' : 'seat_layout', before, next, '从 Excel 导入')
-  notifySuccess(`已从 Excel 导入${importTarget.value === 'master' ? '座位模板' : '当前座位表'}`)
+  recordGridSnapshotUndo('座位表', importTarget.value === 'master' ? 'seat_template' : 'seat_layout', before, next, '从表格导入')
+  notifySuccess(`已从表格导入${importTarget.value === 'master' ? '座位模板' : '当前座位表'}`)
 }
 
 async function applySmartArrangement(result) {
@@ -1822,7 +1823,18 @@ function openHistoryExport() {
   historyExportVisible.value = true
 }
 
-watch(activeTab, (newTab) => { if (newTab === 'history') fetchHistoryWeeks() })
+// 切到历史页签：数据已在就不重复拉周列表+快照+指数（避免来回切 tab 反复请求）。
+// 判定抽在 utils/historyLoadGuard.js，与 DutyView 共用；刷新按钮仍走 refreshHistory() 强制拉。
+watch(activeTab, (newTab) => {
+  if (newTab !== 'history') return
+  if (shouldReloadHistory({ weeks: historyWeeks.value, currentWeek: historyCurrentWeek.value })) {
+    fetchHistoryWeeks()
+  } else if (!historyCurrentWeek.value || !historyWeeks.value.some(w => w.week_start === historyCurrentWeek.value)) {
+    // 列表在但选中周失效：重选第一周并载快照（fetchHistoryWeeks 不开，省一次周列表请求）
+    historyCurrentWeek.value = historyWeeks.value[0]?.week_start || ''
+    if (historyCurrentWeek.value) loadHistorySnapshot()
+  }
+})
 
 // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y 撤销/重做座位（当前页）
 useUndoShortcut('座位表', {

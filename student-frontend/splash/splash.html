@@ -2,13 +2,34 @@
   // 首帧占位在 Vue 挂载前就已绘制，此时主题仓库（src/stores/theme.js）还没初始化，
   // 因此这里直接读 localStorage 里的主题 / 模式，抢先把 data-theme / data-mode 写到 <html> 上，
   // 让 splash.css 的深色规则在首帧就生效 —— 否则深色模式下启动会先闪一下浅色。
-  // 判定口径与 theme.js 保持一致：只有 glass / glass2 实现了夜间配色。
+  // 判定口径与 theme.js 保持一致：base / glass / glass2 三套主题都实现了夜间配色。
   (function () {
     try {
       var root = document.documentElement
       root.dataset.theme = localStorage.getItem('app-theme') || 'glass'
       root.dataset.mode = localStorage.getItem('app-mode') === 'night' ? 'night' : 'day'
     } catch (_) { /* 读不到（隐私模式 / dev 的 data: 页面独立源）时保持默认日间 */ }
+  })()
+  // 常驻「取消启动」：点下去是退出整个应用（不是回到登录页）。preload 在页面脚本前注入
+  // window.electron，正常首帧即可用；dev 的 data: 独立源若还没注入，短重试最多 2s。
+  (function () {
+    var btn = document.getElementById('cancel-boot')
+    if (!btn) return
+    btn.addEventListener('click', function () {
+      btn.disabled = true
+      btn.textContent = '正在退出…'
+      var tries = 0
+      var send = function () {
+        try {
+          if (window.electron && window.electron.send) {
+            window.electron.send('quit-app')
+            return
+          }
+        } catch (_) {}
+        if (++tries < 20) setTimeout(send, 100)
+      }
+      send()
+    })
   })()
 </script>
 <div class="app-splash">
@@ -24,4 +45,5 @@
   </svg>
   <span class="logo">班集</span>
   <span class="tip" id="boot-tip">加载中，请稍候…</span>
+  <button type="button" class="fail-btn cancel-boot" id="cancel-boot">取消启动</button>
 </div>

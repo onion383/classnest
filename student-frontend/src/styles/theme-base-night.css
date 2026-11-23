@@ -216,6 +216,52 @@
 :root[data-theme="base"][data-mode="night"] .opbar button.bg-danger svg {
   color: #fca5a5 !important;
 }
+/* ---------- 夜间：警告色按钮（从表格批量导入 / 导出 Excel / 弹窗「点击下载」）----------
+   base 夜间 --color-warning 是亮金黄 #fbbf24，实心底 + 白字在深色界面上过分刺眼（用户反馈）。
+   按上面危险按钮的同款口径改成深琥珀底 + 浅琥珀字，保留暖色语义但压住亮度。
+   不限定 .opbar：弹窗里的「点击下载」按钮不在 opbar 上下文，也要覆盖到。 */
+:root[data-theme="base"][data-mode="night"] button.bg-warning.text-text-inverse,
+:root[data-theme="base"][data-mode="night"] button.bg-warning-hover.text-text-inverse {
+  background: #78350f;
+  color: #fcd34d;
+}
+:root[data-theme="base"][data-mode="night"] button.bg-warning.text-text-inverse:hover {
+  background: #92400e;
+  color: #fde68a;
+}
+/* ---------- 夜间：通用 info / danger 按钮（表格内「修改 / 删除」等）----------
+   base 夜间 --color-info(#60a5fa) / --color-danger(#f87171) 都是高亮实色 + 白字，
+   表格操作列那排小按钮因此格外刺眼。原先只在 .opbar/.week-bar/.settings-view
+   这些具体容器下配了暗色，表格内按钮漏掉。这里补一套通用规则（取值与那些容器
+   已有的夜间配方一致），让没有专属覆盖的同类按钮一并压住亮度。 */
+:root[data-theme="base"][data-mode="night"] button.bg-info.text-text-inverse {
+  background: #1e3a5f;
+  color: #dbeafe;
+}
+:root[data-theme="base"][data-mode="night"] button.bg-info.text-text-inverse:hover {
+  background: #264a75;
+  color: #eff6ff;
+}
+:root[data-theme="base"][data-mode="night"] button.bg-danger.text-text-inverse {
+  background: #4c1d1d;
+  color: #fca5a5;
+}
+:root[data-theme="base"][data-mode="night"] button.bg-danger.text-text-inverse:hover {
+  background: #5c2525;
+  color: #fecaca;
+}
+/* ---------- 夜间：通用 primary 按钮（添加职务 / 确定 / ViewSwitch 切换块等）----------
+   base 夜间 --color-primary(#60a5fa) 是亮蓝实色 + 白字，深色界面上刺眼（用户反馈）。
+   之前只压了 info/danger/warning，primary 漏了。沿用 info 的深蓝配方，让这类
+   主按钮一并压住亮度；不限定容器，弹窗内、空态内、切换块都覆盖到。 */
+:root[data-theme="base"][data-mode="night"] button.bg-primary.text-text-inverse {
+  background: #1e3a5f;
+  color: #dbeafe;
+}
+:root[data-theme="base"][data-mode="night"] button.bg-primary.text-text-inverse:hover {
+  background: #264a75;
+  color: #eff6ff;
+}
 
 /* ---------- 夜间：网状表格 ---------- */
 :root[data-theme="base"][data-mode="night"] .grid-view-container > div.overflow-auto {
@@ -403,4 +449,67 @@
 }
 :root[data-theme="base"][data-mode="night"] .settings-view button.bg-danger svg {
   color: #fca5a5 !important;
+}
+
+/* ---------- 夜间：表单控件聚焦态 ----------
+   base 夜间此前没有 input:focus 规则，聚焦时走浏览器默认 outline（浅白圈，
+   深色界面上很刺眼）。这里显式去掉默认 outline，换成暗底 + 主题色边框 +
+   低透明光环，与 glass / glass2 夜间的同类配方一致，键盘聚焦仍可见。 */
+:root[data-theme="base"][data-mode="night"] input:not([type]):focus,
+:root[data-theme="base"][data-mode="night"] input[type="text"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="number"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="password"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="search"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="tel"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="email"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="url"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="date"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="datetime-local"]:focus,
+:root[data-theme="base"][data-mode="night"] input[type="time"]:focus,
+:root[data-theme="base"][data-mode="night"] textarea:focus,
+:root[data-theme="base"][data-mode="night"] select:focus {
+  outline: none;
+  border-color: #60a5fa !important;
+  background-color: rgba(30, 58, 95, 0.88) !important;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.28);
+}
+
+/* ---------- 夜间：班级概览「班级信息大框」（时钟 / 倒数日 / 倒计时）----------
+   基础样式在 DashboardView.vue scoped 里写死浅色（白玻璃 + 深字），
+   glass / glass2 夜间文件各有一套翻转，base 夜间此前缺 → 深色下整块浅灰刺眼。
+   这里按 base 夜间色板补同款翻转：深蓝底 + 与其它卡片一致的 #22304a 描边
+   （base 夜间 --color-border 已是深色，不像 glass 会出现白亮线，故不设 transparent）、
+   时钟下传色变量、文字分层。 */
+:root[data-theme="base"][data-mode="night"] .class-info-card {
+  background: rgba(17, 28, 46, 0.62);
+  border-color: #22304a;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="base"][data-mode="night"] .info-divider {
+  background: rgba(148, 163, 184, 0.16);
+}
+:root[data-theme="base"][data-mode="night"] .clock-part {
+  --ac-time-color: #e5edf7;
+  --ac-date-color: #a9b7c9;
+}
+:root[data-theme="base"][data-mode="night"] .class-info-card .class-name,
+:root[data-theme="base"][data-mode="night"] .class-info-card .cd-top {
+  color: #e5edf7;
+}
+:root[data-theme="base"][data-mode="night"] .class-info-card .class-line {
+  color: #c3ccdd;
+}
+:root[data-theme="base"][data-mode="night"] .class-info-card .line-label {
+  color: #8f9cb3;
+}
+:root[data-theme="base"][data-mode="night"] .class-info-card .class-placeholder,
+:root[data-theme="base"][data-mode="night"] .class-info-card .countdown-empty {
+  color: #718096;
+}
+:root[data-theme="base"][data-mode="night"] .class-info-card .cd-bottom {
+  color: #a9b7c9;
+}
+:root[data-theme="base"][data-mode="night"] .class-info-card .cd-item-name,
+:root[data-theme="base"][data-mode="night"] .class-info-card .cd-num {
+  color: #60a5fa;
 }

@@ -114,7 +114,8 @@ const selectedCount = computed(() => { return props.options.filter(o => o.select
 const posStyle = computed(() => { return { left: pos.value.left + 'px', top: pos.value.top + 'px', zIndex: z.value } })
 
 function displayValue(v) { return v === '' ? '（空白）' : v }
-// 面板贴在触发按钮下方；下方空间不足则翻到上方，左右夹在视口内
+// 面板贴在触发按钮下方，左边缘与放大镜按钮对齐、向右展开（原先是右边缘对齐按钮、
+// 向左展开，会盖住前面几列）；下方空间不足则翻到上方，右侧超出视口时往回收。
 function place() {
   const el = panel.value
   const h = el ? el.offsetHeight : 260
@@ -123,7 +124,7 @@ function place() {
   let top = 96
   if (a && typeof a.getBoundingClientRect === 'function') {
     const r = a.getBoundingClientRect()
-    left = Math.min(Math.max(8, r.right - PANEL_W), Math.max(8, window.innerWidth - PANEL_W - 8))
+    left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - PANEL_W - 8))
     top = r.bottom + 6
     if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6)
   }

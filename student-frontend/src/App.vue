@@ -44,9 +44,10 @@
       </div>
     </div>
 
-    <!-- 标题栏待办胶囊点开后的通知中心：只有点开才挂载 -->
+    <!-- 标题栏待办胶囊点开后的通知中心：与其他弹窗一样常驻挂载，显隐交给内部 Transition。
+         不能在关窗时卸载组件，否则 dialog 过渡的离场动画来不及跑。 -->
     <TodoCenterDialog
-      v-if="chromeReady && todoOpen"
+      v-if="chromeReady"
       :visible="todoOpen"
       :items="todoItems"
       @close="todoOpen = false"
@@ -219,6 +220,7 @@ import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
 import { classScopeKey } from './utils/classScope.js'
 import { refreshOverdueLeaveBadge, startOverdueLeaveBadge } from './composables/useOverdueLeaveBadge.js'
 import { useTodoCenter, startTodoCenter, refreshProvisionalStudents } from './composables/useTodoCenter.js'
+import { isGlobalSearchShortcut } from './utils/searchShortcut.js'
 import TodoBell from './components/base/TodoBell.vue'
 import TodoCenterDialog from './components/dialogs/TodoCenterDialog.vue'
 import IconGlyph from './components/base/IconGlyph.vue'
@@ -565,6 +567,19 @@ function winClose() {
 // 内部统一走 prefetch（32ms 防抖 + 同 loader 去重）。
 // 不用自定义指令的原因见 utils/dialogPrefetch.js 顶部说明。
 function preloadSearchDialog() { prefetch(loadSearchDialog) }
+// 全局搜索快捷键 Ctrl/Cmd+K：再按一次收起（toggle）。
+// 登录页不响应——那里搜索按钮本身也不渲染；打开时顺手预取，避免首按等 chunk。
+function onGlobalSearchKeydown(e) {
+  if (route.path === '/login') return
+  if (!isGlobalSearchShortcut(e)) return
+  e.preventDefault()
+  if (searchOpen.value) {
+    searchOpen.value = false
+    return
+  }
+  preloadSearchDialog()
+  searchOpen.value = true
+}
 function preloadThemePickerDialog() { prefetch(loadThemePickerDialog) }
 function preloadAccountDialog() { prefetch(loadAccountDialog) }
 function preloadAiAssistant() { prefetch(loadAiAssistant) }
@@ -813,6 +828,8 @@ watch(() => route.path, (to, from) => {
 
 onMounted(() => {
   disposables.listen(window, 'resize', onWindowResize)
+  // 全局搜索快捷键：注册进 disposables，卸载自动摘
+  disposables.listen(window, 'keydown', onGlobalSearchKeydown)
   // 点击浮窗/图标以外的区域自动收起（与工具箱一致）
   disposables.listen(document, 'mousedown', onDocMouseDown)
   // 启动回报「桌面小组件启用状态」：主进程据此按需创建工具箱浮窗与（如启用）桌面小组件。

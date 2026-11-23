@@ -6,7 +6,7 @@
     </div>
 
     <!-- 标签切换 -->
-    <Tabs :tabs="tabItems" v-model="activeTab">
+    <Tabs :tabs="tabItems" v-model="activeTab" @hover="onTabHover">
       <template #default="{ activeTab }">
         <!-- ==================== 课程表管理标签页 ==================== -->
         <div v-if="activeTab === 'schedule'">
@@ -17,7 +17,7 @@
               <button @click="activeSettingsVisible = true" @mouseenter="prefetch(loadSettingsDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
               <button @click="refreshActive" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="applyMasterVisible = true" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> 从模板导入</button>
-              <button @click="openImport('active')" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
+              <button @click="openImport('active')" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入</button>
               <button @click="openActiveExport" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
             </div>
 
@@ -28,7 +28,7 @@
               min-height="400px"
               action-text="去设置"
               action-icon="settings"
-              secondary-action-text="从 Excel 表格批量导入"
+              secondary-action-text="从表格批量导入"
               secondary-action-icon="download"
               @action="activeSettingsVisible = true"
               @secondary-action="openImport('active')"
@@ -89,7 +89,7 @@
               <button @click="masterSettingsVisible = true" @mouseenter="prefetch(loadSettingsDialog)" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="settings" :size="14" tint="current" /> 设置</button>
               <button @click="refreshMaster" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
               <button @click="applyActiveVisible = true" class="bg-primary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="upload" :size="14" tint="current" /> 从实行导入</button>
-              <button @click="openImport('master')" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入</button>
+              <button @click="openImport('master')" @mouseenter="prefetch(loadImportExcel)" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入</button>
               <button @click="openMasterExport" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
             </div>
 
@@ -100,7 +100,7 @@
               min-height="400px"
               action-text="去设置"
               action-icon="settings"
-              secondary-action-text="从 Excel 表格批量导入"
+              secondary-action-text="从表格批量导入"
               secondary-action-icon="download"
               @action="masterSettingsVisible = true"
               @secondary-action="openImport('master')"
@@ -150,7 +150,7 @@
             />
           </section>
 
-          <!-- 从 Excel 导入（按「行号 + 星期列」匹配当前显示的课表矩阵） -->
+          <!-- 从表格导入（按「行号 + 星期列」匹配当前显示的课表矩阵） -->
           <ImportExcel
             v-if="importMounted"
             :visible="importVisible"
@@ -163,60 +163,8 @@
           />
         </div>
 
-        <!-- ==================== 历史课程表记录标签页 ==================== -->
-        <div v-else-if="activeTab === 'history'" class="relative">
-          <h2 class="text-xl font-semibold text-text flex items-center gap-2 min-h-7 mb-3"><IconGlyph name="calendar" :size="20" /> 历史课程表记录</h2>
-          <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
-            <button @click="refreshHistory" class="bg-text-muted text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
-            <button @click="openHistoryExport" class="bg-warning text-text-inverse px-4 py-2 rounded flex items-center gap-1.5"><IconGlyph name="download" :size="14" tint="current" /> 导出 Excel</button>
-          </div>
-          <Transition :name="slideDir">
-            <div :key="historyCurrentWeek" class="history-content">
-              <!-- 表头先行：加载中也渲染 GridView（列头默认周一~周五，快照到了再校正），
-                   仅在「加载完且无快照」时才换 EmptySnapshot -->
-              <EmptySnapshot v-if="!historyLoading && !historySnapshot" />
-              <GridView
-                v-else
-                :colHeaders="historyColHeaders"
-                :colDates="historyColDates"
-                :title="activeTitle"
-                :rows="historySnapshot ? historyDisplayRows : []"
-                :showPeriodColumn="true"
-                @update:cells="() => {}"
-                @swapRows="() => {}"
-                @swapColumns="() => {}"
-                @update:row-meta="() => {}"
-              />
-            </div>
-          </Transition>
-          <ExportExcel
-            v-if="historyExportMounted"
-            :is-visible="historyExportVisible"
-            :rows="historyExportRows"
-            :fields="historyExportFields"
-            defaultFilename="历史课表记录"
-            @update:is-visible="historyExportVisible = $event"
-          />
-          <!-- 快照菜单栏：周切换 + 下拉框 + 保存/删除按钮，同处一条毛玻璃栏 -->
-          <WeekSwitcher
-            v-model:currentWeek="historyCurrentWeek"
-            :weeks="historyWeeks"
-            @update:currentWeek="loadHistorySnapshot"
-            @direction="onSwitchWeek"
-          >
-            <template #actions>
-              <button
-                @click="captureHistorySnapshot"
-                class="bg-primary text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer inline-flex items-center gap-1"
-              ><IconGlyph name="camera" :size="14" tint="current" /> 保存本周快照</button>
-              <button
-                @click="requestDeleteHistorySnapshot"
-                :disabled="!canDeleteHistorySnapshot"
-                class="bg-danger text-text-inverse px-3 py-1.5 rounded whitespace-nowrap cursor-pointer inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-              ><IconGlyph name="trash" :size="14" tint="current" /> 删除本周快照</button>
-            </template>
-          </WeekSwitcher>
-        </div>
+        <!-- ==================== 历史课程表记录标签页（异步分块） ==================== -->
+        <ScheduleHistoryTab v-else-if="activeTab === 'history'" :ctx="tabCtx" />
       </template>
     </Tabs>
 
@@ -264,12 +212,12 @@
 
 <script setup vapor>
 import { prefetch } from '../../utils/dialogPrefetch.js'
-import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue';
+import { isAddActionForRoute } from '../../utils/addActionRoute.js'
+import { ref, reactive, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import EmptySnapshot from '../../components/base/EmptySnapshot.vue';
 import GridView from '../../components/tables/GridView/GridView.vue';
 import Tabs from '../../components/base/Tabs.vue';
-import WeekSwitcher from '../../components/base/WeekSwitcher.vue';
 import { shiftDateStr, diffDays, localDateStr } from '../../utils/dateTime.js';
 import { buildWeekDateMap } from '../../utils/weekDates.js';
 import { useWeekDates } from '../../composables/useWeekDates.js';
@@ -293,6 +241,13 @@ const ExportExcel = defineAsyncComponent(() => import('../../components/import-e
 const loadImportExcel = () => import('../../components/import-export/ImportExcel.vue');
 const ImportExcel = defineAsyncComponent(loadImportExcel);
 const ConfirmDialog = defineAsyncComponent(() => import('../../components/base/ConfirmDialog.vue'));
+
+// 历史 tab 整块异步化：首次切过去才下载该 chunk，悬停标签即预取
+const loadHistoryTab = () => import('./ScheduleHistoryTab.vue');
+const ScheduleHistoryTab = defineAsyncComponent(loadHistoryTab);
+function onTabHover(value) {
+  if (value === 'history') prefetch(loadHistoryTab);
+}
 
 const API_BASE = '/api';
 
@@ -546,7 +501,7 @@ function openHistoryExport() {
   historyExportVisible.value = true
 }
 
-// ==================== 从 Excel 导入（实行 / 一般课表） ====================
+// ==================== 从表格导入（实行 / 一般课表） ====================
 // 导入按「行号 + 星期列」匹配当前显示的矩阵：行号必须与页面上的节次名一致，
 // 只写入课程行；休息/大课间等非课程行不做导入。导出的表格可原样导回。
 const importVisible = ref(false)
@@ -610,8 +565,8 @@ async function onImportData({ fields, rows }) {
   // 结果是本地表已换、库里没存、也没有成功提示（审查 v7 · #25）。
   const ok = await (isMaster ? master.saveMaster() : active.saveActive())
   if (!ok) return
-  recordGridSnapshotUndo('课程表', isMaster ? 'master_schedule' : 'schedule', prev, next, '从 Excel 导入')
-  notifySuccess(`已从 Excel 导入${isMaster ? '一般课表' : '实行课表'}`)
+  recordGridSnapshotUndo('课程表', isMaster ? 'master_schedule' : 'schedule', prev, next, '从表格导入')
+  notifySuccess(`已从表格导入${isMaster ? '一般课表' : '实行课表'}`)
 }
 
 const weekNumber = computed(() => {
@@ -644,6 +599,21 @@ const deleteSnapshotMessage = computed(() => {
   return `确定删除 ${String(w).slice(0, 10)} ~ ${shiftDateStr(w, 6)} 的历史快照吗？删除后不可恢复。`;
 });
 
+// 异步 tab 子组件从 ctx 共享状态：父组件继续持有数据加载 / focus / undo，
+// 这里补齐两个 tab 模板用到的顶层绑定（ref 引用原样透传，子组件模板自动解包）。
+// 必须放在 todayName / activeColDates 等声明之后，提前引用会撞 TDZ。
+Object.assign(ctx, {
+  prefetch, loadSettingsDialog, loadImportExcel,
+  courseCandidates,
+  activeTitle, todayName, activeColDates, masterColDates, historyColDates,
+  historyDisplayRows, historyExportVisible, historyExportMounted,
+  historyExportFields, historyExportRows, canDeleteHistorySnapshot,
+  refreshHistory, openHistoryExport, onImportData,
+});
+// 给异步 tab 用的 reactive 视图：ctx 里的 ref 会自动解包，
+// 子组件模板读写 ctx.xxx 等价于本组件 xxx.value，写回落到同一份 ref。
+const tabCtx = reactive(ctx);
+
 watch(activeTab, (newTab) => {
   if (newTab === 'history') {
     if (historyWeeks.value.length === 0) {
@@ -661,6 +631,14 @@ watch(activeTab, (newTab) => {
 })
 // 跨页定位：/schedule?focus=s:节次:周几（s=实行课表，m=一般课表）→ 切到课程表页签并高亮该格
 watch(() => route.query.focus, () => { _applyRowFocus() })
+// 首页空态「去设置课程表」：?action=add 直接打开课表设置弹窗。
+// 打开后立刻清掉 action：本页被 KeepAlive 缓存，若留着这个 query，下次从首页点同一按钮
+// （路径不变、query 也没变）watch 不会重新触发，弹窗就打不开了。
+watch(() => route.query.action, () => {
+  if (!isAddActionForRoute(route, 'schedule')) return
+  router.replace({ path: route.path, query: { ...route.query, action: undefined } })
+  activeSettingsVisible.value = true
+}, { immediate: true })
 // 懒加载弹窗保活：首次打开后保持挂载，关闭只降 visible，保留退出动画
 watch(masterSettingsVisible, (n) => { if (n) masterSettingsMounted.value = true })
 watch(masterExportVisible, (n) => { if (n) masterExportMounted.value = true })
@@ -688,25 +666,3 @@ onActivated(() => {
   retryFailedLoads();
 })
 </script>
-
-<style scoped>
-/* 历史表格周切换滑动动画：新旧表同向并行滑动（推拉感），不影响 WeekSwitcher */
-.history-content { width: 100%; }
-.next-enter-active, .next-leave-active,
-.prev-enter-active, .prev-leave-active {
-  transition: transform 0.25s ease, opacity 0.25s ease;
-}
-/* 退场表绝对定位到容器顶部，与进场表重叠实现并行滑动 */
-.next-leave-active, .prev-leave-active {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-}
-/* 下一周：向右推进（新表从左侧跟进向右移动，旧表向右滑出，同方向） */
-.next-enter-from { transform: translateX(-60px); opacity: 0; }
-.next-leave-to   { transform: translateX(60px); opacity: 0; }
-/* 上一周：向左推进（新表从右侧跟进向左移动，旧表向左滑出，同方向） */
-.prev-enter-from { transform: translateX(60px); opacity: 0; }
-.prev-leave-to   { transform: translateX(-60px); opacity: 0; }
-</style>

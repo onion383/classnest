@@ -489,6 +489,7 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
+import { isAddActionForRoute } from '../utils/addActionRoute.js'
 import { getToken } from '../utils/authStorage.js'
 import { ref, computed, nextTick, onMounted, onActivated, onDeactivated, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -1755,6 +1756,13 @@ onActivated(() => {
 })
 watch(() => route.query.focus, applyFocus)
 watch(() => route.query.photo, applyPhotoFocus)
+// 首页空态「去上传照片」：相册照片来自本地文件夹扫描、无独立上传弹窗，落到「新建相册」弹窗。
+// 随后清 query 防重复触发（KeepAlive 缓存页）
+watch(() => route.query.action, () => {
+  if (!isAddActionForRoute(route, 'album')) return
+  router.replace({ path: route.path, query: { ...route.query, action: undefined } })
+  openNewAlbum()
+}, { immediate: true })
 
 // 被 KeepAlive 缓存时定时器要停（见 scanWatch 注释），否则切走后仍在发请求。
 // 顺手记下滚动位置 —— 只能读 onScroll 维护的 ref：onDeactivated 触发时 DOM 已被移出文档，

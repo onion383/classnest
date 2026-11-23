@@ -20,6 +20,8 @@ const vm = require('node:vm')
 const ROOT = path.join(__dirname, '../..')
 const TIMELINE = fs.readFileSync(path.join(ROOT, 'student-frontend/src/components/base/LeaveTimeline.vue'), 'utf8')
 const ACTIVITIES = fs.readFileSync(path.join(ROOT, 'student-frontend/src/views/ActivitiesView.vue'), 'utf8')
+// 倒计时时间轴已拆到异步组件（tab 分块）：函数还在父组件，模板判据要跟着结构走到子组件
+const COUNTDOWN_TAB = fs.readFileSync(path.join(ROOT, 'student-frontend/src/views/ActivitiesCountdownTab.vue'), 'utf8')
 
 // 从真实源码里按花括号配平抽出一个完整函数声明（源码改了，测试跟着变）
 function extractFn(src, name) {
@@ -143,10 +145,10 @@ test('源码判据：组件真的按节点取 label、缓存真的比 label/extr
   assert.match(HAYSTACK_SRC, /hit\.label === label && hit\.extras === extras/, '缓存快照要比 label/extras')
   assert.match(HAYSTACK_SRC, /haystackCache\.set\(n, \{ values: values\.slice\(\), label, extras, text \}\)/)
 
-  const from = ACTIVITIES.indexOf('<!-- 倒计时时间轴 -->')
+  const from = COUNTDOWN_TAB.indexOf('<!-- 倒计时时间轴 -->')
   assert.ok(from >= 0, '倒计时时间轴块必须存在')
-  const cdBlock = ACTIVITIES.slice(from, ACTIVITIES.indexOf('</LeaveTimeline>', from))
-  assert.match(cdBlock, /:search-extras="countdownSearchText"/, '统一入口必须真的被倒计时页用上')
+  const cdBlock = COUNTDOWN_TAB.slice(from, COUNTDOWN_TAB.indexOf('</LeaveTimeline>', from))
+  assert.match(cdBlock, /:search-extras="ctx\.countdownSearchText"/, '统一入口必须真的被倒计时页用上')
 
   assert.match(EXTRAS_SRC, /node\.days >= 0/, '补词必须按状态分叉')
   assert.match(EXTRAS_SRC, /距离该事件还有/)

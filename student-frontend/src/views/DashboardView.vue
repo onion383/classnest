@@ -92,7 +92,7 @@
           <div v-else class="countdown-empty">暂无倒计时</div>
           <!-- 与下方 7 张卡片同一套入口：空态「去XX」、有数据「转到XX页面」。
                倒计时没有独立路由，管理入口在活动页的倒计时页签（?tab=countdown）。 -->
-          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/activities?tab=countdown')">
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goToCountdown">
             {{ nearestCountdown ? '转到倒计时页面' : '去添加倒计时' }}
           </button>
         </template>
@@ -112,7 +112,7 @@
             <div class="skeleton-block sk-btn"></div>
           </div>
           <template v-else>
-          <div class="space-y-1.5">
+          <div class="space-y-1.5 card-scroll">
             <div v-for="d in todayDuties" :key="d.task" class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-bg-secondary/60">
               <span class="text-text text-sm shrink-0">{{ d.task }}</span>
               <span class="text-text-muted text-sm truncate">
@@ -123,7 +123,7 @@
           </div>
           <!-- 卡片底部入口：空态时是「去XX」的引导，有数据时是「转到XX页面」的跳转，同一个按钮同一个位置，
                两种状态切换时高度不跳。卡片整体已可点击（.card-link），这里必须 @click.stop，否则会 push 两次。 -->
-          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/duty')">
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goToMaybeAdd('/duty', todayDuties.length === 0)">
             {{ todayDuties.length ? '转到值日页面' : '去设置值日' }}
           </button>
           </template>
@@ -153,7 +153,7 @@
             <span class="text-text-muted">本月支出 <b :key="'fee-out-' + showFee" class="text-warning fee-blur-in fee-amount-sm">{{ showFee ? formatMoney(monthExpense) : '••' }}</b></span>
           </div>
           <!-- 班费没有「列表空态」：余额恒显示数字，无记录时是 0.00，所以只能按记录条数决定按钮文案 -->
-          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/fee')">
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goToMaybeAdd('/fee', !summary.feeCount)">
             {{ summary.feeCount ? '转到班费页面' : '去记一笔班费' }}
           </button>
           </template>
@@ -177,7 +177,7 @@
             </div>
           </div>
           <div v-else class="text-center py-5 text-text-muted text-sm">今日无课程</div>
-          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/schedule')">
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goToMaybeAdd('/schedule', todayCourseList.length === 0)">
             {{ todayCourseList.length ? '转到课程表页面' : '去设置课程表' }}
           </button>
           </template>
@@ -199,7 +199,7 @@
             </div>
           </div>
           <div v-else class="text-center py-5 text-text-muted text-sm">今日暂无加分</div>
-          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/scores')">
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goToMaybeAdd('/scores', topScores.length === 0)">
             {{ topScores.length ? '转到加分页面' : '去登记加分' }}
           </button>
           </template>
@@ -215,7 +215,7 @@
             <div class="skeleton-block sk-btn"></div>
           </div>
           <template v-else>
-          <div v-if="todayActivities.length" class="relative pl-5">
+          <div v-if="todayActivities.length" class="relative pl-5 card-scroll">
             <div v-for="(a, i) in todayActivities" :key="i" class="relative pb-4 last:pb-0">
               <span class="absolute -left-5 top-1.5 w-2 h-2 rounded-full bg-primary"></span>
               <div class="text-text text-sm">{{ a.主题 }}</div>
@@ -223,7 +223,7 @@
             </div>
           </div>
           <div v-else class="text-center py-5 text-text-muted text-sm">今日暂无活动</div>
-          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/activities')">
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goToMaybeAdd('/activities', todayActivities.length === 0)">
             {{ todayActivities.length ? '转到活动中心' : '去添加活动' }}
           </button>
           </template>
@@ -240,14 +240,14 @@
             <div class="skeleton-block sk-btn"></div>
           </div>
           <template v-else>
-          <div v-if="currentLeaveList.length" class="space-y-1.5">
+          <div v-if="currentLeaveList.length" class="space-y-1.5 card-scroll">
             <div v-for="l in currentLeaveList" :key="l.id" class="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-secondary/60">
               <span class="text-text text-sm flex-1 truncate">{{ l.姓名 }}</span>
               <span class="text-text-muted text-xs shrink-0">{{ formatLeaveTime(l) }}</span>
             </div>
           </div>
           <div v-else class="text-center py-5 text-text-muted text-sm">今日无请假</div>
-          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goTo('/leaves')">
+          <button type="button" class="card-go-btn bg-info text-text-inverse rounded" @click.stop="goToMaybeAdd('/leaves', currentLeaveList.length === 0)">
             {{ currentLeaveList.length ? '转到请假页面' : '去登记请假' }}
           </button>
           </template>
@@ -616,11 +616,32 @@ const monthExpense = computed(() => summary.value.monthExpense || 0)
 function goTo(to) {
   router.push(to)
 }
-// 点「班级相册」卡片/配图：带上当前这张图的 id，相册页会滚到它所在的那一天并打开大图。
-// 没有 id（后端没给头、图还没加载出来）时行为与以前完全一致：只跳到相册页。
+// 空态蓝按钮「去 XX」：跳到目标页的同时带 action=add，目标页读到后就唤起对应的新增弹窗。
+// 有数据时同一按钮文案变成「转到 XX 页面」，只跳转、不带 flag（看数据，不是加数据）。
+function goToMaybeAdd(to, empty) {
+  const target = typeof to === 'string' ? { path: to } : to
+  if (!empty) {
+    router.push(target)
+    return
+  }
+  router.push({ ...target, query: { ...(target.query || {}), action: 'add' } })
+}
+// 倒计时没有独立路由，管理入口在活动页的倒计时页签；空态时连 action=add 一起带过去
+function goToCountdown() {
+  goToMaybeAdd({ path: '/activities', query: { tab: 'countdown' } }, !nearestCountdown.value)
+}
+// 点「班级相册」卡片/配图：有图片 id 时带上它，相册页滚到那天并打开大图；
+// 完全没图时空态按钮是「去上传照片」，带 action=add 让相册页开「新建相册」弹窗；
+// 有图但没 id（后端没给头）时行为与以前一致：只跳到相册页。
 function goToAlbumPhoto() {
   const id = albumPhotoId.value
-  router.push(id ? { path: '/album', query: { photo: String(id) } } : '/album')
+  if (id) {
+    router.push({ path: '/album', query: { photo: String(id) } })
+  } else if (!albumPhoto.value) {
+    router.push({ path: '/album', query: { action: 'add' } })
+  } else {
+    router.push('/album')
+  }
 }
 function toggleFee() {
   showFee.value = !showFee.value
@@ -997,6 +1018,27 @@ onBeforeUnmount(() => {
   width: 100%;
   display: inline-block; /* 保持卡片内块级尺寸稳定 */
   vertical-align: top;
+}
+
+/* 卡片内的长列表：超过上限就在卡片内滚，不再把整列拉成一根很高的柱子。
+   只给「长度跟着数据走」的三张卡用（今日值日 / 今日活动 / 今日请假）；
+   今日加分由后端 LIMIT 4、今日课程受课表行数限制、班费恒 3 行、相册舞台写死 176px，都不需要。
+   上限 320px 是按行高反推的：值日/请假每行 42px ≈ 7 行，活动（时间轴项更高）≈ 5 项。
+
+   两点不是随手写的：
+   - overscroll-behavior: contain —— 卡片内滚到底/到顶时，滚动不再传导给外层 <main> 带着整个看板一起走
+     （触控板和滚轮最容易踩到，不写的话「滚卡片」和「滚页面」会黏在一起）。
+   - scrollbar-width / scrollbar-color 写在元素上而不是用 ::-webkit-scrollbar：
+     各主题里有 `:root[data-theme="base"] ::-webkit-scrollbar { width: 10px }` 这类后代选择器，
+     单类名压不过它（特异性 0,2,0 > 0,1,0），会得到一条 10px 的粗滚动条；
+     而 Chromium 只要在元素上看到非 auto 的标准属性，就直接忽略 ::-webkit 皮肤，
+     所以这两行才能稳定拿到「细 + 跟随主题」的效果，四套主题都不用各写一份配色。 */
+.card-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
 }
 
 .dashboard-page ::v-deep(.icon-glyph) {

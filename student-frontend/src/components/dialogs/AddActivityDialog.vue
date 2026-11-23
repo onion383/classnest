@@ -1,16 +1,16 @@
 <template>
   <DialogShell :visible="visible" :z-index="10001" @overlay="$emit('cancel')">
     <div class="bg-surface p-5 rounded-xl w-[520px] max-w-full shadow-lg dialog-card">
-      <div class="flex items-center gap-3 mb-4">
+      <div class="flex items-center justify-between gap-3 mb-4">
         <h3 class="text-lg font-bold text-text">{{ title }}</h3>
         <button
           v-if="!isEdit"
           type="button"
           @click="$emit('import')"
           class="bg-warning hover:bg-warning-hover text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-theme cursor-pointer"
-          title="从 Excel 表格批量导入"
+          title="从表格批量导入"
         >
-          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+          <IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入
         </button>
       </div>
 

@@ -596,6 +596,17 @@
 :root[data-theme="glass2"] table .text-text-inverse\/70 {
   color: #3d4661 !important;
 }
+/* 例外：操作列那些「实色底 + 白字」的按钮（修改=bg-info / 删除=bg-danger 等）
+   也带 text-text-inverse，被上面那条宽规则一起改成深灰 #3d4661，在蓝/红实底上几乎看不清。
+   上面那条本意是给「浅玻璃底上的白字」改深字，不该碰实色按钮。这里按按钮实色开例外，
+   选择器比上面更具体（多了 button + 具体色类），把白字找回。 */
+:root[data-theme="glass2"] table button.bg-info.text-text-inverse,
+:root[data-theme="glass2"] table button.bg-danger.text-text-inverse,
+:root[data-theme="glass2"] table button.bg-primary.text-text-inverse,
+:root[data-theme="glass2"] table button.bg-success.text-text-inverse,
+:root[data-theme="glass2"] table button.bg-warning.text-text-inverse {
+  color: var(--color-text-inverse, #ffffff) !important;
+}
 /* 数据行：比空数据区亮一档，形成可辨识的层次 */
 :root[data-theme="glass2"] table tbody tr td {
   background-color: rgba(255, 255, 255, calc(var(--g2-a) + 0.2)) !important;
@@ -632,9 +643,15 @@
 :root[data-theme="glass2"] table select:focus {
   background-color: var(--alpha-white-60) !important;
   border-color: var(--g2-accent) !important;
+  /* 上面「格内输入框透明」那条带 box-shadow:none !important，把通用 input:focus
+     的焦点高光圈也一起干掉了。这里补回来，与通用 input:focus 的 --g2-accent-ring
+     同款；带 !important 且写在后面，压过那条 none。 */
+  box-shadow: 0 0 0 3px var(--g2-accent-ring) !important;
 }
-/* 表格内的辅助元素（拖拽把手、操作列容器等）不要带边框/投影 */
-:root[data-theme="glass2"] table [class*="border"]:not(th):not(td) {
+/* 表格内的辅助元素（拖拽把手、操作列容器等）不要带边框/投影。
+   排除 input/select：格内编辑框带 border-transparent 类，会被这条的 box-shadow:none !important
+   压住上面刚补的焦点高光圈 —— 辅助元素去投影是对的，但不能连编辑框的焦点反馈一起去掉。 */
+:root[data-theme="glass2"] table [class*="border"]:not(th):not(td):not(input):not(select) {
   border: none !important;
   border-width: 0 !important;
   box-shadow: none !important;
@@ -920,4 +937,29 @@
   --sidebar-arrow: rgba(255, 255, 255, 0.72);
   --sidebar-arrow-hover: #ffffff;
   --sidebar-arrow-bg-hover: rgba(255, 255, 255, 0.14);
+}
+
+/* ---------- 空态配色：玻璃主题底色下重定图标/文字/按钮 ----------
+   同 theme-glass.css 的口径：scoped 默认图标/文字偏暗、按钮淡蓝实底刺眼，
+   这里提亮图标/文字、按钮改深磨砂，深/浅壁纸与日/夜都协调。 */
+:root:is([data-theme="glass2"]) .dt-empty-icon,
+:root:is([data-theme="glass2"]) .grid-empty-icon {
+  color: #a9b8dc;
+}
+:root:is([data-theme="glass2"]) .dt-empty-text,
+:root:is([data-theme="glass2"]) .grid-empty-text {
+  color: #a9b8dc;
+}
+:root:is([data-theme="glass2"]) .dt-empty-btn,
+:root:is([data-theme="glass2"]) .grid-empty-btn,
+:root:is([data-theme="glass2"]) .empty-action-btn {
+  color: #c7d7fd;
+  background: rgba(39, 49, 78, 0.38);
+  border-color: rgba(129, 140, 248, 0.36);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+:root:is([data-theme="glass2"]) .dt-empty-btn:hover,
+:root:is([data-theme="glass2"]) .grid-empty-btn:hover,
+:root:is([data-theme="glass2"]) .empty-action-btn:hover {
+  background: rgba(39, 49, 78, 0.54);
 }

@@ -10,135 +10,13 @@
     </div>
 
     <!-- 切换栏 -->
-    <Tabs :tabs="tabs" v-model="activeTab" />
+    <Tabs :tabs="tabs" v-model="activeTab" @hover="onTabHover" />
 
-    <!-- ==================== 今日加分 ==================== -->
-    <div v-if="activeTab === 'today'">
-      <!-- 数据看板 -->
-      <div class="grid grid-cols-4 gap-4 mb-6">
-        <div class="bg-surface shadow-md rounded-xl border border-border p-4">
-          <div class="flex items-center gap-1.5 text-sm text-text-secondary">
-            <span class="w-2 h-2 rounded-full bg-success inline-block"></span> {{ addPeopleLabel }}
-          </div>
-          <div class="text-2xl font-bold text-success">{{ todayAddPeople }} 人</div>
-        </div>
-        <div class="bg-surface shadow-md rounded-xl border border-border p-4">
-          <div class="flex items-center gap-1.5 text-sm text-text-secondary">
-            <span class="w-2 h-2 rounded-full bg-success inline-block"></span> 加分项目
-          </div>
-          <div class="text-2xl font-bold text-success">{{ todayAddItems }} 项</div>
-        </div>
-        <div class="bg-surface shadow-md rounded-xl border border-border p-4">
-          <div class="flex items-center gap-1.5 text-sm text-text-secondary">
-            <span class="w-2 h-2 rounded-full bg-danger inline-block"></span> {{ subPeopleLabel }}
-          </div>
-          <div class="text-2xl font-bold text-danger">{{ todaySubPeople }} 人</div>
-        </div>
-        <div class="bg-surface shadow-md rounded-xl border border-border p-4">
-          <div class="flex items-center gap-1.5 text-sm text-text-secondary">
-            <span class="w-2 h-2 rounded-full bg-danger inline-block"></span> 扣分项目
-          </div>
-          <div class="text-2xl font-bold text-danger">{{ todaySubItems }} 项</div>
-        </div>
-      </div>
+    <!-- ==================== 今日加分（异步分块） ==================== -->
+    <ScoreTodayTab v-if="activeTab === 'today'" :ctx="tabCtx" />
 
-      <!-- 工具栏 -->
-      <div class="mb-4 flex items-center gap-3 opbar">
-        <button @mouseenter="prefetch(loadAddScoreDialog)" @click="openAdd" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">＋ 添加{{ isGroup ? '小组' : '个人' }}加分</button>
-        <button @click="refresh" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1 btn-refresh transition-theme"><IconGlyph name="refresh" :size="14" tint="current" /> 刷新</button>
-        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
-        </button>
-        <button @mouseenter="prefetch(loadExportExcel)" @click="openExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1 transition-theme"><IconGlyph name="download" :size="14" tint="current" /> 导出{{ isGroup ? '小组' : '个人' }}加分</button>
-      </div>
-
-      <!-- 今日时间轴 -->
-      <LeaveTimeline
-        :nodes="timelineNodes"
-        :node-types="timelineNodeTypes"
-        :type-options="['加分', '扣分']"
-        :title="isGroup ? '今日小组加减分时间轴' : '今日个人加减分时间轴'"
-        :empty-text="isGroup ? '今天还没有小组加分' : '今天还没有人加分'"
-        empty-action-text="去加分"
-        empty-secondary-action-text="从 Excel 表格批量导入"
-        :loading="loading"
-        align-right
-        @empty-action="openAdd"
-        @empty-secondary-action="openImportDialog"
-      >
-        <template #content="{ node }">
-          <div class="text-sm text-text">
-            <span class="font-medium">{{ node.person }}</span>
-            <span class="text-text-secondary"> 因为 </span>
-            <span>{{ node.reason }}</span>
-            <span class="font-bold ml-1" :class="node.isSub ? 'text-danger' : 'text-success'">{{ node.sign }}</span>
-          </div>
-        </template>
-        <template #ops="{ node }">
-          <div class="flex items-center gap-1.5">
-            <button @click="openEdit(recordByKey(node.key))" class="bg-info hover:bg-blue-700 text-text-inverse px-2.5 py-0.5 rounded text-xs transition-theme">编辑</button>
-            <button @click="askDelete(recordByKey(node.key))" class="bg-danger hover:bg-red-700 text-text-inverse px-2.5 py-0.5 rounded text-xs transition-theme">删除</button>
-          </div>
-        </template>
-      </LeaveTimeline>
-    </div>
-
-    <!-- ==================== 加分统计 ==================== -->
-    <div v-if="activeTab === 'stats'">
-      <!-- 子标题 + 工具栏（统计范围切换右对齐） -->
-      <h3 class="text-xl font-semibold text-text mb-4 flex items-center gap-2 min-h-7"><IconGlyph name="chart" :size="20" /> 加分统计</h3>
-      <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
-        <button @click="refreshStats" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh transition-theme">
-          <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
-        </button>
-        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
-        </button>
-        <button @click="openStatsExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
-        </button>
-        <AppSelect v-model="statMode" :options="statModeOptions" class="w-32 ml-auto" />
-      </div>
-
-      <div class="bg-surface border border-border rounded-xl p-5 mb-6">
-        <StatBarList
-          :rows="statRows"
-          :bar-width="barWidth"
-          :bar-class="barColor"
-          :value-text="valueText"
-          :value-class="valueColor"
-          :row-key="(row) => statMode + '-' + (row.key || row.name)"
-          :empty-text="'暂无' + (isGroup ? '小组' : '个人') + '加分记录'"
-        />
-      </div>
-
-      <!-- 加分记录 -->
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-base font-bold text-text flex items-center gap-2"><IconGlyph name="clipboard" :size="18" /> {{ isGroup ? '小组' : '个人' }}加分记录</h3>
-      </div>
-      <div class="bg-surface border border-border rounded-xl overflow-hidden">
-        <DynamicTable
-          :fields="scoreFields"
-          :rows="scoreRows"
-          :editing-cell="editingCell"
-          hide-select-all
-          hide-move-buttons
-          hide-add-row
-          :empty-label="isGroup ? '小组加分' : '个人加分'"
-          :empty-action-text="isGroup ? '＋ 添加小组加分' : '＋ 添加个人加分'"
-          empty-import-text="从 Excel 表格批量导入"
-          @add-new-row-at-bottom="openAdd"
-          @empty-import="openImportDialog"
-          @start-edit="startEdit"
-          @save-cell="saveCell"
-          @delete-row="onDeleteRow"
-          @swap-rows="onSwapRows"
-          @scroll-end="loadMore"
-          @swap-columns="onSwapColumns"
-          @edit-row="openEditRow"
-        />
-      </div>
-    </div>
+    <!-- ==================== 加分统计（异步分块） ==================== -->
+    <ScoreStatsTab v-else-if="activeTab === 'stats'" :ctx="tabCtx" />
 
     <!-- 添加/编辑加分弹窗 -->
     <AddScoreDialog
@@ -177,7 +55,7 @@
       @update:is-visible="exportVisible = $event"
     />
 
-    <!-- 从 Excel 导入弹窗 -->
+    <!-- 从表格导入弹窗 -->
     <ImportExcel
       v-if="importMounted"
       :visible="importDialogVisible"
@@ -192,6 +70,7 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
+import { isAddActionForRoute } from '../utils/addActionRoute.js'
 import { ref, reactive, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useDisposables } from '../utils/disposables.js'
 import { useRoute, useRouter } from 'vue-router'
@@ -199,9 +78,6 @@ import { reportError } from '../utils/reportError.js'
 import axios from 'axios'
 import AppSelect from '../components/base/AppSelect.vue'
 import Tabs from '../components/base/Tabs.vue'
-import LeaveTimeline from '../components/base/LeaveTimeline.vue'
-import StatBarList from '../components/base/StatBarList.vue'
-import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import { zhCollator } from '../utils/collator.js'
 import { aggregatePersonal, countDistinctPeople } from '../utils/scoreAggregate.js'
 import { useNotification } from '../composables/useNotification.js'
@@ -219,6 +95,16 @@ const loadExportExcel = () => import('../components/import-export/ExportExcel/Ex
 const ExportExcel = defineAsyncComponent(loadExportExcel)
 const loadImportExcel = () => import('../components/import-export/ImportExcel.vue')
 const ImportExcel = defineAsyncComponent(loadImportExcel)
+
+// 两个 tab 整块异步化：首次切过去才下载对应 chunk，悬停标签即预取
+const loadTodayTab = () => import('./ScoreTodayTab.vue')
+const ScoreTodayTab = defineAsyncComponent(loadTodayTab)
+const loadStatsTab = () => import('./ScoreStatsTab.vue')
+const ScoreStatsTab = defineAsyncComponent(loadStatsTab)
+function onTabHover(value) {
+  if (value === 'today') prefetch(loadTodayTab)
+  else if (value === 'stats') prefetch(loadStatsTab)
+}
 
 const API = '/api'
 
@@ -247,6 +133,10 @@ const pageState = reactive({
 // 声明必须在这里（loadAll 在模块顶层就会被调用），放到函数旁边会踩 TDZ ——
 // 「Cannot access 'fullLoaded' before initialization」会被 catch 吞成「加载失败」。
 const fullLoaded = reactive({ personal: false, group: false })
+// 全量拉取的在途单飞：fullLoaded 只在响应回来后才置 true，而跨页定位 / 切加分对象 /
+// 切统计页签三处可能在同一轮里并发触发同一个 mode —— 没有这张表就会重复发整表请求。
+// 存的是 Promise（非响应式），谁先发谁入表，后来者直接 await 同一个 Promise。
+const fullInFlight = { personal: null, group: null }
 const statMode = ref('add')
 const addDialogVisible = ref(false)
 const addDialogMounted = ref(false)
@@ -377,7 +267,7 @@ const scoreFields = computed(() => scoreCols.value.map(name => ({
   options: name === '类型' ? ['加分', '扣分'] : undefined
 })))
 
-// 从 Excel 导入：表头与页面导出的列保持一致；个人/小组由当前「加分对象」决定
+// 从表格导入：表头与页面导出的列保持一致；个人/小组由当前「加分对象」决定
 const importFields = computed(() => isGroup.value
   ? [{ name: '小组' }, { name: '成员数' }, { name: '类型' }, { name: '项目' }, { name: '分值' }, { name: '加分时间' }, { name: '原因' }]
   : [{ name: '姓名' }, { name: '学号' }, { name: '类型' }, { name: '项目' }, { name: '分值' }, { name: '加分时间' }, { name: '原因' }])
@@ -397,6 +287,12 @@ watch(importDialogVisible, (v) => { if (v) importMounted.value = true })
 watch(() => confirm.value.visible, (v) => { if (v) confirmMounted.value = true })
 // 跨页定位：标题栏全局搜索点「加扣分记录」结果跳转 /scores?focus=<id>
 watch(() => route.query.focus, () => { _applyRowFocus() })
+// 首页空态「去登记加分」：?action=add 直接打开新增弹窗，随后清 query 防重复触发（KeepAlive 缓存页）
+watch(() => route.query.action, () => {
+  if (!isAddActionForRoute(route, 'scoreManage')) return
+  router.replace({ path: route.path, query: { ...route.query, action: undefined } })
+  openAdd()
+}, { immediate: true })
 
 // 与原 created() 等价：发起加载但不阻塞渲染（Vue 本就不等待 async created）
 loadAll()
@@ -452,7 +348,10 @@ function _applyRowFocus() {
 // 统计全量是否已加载的声明已上移到 pageState 旁边（顶层 loadAll 会先用到它，见那里的注释）
 
 function resetPaging() {
-  for (const k of ['personal', 'group']) Object.assign(pageState[k], { offset: 0, hasMore: true, loading: false })
+  for (const k of ['personal', 'group']) {
+    Object.assign(pageState[k], { offset: 0, hasMore: true, loading: false })
+    fullInFlight[k] = null
+  }
   fullLoaded.personal = false
   fullLoaded.group = false
 }
@@ -499,21 +398,30 @@ async function loadToday() {
 }
 
 // 把某个加分对象补成全量（列表分页只加载了第一页，统计/跨页定位需要完整数据）
-async function loadFullOf(mode) {
-  try {
-    const res = await axios.get(`${API}/scores`, { params: { source: mode } })
-    const rows = (res.data && res.data.data) || []
-    if (mode === 'group') groupScores.value = rows
-    else scores.value = rows
-    Object.assign(pageState[mode], { offset: rows.length, hasMore: false })
-    fullLoaded[mode] = true
-    buildScoreRows()
-    return true
-  } catch (err) {
-    console.error('[score] 加载失败:', err)
-    useNotification().error('加载失败')
-    return false
-  }
+// 在途单飞：同一 mode 并发调用共享同一个 Promise；失败后清掉单飞槽，允许下次重试。
+function loadFullOf(mode) {
+  if (fullLoaded[mode]) return Promise.resolve(true)
+  if (fullInFlight[mode]) return fullInFlight[mode]
+  const task = (async () => {
+    try {
+      const res = await axios.get(`${API}/scores`, { params: { source: mode } })
+      const rows = (res.data && res.data.data) || []
+      if (mode === 'group') groupScores.value = rows
+      else scores.value = rows
+      Object.assign(pageState[mode], { offset: rows.length, hasMore: false })
+      fullLoaded[mode] = true
+      buildScoreRows()
+      return true
+    } catch (err) {
+      console.error('[score] 加载失败:', err)
+      useNotification().error('加载失败')
+      return false
+    } finally {
+      fullInFlight[mode] = null
+    }
+  })()
+  fullInFlight[mode] = task
+  return task
 }
 async function loadFullForStats() {
   return loadFullOf(scoreMode.value)
@@ -555,6 +463,21 @@ watch(scoreMode, async (mode) => {
 watch(activeTab, async (tab) => {
   if (tab === 'stats' && !fullLoaded[scoreMode.value]) await loadFullForStats()
 })
+
+// 异步 tab 子组件共享的 reactive 上下文：字段都是本组件的 ref / 函数，
+// reactive 解包后子组件模板读写 ctx.xxx 等价于本组件 xxx.value。
+// 数据加载 / focus / undo / 在途单飞全部留在父组件，这里只做透传。
+const tabCtx = reactive({
+  prefetch, loadAddScoreDialog, loadImportExcel, loadExportExcel,
+  openAdd, openImportDialog, refresh, refreshStats, openExport, openStatsExport,
+  openEdit, askDelete, recordByKey, startEdit, saveCell, onDeleteRow,
+  onSwapRows, onSwapColumns, loadMore, openEditRow,
+  barWidth, barColor, valueColor, valueText,
+  isGroup, loading, importDialogVisible,
+  addPeopleLabel, subPeopleLabel, todayAddPeople, todayAddItems, todaySubPeople, todaySubItems,
+  timelineNodes, timelineNodeTypes,
+  statMode, statModeOptions, statRows, scoreFields, scoreRows, editingCell,
+})
 // 跨天：今日卡片的日期变了，要重拉今日那份（列表不受影响）
 watch(todayStart, () => { void loadToday() })
 async function refreshStats() {
@@ -572,7 +495,7 @@ async function onImportData({ fields, rows }) {
     reportError(err, { action: '导入加分记录' })
   }
 }
-// 表格空态里的「从 Excel 表格批量导入」：预取导入弹窗 chunk 后打开
+// 表格空态里的「从表格批量导入」：预取导入弹窗 chunk 后打开
 function openImportDialog() {
   prefetch(loadImportExcel)
   importDialogVisible.value = true
@@ -581,7 +504,7 @@ function openAdd() {
   editingRecord.value = null
   addDialogVisible.value = true
 }
-// 加分弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+// 加分弹窗右上角（标题行右端）的「从表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
 function openBatchImportFromAdd() {
   addDialogVisible.value = false
   importMounted.value = true

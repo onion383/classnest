@@ -44,6 +44,7 @@
 </template>
 
 <script setup vapor>
+import '../../styles/dialog-transition.css'
 defineProps({
   visible: { type: Boolean, default: false },
   items: { type: Array, default: () => [] },

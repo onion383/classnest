@@ -97,7 +97,6 @@
         Copyright &copy; 无聊的小洋葱 2026 &nbsp;|&nbsp;
         <a href="https://github.com/onion383/classnest" target="_blank" rel="noopener" @click="openExternal($event, 'https://github.com/onion383/classnest')" class="text-primary hover:underline">仓库地址</a>
       </div>
-      <div class="text-text-muted/50">https://github.com/onion383/classnest</div>
     </div>
 
     <!-- 软件自己的 MIT 协议与第三方许可证共用下方同一个弹窗（见 OWN_LICENSE），
@@ -678,6 +677,10 @@ const libGroups = [
       { desc: 'ZIP 解压', name: 'yauzl', url: 'https://github.com/thejoshwolfe/yauzl', license: 'MIT' },
       { desc: 'Word 转换', name: 'Mammoth', url: 'https://github.com/mwilliamson/mammoth.js', license: 'BSD-2-Clause' },
       { desc: 'PDF 解析', name: 'pdf-parse', url: 'https://github.com/mehmet-kozan/pdf-parse', license: 'Apache-2.0' },
+      { desc: 'MCP 服务端', name: '@modelcontextprotocol/server', url: 'https://github.com/modelcontextprotocol/typescript-sdk', license: 'Apache-2.0' },
+      { desc: 'MCP 客户端', name: '@modelcontextprotocol/client', url: 'https://github.com/modelcontextprotocol/typescript-sdk', license: 'Apache-2.0' },
+      { desc: 'MCP 适配层', name: '@modelcontextprotocol/node', url: 'https://github.com/modelcontextprotocol/typescript-sdk', license: 'Apache-2.0' },
+      { desc: '数据校验', name: 'zod', url: 'https://github.com/colinhacks/zod', license: 'MIT' },
     ],
   },
   {

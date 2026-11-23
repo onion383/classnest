@@ -296,7 +296,9 @@
       </tbody>
     </table>
   </div>
-  <CustomScrollbar :target="scrollWrapper" />
+  <!-- 空态/加载失败/判定中都不挂自定义滚动条：空表没有可滚内容，
+       dt-scroll-empty 已关掉原生 overflow，再画一条白色滑块就是凭空的竖带（用户截图所见）。 -->
+  <CustomScrollbar v-if="!emptyVisible && !emptyPending && !loadError" :target="scrollWrapper" />
 
   <!-- 添加一行：放在滚动容器下方，始终固定可见（数据滚动时不随之滚走）
        存在新增行时按钮切换为「取消添加一行」，点击可放弃本次新增
@@ -471,7 +473,7 @@ const emit = defineEmits([
     'retry',
     // 搜索无结果态里的「清除搜索」
     'clearSearch',
-    // 空态里的「从 Excel 表格批量导入」：表格只抛事件，由页面打开自己的导入弹窗
+    // 空态里的「从表格批量导入」：表格只抛事件，由页面打开自己的导入弹窗
     'emptyImport',
 ])
 
@@ -1830,7 +1832,7 @@ th.col-header {
    让用户一眼看出「还是这块区域，只是结论不同」 */
 .dt-error .dt-empty-icon { color: var(--color-danger, #ef4444); }
 .dt-error .dt-empty-text { color: var(--color-text-secondary, #64748b); }
-/* 空态操作区：主按钮 + 「从 Excel 表格批量导入」竖排。
+/* 空态操作区：主按钮 + 「从表格批量导入」竖排。
    单独一列 18px 间距，比外层 16px 略大 —— 两个按钮属于同一组选择，但也要一眼看出是两个入口。 */
 .dt-empty-actions {
   display: flex;

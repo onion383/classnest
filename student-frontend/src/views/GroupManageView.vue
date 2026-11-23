@@ -21,7 +21,7 @@
         <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
       </button>
       <button v-if="activeDim" @click="importVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        <IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入
       </button>
       <button @mouseenter="prefetch(loadExportExcel)" @click="openExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
         <IconGlyph name="download" :size="14" tint="current" /> 导出分组
@@ -52,7 +52,7 @@
       min-height="220px"
       action-text="去设置"
       action-icon="settings"
-      secondary-action-text="从 Excel 表格批量导入"
+      secondary-action-text="从表格批量导入"
       secondary-action-icon="download"
       @action="openSettings"
       @secondary-action="openImportDialog"
@@ -161,7 +161,7 @@
       min-height="220px"
       action-text="去设置"
       action-icon="settings"
-      secondary-action-text="从 Excel 表格批量导入"
+      secondary-action-text="从表格批量导入"
       secondary-action-icon="download"
       @action="openSettings"
       @secondary-action="openImportDialog"
@@ -352,15 +352,15 @@
     <Transition name="dialog">
     <div v-if="showAddGroup" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10003]" @click.self="showAddGroup = false">
       <div class="bg-surface p-6 rounded-xl w-96 shadow-card dialog-card border border-border">
-        <div class="flex items-center gap-3 mb-4">
+        <div class="flex items-center justify-between gap-3 mb-4">
           <h3 class="text-lg font-bold text-text">添加小组</h3>
           <button
             type="button"
             @click="openImportFromAddGroup"
             class="bg-warning hover:bg-warning-hover text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-theme cursor-pointer"
-            title="从 Excel 表格批量导入"
+            title="从表格批量导入"
           >
-            <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+            <IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入
           </button>
         </div>
         <p class="text-xs text-text-muted mb-4">在「{{ activeDim?.name }}」分组类型下新增一个小组。</p>
@@ -961,7 +961,7 @@ function openAddGroup() {
   showAddGroup.value = true;
 }
 
-// 添加小组弹窗左上角的批量导入：关掉单条新增，直接打开导入弹窗（写入当前维度）
+// 添加小组弹窗右上角（标题行右端）的批量导入：关掉单条新增，直接打开导入弹窗（写入当前维度）
 function openImportFromAddGroup() {
   showAddGroup.value = false;
   importVisible.value = true;
@@ -1684,7 +1684,7 @@ const importVisible = ref(false);
 const importMounted = ref(false);
 watch(importVisible, (n) => { if (n) importMounted.value = true; });
 const importFields = [{ name: '小组' }, { name: '姓名' }, { name: '备注' }];
-// 空态里的「从 Excel 表格批量导入」：预取导入弹窗 chunk 后打开（写入当前维度）
+// 空态里的「从表格批量导入」：预取导入弹窗 chunk 后打开（写入当前维度）
 function openImportDialog() {
   prefetch(loadImportExcel);
   importVisible.value = true;

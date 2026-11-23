@@ -145,6 +145,15 @@ export function setupApiClient({
       config.__authGeneration = userScopedGeneration()
       const token = await getToken()
       config.headers = config.headers || {}
+      // 无登录态（登录页 / 引导页 / 忘记密码恢复 / 登出后）不打标就一定会被后端拒：
+      // 加密拦截器随后会把 body 封成 { session, d }，后端 requestDecrypt 据此置上
+      // req.sessionId，requestAuthProof 便按「加密写请求必须带 X-Auth-Proof」判 401 ——
+      // 而 applyAuthHeader 首行就是 `if (!token) return false`，没有 token 根本不发凭据。
+      // 所以这里显式标记「本次别加密」，让免鉴权的公开写接口按设计走明文
+      // （后端注释里的原假设：登录/注册是明文请求，requestDecrypt 不会设 sessionId）。
+      // 每次进入都重新赋值（而不是只在空 token 时置 true）：config 会在 401 重试时被复用，
+      // 重试途中若拿到了 token，必须让加密重新生效。
+      config.__noToken = !token
       if (!token) return config
       const carriedToken = await applyAuthHeader(config.headers, token, {
         forceToken: config.__forceAuthToken === true,

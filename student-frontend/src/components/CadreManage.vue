@@ -12,7 +12,7 @@
         <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
       </button>
       <button @click="importVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded transition-theme flex items-center gap-1.5 cursor-pointer">
-        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        <IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入
       </button>
     </div>
 
@@ -75,16 +75,16 @@
     <Transition name="dialog">
     <div v-if="nodeDialogVisible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10003]" @click.self="nodeDialogVisible = false">
       <div class="bg-surface p-6 rounded-xl w-96 shadow-card dialog-card border border-border">
-        <div class="flex items-center gap-3 mb-4">
+        <div class="flex items-center justify-between gap-3 mb-4">
           <h3 class="text-lg font-bold text-text">{{ editTarget ? '编辑职务' : (parentTarget ? '添加下级职务' : '添加职务') }}</h3>
           <button
             v-if="!editTarget"
             type="button"
             @click="openImportFromNodeDialog"
             class="bg-warning hover:bg-warning-hover text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-theme cursor-pointer"
-            title="从 Excel 表格批量导入"
+            title="从表格批量导入"
           >
-            <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+            <IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入
           </button>
         </div>
         <label class="block text-sm text-text-secondary mb-1">职务名称</label>
@@ -126,6 +126,10 @@ import { prefetch } from '../utils/dialogPrefetch.js'
 import axios from 'axios'
 import CadreTreeList from './CadreTreeList.vue'
 import CustomScrollbar from './base/CustomScrollbar.vue'
+
+// KeepAlive 缓存 key：ClassroomView 用 v-if + KeepAlive 包住本组件，
+// 切到「学生信息」时缓存而非卸载，避免切回来重新挂载导致「空态→树」闪跳 + 重复拉接口。
+defineOptions({ name: 'CadreManage' })
 import { useNotification } from '../composables/useNotification'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 import { recordUndo as recordUndoSpec } from '../utils/undoRecorder.js'
@@ -254,7 +258,10 @@ async function loadTree() {
   loading.value = true
   try {
     const res = await api({ url: '/cadres' })
-    tree.value = res.data.tree || []
+    const next = res.data.tree || []
+    // 刷新时数据没变就别替换 tree.value：整体换引用会让递归树整棵重画，
+    // 表现为「下面的列表闪跳」。内容一致直接沿用旧数组，折叠/选中状态也不受影响。
+    if (JSON.stringify(next) !== JSON.stringify(tree.value)) tree.value = next
     return true
   } catch (e) {
     error('加载职务树失败')
@@ -367,7 +374,7 @@ function onAddRoot() {
   Object.assign(nodeForm, { name: '', max_count: 1 })
   nodeDialogVisible.value = true
 }
-// 添加职务弹窗左上角的批量导入：关掉单条新增，直接打开导入弹窗
+// 添加职务弹窗右上角（标题行右端）的批量导入：关掉单条新增，直接打开导入弹窗
 function openImportFromNodeDialog() {
   nodeDialogVisible.value = false
   importVisible.value = true

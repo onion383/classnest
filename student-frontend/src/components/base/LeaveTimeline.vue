@@ -68,7 +68,7 @@
     </div>
     <div v-else class="tl-empty">
       <p class="tl-empty-text">{{ filteredOut ? '暂无匹配的时间轴记录' : emptyText }}</p>
-      <!-- 空态两条出路：主操作（去加分）在上，「从 Excel 表格批量导入」在下。
+      <!-- 空态两条出路：主操作（去加分）在上，「从表格批量导入」在下。
            两者间距 18px（.empty-actions），避免两个按钮挤在一起。 -->
       <div
         v-if="!filteredOut && (emptyActionText || emptySecondaryActionText)"
@@ -116,7 +116,7 @@ const props = defineProps({
   emptyText: { type: String, default: '暂无匹配的时间轴记录' },
   // 空态下的引导按钮文案；留空则不显示按钮（请假页、导入预览等不需要）
   emptyActionText: { type: String, default: '' },
-  // 空态下的第二入口文案（目前用于「从 Excel 表格批量导入」）；留空则不显示
+  // 空态下的第二入口文案（目前用于「从表格批量导入」）；留空则不显示
   emptySecondaryActionText: { type: String, default: '' },
   // 数据加载中：此时 nodes 也是空的，若不单独挡一下会先闪出空态（尤其是带按钮的空态）再变列表。
   // 不传则维持改造前行为（加载中直接显示空态文案）。

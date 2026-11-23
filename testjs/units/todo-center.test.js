@@ -55,6 +55,22 @@ test('App.vue 已换成共用胶囊，旧的销假专属铃铛清干净', () => 
   assert.doesNotMatch(s, /overdueCount/, '销假计数不再单独喂给标题栏')
 })
 
+test('通知窗常驻挂载 + 复用通用 dialog 动画，关闭才有离场过渡', () => {
+  const app = read('App.vue')
+  // 根因：原来写 v-if="chromeReady && todoOpen"，关窗瞬间整个组件被卸载，
+  // 内部 <Transition> 的 leave 动画根本没机会跑。改成常驻挂载、由 :visible 驱动。
+  const mount = app.match(/<TodoCenterDialog[\s\S]*?\/>/)
+  assert.ok(mount, '找不到 TodoCenterDialog 挂载点')
+  assert.match(mount[0], /v-if="chromeReady"\s*$/m, '必须常驻挂载（只受 chromeReady 控制），不能在关窗时卸载组件')
+  assert.doesNotMatch(mount[0], /&&\s*todoOpen/, '挂载条件不能带 todoOpen，否则离场动画被跳过')
+  assert.match(mount[0], /:visible="todoOpen"/, '显隐必须交给内部 Transition 的 visible')
+
+  const s = read('components/dialogs/TodoCenterDialog.vue')
+  assert.match(s, /<Transition name="dialog"/, '复用通用 dialog 过渡，不要另写一套动画')
+  assert.match(s, /class="[^"]*dialog-card[^"]*"/, '卡片带 dialog-card 才有进出场的回弹缩放')
+  assert.match(s, /import '\.\.\/\.\.\/styles\/dialog-transition\.css'/, '组件自治：自己引入通用动画样式')
+})
+
 test('两个「去处理」都接上：销假回请假页，临时学生回班级页', () => {
   const s = read('App.vue')
   const at = s.indexOf('function goToTodo')

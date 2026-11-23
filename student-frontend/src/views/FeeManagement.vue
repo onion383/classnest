@@ -32,7 +32,7 @@
         <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
       </button>
       <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-        <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+        <IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入
       </button>
       <button
         @click="openExport"
@@ -99,7 +99,7 @@
       @clear-search="onClearSearch"
       :protectedColumns="['收据']"
       emptyLabel="班费"
-      empty-import-text="从 Excel 表格批量导入"
+      empty-import-text="从表格批量导入"
       :load-error="loadError"
       error-text="班费记录加载失败"
       @retry="fetchRecords"
@@ -177,6 +177,7 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
+import { isAddActionForRoute } from '../utils/addActionRoute.js'
 import { reportError } from '../utils/reportError.js'
 import { ref, computed, watch, onMounted, onActivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -260,6 +261,12 @@ const applyFocus = () => applyRouteRowFocus(rowFocusHost)
 onMounted(applyFocus)
 onActivated(applyFocus)
 watch(() => route.query.focus, applyFocus)
+// 首页空态「去记一笔班费」：?action=add 直接打开新增弹窗，随后清 query 防重复触发（KeepAlive 缓存页）
+watch(() => route.query.action, () => {
+  if (!isAddActionForRoute(route, 'fee')) return
+  router.replace({ path: route.path, query: { ...route.query, action: undefined } })
+  openAddDialog()
+}, { immediate: true })
 
 const feeRecords = table.rows
 const {
@@ -372,7 +379,7 @@ function openAddDialog() {
   addDialogVisible.value = true
 }
 
-// 添加记录弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+// 添加记录弹窗右上角（标题行右端）的「从表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
 function openBatchImportFromAdd() {
   addDialogVisible.value = false
   importMounted.value = true
@@ -460,8 +467,8 @@ const tableElement = computed(() => {
   return dynamicTable.value?.rootEl || null
 })
 
-// 表格空态里的「从 Excel 表格批量导入」：预取导入弹窗 chunk 后打开。
-// 与工具栏的「从 Excel 表格批量导入」共用同一个弹窗，只是把入口也放到空表上。
+// 表格空态里的「从表格批量导入」：预取导入弹窗 chunk 后打开。
+// 与工具栏的「从表格批量导入」共用同一个弹窗，只是把入口也放到空表上。
 function openImportDialog() {
   prefetch(loadImportExcel)
   importDialogVisible.value = true

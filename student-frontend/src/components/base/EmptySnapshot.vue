@@ -3,7 +3,7 @@
        text/icon/minHeight 可覆盖默认值；bare=true 时去掉自身底色与边框，供嵌入已有玻璃卡片的场景复用。
        不传时与原来完全一致，既有调用方无需改动。 -->
   <div class="snapshot-empty" :class="bare ? 'snapshot-empty--bare' : 'bg-surface'" :style="{ minHeight }">
-    <IconGlyph class="snapshot-empty-icon" :name="icon" :size="44" />
+    <IconGlyph class="snapshot-empty-icon" :name="icon" :size="iconSize" :style="{ fontSize: iconSize + 'px' }" />
     <span class="snapshot-empty-text">{{ text }}</span>
     <!-- 默认插槽：需要「空态 + 自定义内容」时塞进来。不传时渲染为空，既有调用方零改动。
          常规的「一行去某某的引导按钮」不必写插槽，传 actionText / actionIcon 即可。 -->
@@ -13,7 +13,7 @@
          所以从手写插槽迁过来观感零变化。
          为什么是 bg-info 而不是 bg-primary：--color-primary 在 base 主题是绿，
          只有 glass 系才是蓝；--color-info 全主题都是蓝。这条是用户定的口径（占位页按钮统一蓝色）。
-         secondaryActionText 是第二入口（目前用于「从 Excel 表格批量导入」），走暖色毛玻璃，
+         secondaryActionText 是第二入口（目前用于「从表格批量导入」），走暖色毛玻璃，
          与蓝色主按钮拉开层级；两者竖排且间距 18px，避免贴在一起像同一个按钮。 -->
     <div v-if="actionText || secondaryActionText" class="empty-actions">
       <button
@@ -40,13 +40,15 @@ defineProps({
   text: { type: String, default: '暂未有历史快照' },
   // 图标 key（见 IconGlyph 的 MAP）：跟随「图标样式」设置，彩色档渲染图形、Emoji 档渲染表情
   icon: { type: String, default: 'calendar' },
+  // 图标像素尺寸：默认 44（与历史外观一致）；嵌入小弹窗/紧凑空态时传更小值（如 32）
+  iconSize: { type: Number, default: 44 },
   // 与同位置的内容块保持等高，避免空态↔数据切换时页面跳动
   minHeight: { type: String, default: '320px' },
   // 引导按钮文案。留空则不渲染按钮（多数纯展示的空态不需要）
   actionText: { type: String, default: '' },
   // 引导按钮左侧图标（IconGlyph 的 name）。留空则只有文字
   actionIcon: { type: String, default: '' },
-  // 第二入口文案（目前用于「从 Excel 表格批量导入」）。留空则不渲染
+  // 第二入口文案（目前用于「从表格批量导入」）。留空则不渲染
   secondaryActionText: { type: String, default: '' },
   // 第二入口左侧图标（IconGlyph 的 name）
   secondaryActionIcon: { type: String, default: '' },
@@ -89,7 +91,7 @@ const emit = defineEmits(['action', 'secondaryAction'])
   to { opacity: 1; transform: none; }
 }
 .snapshot-empty-icon {
-  font-size: 44px;
+  /* font-size 由 iconSize prop 以内联 style 下传（SVG 档靠 width/height，emoji 档靠它） */
   line-height: 1;
   opacity: 0.85;
 }

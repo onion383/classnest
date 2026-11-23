@@ -6,9 +6,9 @@
         <button
           @click="importVisible = true"
           class="bg-warning text-text-inverse px-3 py-1.5 rounded text-sm flex items-center gap-1.5"
-          title="从 Excel 批量导入节次与时间"
+          title="从表格批量导入节次与时间"
         >
-          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
+          <IconGlyph name="download" :size="14" tint="current" /> 从表格批量导入
         </button>
       </div>
 
@@ -122,7 +122,7 @@
         <button @click="save" class="bg-info text-text-inverse px-4 py-2 rounded">保存设置</button>
       </div>
 
-      <!-- 从 Excel 导入作息：只填充当前弹窗表单，仍需点「保存设置」才落库 -->
+      <!-- 从表格导入作息：只填充当前弹窗表单，仍需点「保存设置」才落库 -->
       <ImportExcel
         v-if="importMounted"
         :visible="importVisible"
@@ -211,7 +211,7 @@ function removeItem(section, idx) {
   sections.value[section].splice(idx, 1);
 }
 
-// ==================== 从 Excel 导入作息 ====================
+// ==================== 从表格导入作息 ====================
 const importVisible = ref(false)
 const importMounted = ref(false)
 watch(importVisible, (v) => { if (v) importMounted.value = true })

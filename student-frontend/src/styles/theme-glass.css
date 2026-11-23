@@ -1466,3 +1466,31 @@
   --sidebar-arrow-hover: #d6d2c8;
   --sidebar-arrow-bg-hover: rgba(243, 242, 236, 0.14);
 }
+
+/* ---------- 空态配色：玻璃主题底色下重定图标/文字/按钮 ----------
+   这些色值在 DynamicTable scoped 里是给浅色背景调的，压在玻璃主题
+   （尤其叠了深色壁纸）上：图标/文字用 --color-text-muted 偏暗看不清，
+   .dt-empty-btn 的 #d9e5f8 淡蓝实底又是一块刺眼亮板。这里统一重定：
+   图标/文字提亮到浅灰蓝，按钮改半透明深色磨砂 + 浅蓝字。深/浅壁纸与日/夜都协调。
+   .dt-empty-btn 与 .empty-import-btn（暖色第二入口）一冷一暖配套。 */
+:root:is([data-theme="glass"]) .dt-empty-icon,
+:root:is([data-theme="glass"]) .grid-empty-icon {
+  color: #9fb3d1;
+}
+:root:is([data-theme="glass"]) .dt-empty-text,
+:root:is([data-theme="glass"]) .grid-empty-text {
+  color: #9fb3d1;
+}
+:root:is([data-theme="glass"]) .dt-empty-btn,
+:root:is([data-theme="glass"]) .grid-empty-btn,
+:root:is([data-theme="glass"]) .empty-action-btn {
+  color: #dbeafe;
+  background: rgba(30, 58, 95, 0.34);
+  border-color: rgba(96, 165, 250, 0.34);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+:root:is([data-theme="glass"]) .dt-empty-btn:hover,
+:root:is([data-theme="glass"]) .grid-empty-btn:hover,
+:root:is([data-theme="glass"]) .empty-action-btn:hover {
+  background: rgba(30, 58, 95, 0.5);
+}

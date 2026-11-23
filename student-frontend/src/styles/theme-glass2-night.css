@@ -430,8 +430,13 @@
   background-color: #1e263a;
   color: var(--color-text);
 }
-/* 原 `button.bg-surface-hover:hover`（提到 0.9）已删除：夜间按钮悬浮不改配色，
-   静止值来自 theme-glass2.css 的 `.bg-surface-hover`（带 !important），悬浮时同样生效。 */
+/* 日间 `button.bg-surface-hover:hover` 把底色提到 alpha-white-90（近白），
+   夜间仍生效（选择器只匹配 data-theme）→ 浅字压白底看不清。
+   夜间显式压回深玻璃静止值，悬浮时文字仍可读。 */
+:root[data-mode="night"][data-theme="glass2"] button.bg-surface-hover:hover {
+  background-color: var(--g2-glass-strong) !important;
+  color: var(--color-text) !important;
+}
 :root[data-mode="night"][data-theme="glass2"] .candidate-popup,
 :root[data-mode="night"][data-theme="glass2"] .context-menu-popup {
   background-color: rgba(42, 50, 76, 0.86) !important;
@@ -613,5 +618,33 @@
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .empty-import-btn:hover {
   color: #fde68a;
   background: rgba(245, 158, 11, 0.26);
+}
+/* ---------- 工具栏暖色按钮（.btn-search：搜索 / 临时学生 / 更多操作）夜间适配 ----------
+   白天 theme-glass.css / theme-glass2.css 里 .btn-search 硬编码淡琥珀底 + 深棕字，且带 !important；
+   夜间没有对应规则，于是深色下仍是一块刺眼的米黄。这里按警告按钮的同款夜间配方
+   （深琥珀半透明底 + 浅琥珀字）压回去，!important 与白天同权重、选择器特异性更高故胜出。
+   与 theme-glass-night.css 同为双主题选择器，保证 glass / glass2 夜间都覆盖到。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .btn-search {
+  background-color: rgba(245, 158, 11, 0.28) !important;
+  color: #fde68a !important;
+  border-color: rgba(245, 158, 11, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 1px 4px rgba(0, 0, 0, 0.3) !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .btn-search:hover {
+  background-color: rgba(245, 158, 11, 0.4) !important;
+  color: #fef3c7 !important;
+}
+/* ---------- 「更多操作」下拉菜单项夜间适配 ----------
+   白天 theme-glass.css:1366 把 danger 菜单项写死成深红 #b91c1c，夜间没有覆盖 →
+   深色底上暗红几乎看不清。禁用项则叠了 --color-text-muted + opacity-50，
+   对比更低。这里把 danger 提到浅红、禁用项提亮并抬高不透明度。 */
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .more-menu-popup .more-menu-item.text-danger {
+  color: #fca5a5 !important;
+}
+:root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .more-menu-popup .more-menu-item:disabled {
+  color: #cbd5e1 !important;
+  opacity: 0.85;
 }
 

@@ -8,6 +8,7 @@
         v-for="tab in tabs"
         :key="tab.value"
         @click="$emit('update:modelValue', tab.value)"
+        @mouseenter="$emit('hover', tab.value)"
         :class="[
           'tab-btn px-5 py-2.5 rounded-xl font-medium text-sm transition-[background-color,color,box-shadow,transform,scale] duration-300 ease-in-out',
           'hover:shadow-md hover:scale-105',
@@ -32,5 +33,5 @@ defineProps({
   tabs: { type: Array, required: true },
   modelValue: { type: String, required: true }
 })
-defineEmits(['update:modelValue'])
+defineEmits(['update:modelValue', 'hover'])
 </script>

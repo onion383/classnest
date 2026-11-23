@@ -9,7 +9,8 @@
 //   传了就显示，不传就不显示（座位表的「列1/走廊」没有日期概念）。
 //
 //   这条测试锁的是**接线关系**，不是渲染细节：
-//   · 课表：实行课表 / 一般课表 / 历史记录 三张表都要传
+//   · 课表：实行 / 一般 在 ScheduleView，历史记录在异步子组件 ScheduleHistoryTab；
+//     拆组件不等于断开线，三张表都要传 colDates
 //   · 值日：当前值日 / 值日模板 / 值日记录 三张表都要传
 //   · 值日项目权重表**不传**（它是「项目 × 权重」对照表，不是某一周的日程）
 //
@@ -69,7 +70,8 @@ function gridViewBlocks(src) {
     const pick = (name) => {
       const re2 = new RegExp(`:${name}\\s*=\\s*"([^"]+)"`)
       const hit = re2.exec(tag)
-      return hit ? hit[1] : null
+      // 异步子组件走 ctx.xxx（父级传下来的 reactive 视图），判据只认语义名、不认 ctx. 前缀
+      return hit ? hit[1].replace(/^ctx\./, '') : null
     }
     out.push({
       colHeaders: pick('colHeaders') || pick('col-headers'),
@@ -81,15 +83,25 @@ function gridViewBlocks(src) {
   return out
 }
 
-test('课表：实行课表 / 一般课表 / 历史记录 三张表都传了 colDates', () => {
+test('课表：实行 / 一般 / 历史（异步 tab）三张表都传了 colDates', () => {
   const s = read('views/ScheduleView/ScheduleView.vue')
   const blocks = gridViewBlocks(s)
-  assert.equal(blocks.length, 3, `ScheduleView 期望 3 个 GridView，实际 ${blocks.length}`)
+  assert.equal(blocks.length, 2, `ScheduleView 期望 2 个 GridView，实际 ${blocks.length}`)
   const byHeaders = {}
   for (const b of blocks) byHeaders[b.colHeaders] = b.colDates
   assert.equal(byHeaders['activeColHeaders'], 'activeColDates', '实行课表没绑 activeColDates')
   assert.equal(byHeaders['masterColHeaders'], 'masterColDates', '一般课表没绑 masterColDates')
-  assert.equal(byHeaders['historyColHeaders'], 'historyColDates', '历史记录没绑 historyColDates')
+
+  // 历史 tab 拆成异步组件：GridView 在子组件里，父组件必须真渲染它并传 ctx。
+  // 少了这一环，光验子组件源码就是假绿（组件可能根本没被挂上）。
+  assert.ok(/<ScheduleHistoryTab\b[^>]*\bctx\s*=\s*"tabCtx"/.test(s),
+    'ScheduleView 没有渲染 ScheduleHistoryTab 并传 tabCtx')
+  const child = read('views/ScheduleView/ScheduleHistoryTab.vue')
+  assert.ok(/defineProps\(\{\s*ctx\s*:/.test(child), 'ScheduleHistoryTab 没有声明 ctx prop')
+  const history = gridViewBlocks(child)
+  assert.equal(history.length, 1, `ScheduleHistoryTab 期望 1 个 GridView，实际 ${history.length}`)
+  assert.equal(history[0].colHeaders, 'historyColHeaders', '历史记录列头绑错')
+  assert.equal(history[0].colDates, 'historyColDates', '历史记录没绑 historyColDates')
 })
 
 test('值日：当前值日 / 值日模板 / 值日记录 都传了 colDates，权重表不传', () => {
@@ -161,14 +173,17 @@ test('GridView：「今天」按原始表头列下标定位（拖拽时表头文
     'todayColIdx 查了 displayHeaders —— 拖拽时表头文字被临时改写，高亮会乱跳')
 })
 
-test('课表：实行课表 / 一般课表 传 today-col，历史记录不传（那是过去的周）', () => {
+test('课表：实行 / 一般 传 today-col，历史（异步 tab）不传（那是过去的周）', () => {
   const s = read('views/ScheduleView/ScheduleView.vue')
   const blocks = gridViewBlocks(s)
   const byHeaders = {}
   for (const b of blocks) byHeaders[b.colHeaders] = b
-  assert.equal(byHeaders['activeColHeaders'].todayCol, 'todayName', '实行课表没传 today-col')
-  assert.equal(byHeaders['masterColHeaders'].todayCol, 'todayName', '一般课表没传 today-col')
-  assert.equal(byHeaders['historyColHeaders'].todayCol, null,
+  assert.equal(byHeaders['activeColHeaders']?.todayCol, 'todayName', '实行课表没传 today-col')
+  assert.equal(byHeaders['masterColHeaders']?.todayCol, 'todayName', '一般课表没传 today-col')
+  // 历史记录在异步子组件里；高亮「今天」的绑定要在那边验，别只验父组件的两张表
+  const history = gridViewBlocks(read('views/ScheduleView/ScheduleHistoryTab.vue'))
+  assert.equal(history.length, 1, `ScheduleHistoryTab 期望 1 个 GridView，实际 ${history.length}`)
+  assert.equal(history[0].todayCol, null,
     '历史记录不该高亮「今天」—— 那一周是过去的周，今天不在里面')
   // todayName 必须来自 useWeekDates（跟着今天走，跨零点自动更新）
   assert.ok(/useWeekDates\(\)/.test(s), 'ScheduleView 没有用 useWeekDates')

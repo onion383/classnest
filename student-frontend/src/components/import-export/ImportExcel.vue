@@ -95,6 +95,7 @@ import DynamicTable from '../tables/DynamicTable/DynamicTable.vue';
 const GridView = defineAsyncComponent(() => import('../tables/GridView/GridView.vue'));
 import { parseSheet } from '../../utils/importSheet.js';
 import { saveBlobWithDialog } from '../../utils/saveFile.js';
+import { useNotification } from '../../composables/useNotification';
 import { createLatest } from '../../utils/latestOnly.js';
 import '../../styles/dialog-transition.css';
 import { ref, computed, watch, defineAsyncComponent } from 'vue';
@@ -113,6 +114,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['import-data', 'cancel']);
+const { success: notifySuccess } = useNotification();
 
 // 请求序号挂实例上：Options API 没有 setup 作用域；序号不参与渲染，不必进 data
 const seq = createLatest();
@@ -236,7 +238,9 @@ async function downloadTemplate() {
 
     const buffer = await workbook.xlsx.writeBuffer()
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-    await saveBlobWithDialog(`${props.templateName || '标准导入表'}.xlsx`, blob)
+    const saved = await saveBlobWithDialog(`${props.templateName || '标准导入表'}.xlsx`, blob)
+    // 空串 = 用户在保存对话框点了取消，不打扰；非空才是真保存成功
+    if (saved) notifySuccess('标准导入表已保存')
   } catch (e) {
     parseError.value = '标准导入表生成失败：' + e.message
   }

@@ -25,6 +25,16 @@ export function setupSecureAxios(axios) {
       // 重试请求：错误/解密重试时已用新会话重新加密好 data，这里直接放行，
       // 避免把已加密的 {session,d} 信封再加密一次（二次封装会让后端解出乱数据）。
       if (config.__retrySecure === true) return config
+      // 没有登录态（token 为空）的请求一律走明文，由 httpClient 的凭据拦截器打标。
+      //
+      // 为什么必须跳过加密：公开写接口（/api/login、/api/register、/api/db-login、
+      // /api/db-recover、/api/recover-password、restore-zip-offline）本身免鉴权，
+      // 但请求体一旦被加密成 { session, d }，后端 requestDecrypt 就会置上 req.sessionId，
+      // 紧接着 requestAuthProof 按「加密写请求必须带 X-Auth-Proof」判定 —— 而没有 token
+      // 就根本生成不出凭据（applyAuthHeader 首行 `if (!token) return false`）→ 必然 401。
+      // 这正是后端那条门禁注释里「登录/注册是明文请求，requestDecrypt 不会设 sessionId」
+      // 的原本假设，此前前端无条件加密使该假设失效（0da1458 引入的回归）。
+      if (config.__noToken === true) return config
       const d = config.data
       if (d == null) return config
       // 已是密文信封（后端未就绪重试等场景复用同一 config）：不能再加密一次，

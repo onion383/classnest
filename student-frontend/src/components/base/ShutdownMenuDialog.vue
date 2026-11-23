@@ -102,17 +102,26 @@ function cancel() { emit('cancel') }
   width: 460px;
   max-width: calc(100vw - 32px);
   padding: 24px 28px 20px;
-  /* 取色一律走主题变量：--color-surface 各主题都有定义，glass / glass2 的夜间取值
-     已在 theme-*-night.css 里重映射，故日/夜与其它主题都会自动跟随，无硬编码颜色。
-     再叠一层 backdrop-filter 做「第二层毛玻璃」（与引导页玻璃面板同一套做法）。 */
+  /* 二层毛玻璃：遮罩已模糊背景（第一层），卡片再叠一层更白的玻璃（第二层）。
+     日间沿用 AI 助手面板 / 引导页玻璃面板的现成配方：0.86 白 + 28px 强模糊 +
+     白色描边 + 顶部内高光，比原来直接取 --color-surface（glass2 仅 0.55 白）更白净。 */
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(28px) saturate(1.5);
+  -webkit-backdrop-filter: blur(28px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-radius: var(--radius-surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), var(--shadow-lg);
+  text-align: left;
+  color: var(--color-text);
+}
+/* 夜间回到主题变量：深色底上硬编码白玻璃会冲淡底色、让浅色文字看不清。
+   glass / glass2 / base 三套主题的夜间 --color-surface 都已定义，无需逐主题写规则。 */
+:root[data-mode="night"] .shutdown-card {
   background: var(--color-surface);
   backdrop-filter: blur(14px) saturate(1.15);
   -webkit-backdrop-filter: blur(14px) saturate(1.15);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-surface);
+  border-color: var(--color-border);
   box-shadow: var(--shadow-lg);
-  text-align: left;
-  color: var(--color-text);
 }
 
 /* ========== 顶部：标签 + 关闭按钮 ========== */
@@ -164,18 +173,27 @@ function cancel() { emit('cancel') }
   gap: 14px;
   width: 100%;
   padding: 14px 16px;
-  /* 用文字色按比例混出的弱底纹：日间接近原来的 #f9fafb，夜间自动变成浅色微亮，
-     无需为深浅两套模式各写一份取色。 */
-  background: color-mix(in srgb, var(--color-text) 4%, transparent);
-  border: 1px solid transparent;
+  /* 嵌套毛玻璃第三层：卡片自身已是第二层玻璃（0.86 白），每个选项再叠一层白玻璃。
+     0.74 白叠在卡片上合成约 0.96 白，比卡片更白更通透；再补强模糊、白描边、顶部内高光，
+     与 AI 面板 / 设置页 ai-glass-panel 的嵌套玻璃同一套观感。夜间在下方单独翻成深蓝玻璃。 */
+  background: rgba(255, 255, 255, 0.74);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.68);
+  /* !important 压过 glass 主题给所有 button 写的投影 + 荧光环（theme-glass.css:354）。 */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 2px 10px rgba(15, 23, 42, 0.05) !important;
   border-radius: var(--radius-control);
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
 }
+/* 压掉 glass 主题给所有 button 加的 ::before 荧光描边环，玻璃选项只要自己的白描边 */
+.shutdown-opt::before { display: none !important; content: none !important; }
+/* 悬浮不改背景色：白玻璃叠在卡片上已接近饱和，再提亮几乎看不出（会变成「有的项变、有的不变」）。
+   统一靠描边 + 投影抬升给反馈，四个选项行为一致，也没有颜色突变。 */
 .shutdown-opt:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-text) 9%, transparent);
-  border-color: var(--color-border-strong);
+  border-color: rgba(255, 255, 255, 0.95);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 4px 14px rgba(15, 23, 42, 0.14) !important;
 }
 .shutdown-opt:active:not(:disabled) {
   transform: scale(0.99);
@@ -185,10 +203,21 @@ function cancel() { emit('cancel') }
   cursor: not-allowed;
 }
 .shutdown-opt.opt-danger:hover:not(:disabled) {
-  /* 危险项 hover：用 --color-danger 按比例混出浅红底 / 描边（日间 ≈ 原来的 #fef2f2 / #fecaca），
-     夜间由 theme-*-night.css 的 C3 覆盖成更明显的暗红。 */
-  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
-  border-color: color-mix(in srgb, var(--color-danger) 28%, transparent);
+  /* 危险项 hover 也不改背景色，只把描边/投影染成红色，与其他三项反馈方式一致。
+     红色走 --color-danger 按主题混色，夜间自动适配（C3 的暗红 !important 仍会覆盖）。 */
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 4px 14px color-mix(in srgb, var(--color-danger) 18%, transparent) !important;
+}
+/* 夜间：白玻璃翻成深蓝玻璃（与 ai-glass-panel / class-info-card 同一口径），
+   保留描边与顶部内高光的层次。C3 的 danger hover 特异性更高且带 !important，不受影响。 */
+:root[data-mode="night"] .shutdown-opt {
+  background: rgba(46, 64, 100, 0.55);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+}
+:root[data-mode="night"] .shutdown-opt:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 4px 14px rgba(0, 0, 0, 0.3) !important;
 }
 
 /* 图标盒：底色/图标色沿用日间语义色，夜间在 theme-*-night.css C3 统一提亮 */
@@ -238,18 +267,34 @@ function cancel() { emit('cancel') }
   gap: 8px;
   padding: 10px 14px;
   margin: 4px 0 12px;
-  /* 弱底纹统一用文字色按比例混出：日间≈原来的 #f9fafb，夜间自动变浅色微亮 */
-  background: color-mix(in srgb, var(--color-text) 4%, transparent);
-  border: 1px solid var(--color-border);
+  /* 与上方四个选项同一套嵌套白玻璃（0.74 白 + 模糊 + 白描边 + 内高光），保持层次一致。
+     这是 label 不是 button，没有 glass 主题的 button 荧光环冲突，故无需 !important。 */
+  background: rgba(255, 255, 255, 0.74);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.68);
   border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 2px 10px rgba(15, 23, 42, 0.05);
   font-size: 13px;
   color: var(--color-text-secondary);
   cursor: pointer;
   user-select: none;
-  transition: background 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
+/* 与选项一致：悬浮只改描边/投影，不动背景色 */
 .shutdown-check:hover {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  border-color: rgba(255, 255, 255, 0.95);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 4px 14px rgba(15, 23, 42, 0.14);
+}
+/* 夜间翻成与选项一致的深蓝玻璃 */
+:root[data-mode="night"] .shutdown-check {
+  background: rgba(46, 64, 100, 0.55);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+:root[data-mode="night"] .shutdown-check:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 4px 14px rgba(0, 0, 0, 0.3);
 }
 .shutdown-check input {
   display: none;

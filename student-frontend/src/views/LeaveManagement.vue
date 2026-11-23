@@ -6,210 +6,14 @@
     </div>
 
     <!-- 切换栏 -->
-    <Tabs :tabs="tabs" v-model="activeTab">
+    <Tabs :tabs="tabs" v-model="activeTab" @hover="onTabHover">
       <template #default>
       </template>
     </Tabs>
 
-    <!-- 今日到班 -->
-    <div v-if="activeTab === 'today'">
-      <!-- 数据看板 -->
-      <div class="grid grid-cols-3 gap-4 mb-6">
-        <div class="bg-surface rounded-xl border border-border p-4">
-          <div class="text-sm text-text-secondary">全班人数</div>
-          <div class="text-2xl font-bold text-text">{{ totalStudents }} 人</div>
-        </div>
-        <div class="bg-success/10 rounded-xl border border-border p-4">
-          <div class="text-sm text-text-secondary">在校人数</div>
-          <div class="text-2xl font-bold text-success">{{ inSchool }} 人</div>
-        </div>
-        <div class="bg-danger/10 rounded-xl border border-border p-4">
-          <div class="text-sm text-text-secondary">当前请假</div>
-          <div class="text-2xl font-bold text-danger">{{ activeLeaves.length }} 人</div>
-        </div>
-      </div>
-
-      <!-- 工具栏 -->
-      <div class="mb-4 flex items-center gap-3 opbar">
-        <button @mouseenter="prefetch(loadAddLeaveDialog)" @click="openAddLeave" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">
-          ＋ 添加请假
-        </button>
-        <button @click="refresh" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh transition-theme">
-          <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
-        </button>
-        <button @mouseenter="prefetch(loadExportExcel)" @click="openExportToday" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 导出今日表
-        </button>
-      </div>
-
-      <!-- 两张「今日」小表通常只有几行，却默认跟着 virtualFrom=1 跑窗口化渲染：
-           挂载后 recalcWindow 才把窗口算出来、行是后补的；叠加 sticky 操作列的独立绘制层
-           与玻璃主题按钮描边，会出现「数据先出、按钮逐行补齐」和滚动重绘。传 0 走整表 DOM。 -->
-      <!-- 当前请假中 -->
-      <div class="bg-surface border border-border rounded-xl mb-4 overflow-hidden">
-        <div class="px-5 py-3 border-b border-border font-bold text-text flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full bg-danger inline-block"></span> 当前请假中（{{ activeLeaves.length }}人）
-        </div>
-        <DynamicTable
-          fit-content
-          no-select
-          hide-add-row
-          :virtualFrom="0"
-          class="leave-today-table leave-empty-sm"
-          :fields="activeLeaveFields"
-          :rows="activeLeaveRows"
-          :editing-cell="editingCell"
-          actionsHeader="操作"
-          emptyText="当前无请假学生"
-          emptyActionText="添加请假"
-          @addNewRowAtBottom="openAddLeave"
-          @startEdit="startEdit"
-          @saveCell="saveCell"
-          @swapRows="(from, to) => saveRowOrder('active', from, to)"
-          @swapColumns="(from, to) => saveColumnOrder('active', from, to)"
-        >
-          <template #cell-type="{ row, field, editing }">
-            <AppSelect v-if="editing" v-model="row.类型" :options="leaveTypeOptions" @change="saveCell(row, field)" class="w-full" />
-            <span v-else @dblclick="startEdit(row, field)" class="px-2 py-0.5 rounded text-xs bg-danger/10 text-danger cursor-text">{{ row.类型 }}</span>
-          </template>
-          <template #cell-range="{ row }">
-            <span class="whitespace-nowrap">{{ row._range }}</span>
-          </template>
-          <template #cell-dash="{ row, field, value, editing }">
-            <input
-              v-if="editing"
-              v-model="row[field.name]"
-              @blur="saveCell(row, field)"
-              @keyup.enter="saveCell(row, field)"
-              class="w-full h-6 leading-6 px-1 py-0 border border-transparent bg-warning/10 focus:outline-none focus:border-primary box-border"
-            />
-            <span v-else @dblclick="startEdit(row, field)" class="cursor-text">{{ value || '—' }}</span>
-          </template>
-          <template #row-actions="{ row }">
-            <button @click="openEditLeave(row)" class="bg-info hover:bg-blue-700 text-text-inverse px-3 py-1 rounded text-xs mr-1 transition-theme">编辑</button>
-            <button @click="returnLeave(row)" class="bg-success hover:bg-green-700 text-text-inverse px-3 py-1 rounded text-xs transition-theme">销假</button>
-          </template>
-        </DynamicTable>
-      </div>
-
-      <!-- 今日已返校 -->
-      <div class="bg-surface border border-border rounded-xl overflow-hidden">
-        <div class="px-5 py-3 border-b border-border font-bold text-text flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full bg-success inline-block"></span> 今日已返校（{{ todayReturned.length }}人）
-        </div>
-        <DynamicTable
-          fit-content
-          no-select
-          hide-add-row
-          :virtualFrom="0"
-          class="leave-today-table leave-empty-sm"
-          :fields="returnedLeaveFields"
-          :rows="returnedLeaveRows"
-          :editing-cell="editingCell"
-          actionsHeader="操作"
-          emptyText="今日暂无返校记录"
-          emptyActionText=""
-          @startEdit="startEdit"
-          @saveCell="saveCell"
-          @swapRows="(from, to) => saveRowOrder('returned', from, to)"
-          @swapColumns="(from, to) => saveColumnOrder('returned', from, to)"
-        >
-          <template #cell-range="{ row }">
-            <span class="whitespace-nowrap">{{ row._range }}</span>
-          </template>
-          <template #cell-type-info="{ row, field, editing }">
-            <AppSelect v-if="editing" v-model="row.类型" :options="leaveTypeOptions" @change="saveCell(row, field)" class="w-full" />
-            <span v-else @dblclick="startEdit(row, field)" class="px-2 py-0.5 rounded text-xs bg-info/10 text-info cursor-text">{{ row.类型 }}</span>
-          </template>
-          <template #cell-dash="{ row, field, value, editing }">
-            <input
-              v-if="editing"
-              v-model="row[field.name]"
-              @blur="saveCell(row, field)"
-              @keyup.enter="saveCell(row, field)"
-              class="w-full h-6 leading-6 px-1 py-0 border border-transparent bg-warning/10 focus:outline-none focus:border-primary box-border"
-            />
-            <span v-else @dblclick="startEdit(row, field)" class="cursor-text">{{ value || '—' }}</span>
-          </template>
-          <template #row-actions="{ row }">
-            <button @click="openEditLeave(row)" class="bg-info hover:bg-blue-700 text-text-inverse px-3 py-1 rounded text-xs mr-1 transition-theme">编辑</button>
-            <button @click="unreturnLeave(row)" class="bg-warning hover:bg-yellow-600 text-text-inverse px-3 py-1 rounded text-xs transition-theme">撤销销假</button>
-          </template>
-        </DynamicTable>
-      </div>
-    </div>
-
-    <!-- 请假记录页签：请假统计 + 请假记录（表格 / 时间轴） -->
-    <div v-if="activeTab === 'records'">
-      <!-- 请假统计 -->
-      <h3 class="text-xl font-semibold text-text mb-4 flex items-center gap-2 min-h-7"><IconGlyph name="chart" :size="20" /> 请假统计</h3>
-      <div class="mb-4 flex flex-wrap items-center gap-3 opbar">
-        <button @click="refreshStats" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh transition-theme">
-          <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
-        </button>
-        <button @mouseenter="prefetch(loadExportExcel)" @click="openStatsExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
-        </button>
-      </div>
-      <div class="bg-surface border border-border rounded-xl p-5">
-        <StatBarList :rows="leaveStatRows" name-key="姓名" value-key="合计" :bar-width="statBarWidth" empty-text="暂无请假统计" />
-      </div>
-
-      <!-- 请假记录子标题 -->
-      <h3 class="text-xl font-semibold text-text mt-8 mb-4 flex items-center gap-2 min-h-7"><IconGlyph name="clipboard" :size="20" /> 请假记录</h3>
-
-      <!-- 工具栏：视图切换右对齐 -->
-      <div class="mb-4 flex items-center gap-3 opbar">
-        <button @mouseenter="prefetch(loadAddLeaveDialog)" @click="openAddLeave" class="bg-primary hover:bg-primary-hover text-text-inverse px-5 py-2 rounded transition-theme">
-          ＋ 添加请假
-        </button>
-        <button @click="refresh" class="bg-text-muted hover:bg-text-secondary text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 btn-refresh transition-theme">
-          <IconGlyph name="refresh" :size="14" tint="current" /> 刷新
-        </button>
-        <button @click="importDialogVisible = true" @mouseenter="prefetch(loadImportExcel)" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 从 Excel 表格批量导入
-        </button>
-        <button @mouseenter="prefetch(loadExportExcel)" @click="openRecordsExport" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
-          <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
-        </button>
-        <ViewSwitch v-model="recordsView" :options="recordsViewOptions" class="ml-auto" />
-      </div>
-
-      <!-- 同一固定高度容器：v-show 切换，两个视图都保持挂载，切换不闪动、不改变页面高度 -->
-      <div class="records-panel h-[400px] min-h-0">
-        <div v-show="recordsView === 'table'" class="h-full">
-          <DynamicTable
-            :fields="leaveFields"
-            :rows="displayLeaves"
-            :newRow="newRow"
-            :editingCell="editingCell"
-            :hideMoveButtons="true"
-            :hideSelectAll="true"
-            :maxRows="10"
-            :opColumnWidth="190"
-            @startEdit="startEdit"
-            @saveCell="saveCell"
-            @swapColumns="(from, to) => saveColumnOrder('records', from, to)"
-            @deleteRow="deleteLeave"
-            @addNewRowAtBottom="addNewRowAtBottom"
-            @updateNewRow="onUpdateNewRow"
-            @saveNewRow="saveNewRow"
-            @cancelNewRow="cancelNewRow"
-            @contextmenu.prevent="() => {}"
-            @selectionChange="() => {}"
-            empty-import-text="从 Excel 表格批量导入"
-            @empty-import="openImportDialog"
-          >
-            <template #row-actions-extra="{ row }">
-              <button v-if="!row._isNew" @click="openEditLeave(row)" class="bg-info hover:bg-blue-700 text-text-inverse px-1.5 py-0.5 rounded mr-1 transition-theme">编辑</button>
-            </template>
-          </DynamicTable>
-        </div>
-        <div v-show="recordsView === 'timeline'" class="h-full">
-          <LeaveTimeline fill-height :nodes="timelineNodes" :type-options="leaveTypeOptions" title="" />
-        </div>
-      </div>
-    </div>
+    <!-- 今日到班 / 请假记录：异步分块，hover 预取 -->
+    <LeaveTodayTab v-if="activeTab === 'today'" :ctx="tabCtx" />
+    <LeaveRecordsTab v-else-if="activeTab === 'records'" :ctx="tabCtx" />
 
     <!-- 添加请假弹窗 -->
     <AddLeaveDialog
@@ -238,7 +42,7 @@
       @update:is-visible="exportVisible = $event"
     />
 
-    <!-- 从 Excel 导入弹窗 -->
+    <!-- 从表格导入弹窗 -->
     <ImportExcel
       v-if="importMounted"
       :visible="importDialogVisible"
@@ -276,19 +80,15 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
-import { ref, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
+import { isAddActionForRoute } from '../utils/addActionRoute.js'
+import { ref, reactive, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useDisposables } from '../utils/disposables.js'
 import { useRoute, useRouter } from 'vue-router'
 import { reportError } from '../utils/reportError.js'
 import axios from 'axios'
 import Tabs from '../components/base/Tabs.vue'
-import ViewSwitch from '../components/base/ViewSwitch.vue'
-import AppSelect from '../components/base/AppSelect.vue'
-import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
-import LeaveTimeline from '../components/base/LeaveTimeline.vue'
 import { zhCollator } from '../utils/collator.js'
 import { personKeyOfRecord } from '../utils/dutyPersonKey.js'
-import StatBarList from '../components/base/StatBarList.vue'
 import { useNotification } from '../composables/useNotification.js'
 import { recordCellUndo, recordRowDelete, recordRowInsert, recordRowUpdate, recordRowReorder, recordRowsBatchInsert, newUndoBatchId, flushUndoStatus, useUndoShortcut } from '../composables/useUndo.js'
 import { formatDate, formatDateTime } from '../utils/dateTime.js'
@@ -302,6 +102,16 @@ const loadExportExcel = () => import('../components/import-export/ExportExcel/Ex
 const ExportExcel = defineAsyncComponent(loadExportExcel)
 const loadImportExcel = () => import('../components/import-export/ImportExcel.vue')
 const ImportExcel = defineAsyncComponent(loadImportExcel)
+
+// 两个 tab 整块异步化：首次切过去才下载对应 chunk，悬停标签即预取
+const loadTodayTab = () => import('./LeaveTodayTab.vue')
+const LeaveTodayTab = defineAsyncComponent(loadTodayTab)
+const loadRecordsTab = () => import('./LeaveRecordsTab.vue')
+const LeaveRecordsTab = defineAsyncComponent(loadRecordsTab)
+function onTabHover(value) {
+  if (value === 'today') prefetch(loadTodayTab)
+  else if (value === 'records') prefetch(loadRecordsTab)
+}
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
 const OverdueLeaveDialog = defineAsyncComponent(() => import('../components/dialogs/OverdueLeaveDialog.vue'))
 
@@ -504,6 +314,22 @@ watch(exportVisible, (n) => { if (n) exportMounted.value = true })
 watch(importDialogVisible, (n) => { if (n) importMounted.value = true })
 watch(() => confirm.value.visible, (n) => { if (n) confirmMounted.value = true })
 watch(overdueDialogVisible, (n) => { if (n) overdueDialogMounted.value = true })
+// 异步 tab 子组件共享的 reactive 上下文：字段都是本组件的 ref / 函数，
+// reactive 解包后子组件模板读写 ctx.xxx 等价于本组件 xxx.value。
+// leaves 共享数据 / editingCell / 弹窗 / overdue / 列顺序 / undo / focus 全留父组件，这里只做透传。
+const tabCtx = reactive({
+  prefetch, loadAddLeaveDialog, loadImportExcel, loadExportExcel,
+  openAddLeave, refresh, openExportToday, openEditLeave, startEdit, saveCell,
+  saveRowOrder, saveColumnOrder, returnLeave, unreturnLeave,
+  refreshStats, openStatsExport, openRecordsExport, deleteLeave,
+  addNewRowAtBottom, onUpdateNewRow, saveNewRow, cancelNewRow, openImportDialog,
+  importDialogVisible, editingCell, leaveTypeOptions,
+  totalStudents, inSchool, activeLeaves, todayReturned,
+  activeLeaveFields, activeLeaveRows, returnedLeaveFields, returnedLeaveRows,
+  leaveStatRows, statBarWidth, recordsView, recordsViewOptions,
+  leaveFields, displayLeaves, newRow, timelineNodes,
+})
+
 // 跨页定位：标题栏全局搜索点「请假记录」结果跳转 /leaves?focus=<id>
 watch(() => route.query.focus, () => { _applyRowFocus() })
 // 标题栏铃铛点进来（页面已被 KeepAlive 缓存，不会重跑下面的 created）：
@@ -514,6 +340,13 @@ watch(() => route.query.overdue, async (v) => {
   router.replace({ path: route.path, query: { ...route.query, overdue: undefined } })
   if (await loadAll()) checkOverdue(true)
 })
+// 首页空态「去登记请假」：?action=add 直接打开新增弹窗，随后清 query 防重复触发（KeepAlive 缓存页）。
+// 与铃铛的 overdue 是两套独立入口，互不干扰。
+watch(() => route.query.action, () => {
+  if (!isAddActionForRoute(route, 'leaves')) return
+  router.replace({ path: route.path, query: { ...route.query, action: undefined } })
+  openAddLeave()
+}, { immediate: true })
 
 // 非响应式实例状态
 // 逾期检查的 interval：取消函数由 d.interval 返回，stop/卸载走同一条路径
@@ -628,7 +461,7 @@ async function onImportData({ fields, rows }) {
     reportError(err, { action: '导入请假记录' })
   }
 }
-// 表格空态里的「从 Excel 表格批量导入」：预取导入弹窗 chunk 后打开
+// 表格空态里的「从表格批量导入」：预取导入弹窗 chunk 后打开
 function openImportDialog() {
   prefetch(loadImportExcel)
   importDialogVisible.value = true
@@ -751,7 +584,7 @@ function openAddLeave() {
   editingLeave.value = null
   addDialogVisible.value = true
 }
-// 请假登记弹窗左上角的「从 Excel 表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
+// 请假登记弹窗右上角（标题行右端）的「从表格批量导入」：先关掉单条新增，再打开同一个导入弹窗
 function openBatchImportFromAdd() {
   addDialogVisible.value = false
   importMounted.value = true

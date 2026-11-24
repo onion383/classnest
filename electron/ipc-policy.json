@@ -129,6 +129,9 @@
   "save-file": [
     "main"
   ],
+  "save-file-from-path": [
+    "main"
+  ],
   "screenshot-capture": [
     "widget"
   ],
@@ -225,6 +228,7 @@
     "widget"
   ],
   "boot-status": [
+    "main",
     "setup"
   ],
   "restart-backend": [

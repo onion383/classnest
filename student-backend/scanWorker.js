@@ -39,6 +39,10 @@ const RESTART_LIMIT_PER_MIN = 6;
 let child = null;             // 当前 worker 进程
 let idleTimer = null;         // 空闲退出定时器
 let restartTimer = null;      // 崩溃重建定时器
+// 崩溃重建的时间窗（一分钟内最多 RESTART_LIMIT_PER_MIN 次）。声明必须在
+// scheduleRestart 之前：函数体内引用、声明写在函数之后的写法虽然当前没有顶层
+// 调用不会触发 TDZ，但任何一次模块初始化期调用都会直接抛 ReferenceError（K03-15）。
+let restartWindow = [];
 // 「这个 worker 是我们主动叫它退的」标志。
 // 为什么需要：主动 shutdown 走 child.kill() 时，Windows 上 exit 回调拿到的是
 // code=null + signal=SIGTERM，与崩溃长得一模一样 → 被当成崩溃去 scheduleRestart。
@@ -118,7 +122,6 @@ function scheduleRestart() {
     spawnWorker();
   }, SCAN_WORKER_RESTART_MS);
 }
-let restartWindow = [];
 
 function onWorkerMessage(msg) {
   if (!msg || !msg.type) return;
@@ -283,6 +286,7 @@ function dispatchResume(tasks) {
 // 请求停止：既发 IPC（快速），也改库里的 state（跨进程真源，双保险）。
 // conn 可选：调用方能给出当前请求的连接就给出（避免依赖 ALS 上下文）；
 // 拿不到就退回 dbManager.current()，再拿不到就跳过（IPC 那条路仍然有效）。
+const CANCEL_LINGER_MS = 5 * 60 * 1000;
 function requestStop(slug, albumId, conn) {
   const key = taskKey(slug, albumId);
   const token = (active.get(key) || {}).token || 0;
@@ -300,7 +304,15 @@ function requestStop(slug, albumId, conn) {
   }
   dispatched.delete(key);
   const t = active.get(key);
-  if (t) t.cancelled = true;
+  if (t) {
+    t.cancelled = true;
+    // 取消后若 worker 始终不回报终态（卡死/半途换实现），active 条目会带着闭包滞留（P2-04）。
+    // 给一个远大于一次扫描收尾的宽限期，到期仍未移除就清掉；迟到的 done 只是 no-op。
+    const linger = setTimeout(() => {
+      if (active.get(key) === t && t.cancelled) active.delete(key);
+    }, CANCEL_LINGER_MS);
+    if (linger.unref) linger.unref();
+  }
 }
 
 // 设置暂停/继续。
@@ -332,8 +344,14 @@ function forwardDemand(slug, ids) {
   if (!child) spawnWorker();
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   try {
-    child.send({ cmd: 'demand', slug, ids: ids.slice(0, 500), dbKey: dbManager.getUnlockedKey(slug) });
-    return ids.length;
+    // 单批上限 500：回传必须是「实际转发条数」，不能拿请求长度冒充，
+    // 否则调用方以为全部已入队，尾部照片永远不生成缩略图（K03-14）。
+    const batch = ids.slice(0, 500);
+    if (ids.length > batch.length) {
+      console.warn(`[scan] 补图需求 ${ids.length} 条超过单批上限，本次只转发 ${batch.length} 条`);
+    }
+    child.send({ cmd: 'demand', slug, ids: batch, dbKey: dbManager.getUnlockedKey(slug) });
+    return batch.length;
   } catch (_) {
     return 0;
   }

@@ -167,6 +167,10 @@ const PATTERNS = [
     exemptFiles: [],
     exempt: [
       'student-frontend/src/views/SettingsView/SettingsView.data.js :: URL.revokeObjectURL(url)',
+      // 回收站预览：撤的是「换预览对象/关闭弹窗」时的旧 blob URL（:213/:244/:249），
+      // 下载另走 saveBlobWithDialog 磁盘中转，不属于「下载后立刻撤销 → 0 字节」。
+      'student-frontend/src/components/dialogs/TrashPreviewDialog.vue :: URL.revokeObjectURL(viewerUrl)',
+      'student-frontend/src/components/dialogs/TrashPreviewDialog.vue :: URL.revokeObjectURL(docUrl)',
     ],
   },
   {
@@ -352,8 +356,8 @@ const PATTERNS = [
           const ind = l.match(/^\s*/)[0].length
           if (ind <= indent) return false
         }
-        // 出了函数体（缩进更浅且是函数结束）
-        if (/^\s*\}\s*\$/.test(l) && l.match(/^\s*/)[0].length < indent) break
+        // 出了函数体（缩进更浅且是函数结束）。`$` 必须是行尾锚点，不能再转义成字面美元号（T02-04）
+        if (/^\s*\}\s*$/.test(l) && l.match(/^\s*/)[0].length < indent) break
       }
       // 同文件里有轮询（for + 条件 + sleep/间隔）→ 已是早退写法
       const hasPoll = file.lines.some((l) => /for\s*\(.*;.*;.*\)/.test(l) && /await/.test(l))

@@ -2,20 +2,32 @@
   <!-- 媒体查看器：图片缩放/旋转、视频播放、翻页。外观与相册页完全一致（样式在 styles/media-viewer.css） -->
   <Teleport to="body">
     <Transition name="preview">
-      <div v-if="visible" class="fixed inset-0 z-[10004] flex flex-col album-viewer" @click.self="close">
+      <div
+        v-if="visible"
+        ref="rootEl"
+        class="fixed inset-0 z-[10004] flex flex-col album-viewer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="媒体查看器"
+        tabindex="-1"
+        @keydown="onKeydown"
+        @click.self="close"
+      >
         <div class="viewer-main flex-1 flex min-h-0">
           <div class="viewer-stage flex-1 min-w-0 relative">
-            <button class="z-20 w-10 h-10 rounded-full viewer-btn viewer-close text-lg flex items-center justify-center transition-theme" title="关闭" @click="close">✕</button>
+            <button class="z-20 w-10 h-10 rounded-full viewer-btn viewer-close text-lg flex items-center justify-center transition-theme" title="关闭" aria-label="关闭" @click="close">✕</button>
             <button
               v-if="items.length > 1"
               class="z-20 w-11 h-11 rounded-full viewer-btn viewer-nav viewer-nav-prev text-xl flex items-center justify-center transition-theme"
               title="上一个"
+              aria-label="上一个"
               @click="step(-1)"
             >‹</button>
             <button
               v-if="items.length > 1"
               class="z-20 w-11 h-11 rounded-full viewer-btn viewer-nav viewer-nav-next text-xl flex items-center justify-center transition-theme"
               title="下一个"
+              aria-label="下一个"
               @click="step(1)"
             >›</button>
 
@@ -53,6 +65,7 @@
               <img
                 ref="mediaEl"
                 :src="current ? current.src : ''"
+                :alt="current && current.name ? current.name : '图片预览'"
                 class="max-w-full max-h-full select-none transition-transform duration-100 viewer-media"
                 :class="mediaClass"
                 :style="mediaStyle"
@@ -78,6 +91,7 @@
               <input
                 type="range"
                 class="flex-1 accent-info"
+                aria-label="播放进度"
                 min="0"
                 :max="duration || 0"
                 step="0.1"
@@ -90,6 +104,7 @@
             </div>
             <button class="h-10 px-3 rounded-full viewer-btn text-xs transition-theme" title="前进 10 秒" @click="skip(10)">+10s »</button>
             <AppSelect
+              aria-label="播放倍数"
               v-model="playbackRate"
               class="w-20"
               title="播放倍数"
@@ -116,6 +131,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import AppSelect from '../base/AppSelect.vue'
 import { useViewerPan } from '../../composables/useViewerPan.js'
+import { trapTab } from '../../composables/useModalFocus.js'
 
 defineOptions({ name: 'MediaViewer' })
 
@@ -179,6 +195,29 @@ watch(() => [props.visible, props.index], (val, oldVal) => {
 }, { immediate: true })
 
 function close() { emit('update:visible', false) }
+
+// 键盘可访问（F01-04）：打开时把焦点移进查看器，关闭时还给触发点；
+// ←/→ 翻页、Esc 关闭。焦点在 AppSelect 内部时让下拉自己处理 Esc。
+const rootEl = ref(null)
+let lastFocus = null
+watch(() => props.visible, (v) => {
+  if (v) {
+    lastFocus = document.activeElement
+    nextTick(() => { if (rootEl.value) rootEl.value.focus() })
+  } else if (lastFocus) {
+    try { lastFocus.focus() } catch (_) { /* 触发点已被移除 */ }
+    lastFocus = null
+  }
+})
+
+function onKeydown(e) {
+  // 下拉菜单展开时 Esc/方向键归它自己，避免 Esc 把整个查看器关掉
+  if (e.target && e.target.closest && e.target.closest('.av-select, [role="listbox"]')) return
+  if (e.key === 'Tab') { trapTab(e, rootEl.value); return }
+  if (e.key === 'Escape') { e.preventDefault(); close(); return }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); return }
+  if (e.key === 'ArrowRight') { e.preventDefault(); step(1); return }
+}
 
 function step(dir) {
   if (props.items.length < 2) return

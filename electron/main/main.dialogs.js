@@ -119,7 +119,9 @@ function registerDialogsIpc(opts = {}) {
     // 渲染层传什么路径都不能直接交给系统：只放行已存在、非盘符根、非系统保护目录的绝对路径
     const safe = resolveSafeFolder(folderPath)
     if (safe.error) return contract.fail(safe.error)
-    shell.openPath(safe.path)
+    // 与 OPEN_FILE / OPEN_UPLOAD_FILE 同口径：读取系统外壳返回的错误串（E01-04）
+    const error = await shell.openPath(safe.path)
+    if (error) return contract.fail(error)
     return contract.ok()
   }))
 
@@ -139,20 +141,20 @@ function registerDialogsIpc(opts = {}) {
   //   设置页的背景图改用 <input type="file"> + save-background-image（base64 直传），
   //   前端已无任何一处调用它。留着等于给主进程多开一个能读本地文件的口子（审查 v4 · B01-01）。
 
-  // 保存背景图片（用于大图片，前端传入 base64）
+  // 保存背景图片（前端传入二进制 ArrayBuffer）
   // 写盘改成异步：背景图动辄几 MB，writeFileSync 会把主进程阻塞到写完为止。
-  IPC.handle(CH.SAVE_BACKGROUND_IMAGE, contract.safe(async (event, { name, base64 }) => {
+  // P3-07：入参从 base64 字符串改为 ArrayBuffer —— 不再有 4/3 的字符串膨胀，
+  // 也不必在主进程再解码出一份等量 Buffer（峰值内存从「原件 + 串 + 解码」降到「原件 + 一份」）。
+  IPC.handle(CH.SAVE_BACKGROUND_IMAGE, contract.safe(async (event, { name, buffer } = {}) => {
     try {
-      // 与「选择图片」路径对齐的 50MB 上限：base64 入口原先没有大小校验，
-      // 一次超大 payload 就会在主进程里解码出数倍内存（B01-09）。
+      // 与「选择图片」路径对齐的 50MB 上限：超大 payload 不写盘、不拷贝。
       // 与 note-save/save-file 共用同一个 50MB 上限，避免三处各写一份常量
-      if (typeof base64 !== 'string' || base64.length === 0) {
+      if (!(buffer instanceof ArrayBuffer) && !ArrayBuffer.isView(buffer)) {
         return contract.fail('缺少图片数据')
       }
-      // 先按 base64 长度粗判（约为原始字节的 4/3），避免把超大字符串解码进内存
-      if (base64.length > Math.ceil(MAX_WRITE_BYTES / 3) * 4) {
-        return contract.fail('背景图片不能超过 50MB')
-      }
+      const byteLength = buffer.byteLength
+      if (byteLength === 0) return contract.fail('缺少图片数据')
+      if (byteLength > MAX_WRITE_BYTES) return contract.fail('背景图片不能超过 50MB')
       // v2 布局：content/uploads/background。原先硬编码 userData/data 会在用户
       // 把数据目录改到别处时把背景图写到旧位置（顺带修掉这个老问题）。
       const bgDir = path.join(resolveContentDir(), 'uploads', 'background')
@@ -165,12 +167,11 @@ function registerDialogsIpc(opts = {}) {
       if (!ALLOWED_BG_EXT.has(ext)) ext = '.png'
       const fileName = `bg_${Date.now()}${ext}`
       const destPath = path.join(bgDir, fileName)
-      // 将 base64 写入文件
-      const buffer = Buffer.from(base64, 'base64')
-      if (buffer.length > MAX_WRITE_BYTES) {
-        return contract.fail('背景图片不能超过 50MB')
-      }
-      await fsp.writeFile(destPath, buffer)
+      // ArrayBuffer 直接交给 Buffer 视图（不复制）；TypedArray 按自己的窗口取
+      const bytes = buffer instanceof ArrayBuffer
+        ? Buffer.from(buffer)
+        : Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+      await fsp.writeFile(destPath, bytes)
       // 根据环境返回不同的 URL
       let imageUrl
       if (isDev) {
@@ -232,6 +233,54 @@ function registerDialogsIpc(opts = {}) {
     }
   }))
 
+  // 业务 ZIP 磁盘中转落盘（N2-07）：后端已把整包写到临时文件，这里只负责
+  // 「弹保存对话框 → 移动/流式复制 → 登记本应用写过」。
+  // 不走 save-file 的 50MB 通道，因此几十上百张收据的大包也能保存。
+  const EXPORT_TMP_DIR = path.join(require('os').tmpdir(), 'classnest-export')
+  IPC.handle(CH.SAVE_FILE_FROM_PATH, contract.safe(async (event, { defaultName, srcPath } = {}) => {
+    const mainWindow = getMainWindow()
+    if (!mainWindow || mainWindow.isDestroyed()) return contract.fail('主窗口不可用')
+    if (typeof srcPath !== 'string' || !srcPath) return contract.fail('缺少源文件路径')
+    const src = path.resolve(srcPath)
+    const tmpRoot = path.resolve(EXPORT_TMP_DIR)
+    // 只允许搬「后端刚写出的导出包」：否则渲染层被注入后可以把任意本地文件复制出去
+    if (!src.startsWith(tmpRoot + path.sep)) return contract.fail('源文件不在导出临时目录')
+    const name = sanitizeSuggestedName(defaultName)
+    if (path.extname(name).toLowerCase() !== '.zip') return contract.fail('不支持保存为该文件类型')
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '保存文件',
+      defaultPath: lastDialogDir ? path.join(lastDialogDir, name) : name,
+      filters: [{ name: '压缩包', extensions: ['zip'] }],
+    })
+    if (result.canceled || !result.filePath) {
+      // 用户取消：临时包没有保留价值，删掉；失败也不影响用户操作
+      try { await fsp.unlink(src) } catch (_) { /* 已被清理 */ }
+      return contract.canceled()
+    }
+    const target = result.filePath
+    try {
+      try {
+        await fsp.rename(src, target)
+      } catch (_) {
+        // 跨盘 rename 会 EXDEV：退回流式复制，主进程不整包驻留
+        await new Promise((resolve, reject) => {
+          const rs = fs.createReadStream(src)
+          const ws = fs.createWriteStream(target)
+          rs.on('error', reject)
+          ws.on('error', reject)
+          ws.on('finish', resolve)
+          rs.pipe(ws)
+        })
+        try { await fsp.unlink(src) } catch (_) { /* 留到 TTL 清理 */ }
+      }
+      lastDialogDir = path.dirname(target)
+      markFileWritten(target)
+      return contract.ok({ filePath: target })
+    } catch (err) {
+      return contract.fail(err)
+    }
+  }))
+
   // 导出文件保存后：用系统默认应用打开
   IPC.handle(CH.OPEN_FILE, contract.safe(async (event, { filePath }) => {
     if (!filePath) return contract.fail('缺少文件路径')
@@ -248,21 +297,24 @@ function registerDialogsIpc(opts = {}) {
     }
   }))
 
-  // 打开上传目录里的文件（收据里的 PDF / Office / 视频）：用系统默认程序。
+  // 打开上传目录 / 收据回收站里的文件（PDF / Office / 视频）：用系统默认程序。
   //
   // 为什么不复用 open-file：那条通道只认「本进程通过 save-file 写过的路径」，
   // 目的是防止渲染层被注入后把任意 exe 交给 shell.openPath。收据是上传时直接写进
   // uploads 的，不在那个名单里，所以需要一条范围同样小的旁路：
-  //   · 只认 uploads 根目录下的文件名（basename 压平，穿越不出去）
+  //   · 只认指定根目录下的文件名（basename 压平，穿越不出去）
   //   · 挡掉可执行扩展名（见 BLOCKED_OPEN_EXTS）
-  IPC.handle(CH.OPEN_UPLOAD_FILE, contract.safe(async (event, { relPath } = {}) => {
+  // area='receiptTrash' 时根改成 content/receipt-trash —— 回收站里的 Office 收据
+  // 也要能「本地查看」；不传 area 的旧调用（管理收据）仍走 uploads，行为不变。
+  IPC.handle(CH.OPEN_UPLOAD_FILE, contract.safe(async (event, { relPath, area } = {}) => {
     // 上传目录在 v2 布局里是 content/uploads（dbManager.paths.js 的 uploadsDir），
     // 原先按 <dataDir>/uploads 拼，路径永远不存在 → 打开收据 PDF 一律「文件不存在」。
-    const root = path.resolve(path.join(resolveContentDir(), 'uploads'))
+    const sub = area === 'receiptTrash' ? 'receipt-trash' : 'uploads'
+    const root = path.resolve(path.join(resolveContentDir(), sub))
     const name = path.basename(String(relPath || ''))
     if (!name || name === '.' || name === '..') return contract.fail('缺少文件路径')
     const abs = path.join(root, name)
-    if (!abs.startsWith(root + path.sep)) return contract.fail('路径不在上传目录内')
+    if (!abs.startsWith(root + path.sep)) return contract.fail('路径不在允许的目录内')
     if (!fs.existsSync(abs)) return contract.fail('文件不存在')
     if (BLOCKED_OPEN_EXTS.has(path.extname(abs).toLowerCase())) {
       return contract.fail('不支持用系统程序打开该文件类型')
@@ -545,7 +597,6 @@ function registerDialogsIpc(opts = {}) {
     const saveDir = safeDir.path
     await fsp.mkdir(saveDir, { recursive: true })
     // 精度必须到毫秒：只到秒时 1 秒内连存两次会生成同名文件，writeFile 直接把上一次的覆盖掉（静默丢数据）
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23)
     const filePath = path.join(saveDir, `note_${timestamp}.png`)
     await fsp.writeFile(filePath, buffer)
     return contract.ok({ filePath })

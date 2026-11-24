@@ -61,10 +61,18 @@ async function sha256FileAsync(file, onBytes) {
 }
 
 // 复制单个文件，按块回报已写字节（供进度条使用）
+// 复制语义要覆盖元数据：保留源的权限位与修改时间，并防止写入穿过目标残留的符号链接（E02-09）。
 async function copyFileAsync(src, dst, onBytes) {
   await fsp.mkdir(path.dirname(dst), { recursive: true })
+  // 目标若是符号链接（上一轮搬迁残留），先删链接本身；否则 open(dst,'w') 会写到链接目标
+  try {
+    const lst = await fsp.lstat(dst)
+    if (lst.isSymbolicLink()) await fsp.unlink(dst)
+  } catch (_) { /* 目标不存在是正常情况 */ }
+  const st = await fsp.stat(src)
+  const mode = st.mode & 0o777
   const rh = await fsp.open(src, 'r')
-  const wh = await fsp.open(dst, 'w')
+  const wh = await fsp.open(dst, 'w', mode)
   try {
     const buf = Buffer.allocUnsafe(1 << 20)
     let pos = 0
@@ -79,6 +87,9 @@ async function copyFileAsync(src, dst, onBytes) {
     await rh.close()
     await wh.close()
   }
+  // open 的 mode 受 umask 影响，拷贝完成后显式回写源权限与时间戳
+  try { await fsp.chmod(dst, mode) } catch (_) { /* Windows 上 chmod 能力有限，忽略 */ }
+  try { await fsp.utimes(dst, st.atime, st.mtime) } catch (_) { /* 元数据失败不影响字节一致 */ }
 }
 
 // 建立目录清单：相对路径 → { size, hash }，并回报总文件数/总字节数（用于进度）

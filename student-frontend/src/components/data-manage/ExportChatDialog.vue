@@ -1,8 +1,6 @@
 <template>
   <!-- 导出聊天记录：选择消息（可展开/勾选/按角色筛选）→ 导出范围 → 格式 + 文件名（外观沿用导出表格弹窗） -->
-  <Teleport to="body">
-  <Transition name="dialog">
-  <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="cancel">
+  <DialogShell :visible="visible" :z-index="10001" @overlay="cancel">
     <div class="bg-surface p-5 rounded-lg shadow-card border border-border dialog-card chat-card flex flex-col relative">
       <h3 class="text-lg font-bold mb-3">导出聊天记录</h3>
 
@@ -26,7 +24,7 @@
             v-for="m in visibleMsgs" :key="m.id"
             class="msg-row flex items-start gap-2 px-2.5 py-2 border-b border-border last:border-b-0"
           >
-            <input type="checkbox" class="mt-1 shrink-0" :checked="isSelected(m.id)" @change="toggle(m.id)" />
+            <input type="checkbox" class="mt-1 shrink-0" :aria-label="`选择消息：${(m.content || '（无内容）').slice(0, 20)}`" :checked="isSelected(m.id)" @change="toggle(m.id)" />
             <span
               class="shrink-0 text-[11px] leading-5 px-1.5 rounded mt-0.5"
               :class="m.role === 'user' ? 'role-user' : 'role-ai'"
@@ -53,17 +51,17 @@
 
       <div class="mb-4">
         <p class="font-semibold mb-2">导出范围：</p>
-        <AppSelect v-model="range" class="w-full" :options="RANGES" />
+        <AppSelect v-model="range" aria-label="导出范围" class="w-full" :options="RANGES" />
       </div>
 
       <div class="mb-4">
         <p class="font-semibold mb-2">导出格式：</p>
-        <AppSelect v-model="exportFormat" class="w-full" :options="FORMAT_OPTIONS" no-scroll />
+        <AppSelect v-model="exportFormat" aria-label="导出格式" class="w-full" :options="FORMAT_OPTIONS" no-scroll />
       </div>
 
       <div class="mb-4">
         <label class="font-semibold block mb-1">文件名</label>
-        <input v-model="filename" class="filename-input border border-border bg-surface text-text p-2 w-full !rounded-[12px]" />
+        <input v-model="filename" class="filename-input border border-border bg-surface text-text p-2 w-full !rounded-[12px]" aria-label="文件名" />
       </div>
 
       <div class="text-right">
@@ -71,15 +69,14 @@
         <button @click="doExport" :disabled="exporting || !selectedIds.length" class="bg-info text-text-inverse border-none px-4 py-1.5 rounded-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">{{ exporting ? '导出中…' : '导出' }}</button>
       </div>
     </div>
-  </div>
-  </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
 import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 import AppSelect from '../base/AppSelect.vue'
+import DialogShell from '../base/DialogShell.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
 import { useNotification } from '../../composables/useNotification'
 import { parseMessages } from '../../composables/ai/aiMessages.js'
@@ -186,7 +183,12 @@ async function loadMessages() {
       }))
       .filter((m) => m.content || m.reasoning)
     selectedIds.value = msgs.value.map((m) => m.id)
-  } catch (_) { msgs.value = [] }
+  } catch (err) {
+    // 失败不能显示成「没有可导出的聊天记录」：区分故障与空数据（F02-10）
+    msgs.value = []
+    const msg = (err && err.response && err.response.data && err.response.data.error) || (err && err.message)
+    notifyError(msg ? '读取聊天记录失败：' + msg : '读取聊天记录失败，请重试')
+  }
   finally { loading.value = false }
 }
 // 依据导出范围拼出二维数据（列 + 行）
@@ -217,7 +219,9 @@ async function doExport() {
     }
   } catch (err) {
     console.error('导出失败:', err)
-    notifyError('导出失败，请重试')
+    // 带出后端可读原因（参数/权限/文件占用），与 ExportMarkdownDialog / ExportExcel 同口径（F02-06）
+    const msg = (err && err.response && err.response.data && err.response.data.error) || (err && err.message)
+    notifyError(msg ? '导出失败：' + msg : '导出失败，请重试')
   } finally {
     exporting.value = false
   }

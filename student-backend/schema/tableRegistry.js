@@ -59,7 +59,11 @@ const LOGICAL = Object.freeze({
   seat_draft: 'seat_slots',
 });
 
-const ALL_LOGICAL = Object.freeze(Object.keys(LOGICAL));
+const ALL_LOGICAL = Object.freeze(Object.keys(LOGICAL))
+
+// 三张历史只读视图（schema.history.js 基于 domain_history 建）：
+// 名字不是物理表也不是逻辑槽位，但 AI 可读名单里有它们，isKnownName 必须认得（X3-20）。
+const HISTORY_VIEWS = Object.freeze(['schedule_history', 'duty_history', 'seat_history']);
 
 // ---- 业务白名单：引用方只 import，不许再抄一份 ----
 
@@ -96,6 +100,10 @@ const AI_SEARCH_TABLES = Object.freeze([
 
 // services/seatWrite.js：只有这两张有「当前座位」语义，写错表必须当场失败。
 const SEAT_CURRENT_SLOTS = Object.freeze(['seat_layout', 'seat_template']);
+
+// services/undoStore.js：以二维 `cells` 矩阵存几何的表（课表两份）。
+// 撤销/重做越界格前要用「当前矩阵形状」校验——形状来自数据本身，不是写死的行列数。
+const MATRIX_GEOMETRY_TABLES = Object.freeze(['schedule', 'master_schedule']);
 
 // routes/undo/undo.executors.js：以「整块 JSON 列」存数据、撤销时整列还原的表。
 // 除 widget_settings 外都是逻辑表；混在一张清单里是因为撤销只认「表名 + 列名」。
@@ -143,7 +151,7 @@ const AI_SCORE_TABLES = Object.freeze({
 
 // 物理表名与逻辑表名都算「已知表名」；白名单 / 配置里出现别的名字即视为手抄。
 function isKnownName(name) {
-  return ALL_PHYSICAL.includes(name) || ALL_LOGICAL.includes(name);
+  return ALL_PHYSICAL.includes(name) || ALL_LOGICAL.includes(name) || HISTORY_VIEWS.includes(name);
 }
 
 module.exports = {
@@ -151,6 +159,7 @@ module.exports = {
   ALL_PHYSICAL,
   LOGICAL,
   ALL_LOGICAL,
+  HISTORY_VIEWS,
   GENERIC_CRUD_TABLES,
   UNDO_WRITE_TABLES,
   UNDO_DOC_TABLES,
@@ -158,6 +167,7 @@ module.exports = {
   AI_CHECK_RULE_TABLES,
   AI_SCORE_TABLES,
   SEAT_CURRENT_SLOTS,
+  MATRIX_GEOMETRY_TABLES,
   DUTY_TABLES,
   isKnownName,
 };

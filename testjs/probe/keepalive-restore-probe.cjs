@@ -11,12 +11,14 @@
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 const { pathToFileURL } = require('url')
 
 const BACKEND = path.join(__dirname, '..', '..', 'student-backend')
 const sharp = require(path.join(BACKEND, 'node_modules', 'sharp'))
 
-const TMP = path.join(__dirname, '..', 'tmp', 'keepalive-probe')
+// 与其它 keepalive 探针分开目录，避免并行运行时互相覆盖样本（T01-10）
+const TMP = path.join(os.tmpdir(), 'classnest-probe', 'keepalive-restore')
 const IMG_DIR = path.join(TMP, 'imgs')
 
 async function makeImages(count) {

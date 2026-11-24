@@ -18,6 +18,7 @@
     </button>
     <div class="w-56">
       <AppSelect
+        aria-label="选择周次"
         v-if="weeks.length > 0"
         compact
         class="week-select"

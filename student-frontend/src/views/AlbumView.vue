@@ -345,7 +345,7 @@
     <Teleport to="body">
     <Transition name="preview">
     <!-- 配色走 .album-viewer 的 CSS 变量：默认深色灯箱，毛玻璃主题下换成浅色玻璃（见 style 块） -->
-    <div v-if="viewer" class="fixed inset-0 z-[10004] flex flex-col album-viewer" @click.self="closeViewer">
+    <div v-if="viewer" ref="viewerEl" class="fixed inset-0 z-[10004] flex flex-col album-viewer" role="dialog" aria-modal="true" aria-label="媒体查看器" tabindex="-1" @click.self="closeViewer">
       <!-- 媒体区 + 信息面板的外层：flex 行。面板展开时靠宽度动画把媒体区【压窄】（而不是盖上去），
            图片因此会在剩下的空间里重新居中。媒体区必须 min-w-0：flex 子项默认 min-width:auto，
            会被图片的固有宽度撑住，那样面板再怎么变宽也挤不动它。 -->
@@ -452,6 +452,7 @@
             <input
               type="range"
               class="flex-1 accent-info"
+              aria-label="播放进度"
               min="0"
               :max="duration || 0"
               step="0.1"
@@ -463,7 +464,7 @@
             <span class="viewer-fg text-xs tabular-nums w-12">{{ fmtTime(duration) }}</span>
           </div>
           <button @click="skip(10)" class="h-10 px-3 rounded-full viewer-btn text-xs transition-theme" title="前进 10 秒">+10s »</button>
-          <AppSelect v-model="playbackRate" @change="changeRate" class="w-20" title="播放倍数" :options="[{ value: 0.5, label: '0.5x' }, { value: 0.75, label: '0.75x' }, { value: 1, label: '1x' }, { value: 1.25, label: '1.25x' }, { value: 1.5, label: '1.5x' }, { value: 2, label: '2x' }]" />
+          <AppSelect v-model="playbackRate" aria-label="播放倍数" @change="changeRate" class="w-20" title="播放倍数" :options="[{ value: 0.5, label: '0.5x' }, { value: 0.75, label: '0.75x' }, { value: 1, label: '1x' }, { value: 1.25, label: '1.25x' }, { value: 1.5, label: '1.5x' }, { value: 2, label: '2x' }]" />
           <span class="viewer-sep">|</span>
         </template>
         <!-- 图片控制 -->
@@ -484,6 +485,18 @@
     </div>
     </Transition>
     </Teleport>
+
+    <!-- 删除照片确认：全站统一的 ConfirmDialog，不再用原生 confirm()（F06-10） -->
+    <ConfirmDialog
+      :visible="!!deleteTarget"
+      title="移入回收站"
+      :message="`确定把「${deleteTarget?.file_name || ''}」移入回收站吗？可撤销还原。`"
+      confirm-text="移入回收站"
+      cancel-text="取消"
+      :show-cancel="true"
+      @confirm="doDeletePhoto"
+      @cancel="deleteTarget = null"
+    />
   </div>
 </template>
 
@@ -510,6 +523,7 @@ import {
 import { useThumbBatch } from '../composables/useThumbBatch.js'
 import { useDisposables } from '../utils/disposables.js'
 import { useViewerPan } from '../composables/useViewerPan.js'
+import { useModalFocus } from '../composables/useModalFocus.js'
 import VideoThumb from '../components/import-export/VideoThumb.vue'
 import AppSelect from '../components/base/AppSelect.vue'
 import ViewSwitch from '../components/base/ViewSwitch.vue'
@@ -523,6 +537,7 @@ import '../styles/dialog-transition.css'
 import { INVOKE } from '../electronChannels.js'
 
 // 新建相册 / 相册管理 / 任务管理 / 相册索引导出四个弹窗按需加载（与分组管理等页面同一套约定）
+const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'))
 const loadNewAlbumDialog = () => import('../components/dialogs/NewAlbumDialog.vue')
 const NewAlbumDialog = defineAsyncComponent(loadNewAlbumDialog)
 const loadAlbumManageDialog = () => import('../components/dialogs/AlbumManageDialog.vue')
@@ -562,6 +577,9 @@ const exportMounted = ref(false)
 
 // 查看器
 const viewer = ref(null)
+// 全屏灯箱的焦点管理：打开移入、Tab 圈定、Esc 关闭、关闭还原（N5-11）
+const viewerEl = ref(null)
+useModalFocus(() => !!viewer.value, viewerEl, closeViewer)
 const rotation = ref(0)
 const zoom = ref(1)
 // 平移作用在这两个元素上：舞台算可视余量，img 承载 transform
@@ -1689,8 +1707,17 @@ async function saveAs(p) {
   }
 }
 
-async function deletePhoto(p) {
-  if (!confirm(`确定把「${p.file_name}」移入回收站吗？（可撤销还原）`)) return
+// 待确认删除的照片：先弹 ConfirmDialog，确认后再移入回收站（F06-10）
+const deleteTarget = ref(null)
+
+function deletePhoto(p) {
+  if (!p) return
+  deleteTarget.value = p
+}
+async function doDeletePhoto() {
+  const p = deleteTarget.value
+  deleteTarget.value = null
+  if (!p) return
   try {
     await axios.delete(`/api/album/photo/${p.id}`, { headers: authHeaders() })
     // 记录「删除照片」撤销：undo 从回收站搬回文件+还原索引，redo 再次移入回收站。

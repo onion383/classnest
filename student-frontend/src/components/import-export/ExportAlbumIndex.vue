@@ -16,16 +16,16 @@
     <template #extraOptions>
       <div class="mb-4">
         <p class="font-semibold mb-1">选择相册：</p>
-        <AppSelect v-model="albumId" :options="albumOptions" class="w-full" />
+        <AppSelect v-model="albumId" aria-label="选择相册" :options="albumOptions" class="w-full" />
       </div>
       <div class="mb-4 flex gap-3">
         <div class="flex-1 min-w-0">
           <p class="font-semibold mb-1">索引分组：</p>
-          <AppSelect v-model="groupMode" :options="GROUP_OPTIONS" class="w-full" />
+          <AppSelect v-model="groupMode" aria-label="索引分组" :options="GROUP_OPTIONS" class="w-full" />
         </div>
         <div class="flex-1 min-w-0">
           <p class="font-semibold mb-1">顺序：</p>
-          <AppSelect v-model="order" :options="ORDER_OPTIONS" class="w-full" />
+          <AppSelect v-model="order" aria-label="索引顺序" :options="ORDER_OPTIONS" class="w-full" />
         </div>
       </div>
       <p v-if="loading" class="text-xs text-text-muted mb-3">正在读取照片索引…</p>

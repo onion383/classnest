@@ -275,12 +275,12 @@ test('接线：后端每个结果源都走分页，SQL 与内存 JSON 都不例�
   assert.equal((src.match(/const collectUpTo = limits\.offset \+ limits\.probeLimit/g) || []).length, 4)
   assert.match(src, /meta\.hasMore = pageState\.hasMore/)
   assert.match(src, /return \{ groups, meta \}/)
-  assert.ok(!/truncated|maxPerGroup/.test(src), '不能退回「放大上限重查」那条路')
+  assert.ok(!/maxPerGroup|truncatedPage/.test(src), '不能退回「放大上限重查」那条路')
   assert.match(src, /splitTerms\(q, limits\.maxTerms\)/)
-  assert.match(src, /primaryValues\(src\.table, src\.primary, limits\.pinyinValues\)/)
+  assert.match(src, /primaryValues\(src\.table, src\.primary, limits\.pinyinValues/)
   assert.match(src, /const pm = terms\.some\(t => \/\^\[a-z\]\+\$\/i\.test\(t\.text\)\)/, '多词也要启用拼音匹配器')
   assert.match(src, /function pinyinAlternatives\(/)
-  assert.match(src, /pm && \/\^\[a-z\]\+\$\/i\.test\(q\)/, 'nameHit 必须按词判断，中文词不该进拼音匹配器')
+  assert.match(src, /pm && \/\^\[a-z\]\+\$\/i\.test\((q|k)\)/, 'nameHit 必须按词判断，中文词不该进拼音匹配器')
 
   // M12-B5：路由只剩 HTTP 形状，查询实现下沉到 service（SQL 不许回到路由层）
   const routeSrc = read('student-backend/routes/search.js')
@@ -299,5 +299,5 @@ test('接线：前端按页追加，不再放大上限重查', () => {
   assert.match(s, /v-if="remoteHasMore &&/)
   assert.match(s, /@click="showMoreRemote"/)
   assert.match(s, /scheduleRemote\.cancel\(\)/)
-  assert.ok(!/remotePerGroup|remoteTruncated|maxPerGroup|perGroup/.test(s), '前端不该再复制页大小或放大上限')
+  assert.ok(!/remotePerGroup|maxPerGroup|perGroup/.test(s), '前端不该再复制页大小或放大上限')
 })

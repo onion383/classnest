@@ -14,6 +14,18 @@
 // =========================================================================
 const sessions = require('./sessions');
 
+// 登录校验用哪份哈希（唯一口径）：
+//   accounts.password_hash 是账号级权威 —— 一个账号在多个班的 users 表里可以各存一份
+//   密码，但登录发生在「进哪个班」之前，只能认账号级这一份。
+//   账号级哈希还没同步过（历史账号/明文模式）时，退回当前库 users.password。
+//
+// 抽成导出纯函数（T07-03）：登录路径与单测共用同一行判据。
+// 过去单测把这行手抄进 `security-level-hash-sync.test.js` 当 oracle，
+// 口径一旦调整（比如改成先看 user.password），测试不会跟着变。
+function hashSource(acc, user) {
+  return (acc && acc.password_hash) ? acc.password_hash : user.password;
+}
+
 // 改密 / 恢复词重置 / 删账号：全部旧 token 作废，要求重新登录。
 // 缺任一维度直接抛错，绝不静默返回 0 —— 静默等于「改完密码旧 token 还能用」。
 //
@@ -30,7 +42,12 @@ function revokeAccountSessions(userId, dbSlug) {
     throw new TypeError('revokeAccountSessions 的 dbSlug 列表为空');
   }
   let revoked = 0;
-  for (const s of slugs) revoked += sessions.revokeAllByUser(userId, s);
+  for (const s of slugs) {
+    revoked += sessions.revokeAllByUser(userId, s);
+    // 集成凭据（MCP token）与登录会话是两套存储：改密/删号后不能留着旧 token 继续访问 /mcp（N3-04）。
+    // 惰性 require：避免启动路径上把 mcpTokenStore → dbManager → db 的初始化链提前拉起来。
+    try { require('./mcpTokenStore').revokeBySlug(s); } catch (_) { /* 令牌文件不可写不阻断会话吊销 */ }
+  }
   return revoked;
 }
 
@@ -44,4 +61,4 @@ function rotateAccountSessions(userId, dbSlug) {
   return { revoked, sid: sessions.create(userId, current) };
 }
 
-module.exports = { revokeAccountSessions, rotateAccountSessions };
+module.exports = { hashSource, revokeAccountSessions, rotateAccountSessions };

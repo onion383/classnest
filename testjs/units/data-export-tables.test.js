@@ -76,8 +76,25 @@ test('所有「一行对应物理表一行」的表都配了 count', () => {
   assert.deepEqual(missing, [], `以下表有物理表但没配 count：${missing.join(', ')}`)
 })
 
-// 「整理」= VACUUM：删除留下的空闲页必须真的被回收，且数据一条不少。
-// 用独立表造空洞，避免影响上面 students/activities 的计数断言。
+// K03-16：数据源改为逐表序列化写响应（峰值只驻留一张表）。
+// 形状不变，但不能再用 res.json 一次性拼出整包。
+test('/sources 逐表流式写出：无 Content-Length，响应形状不变', async () => {
+  const res = await fetch(`${fx.base}/sources`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keys: ['students', 'activities', 'nope'] }),
+  })
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('content-length'), null, '分片写出不能预置长度')
+  const body = await res.json()
+  assert.deepEqual(body.tables.map((t) => t.key), ['students', 'activities'], '未知 key 直接跳过')
+  assert.equal(body.tables[0].rows.length, 3)
+  assert.equal(body.tables[1].rows.length, 2)
+  assert.ok(Array.isArray(body.tables[0].fields) && body.tables[0].fields.length > 0)
+
+  const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/dataExport.js'), 'utf8')
+  assert.ok(src.includes('res.write(\'{"tables":[\')'), '必须逐表写出，不能退回 res.json 整包')
+})
 test('POST /vacuum 回收空闲页且数据不丢', async () => {
   conn.exec('CREATE TABLE vacuum_probe (id INTEGER PRIMARY KEY, v TEXT)')
   const ins = conn.prepare('INSERT INTO vacuum_probe (v) VALUES (?)')

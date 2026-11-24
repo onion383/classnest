@@ -65,7 +65,8 @@ function insertMember(cadreId, studentId, studentName, sort) {
 }
 
 function deleteMember(id) {
-  db.prepare('DELETE FROM cadre_members WHERE id=?').run(id)
+  // 返回 .run 结果：路由据 changes 判 404，避免「删不存在的成员」也回成功（K03-03）
+  return db.prepare('DELETE FROM cadre_members WHERE id=?').run(id)
 }
 
 function findMember(id) {

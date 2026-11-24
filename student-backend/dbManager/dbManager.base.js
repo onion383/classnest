@@ -244,7 +244,11 @@ function setCachedConn(slug, conn) {
   }
   // 全部在用、没有空闲可驱逐时，硬顶兜底：拒绝本次新连接，避免连接数无限增长。
   if (connCache.size > CONN_CACHE_HARD_MAX) {
-    if (connCache.get(slug) === conn) connCache.delete(slug);
+    if (connCache.get(slug) === conn) {
+      // 摘除即回收：不 close 会把句柄留在「不在缓存也没关闭」的悬空态（K01-18）
+      connCache.delete(slug);
+      try { conn.close(); } catch (_) { /* 关闭失败可忽略 */ }
+    }
     throw new Error('同时打开的数据库连接过多，请稍后重试');
   }
 }

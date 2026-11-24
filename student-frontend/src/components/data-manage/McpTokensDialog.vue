@@ -37,7 +37,7 @@
                 class="bg-info hover:bg-info-hover text-text-inverse px-3 py-1 rounded text-xs transition-theme disabled:opacity-50">复制令牌</button>
               <button type="button" @click="copyConfig(t.id)" :disabled="busy"
                 class="bg-info hover:bg-info-hover text-text-inverse px-3 py-1 rounded text-xs transition-theme disabled:opacity-50">复制配置</button>
-              <button type="button" @click="revoke(t.id)" :disabled="busy"
+              <button type="button" @click="revokeTarget = t" :disabled="busy"
                 class="bg-danger hover:bg-danger-hover text-text-inverse px-3 py-1 rounded text-xs transition-theme disabled:opacity-50">删除配置</button>
             </div>
             <!-- 已失效令牌：右侧原本空白，这里给一个「去除记录」彻底删掉这条行 -->
@@ -60,6 +60,12 @@
 
     <!-- 去除记录确认：已失效令牌彻底删掉后列表不再显示，先问一句防误点。
          层级必须高于本弹窗（10070），否则确认框会被压在下面看不见。 -->
+    <!-- 删除配置确认：与「去除记录」同口径。令牌一旦失效，已配置的外部客户端会立刻断开，
+         必须重新生成并分发配置，属于不可逆操作（F02-01）。 -->
+    <ConfirmDialog :visible="!!revokeTarget" :z-index="10080" title="删除配置"
+      :message="`确定让「${revokeTarget?.label || revokeTarget?.id || '该令牌'}」立即失效吗？\n失效后，已配置的外部客户端（Claude Desktop / Cursor 等）将无法连接，需要重新生成令牌并重新分发配置。`"
+      confirm-text="确定删除" cancel-text="取消" :show-cancel="true"
+      @confirm="doRevoke" @cancel="revokeTarget = null" />
     <ConfirmDialog :visible="!!removeTarget" :z-index="10080" title="去除记录"
       :message="`确定去除「${removeTarget?.label || removeTarget?.id || '该令牌'}」这条记录吗？\n该令牌已失效，去除后列表中不再显示，无法恢复。`"
       confirm-text="确定去除" cancel-text="取消" :show-cancel="true"
@@ -92,6 +98,7 @@ const loading = ref(false)
 const busy = ref(false)
 const showCreate = ref(false)
 const removeTarget = ref(null) // 待确认「去除记录」的令牌行
+const revokeTarget = ref(null) // 待确认「删除配置」的令牌行
 // 令牌列表「只认最后一次读取」：连续撤销/去除时，先发的慢响应不能把已删的令牌画回来
 const tokensSeq = createLatest()
 const launchSeq = createLatest()
@@ -176,7 +183,11 @@ async function loadTokens() {
     const r = await axios.get('/api/mcp/tokens')
     if (!tokensSeq.isCurrent(my)) return
     tokens.value = r.data.tokens || []
-  } catch (_) { /* 读不到就留空列表，不阻断新增 */ }
+  } catch (err) {
+    // 读取失败不能留成「还没有令牌」空态：否则用户会把网络故障当成真的没有令牌（F02-10）
+    tokens.value = []
+    notify.error((err.response?.data?.error || err.message) ? '读取令牌失败：' + (err.response?.data?.error || err.message) : '读取令牌失败，请重试')
+  }
   finally { if (tokensSeq.isCurrent(my)) loading.value = false }
 }
 
@@ -208,10 +219,14 @@ async function copyPlain(id) {
     notify.success('令牌已复制')
   } catch (e) { notify.error('复制失败：' + (e.response?.data?.error || e.message)) }
 }
-async function revoke(id) {
+// 删除配置（revoke）：先确认再发请求。令牌失效会立刻断开外部客户端，不能点一下就执行（F02-01）。
+async function doRevoke() {
+  const t = revokeTarget.value
+  if (!t) return
+  revokeTarget.value = null
   busy.value = true
   try {
-    await axios.post(`/api/mcp/tokens/${encodeURIComponent(id)}/revoke`, {})
+    await axios.post(`/api/mcp/tokens/${encodeURIComponent(t.id)}/revoke`, {})
     await loadTokens()
     changed()
     notify.success('配置已删除，该令牌立即失效')

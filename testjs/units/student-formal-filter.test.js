@@ -20,8 +20,23 @@ const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 const fx = createBackendDb({ label: 'student-formal-filter' })
 const conn = fx.conn
 
-// 与 app.js 里 students 的配置同一份语义（路由级测试复刻一份；③ 用源码判据守住真实配置）
-const listWhere = (req) => (String(req.query.formal) === '1' ? 'is_provisional = 0' : '')
+// 从 app.js 的 students 路由配置里解析出真实的 listWhere 表达式（T08-03）。
+// 以前这里复刻一份同样的箭头函数 —— 源码改了复刻没改，行为用例照样绿。
+// 现在直接取真实表达式编译：app.js 的过滤方向变了，下面 ①② 会立刻失败。
+function listWhereExpr(src) {
+  const start = src.indexOf("createDynamicTableRouter('students'")
+  assert.ok(start >= 0, 'app.js 里找不到 students 路由配置')
+  const block = src.slice(start)
+  const lwStart = block.indexOf('listWhere:')
+  assert.ok(lwStart >= 0, 'students 路由缺少 listWhere 配置')
+  const lwEnd = block.indexOf('extraRoutes:', lwStart)
+  assert.ok(lwEnd > lwStart, '无法定位 listWhere 表达式边界')
+  return block.slice(lwStart + 'listWhere:'.length, lwEnd).trim().replace(/,$/, '').trim()
+}
+
+const compileWhere = (expr) => new Function(`return (${expr})`)()
+const APP_SRC = fs.readFileSync(path.join(ROOT, 'student-backend/app.js'), 'utf8')
+const listWhere = compileWhere(listWhereExpr(APP_SRC))
 
 let base
 test.before(async () => {
@@ -63,4 +78,21 @@ test('app.js 的 students 路由确实接上了 formal 过滤', () => {
   assert.match(block.slice(0, 800), /listWhere:/, 'students 路由缺少 listWhere 配置')
   assert.match(block.slice(0, 800), /is_provisional = 0/, '过滤条件丢失')
   assert.match(block.slice(0, 800), /formal/, 'formal 查询参数没人读')
+})
+
+test('变异反证：把真实 listWhere 的过滤方向写反，方向判据必须失败', async () => {
+  // 取 app.js 的真实表达式，只把 `is_provisional = 0` 改成 `= 1`（原 bug 的反向），
+  // 用同一路由 + 同一份数据验证：如果实现方向写反，`formal=1` 会返回临时学生。
+  const expr = listWhereExpr(APP_SRC)
+  const mutatedExpr = expr.replace('is_provisional = 0', 'is_provisional = 1')
+  assert.notEqual(mutatedExpr, expr, '变异未匹配到过滤方向')
+
+  const { createDynamicTableRouter } = require('../../student-backend/routes/dynamicTable')
+  await fx.mount(
+    '/api/students-mut',
+    createDynamicTableRouter('students', { protectedColumns: ['学号', '姓名'], listWhere: compileWhere(mutatedExpr) }),
+  )
+  const r = await fx.call('GET', '/api/students-mut/?formal=1')
+  assert.equal(r.status, 200)
+  assert.deepEqual(names(r.json), ['临时乙'], '过滤方向写反后 formal=1 只剩临时学生 —— 正例判据必然失败')
 })

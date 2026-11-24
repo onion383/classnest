@@ -63,10 +63,13 @@ async function main() {
   const failures = [];
   for (const url of candidates) {
     const probe = new Client({ name: 'classnest-forwarder', version: '1.0.0' });
-    const transport = new StreamableHTTPClientTransport(new URL(url), {
-      requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } },
-    });
+    let transport;
     try {
+      // new URL 必须在 try 内：畸形候选地址会同步抛错，原先绕过连接失败的 catch
+      // 直接冒到顶层（K01-05），一个坏地址就让整个转发器起不来。
+      transport = new StreamableHTTPClientTransport(new URL(url), {
+        requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } },
+      });
       await probe.connect(transport);
       client = probe;
       connectedUrl = url;

@@ -19,7 +19,7 @@ classnest/
 
 - **定位**：Electron 主进程的唯一入口（[`main.js`](../../../electron/main/main.js)，`package.json` 的 `main` 指向它），负责启动编排、窗口创建、首次引导与数据迁移流程、退出收尾；不承担各模块内部实现。
 - **对外接口**：无 `module.exports`（被 Electron 直接加载）；对渲染层通过 `ipcMain.handle` / `ipcMain.on` 注册入口级通道，对系统通过 `app.whenReady` / `second-instance` / `window-all-closed` / `before-quit` / `activate` 驱动生命周期。
-- **依赖与调用方**：依赖 24 个 `main.*.js` 模块（逐步拆出）与 `electron`、`path`、`fs`、`os`；渲染层只能经 `preload.js` 的白名单通道间接触达。
+- **依赖与调用方**：依赖 32 个 `main.*.js` 模块（逐步拆出）与 `electron`、`path`、`fs`、`os`；渲染层只能经 `preload.js` 的白名单通道间接触达。
 
 ---
 
@@ -29,16 +29,15 @@ classnest/
 
 | 顺序 | 动作 | 关键约束 |
 | --- | --- | --- |
-| 1 | `migrateLegacyUserData()`（旧品牌目录迁移）：`campus-assistant` → `classnest`，同盘重命名；失败则回退继续用旧目录 | 必须在使用 `userData`（用户数据目录）之前执行，保证升级后数据还在 |
-| 2 | 启用 V8 编译缓存：`require('module').enableCompileCache(userData/node-compile-cache)` | 必须在**任何** `require`（模块加载函数）之前；不能写 `module.enableCompileCache`（Electron 的 `module` 是 CJS（CommonJS 模块规范）包装对象，不是 Node 的 `Module` 实例） |
-| 3 | 记录启动计时器 `startupTimer`（`main.startup-timer.js`）并启用开发期 `_profMark` / `_profReq` 打点 | 打点只在 `!app.isPackaged`（非打包环境）生效，打包版是空操作 |
-| 4 | 加载关键路径模块（`main.config`、`main.protocol`、`main.window-material`、`main.web-prefs`、`main.tray`、`main.backend`、`main.widget`、`main.webview-guard`、`main.path-guard`） | 这些模块顶层无立即副作用；IPC 注册都在本文件显式调用 |
-| 5 | 6 个非关键模块改用 `lazyModule()`（惰性加载）：`main.usb`、`main.updater`、`main.dialogs`、`main.apps`、`main.perf`、`main.migration` | 冷启动时这 6 个 require 合计约 300ms，推迟到建窗之后，避免进首屏关键路径 |
-| 6 | `pathGuard.setProtectedRoots([app.getAppPath()])`（设置受保护根目录） | 安装目录（打包后为只读 asar（Electron 应用归档包））禁止被 IPC 写入或启动 |
-| 7 | `app.commandLine.appendSwitch('js-flags', '--expose-gc')`（追加 Node 启动参数） | 必须在 ready 之前，主进程与各渲染进程才会暴露 `gc`（垃圾回收接口） |
-| 8 | `app.requestSingleInstanceLock()`（单实例锁）+ `second-instance`（二次启动） | 未拿到锁的实例在 `whenReady` 里直接退出；二次启动会唤起或重建主窗口 |
-| 9 | `protocol.registerSchemesAsPrivileged()`（`app://` 特权 scheme） | 必须在 ready 之前注册；`standard + secure + supportFetchAPI + corsEnabled + stream + codeCache` 才能让 `localStorage`（本地存储）持久化 |
-| 10 | 开发模式附加：`ELECTRON_DISABLE_SECURITY_WARNINGS`（关闭安全警告）、`INP_DEBUG`（交互性能调试）时开 9222 调试端口、`devLoader`（开发模式加载器）仅开发加载 | 正式包不加载 `main.dev-loader`，也不开 CDP（Chrome 调试协议） |
+| 1 | 启用 V8 编译缓存：`require('module').enableCompileCache(userData/node-compile-cache)` | 必须在**任何** `require`（模块加载函数）之前；不能写 `module.enableCompileCache`（Electron 的 `module` 是 CJS（CommonJS 模块规范）包装对象，不是 Node 的 `Module` 实例） |
+| 2 | 记录启动计时器 `startupTimer`（`main.startup-timer.js`）并启用开发期 `_profMark` / `_profReq` 打点 | 打点只在 `!app.isPackaged`（非打包环境）生效，打包版是空操作 |
+| 3 | 加载关键路径模块（`main.config`、`main.protocol`、`main.window-material`、`main.web-prefs`、`main.tray`、`main.backend`、`main.widget`、`main.webview-guard`、`main.path-guard`） | 这些模块顶层无立即副作用；IPC 注册都在本文件显式调用 |
+| 4 | 6 个非关键模块改用 `lazyModule()`（惰性加载）：`main.usb`、`main.updater`、`main.dialogs`、`main.apps`、`main.perf`、`main.migration` | 冷启动时这 6 个 require 合计约 300ms，推迟到建窗之后，避免进首屏关键路径 |
+| 5 | `pathGuard.setProtectedRoots([app.getAppPath()])`（设置受保护根目录） | 安装目录（打包后为只读 asar（Electron 应用归档包））禁止被 IPC 写入或启动 |
+| 6 | `app.commandLine.appendSwitch('js-flags', '--expose-gc')`（追加 Node 启动参数） | 必须在 ready 之前，主进程与各渲染进程才会暴露 `gc`（垃圾回收接口） |
+| 7 | `app.requestSingleInstanceLock()`（单实例锁）+ `second-instance`（二次启动） | 未拿到锁的实例在 `whenReady` 里直接退出；二次启动会唤起或重建主窗口 |
+| 8 | `protocol.registerSchemesAsPrivileged()`（`app://` 特权 scheme） | 必须在 ready 之前注册；`standard + secure + supportFetchAPI + corsEnabled + stream + codeCache` 才能让 `localStorage`（本地存储）持久化 |
+| 9 | 开发模式附加：`ELECTRON_DISABLE_SECURITY_WARNINGS`（关闭安全警告）、`INP_DEBUG`（交互性能调试）时开 9222 调试端口、`devLoader`（开发模式加载器）仅开发加载 | 正式包不加载 `main.dev-loader`，也不开 CDP（Chrome 调试协议） |
 
 ### 2. 主窗口 `createMainWindow()`
 

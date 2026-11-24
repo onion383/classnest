@@ -18,30 +18,30 @@
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label class="block text-sm text-text-secondary mb-1">时间 <span class="text-danger">*</span></label>
-          <input v-model="form.time" type="datetime-local" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+          <input v-model="form.time" type="datetime-local" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="时间" />
         </div>
         <div>
           <label class="block text-sm text-text-secondary mb-1">主题 <span class="text-danger">*</span></label>
-          <input v-model="form.theme" type="text" placeholder="如：主题班会" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+          <input v-model="form.theme" type="text" placeholder="如：主题班会" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="如：主题班会"/>
         </div>
       </div>
 
       <!-- 地点 -->
       <div class="mb-3">
         <label class="block text-sm text-text-secondary mb-1">地点</label>
-        <input v-model="form.location" type="text" placeholder="如：教室 / 操场 / 多媒体室" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+        <input v-model="form.location" type="text" placeholder="如：教室 / 操场 / 多媒体室" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="如：教室 / 操场 / 多媒体室"/>
       </div>
 
       <!-- 参与人员 -->
       <div class="mb-3">
         <label class="block text-sm text-text-secondary mb-1">参与人员</label>
-        <input v-model="form.participants" type="text" placeholder="如：全班同学 / 张三、李四" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+        <input v-model="form.participants" type="text" placeholder="如：全班同学 / 张三、李四" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="如：全班同学 / 张三、李四"/>
       </div>
 
       <!-- 简介 -->
       <div class="mb-4">
         <label class="block text-sm text-text-secondary mb-1">简介</label>
-        <textarea v-model="form.summary" rows="3" placeholder="活动内容简介" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"></textarea>
+        <textarea v-model="form.summary" rows="3" placeholder="活动内容简介" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="活动内容简介"></textarea>
       </div>
 
       <div class="flex justify-end gap-2">

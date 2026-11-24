@@ -17,11 +17,13 @@
 // =========================================================================
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const require = createRequire(import.meta.url)
-const vueCore = require(
-  path.resolve(process.cwd(), 'student-frontend/node_modules/@vue/runtime-core/dist/runtime-core.cjs.js')
-)
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const ROOT = path.resolve(HERE, '../..')
+// 从前端 package.json 位置解析 vue（T01-16）：换工作目录也能起来，不再依赖 process.cwd()
+const frontendRequire = createRequire(path.join(ROOT, 'student-frontend/package.json'))
+const vueCore = frontendRequire('vue')
 const { createRenderer, h, KeepAlive, ref, defineComponent, onMounted, onUnmounted, nextTick } = vueCore
 
 // ---- 极简 node ops（Vue 只要求这些方法存在，节点本身用普通对象即可）----

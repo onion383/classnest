@@ -19,6 +19,10 @@ const path = require('node:path')
 const ROOT = path.join(__dirname, '../..')
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
+// 行为用例要 require worker.scan.js，它顶层依赖 dbManager；dbManager 在构造期要求主密钥。
+// 这里只 require 不打开任何库，给一个测试值即可（真实密钥语义不在本文件范围）。
+process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'classnest-unit-test-master-key-0001'
+
 const RESTORE = 'student-backend/dbManager/dbManager.backup.js'
 const SNAPSHOT = 'student-backend/routes/ai/ai.dataRoutes.js'
 
@@ -54,4 +58,34 @@ test('变异反证：去掉 lockDb 后判据必须失败', () => {
   const mutated = src.replace(/\s*try \{ require\('\.\.\/scanWorker'\)\.lockDb\(slug\); \} catch \(_\) \{[^\n]*\}/, '')
   assert.ok(mutated !== src, '变异没匹配到 lockDb 调用')
   assert.throws(() => lockBeforeEvict(mutated), /缺少 lockDb/, '变异后判据应判失败')
+})
+
+// 行为层（T07-05）：上面三条只能证明「主进程发了 lock 消息」，
+// 证明不了「子进程收到后真的关连接、丢钥匙」。这里直接执行 worker 的真实清理函数。
+test('行为：子进程收到 lock 后关闭该库连接、丢钥匙、发干净批次、清作用域', () => {
+  const { applyLock } = require(path.join(ROOT, 'student-backend/worker.scan.js'))
+  let closed = 0
+  const connA = { close: () => { closed++ } }
+  const connBroken = { close: () => { throw new Error('bad handle') } }
+  const openConns = new Map([['slug-a', connA], ['slug-b', connBroken]])
+  const keyCache = new Map([['slug-a', 'key-a'], ['slug-b', 'key-b']])
+  const flushed = []
+  const thumbReport = { flushAll: () => flushed.push('flush') }
+  const scoped = []
+  const slugScopes = { clearAllForSlug: (s) => scoped.push(s) }
+
+  applyLock('slug-a', { openConns, keyCache, thumbReport, slugScopes })
+
+  assert.equal(closed, 1, '必须关闭该库连接')
+  assert.ok(!openConns.has('slug-a'), '连接表要删掉该 slug')
+  assert.ok(openConns.has('slug-b'), '不得影响其它库的连接')
+  assert.ok(!keyCache.has('slug-a'), '隐私钥匙必须丢弃')
+  assert.ok(keyCache.has('slug-b'), '其它库的钥匙不受影响')
+  assert.deepEqual(flushed, ['flush'], '必须把残留缩略图索引发干净（按各自 slug）')
+  assert.deepEqual(scoped, ['slug-a'], '必须清该库的扫描作用域')
+
+  // 连接 close 抛错时仍要继续丢钥匙（不能让坏句柄把锁死流程卡住）
+  assert.doesNotThrow(() => applyLock('slug-b', { openConns, keyCache, thumbReport, slugScopes }), 'close 抛错不应中断清理')
+  assert.ok(!keyCache.has('slug-b'), 'close 抛错后钥匙仍必须丢弃')
+  assert.ok(!openConns.has('slug-b'), 'close 抛错后连接表仍必须删掉该 slug')
 })

@@ -18,19 +18,24 @@ classnest/
         │   │   ├── aiFiles.js  # 附件上传与文件列表管理
         │   │   ├── aiMarkdown.js  # Markdown 渲染：懒加载 marked + dompurify，模块级单例
         │   │   └── aiMessages.js  # 消息解析与展示辅助：parseMessages、lastAssistant、buildPro…
-        │   ├── albumPhotoPages.js  # 相册日期分页纯逻辑（按天整组进出、合并已加载组）
+        │   ├── albumPhotoPages.js  # 相册日期分页纯逻辑
         │   ├── exportFormats.js  # 导出格式实现
         │   ├── secureAxios.js  # axios 加解密装配
         │   ├── secureChannel.js  # 加密原语
         │   ├── secureRetry.js  # 安全信道 401 重试判定
         │   ├── tableDragFx.js  # 拖拽让位算法
+        │   ├── useAccessLog.js  # 「数据访问记录」的唯一前端实现，按 source 区分 AI 与 MCP
         │   ├── useAlbumScan.js  # 扫描轮询
         │   ├── useAlbumTaskResume.js  # 断点续扫
         │   ├── useCardHeightAnimation.js  # 卡片高度过渡
         │   ├── useDashboardData.js  # 首页聚合
+        │   ├── useDialogEscape.js  # 手写弹窗的 Esc 关闭
         │   ├── useElasticScroll.js  # 橡皮筋滚动
+        │   ├── useModalFocus.js  # 全屏查看器（未套 DialogShell）的焦点管理
         │   ├── useNotification.js  # 全局通知
+        │   ├── useOverdueLeaveBadge.js  # 标题栏「需销假」待办计数：请假中且已过结束时间的记录数
         │   ├── usePhotoTimeline.js  # 时间轴虚拟滚动
+        │   ├── usePrivacyConfig.js  # AI 与 MCP 两份数据保护配置的唯一前端实现：乐观更新、回滚与序号守卫
         │   ├── useRowFocus.js  # 跨页行定位
         │   ├── useRowSortDrag.js  # 行排序拖拽
         │   ├── useSeatDraft.js  # 座位草稿
@@ -39,6 +44,7 @@ classnest/
         │   ├── useSyncStudentNames.js  # 人名自动补建
         │   ├── useTableCRUD.js  # 动态列 CRUD（增删改查）
         │   ├── useThumbBatch.js  # 缩略图批量预取
+        │   ├── useTodoCenter.js  # 标题栏待办汇总：销假与临时学生两类数据按需刷新，换号即清空
         │   ├── useUndo.js  # 撤销/重做
         │   ├── useViewerPan.js  # 查看器缩放后拖动平移
         │   └── useWeekDates.js  # 今天的响应式日期
@@ -48,7 +54,7 @@ classnest/
 ```
 <!-- doc-tree:end -->
 
-35 个文件：根目录 24 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
+37 个文件：根目录 30 个 + `ai/` 子目录 7 个。条目统一：签名 / 返回字段 / 内部时序与副作用 / 调用方 / 注意事项。这里说的「组合式函数」就是 `composable`（以 `useXxx` 命名、可复用的状态与逻辑）。
 
 ---
 
@@ -161,6 +167,12 @@ classnest/
 - **调用方**：`AlbumView` 的查看器、`MediaViewer`（收据弹窗）。
 - **注意事项**：纯计算在 `utils/viewerPan.js`（可单测），本文件只做响应式装配与指针事件；两份查看器必须共用这一份，交互才不会一边能拖一边不能。
 
+#### [`useModalFocus.js`](../../../student-frontend/src/composables/useModalFocus.js) · 全屏查看器的焦点管理
+- **签名**：`useModalFocus(isOpen, rootRef, onEscape?)`；另导出 `FOCUSABLE` 选择器与 `trapTab(e, root)`。
+- 内部：`watch(isOpen)` 在打开时记住 `document.activeElement` 并把焦点移进根节点（首选第一个可聚焦元素），关闭时还原；`window` 级 `keydown` 做 Tab 圈定，传了 `onEscape` 时同时处理 Esc（`defaultPrevented` 时让给内层，如展开中的下拉）。
+- **调用方**：`AlbumView` 的查看器、`ReceiptDialog` 的文档预览；`MediaViewer` 已有自己的聚焦/还原，只复用 `trapTab`。
+- **注意事项**：这是给「必须保留手写全屏遮罩」的灯箱补焦点行为的兜底，业务弹窗一律用 `DialogShell`，不要用本文件复制一套外层；`DialogShell.trapTab` 在焦点不在自己根节点内时不抢焦点，两层灯箱叠放才不会互相把焦点拽回去。
+
 ### 数据与网络
 
 #### [`useDashboardData.js`](../../../student-frontend/src/composables/useDashboardData.js) · 首页聚合
@@ -212,6 +224,13 @@ classnest/
 - **内部时序**：`ResizeObserver` 观察卡片元素 → 回调里用 `lastHeight` 当起点、`offsetHeight` 当终点 → 先把 `style.height` 钉回起点（WAAPI 起始帧要到下一次渲染步骤才生效，不钉会先闪一下新高度）→ `el.animate` 播 `height` → 结束后交还 `auto` 并恢复观察。动画期间 `unobserve` + `overflow: hidden`（前者避免每帧回调，后者防止变矮时旧内容溢出）。
 - **调用方**：`ExportExcel`（导出选项弹窗）。
 - **注意事项**：用 `ResizeObserver` 而不是让调用方 `watch` 状态，是因为弹窗的高度变化常来自**插槽内容**（勾选开关多出两个输入框），组件内部看不到那些状态。改这里必须跑 `testjs/probe/card-height-anim-probe.cjs`；用 `show: false` 的隐藏窗口测会得到「动画瞬间到终点」的假结论（合成器不跑）。登录页 `Login.vue` 另有一份**状态驱动**的高度动画（`watch` + WAAPI），两者触发源不同，暂未合并。
+
+#### [`useDialogEscape.js`](../../../student-frontend/src/composables/useDialogEscape.js) · 手写弹窗的 Esc 关闭
+- **签名**：`useDialogEscape(isOpen, close)`（`isOpen` 为返回布尔值的 getter，`close` 为关闭回调）。
+- **返回**：无（只挂副作用）。
+- **内部时序**：弹窗打开时 `pushDialog` 入 `dialogStack`，关闭或卸载时 `removeDialog`；按键事件经 `dialogStack.consumeEscape` 处理，只有栈顶弹窗响应，内层下拉/确认框已消费的事件放行。
+- **调用方**：尚未迁移到 `DialogShell`、仍手写 `fixed inset-0` 遮罩的少数弹窗。
+- **注意事项**：新弹窗应直接用 `DialogShell`（`role`/焦点陷阱/Esc 一次到位）；本组合式只用于迁移过渡期，保证「Esc 只关最上层」的两套写法语义一致。
 
 ### AI 组合式（`composables/ai/`）
 

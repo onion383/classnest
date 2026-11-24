@@ -31,6 +31,7 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { existsSync, readFileSync, readFile, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
@@ -41,7 +42,8 @@ const { createOwnedChild } = require('../tools/ownedChild.cjs')
 const ownedElectron = createOwnedChild({ killTree, label: 'bench' })
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FRONTEND = path.join(ROOT, 'student-frontend')
-const OUT_DIR = path.join(ROOT, 'testjs', 'tmp')
+// 结果放系统临时目录：多次运行不再往仓库里堆（T02-09）
+const OUT_DIR = path.join(os.tmpdir(), 'classnest-probe')
 const PORT = Number(process.env.INP_PORT || 9222)
 const VITE_BASE = require('../../config/ports.cjs').frontendOrigin
 const PROD_PORT = 5180
@@ -318,6 +320,9 @@ function printOne(r) {
   console.table(rows)
 }
 
+// 门禁标记：自证失败 / 残留节点非 0 时退出码必须非 0（T02-08：过去恒 exit 0）
+let gateFailed = false
+
 function compare(a, b) {
   const keys = [...new Set([...Object.keys(a.results), ...Object.keys(b.results)])]
   const rows = keys.map((k) => {
@@ -336,6 +341,10 @@ function compare(a, b) {
   console.log(`A ${a.channel}   B ${b.channel}   行数 ${a.rows} × ${a.cells / a.rows} 列   ${a.rounds} 轮`)
   console.table(rows)
   console.log(`自证：A ${a.selfCheck ? '通过' : '未通过'} / B ${b.selfCheck ? '通过' : '未通过'}（通过 = 测完已确认 DOM 真的更新到预期值）`)
+  if (!a.selfCheck || !b.selfCheck) {
+    gateFailed = true
+    console.error('✗ 自证未通过：测的不是你以为的代码（数据不可比）')
+  }
   console.log('读法：加速比 > 1 表示 B 更快。')
   console.log('      mountBare 是纯 JS 挂载（不含布局），mount 含强制布局 —— 两者差值就是布局成本。')
   console.log('      patchOne / patchRow / rebuild 才是框架差异所在；tick / mountEmpty 是基线。')
@@ -383,6 +392,7 @@ async function main() {
   console.log(`\n---- ${VUE_LABEL} 单项结果 ----`)
   printOne(merged)
   console.log(`残留节点：${merged.residualNodes}（应为 0，否则 mount/unmount 有泄漏，后续项会变慢）`)
+  if (merged.residualNodes !== 0) gateFailed = true
 
   mkdirSync(OUT_DIR, { recursive: true })
   // 生产口径单独一份文件：dev 与 prod 的绝对耗时不可混比（dev 版运行时带全部断言）
@@ -407,7 +417,7 @@ async function main() {
   cdp.close()
   ownedElectron.stop()
   stopVite()
-  process.exit(0)
+  process.exit(gateFailed ? 1 : 0)
 }
 
 process.on('SIGINT', () => { ownedElectron.stop(); stopVite(); process.exit(0) })

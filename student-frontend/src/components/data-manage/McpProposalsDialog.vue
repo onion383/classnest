@@ -119,7 +119,7 @@
       <!-- 保留条数只作用于「已处理」：未处理的是确认队列，任何情况下都不会被裁掉 -->
       <div class="border-t border-border mt-3 pt-3 flex items-center gap-2 text-xs text-text-muted flex-shrink-0">
         <span>已处理保留</span>
-        <AppSelect :model-value="prefs.proposal_keep" :options="keepOptions" compact class="w-24"
+        <AppSelect :model-value="prefs.proposal_keep" aria-label="已处理提案保留条数" :options="keepOptions" compact class="w-24"
           @change="onKeep" />
         <span class="ml-auto">{{ done.length }} 条</span>
       </div>

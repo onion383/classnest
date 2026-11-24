@@ -1,8 +1,6 @@
 <template>
-  <!-- Teleport 到 body：避免固定定位遮罩被 main 橡皮筋滚动的 transform 约束，保证全屏覆盖侧边栏 -->
-  <Teleport to="body">
-  <Transition name="dialog">
-    <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]">
+  <!-- 遮罩由 DialogShell 统一处理：Teleport 到 body，避免固定定位遮罩被 main 橡皮筋滚动的 transform 约束 -->
+  <DialogShell :visible="visible" :z-index="10001">
       <div class="bg-surface p-5 rounded-lg w-[900px] max-h-[85vh] flex flex-col shadow-card dialog-card">
       <h3 class="text-lg font-bold mb-3">从文件导入数据</h3>
       <!-- 标准导入表下载：表头与导入要求一致，照着填识别成功率更高 -->
@@ -84,19 +82,28 @@
         </div>
       </div>
     </div>
-    </div>
-  </Transition>
-  </Teleport>
+  </DialogShell>
+  <!-- 同名选人：逐组确认后才真正 emit import-data -->
+  <DuplicateNameDialog
+    :visible="dupVisible"
+    :name="dupName"
+    :rows="dupRows"
+    @confirm="onDuplicateConfirm"
+    @cancel="onDuplicateCancel"
+  />
 </template>
 
 <script setup vapor>
 import DynamicTable from '../tables/DynamicTable/DynamicTable.vue';
+import DialogShell from '../base/DialogShell.vue';
+import DuplicateNameDialog from '../dialogs/DuplicateNameDialog.vue';
 // 网格预览只在矩阵表（课程表/座位/值日）用，懒加载避免行状表也拖入整块 GridView
 const GridView = defineAsyncComponent(() => import('../tables/GridView/GridView.vue'));
 import { parseSheet } from '../../utils/importSheet.js';
 import { saveBlobWithDialog } from '../../utils/saveFile.js';
 import { useNotification } from '../../composables/useNotification';
 import { createLatest } from '../../utils/latestOnly.js';
+import { studentRowLabel } from '../../utils/studentLabel.js';
 import '../../styles/dialog-transition.css';
 import { ref, computed, watch, defineAsyncComponent } from 'vue';
 
@@ -110,7 +117,14 @@ const props = defineProps({
   templateColumns: { type: Array, default: () => [] },
   templateName: { type: String, default: '' },
   // 预览形态：table=行状表（默认）；grid=矩阵表（课程表/座位/值日），用网格组件还原
-  previewMode: { type: String, default: 'table' }
+  previewMode: { type: String, default: 'table' },
+  // 名册（含学号）：传了才做同名检测。学生类导入页传本班学生列表；非学生表不传即无感。
+  students: { type: Array, default: () => [] },
+  // 哪一列是学生姓名：默认「姓名」（请假/成绩）；班干部导入是「担任学生」，一行可多名。
+  studentNameFields: { type: Array, default: () => ['姓名'] },
+  // 一行多名时按分隔符拆开逐个选人，studentIds 用 `${行号}:${第几位}` 当 key；
+  // 默认 false 时沿用行号当 key（请假/成绩口径不变）。
+  multiNamePerRow: { type: Boolean, default: false }
 });
 
 const emit = defineEmits(['import-data', 'cancel']);
@@ -393,11 +407,117 @@ function toggleSort(fieldName, order) {
   });
 }
 function deletePreviewRow(rowKey) { previewRows.value = previewRows.value.filter(r => r._rowKey !== rowKey); }
+
+// ============ 同名选人 ============
+// 同一姓名在名册里有 ≥2 个正式学生时，导入不能替用户挑。收集这些行，弹窗逐行选。
+const dupVisible = ref(false)
+const dupName = ref('')
+const dupRows = ref([])
+// 行号 → 用户选中的学生 id（'new' = 名册外新同学）。import-data 时随 payload 带给后端。
+const resolvedIds = ref({})
+
+// 按姓名分桶：名册里同名 ≥2 的才要选人（正式学生；临时学生同名不参与，避免自建歧义）
+function nameBuckets() {
+  const buckets = new Map()
+  for (const s of props.students || []) {
+    if (s.is_provisional) continue
+    const name = String(s.姓名 ?? '').trim()
+    if (!name) continue
+    if (!buckets.has(name)) buckets.set(name, [])
+    buckets.get(name).push(s)
+  }
+  return buckets
+}
+
+// 一行多名（班干部的「担任学生」）与一行一名（请假/成绩）共用分桶：
+// key 用 `${idx}` 或 `${idx}:${slotIdx}`，后端按同一个 key 取用户选的人。
+function pickDuplicates(headers) {
+  const buckets = nameBuckets()
+  const nameCol = props.studentNameFields.find((n) => headers.includes(n))
+  if (!nameCol) return []
+  const byName = new Map()
+  previewRows.value.forEach((row, idx) => {
+    const raw = String(row[nameCol] ?? '')
+    const names = props.multiNamePerRow
+      ? raw.split(/[、,，;；/|\s]+/).map((s) => s.trim()).filter(Boolean)
+      : [raw.trim()]
+    names.forEach((name, slotIdx) => {
+      if (!name) return
+      const list = buckets.get(name)
+      if (!list || list.length < 2) return
+      if (!byName.has(name)) byName.set(name, [])
+      byName.get(name).push({ key: props.multiNamePerRow ? `${idx}:${slotIdx}` : `${idx}`, idx, row })
+    })
+  })
+  return [...byName.entries()]
+}
+
 function confirmImport() {
   const headers = previewFields.value.map(f => f.name);
   const rows = previewRows.value.map(row => headers.map(h => row[h] ?? ''));
-  emit('import-data', { fields: headers, rows });
+  const groups = pickDuplicates(headers);
+  if (!groups.length) { emit('import-data', { fields: headers, rows }); return }
+  // 多组同名姓名逐个弹：一组确认完自动出下一组，全部处理完才真正导入。
+  pendingGroups.value = groups
+  pendingPayload.value = { fields: headers, rows }
+  pendingResolved.value = {}
+  showNextDuplicate()
+  return
 }
+
+const pendingGroups = ref([])
+const pendingPayload = ref(null)
+const pendingResolved = ref({})
+
+function showNextDuplicate() {
+  const g = pendingGroups.value[0]
+  if (!g) {
+    const payload = { ...pendingPayload.value, studentIds: { ...pendingResolved.value } }
+    pendingGroups.value = []
+    pendingPayload.value = null
+    pendingResolved.value = {}
+    dupVisible.value = false
+    emit('import-data', payload)
+    return
+  }
+  const [name, items] = g
+  dupName.value = name
+  dupRows.value = items.map(({ key, idx, row }) => {
+    const labelParts = Object.entries(row)
+      .filter(([k, v]) => !k.startsWith('_') && k !== '姓名' && k !== '担任学生' && v != null && String(v).trim() !== '')
+      .slice(0, 2)
+      .map(([, v]) => String(v))
+    const label = labelParts.length ? `${name}（${labelParts.join(' · ')}）` : `${name}`
+    return {
+      key,
+      label: `第 ${idx + 1} 行：${label}`,
+      options: [
+        ...nameBuckets().get(name).map(s => ({ value: `id:${s.id}`, label: studentRowLabel(s) })),
+        { value: 'new', label: '这是一位新同学' }
+      ]
+    }
+  })
+  dupVisible.value = true
+}
+
+function onDuplicateConfirm(selections) {
+  const [name] = pendingGroups.value[0]
+  for (const { key } of pendingGroups.value[0][1]) {
+    const v = selections[key]
+    if (!v) continue
+    if (v === 'new') pendingResolved.value[key] = 'new'
+    else if (v.startsWith('id:')) pendingResolved.value[key] = Number(v.slice(3))
+  }
+  pendingGroups.value.shift()
+  showNextDuplicate()
+}
+function onDuplicateCancel() {
+  pendingGroups.value = []
+  pendingPayload.value = null
+  pendingResolved.value = {}
+  dupVisible.value = false
+}
+
 function cancel() { resetState(); emit('cancel'); }
 function resetState() {
   fileData.value = null; fileName.value = '';

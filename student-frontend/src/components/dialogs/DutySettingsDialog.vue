@@ -59,6 +59,7 @@
                 <span class="text-sm text-text-secondary">时间</span>
                 <AppSelect
                   v-model="localConfig.weekday"
+                  aria-label="大扫除星期"
                   :options="weekDays"
                   class="w-28"
                 />
@@ -79,6 +80,7 @@
                 <span class="text-sm text-text-secondary">分组</span>
                 <AppSelect
                   v-model="localConfig.groupType"
+                  aria-label="大扫除任务分组"
                   :options="groupTypeOptions"
                   class="w-24"
                 />
@@ -90,6 +92,7 @@
                   type="number"
                   min="0"
                   :max="maxGroups"
+                  :aria-label="`${groupTypeLabel}数量`"
                   class="w-20 border rounded px-2 py-1.5 text-sm bg-surface"
                 />
                 <span class="text-xs text-text-muted">个（第1{{ groupTypeLabel }} ~ 第{{ localConfig.groupCount || 0 }}{{ groupTypeLabel }}）</span>
@@ -130,12 +133,12 @@
 
               <div class="flex items-center gap-1 text-xs whitespace-nowrap">
                 <span class="text-text-muted">辛苦度</span>
-                <input v-model.number="it.difficulty" type="number" step="0.1" min="0" class="w-14 border rounded px-1 py-0.5 text-sm" />
+                <input v-model.number="it.difficulty" type="number" step="0.1" min="0" class="w-14 border rounded px-1 py-0.5 text-sm" :aria-label="`${it.name}辛苦度`" />
               </div>
 
               <div class="flex items-center gap-1 text-xs whitespace-nowrap">
                 <span class="text-text-muted">人数</span>
-                <input v-model.number="it.count" type="number" min="1" class="w-14 border rounded px-1 py-0.5 text-sm" />
+                <input v-model.number="it.count" type="number" min="1" class="w-14 border rounded px-1 py-0.5 text-sm" :aria-label="`${it.name}人数`" />
               </div>
 
               <button class="text-danger hover:bg-danger/10 rounded px-1.5 py-0.5 text-sm transition-theme" title="删除" @click="removeItem(i)">删除</button>
@@ -173,8 +176,7 @@
                   class="w-28 border px-2 py-1 rounded text-sm"
                   placeholder="项目名"
                   @keyup.enter="confirmAdd"
-                  @blur="confirmAdd"
-                />
+                  @blur="confirmAdd" aria-label="项目名"/>
                 <button class="text-info hover:bg-info/10 rounded px-1.5 py-0.5 text-sm transition-theme" @click="confirmAdd">✓</button>
                 <button class="text-text-muted hover:bg-surface-hover rounded px-1.5 py-0.5 text-sm transition-theme" @click="cancelAdd">✕</button>
               </template>
@@ -214,6 +216,18 @@
         :show-cancel="true"
         @confirm="confirmSave"
         @cancel="slotWarningVisible = false"
+      />
+
+      <!-- 导入会整体替换当前劳动项目：覆盖前先确认（F02-11） -->
+      <ConfirmDialog
+        :visible="!!importTarget"
+        title="覆盖当前劳动项目"
+        :message="`导入将替换当前已填写的 ${localItems.length} 个劳动项目，是否继续？`"
+        confirm-text="确定覆盖"
+        cancel-text="取消"
+        :show-cancel="true"
+        @confirm="applyImport"
+        @cancel="importTarget = null"
       />
   </DialogShell>
 </template>
@@ -403,6 +417,8 @@ function defaultPoolHas(name) { return DEFAULT_POOL.includes(name) }
 
 // ==================== 从表格导入劳动项目 ====================
 const importVisible = ref(false)
+// 待确认覆盖的导入结果：校验通过后先存这里，确认后再替换当前项目列表（F02-11）
+const importTarget = ref(null)
 const importMounted = ref(false)
 watch(importVisible, (v) => { if (v) importMounted.value = true })
 const importFields = [
@@ -435,7 +451,6 @@ function parseDifficulty(raw) {
   return Number.isFinite(value) ? Math.max(0, value) : 0.6
 }
 function onImportData({ fields, rows }) {
-  importVisible.value = false
   // 表头宽松匹配：劳动项目 / 项目 / 项目名称、人数 / 需要人数、辛苦度 / 难度 等
   const nameHeader = resolveHeader(fields, ['劳动项目', '项目', '劳动项目名称', '项目名称', '值日项目'])
   const countHeader = resolveHeader(fields, ['人数', '需要人数', '人数需求', '每班人数'])
@@ -468,6 +483,15 @@ function onImportData({ fields, rows }) {
     return
   }
   if (!next.length) return useNotification().info('没有可导入的劳动项目')
+  // 校验通过才关导入弹窗；覆盖现有项目前先确认（F02-11）
+  importVisible.value = false
+  importTarget.value = next
+}
+// 确认覆盖后才真正替换当前劳动项目列表
+function applyImport() {
+  const next = importTarget.value
+  importTarget.value = null
+  if (!next) return
   localItems.value = next
   useNotification().success(`已导入 ${next.length} 个劳动项目，请确认后点「保存设置」`)
 }
@@ -493,6 +517,11 @@ function buildPayload() {
 }
 function save() {
   const payload = buildPayload()
+  // 空项目清单会让 perDay/total 都为 0，槽位校验被跳过，最终保存出一张没有行的值日表。
+  if (!payload.items.length) {
+    useNotification().error('请至少添加一个有效的劳动项目')
+    return
+  }
   // 日常值日至少勾选一天：0 列保存后，值日表页没有合法列可填 ——
   // 之前它会兜底显示周一~周五，然后整表保存被后端以「列名不在设置里」拒绝。
   if (!isBigMode.value && !payload.days.length) {

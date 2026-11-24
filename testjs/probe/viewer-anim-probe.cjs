@@ -21,11 +21,13 @@
 
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
+const os = require('os')
 const fs = require('fs')
 const { pathToFileURL } = require('url')
 
 const { BIG: SRC, ensureSampleImages } = require('./_sample-big')
-const TMP = path.join(__dirname, '..', 'tmp', 'viewer-anim-probe')
+// 产物放系统临时目录：多次运行不再往仓库里堆（T02-09）
+const TMP = path.join(os.tmpdir(), 'classnest-probe', 'viewer-anim-probe')
 
 // 探针里会连续关窗，默认行为是「最后一个窗口关了就直接退出」，第二个窗口就 load 不起来了
 app.on('window-all-closed', () => { /* 保持进程活着，等探针跑完 */ })

@@ -28,10 +28,10 @@
               class="rename-input"
               @keydown.enter.prevent="commitRename"
               @keydown.esc.prevent="cancelRename"
-              @blur="commitRename"
-            />
+              @blur="commitRename" aria-label="班级名称"/>
             <AppSelect
               v-else-if="classes.length > 1"
+              aria-label="当前班级"
               :model-value="currentSlug"
               :options="classOptions"
               :disabled="switching"
@@ -69,17 +69,17 @@
         <div>
           <label class="block text-sm text-text-secondary mb-1">班级口号</label>
           <textarea v-model="form.motto" rows="2" placeholder="填写班级口号"
-            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary resize-y" />
+            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary resize-y" aria-label="填写班级口号"/>
         </div>
         <div>
           <label class="block text-sm text-text-secondary mb-1">班风</label>
           <textarea v-model="form.mottoStyle" rows="2" placeholder="填写班风"
-            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary resize-y" />
+            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary resize-y" aria-label="填写班风"/>
         </div>
         <div>
           <label class="block text-sm text-text-secondary mb-1">学风</label>
           <textarea v-model="form.xuefeng" rows="2" placeholder="填写学风"
-            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary resize-y" />
+            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary resize-y" aria-label="填写学风"/>
         </div>
       </div>
 

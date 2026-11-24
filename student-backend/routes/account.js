@@ -17,7 +17,7 @@ const { SECRET, auth, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middl
 // 登录保持天数按账号配置：签发点一律现取，不再共享模块级常量
 const authPolicy = require('../services/authPolicy');
 const secureChannel = require('../services/secureChannel');
-const { pickPhrase, deriveRestoreHash, formatPhrase } = require('../services/recoveryKey');
+const { pickPhrase, formatPhrase } = require('../services/recoveryKey');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
 const sessions = require('../services/sessions');
 // 凭证变更（改密 / 删账号）后「全账号会话失效」的唯一动作层，规则不在路由里各写一遍
@@ -25,6 +25,7 @@ const { revokeAccountSessions, rotateAccountSessions } = require('../services/cr
 const { renameUsernameWithCompensation } = require('../services/accountRename');
 // 备份包 v3（ZIP）：库 + 用户文件 + 清单，流式写 / 解包校验
 const { writeBundle } = require('../services/backupArchive');
+const { localDateStr } = require('../utils/date');
 // v3 包的落盘（写库 + 替换目录 + 清列缓存）只有一份，两个恢复入口共用
 const { receiveAndVerify, applyVerifiedBundle, dropTmp } = require('../services/bundleRestore');
 
@@ -37,19 +38,12 @@ function backupUploadMw() {
     const path = require('path');
     const dir = path.join(os.tmpdir(), 'classnest-restore');
     require('fs').mkdirSync(dir, { recursive: true });
-    _backupUpload = multer({ dest: dir, limits: { fileSize: 8 * 1024 * 1024 * 1024 } });
+    // 上限与打包侧 ZIP32 的 4GB 硬限对齐：更大的包本来就写不出来，
+    // 放行到 8GB 只会让用户白传一趟再在导出阶段失败（N2-06）。
+    _backupUpload = multer({ dest: dir, limits: { fileSize: 4 * 1024 * 1024 * 1024 } });
   }
   return _backupUpload.single('file');
 }
-
-// 重置恢复密钥：为当前登录账号生成一组新的 12 词恢复密钥并保存哈希。
-// 生成的密钥只在本次响应返回一次（前端提示先保存再确认）。
-router.get('/recovery-key', auth(), (req, res) => {
-    const phrase = pickPhrase();
-  const hash = deriveRestoreHash(phrase);
-  userStore.updateRecoveryHash(req.user.userId, hash);
-  res.json({ phrase: formatPhrase(phrase), recoveryKey: phrase });
-});
 
 // 导出密码校验 + 「库钥匙怎么随包带回」的唯一实现（v2 JSON 包与 v3 ZIP 包共用）。
 // 安全相关的东西不能有两个版本：任何一处放宽，另一处就是漏洞。
@@ -64,7 +58,17 @@ async function resolveExportKeying({ slug, user, password, encrypt, dbPassword }
     }
   }
 
-  const bundle = dbManager.exportBundle(slug);
+  // 隐私库未解锁时 exportBundle 会抛「数据库已锁定」：归一成 401（与 middleware/auth 的
+  // DB_LOCKED 口径一致），否则 async 兜底会把它变成通用 500，前端无法提示重新登录（K01-14）。
+  let bundle;
+  try {
+    bundle = dbManager.exportBundle(slug);
+  } catch (err) {
+    if (err && (err.code === 'DB_LOCKED' || /已锁定/.test(String(err.message || '')))) {
+      return { error: '数据库已锁定，请重新登录', status: 401, code: 'DB_LOCKED' };
+    }
+    throw err;
+  }
   const wantEncrypt = encrypt === '1';
 
   // 解析用于包裹库钥匙的「导出密码」：
@@ -115,9 +119,13 @@ router.post('/export-zip', auth(), async (req, res) => {
   if (keying.error) return res.status(keying.status || 400).json({ error: keying.error });
   const bundle = keying.bundle;
 
-  // WAL 模式下只拷 .db 会丢掉最近一次提交（-wal 里还没 checkpoint）—— 三个文件一起带，
-  // 还原端按同一组文件名放回去，SQLite 自己会重放 WAL。
-  const dbFiles = [bundle.filePath, `${bundle.filePath}-wal`, `${bundle.filePath}-shm`]
+  // 备份必须是「一致性快照」而不是裸文件拷贝：常驻连接在用户编辑后仍持有句柄，
+  // 最近若干提交可能只落在 -wal 里。先 checkpoint 把尾页合并进主库，包里只带一个
+  // 自包含的 .db；checkpoint 失败（例如库被独占）才退回三件套，由恢复侧重放 WAL。
+  const snapshotOk = dbManager.checkpointForBackup(slug, bundle.key, bundle.encrypted);
+  const dbFiles = (snapshotOk
+    ? [bundle.filePath]
+    : [bundle.filePath, `${bundle.filePath}-wal`, `${bundle.filePath}-shm`])
     .filter((f) => { try { return require('fs').statSync(f).isFile() } catch (_) { return false } })
     .map((f) => ({ name: `db/${require('path').basename(f)}`, path: f }));
 
@@ -130,7 +138,8 @@ router.post('/export-zip', auth(), async (req, res) => {
     ...keying.keyFields,
   };
 
-  const stamp = new Date().toISOString().slice(0, 10);
+  // 文件名日期取本地日历日：toISOString 是 UTC，东八区清晨导出的备份会被标成前一天（F07-07）
+  const stamp = localDateStr();
   const asciiName = `classnest-backup-${String(slug).replace(/^@/, '')}-${stamp}.zip`;
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(`班集备份-${stamp}.zip`)}`);
@@ -169,39 +178,6 @@ router.post('/export-zip', auth(), async (req, res) => {
 // —— v3 包落盘的公共部分已下沉到 services/bundleRestore.js ——
 // 这里只做「入口差异」：slug 从哪来、要不要确认覆盖、要不要签发登录态。
 // 落盘（写库 + 替换目录 + 清列缓存）只有一份实现 —— 它动的是用户的整库和全部文件。
-
-router.post('/restore-zip', auth(), (req, res, next) => backupUploadMw()(req, res, next), async (req, res) => {
-  const curSlug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
-  if (dbManager.isProtected(req.user.username)) {
-    return res.status(400).json({ error: '请先在系统设置中关闭超级隐私模式，再恢复备份' });
-  }
-  if (!req.file) return res.status(400).json({ error: '没有收到备份文件' });
-
-  let recv;
-  try {
-    recv = await receiveAndVerify(req.file);
-  } catch (err) {
-    dropTmp(null, req.file.path);
-    return res.status(400).json({ error: err.message || '备份包无法读取' });
-  }
-
-  const { tmpDir, meta, manifest } = recv;
-  if (meta.slug !== curSlug) {
-    dropTmp(tmpDir, req.file.path);
-    return res.status(400).json({ error: '备份包不属于当前账号，不能用它恢复' });
-  }
-
-  try {
-    const out = await applyVerifiedBundle({
-      tmpDir, meta, manifest, slug: curSlug, username: req.user.username, body: req.body,
-    });
-    res.json({ message: '恢复成功', ...out });
-  } catch (err) {
-    res.status(400).json({ error: err.message || '恢复失败' });
-  } finally {
-    dropTmp(tmpDir, req.file.path);
-  }
-});
 
 // 备份恢复（v3 ZIP · 离线引导，无需登录）：
 // 「新电脑只装了软件、本机一个账号都没有」时唯一能走的路径 —— 没有 JWT 可依，
@@ -270,13 +246,6 @@ router.post('/restore-zip-offline', (req, res, next) => backupUploadMw()(req, re
   });
 });
 
-// 当前登录账号数据库的落盘加密状态（供设置页展示）。
-router.get('/db-encryption', auth(), (req, res) => {
-    const slug = req.user && req.user.dbSlug ? req.user.dbSlug : 'default';
-  const rec = dbManager.registryFindBySlug(slug);
-  res.json({ encrypted: !rec || rec.encrypted !== 0 });
-});
-
 // 就地切换当前登录账号数据库的加密方式（加密 <-> 明文）。
 // 安全约束：slug 只从 JWT 取，绝不接受客户端传入的 slug，保证只改本人库、绝不波及其它账号。
 // 以 NDJSON 流逐步上报进度（校验文件 / 转换数据库 / 校验文件），最后一行为最终结果。
@@ -336,8 +305,16 @@ router.put('/username', auth(), async (req, res) => {
   }
 
   // 重名检查要跨全部账号：registry 是跨库的账号登记表，只查本库 users 会漏掉别的库。
-  const occupied = dbManager.registryFindByUsername(newName);
-  if (occupied && occupied.slug !== req.user.dbSlug) {
+  // 按「账号维度」判断（K01-10）：同一账号名下可能有多个班，registryFindByUsername
+  // 只取 ORDER BY 首行，首行落在自己的另一个班时会误报「已被占用」。
+  // 改名目标与当前账号名相同 → 这些行都属于自己，放行；否则同名行必然是别的账号。
+  const sameAsCurrent = String(req.user.username || '').toLowerCase() === String(newName).toLowerCase();
+  const occupied = sameAsCurrent
+    ? dbManager.registryFindAllByUsername(newName).some(
+      (r) => String(r.username || '').toLowerCase() !== String(req.user.username || '').toLowerCase()
+    )
+    : dbManager.registryFindAllByUsername(newName).length > 0;
+  if (occupied) {
     return res.status(400).json({ error: '该用户名已被占用' });
   }
   // 同库内另有同名用户（registry 与业务库不同步的兜底）
@@ -799,12 +776,18 @@ router.post('/security-level', auth(), async (req, res) => {
 
     // 目标需要登录密码但当前没有：先写入新密码（必须在库连接还可用时改）
     let effectivePwd = password;
+    // 凭证与账号表哈希的切换前快照：后续库加密/隐私步骤失败时要能回滚（K01-13）
+    const prevPassword = user.password;
+    let prevAcc = null;
+    try { prevAcc = dbManager.accountFindByUsername(username); } catch (_) { /* 账号表暂不可读 */ }
+    let pwdChanged = false;
     if (!needsCurrent && (target === 'password' || target === 'privacy')) {
       if (String(newPassword).length < 6) return res.status(400).json({ error: '新密码长度至少 6 位' });
       effectivePwd = String(newPassword);
       // 先算出哈希再写库：哈希是异步的，必须 await 拿到结果才能入库
       const newHash = await bcryptHash(effectivePwd, 10);
       userStore.updatePassword(user.id, newHash);
+      pwdChanged = true;
       // 多班级：登录校验以 accounts.password_hash 为权威（auth.js hashSource），
       // 切到需密码的等级时必须同步权威哈希，否则新密码登录仍被旧哈希判 401。
       // 口径同 PUT /password（下方 610-615）：库内 users.password 保持自洽，账号表另写一份。
@@ -817,6 +800,7 @@ router.post('/security-level', auth(), async (req, res) => {
     } else if (target === 'plain' || target === 'nopass') {
       // 明文库与免密登录都不能保留密码
       userStore.updatePassword(user.id, '');
+      pwdChanged = true;
       // 清空库内密码的同时必须清空权威哈希：否则登录 hashSource 仍拿到旧哈希，
       // 切到免密/明文后反而还要输旧密码，安全等级与登录策略分裂。
       try {
@@ -827,25 +811,56 @@ router.post('/security-level', auth(), async (req, res) => {
       }
     }
 
-    // 退出隐私：先把库钥匙改回主密钥包裹，再处理免密/明文
-    if (from === 'privacy' && target !== 'privacy') {
-      dbManager.disablePrivacy(username, { password });
-    }
-
-    // 加密 -> 明文：转换会驱逐本次请求的连接，必须放在所有库读写之后
-    if (target === 'plain') {
-      await dbManager.convertDbEncryption(req.user.dbSlug, false);
-    }
-    // 明文 -> 加密：先转成加密库，下面开启隐私才有库钥匙可包裹
-    if (from === 'plain') {
-      await dbManager.convertDbEncryption(req.user.dbSlug, true);
-    }
-
-    // 开启隐私：库钥匙只由登录密码 + 恢复词包裹
+    // 以下三步是跨「库加密态 / 隐私开关 / 凭证」的状态机，任一步失败都要尽量回到切换前：
+    //   · 库加密态：按 from/target 反向转换（rekey 自身有回滚）；
+    //   · 密码与权威哈希：恢复切换前快照；
+    //   · 已关闭的隐私无法自动重开（需要恢复词），在错误里说明。
     let phrase = '';
-    if (target === 'privacy') {
-      phrase = pickPhrase();
-      dbManager.enablePrivacy(username, { password: effectivePwd, mnemonic: phrase });
+    try {
+      // 退出隐私：先把库钥匙改回主密钥包裹，再处理免密/明文
+      if (from === 'privacy' && target !== 'privacy') {
+        dbManager.disablePrivacy(username, { password });
+      }
+
+      // 加密 -> 明文：转换会驱逐本次请求的连接，必须放在所有库读写之后
+      if (target === 'plain') {
+        await dbManager.convertDbEncryption(req.user.dbSlug, false);
+      }
+      // 明文 -> 加密：先转成加密库，下面开启隐私才有库钥匙可包裹
+      if (from === 'plain') {
+        await dbManager.convertDbEncryption(req.user.dbSlug, true);
+      }
+
+      // 开启隐私：库钥匙只由登录密码 + 恢复词包裹
+      if (target === 'privacy') {
+        phrase = pickPhrase();
+        dbManager.enablePrivacy(username, { password: effectivePwd, mnemonic: phrase });
+      }
+    } catch (err) {
+      // 反向转换库加密态：只在 from/target 的加密态确实不同时做
+      try {
+        if (target === 'plain' && from !== 'plain') {
+          await dbManager.convertDbEncryption(req.user.dbSlug, true);
+        } else if (from === 'plain' && target !== 'plain') {
+          await dbManager.convertDbEncryption(req.user.dbSlug, false);
+        }
+      } catch (rbErr) {
+        console.error('[account] 切换安全等级失败后回滚库加密态失败:', rbErr.message);
+      }
+      if (pwdChanged) {
+        try { userStore.updatePassword(user.id, prevPassword); } catch (rbErr) {
+          console.error('[account] 回滚登录密码失败:', rbErr.message);
+        }
+        if (prevAcc) {
+          try { dbManager.accountSetPassword(prevAcc.id, prevAcc.password_hash || ''); } catch (rbErr) {
+            console.error('[account] 回滚账号表哈希失败:', rbErr.message);
+          }
+        }
+      }
+      return res.status(500).json({
+        error: '切换安全等级失败，已回滚可回滚的步骤（库加密态与登录密码）。'
+          + '若此前处于超级隐私模式，隐私开关可能已关闭，请重新设置。原始错误：' + err.message,
+      });
     }
 
     // 上面写入或清空了登录密码 = 凭证变更：其它窗口的旧 token 立即失效，
@@ -857,43 +872,6 @@ router.post('/security-level', auth(), async (req, res) => {
       phrase: phrase ? formatPhrase(phrase) : '',
       recoveryKey: phrase,
     });
-  } catch (err) {
-    res.status(err.code === 'PRIVACY_UNLOCK' ? 400 : 500).json({ error: err.message });
-  }
-});
-
-// 超级隐私模式状态（供系统设置展示）
-router.get('/privacy', auth(), (req, res) => {
-    res.json({ enabled: dbManager.isProtected(req.user.username) });
-});
-
-// 开启超级隐私模式：用当前登录密码确认身份，并生成一份 12 词恢复词（仅此次返回）。
-// 开启后库钥匙只由「登录密码 / 恢复词」包裹，主密钥再也解不开；忘记两者即不可恢复。
-router.post('/privacy/enable', auth(), async (req, res) => {
-    const { password } = req.body || {};
-  const user = userStore.findById(req.user.userId);
-  if (!user) return res.status(401).json({ error: '账号不存在' });
-  if (!user.password) return res.status(400).json({ error: '当前账号未设置登录密码，请先设置密码' });
-  if (!password || !await bcryptCompare(password, user.password)) {
-    return res.status(400).json({ error: '密码错误' });
-  }
-
-  const phrase = pickPhrase();
-  dbManager.enablePrivacy(req.user.username, { password, mnemonic: phrase });
-  res.json({
-    enabled: true,
-    recoveryKey: phrase,
-    phrase: formatPhrase(phrase),
-  });
-});
-
-// 关闭超级隐私模式：需要再次输入登录密码解出库钥匙，改回主密钥自动解锁。
-router.post('/privacy/disable', auth(), (req, res) => {
-  try {
-    const { password } = req.body || {};
-    if (!password) return res.status(400).json({ error: '请输入登录密码' });
-    dbManager.disablePrivacy(req.user.username, { password });
-    res.json({ enabled: false });
   } catch (err) {
     res.status(err.code === 'PRIVACY_UNLOCK' ? 400 : 500).json({ error: err.message });
   }

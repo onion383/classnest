@@ -100,7 +100,7 @@ test('子助手真跑：思维链增量回调被接上，落库步骤与轨迹�
 
 test('接线：主循环把子助手增量挂到当前工具步骤，并以独立事件类型下发', () => {
   const src = read(CONV)
-  assert.match(src, /ctx\.emitSub\s*=\s*\(p\)\s*=>/, 'ctx 上要有下发函数')
+  assert.match(src, /(?:ctx\.emitSub\s*=\s*|emitSub:\s*)\(p\)\s*=>/, 'ctx 上要有下发函数')
   assert.match(src, /send\(\{\s*type:\s*'sub_step'/, '必须发 sub_step 事件，不能复用主对话的 reasoning')
   assert.match(src, /ctx\.stepId\s*=\s*sid/, '事件要挂在真实的工具步骤 id 上')
   assert.match(src, /stepId:\s*ctx\.stepId/, '事件体里要带 stepId')

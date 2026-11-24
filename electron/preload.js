@@ -57,6 +57,15 @@ const backendOriginArg = (process.argv || []).find((a) => typeof a === 'string' 
 const backendOrigin = backendOriginArg ? backendOriginArg.slice('--backend-origin='.length) : ''
 if (backendOrigin) contextBridge.exposeInMainWorld('__BACKEND_ORIGIN__', backendOrigin)
 
+// 请求-响应式 IPC 的唯一出口（对应 ipcMain.handle）。白名单外的通道一律拒绝调用。
+// 预取主密钥等 preload 内部调用也必须走这里，不能绕开白名单直连 ipcRenderer（N3-06）。
+const invokeWhitelisted = (channel, ...args) => {
+  if (!validInvokeChannels.includes(channel)) {
+    return Promise.reject(new Error(`Invalid invoke channel: ${channel}`))
+  }
+  return ipcRenderer.invoke(channel, ...args)
+}
+
 contextBridge.exposeInMainWorld('electron', {
   // 向主进程发送消息（单向）
   send: (channel, ...args) => {
@@ -135,12 +144,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
 
   // 请求-响应式 IPC（对应 ipcMain.handle）。白名单外的通道一律拒绝调用。
-  invoke: (channel, ...args) => {
-    if (!validInvokeChannels.includes(channel)) {
-      return Promise.reject(new Error(`Invalid invoke channel: ${channel}`))
-    }
-    return ipcRenderer.invoke(channel, ...args)
-  },
+  invoke: invokeWhitelisted,
 
   // 取拖入文件的真实路径（Electron 32 起 File.path 已移除，必须走 webUtils）。
   // 失败返回空串，调用方按「取不到路径」处理。
@@ -158,13 +162,16 @@ contextBridge.exposeInMainWorld('electron', {
 // 放在页面模块顶层 fire-and-forget 时，结果仍未必赶得上握手；这里提前到 document-start
 // 发起（早于任何渲染层脚本），并把同一个 promise 暴露给页面复用。
 // 不新增 IPC 通道（仍是已有的 get-master-key handle），不改 ipc-policy.json。
+// 与 main/channels.js 的 CH.GET_MASTER_KEY 必须一致（preload 在 sandbox 里无法 require
+// 本地模块，只能在这里保留一份字面量）。改通道名时两处要一起改，否则预取会静默失效。
+const GET_MASTER_KEY_CHANNEL = 'get-master-key'
 let masterKeyPromise = null
 const preloadMasterKey = () => {
   if (!masterKeyPromise) {
     // 白名单外的窗口不发起。失败时收敛成 null 并清空缓存，允许后续重试；
     // 同时避免「没人 await 的 rejected promise」变成 unhandled rejection。
-    masterKeyPromise = validInvokeChannels.includes('get-master-key')
-      ? ipcRenderer.invoke('get-master-key').catch(() => { masterKeyPromise = null; return null })
+    masterKeyPromise = validInvokeChannels.includes(GET_MASTER_KEY_CHANNEL)
+      ? invokeWhitelisted(GET_MASTER_KEY_CHANNEL).catch(() => { masterKeyPromise = null; return null })
       : Promise.resolve(null)
   }
   return masterKeyPromise

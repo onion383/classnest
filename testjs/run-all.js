@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// run-all.js —— 全板块串跑总闸：units → behavior → smoke（冒烟最后，它最重）
+// run-all.js —— 全板块串跑总闸：units → behavior → probe → smoke（冒烟最后，它最重）
 //
 // 用法：
 //   node testjs/run-all.js          全量（含冒烟），打包前用
-//   node testjs/run-all.js --fast   快测（units + behavior），每次提交用（即 npm test）
+//   node testjs/run-all.js --fast   快测（units + behavior + probe），每次提交用（即 npm test）
 //   其余参数（--only= / --skip= / --bail）原样透传给各板块 runner
 //
 // 各板块打印自己的 per-file 明细与汇总；本脚本只负责串联与板块级记分。
@@ -17,6 +17,9 @@ const passThrough = args.filter((a) => a !== '--fast')
 const boards = [
   { name: '单元 units', script: 'run-units.js' },
   { name: '行为 behavior', script: 'run-behavior.js' },
+  // 探针必须进快测：它们是外键/守卫这类「只有故意改坏才看得见」的判据，
+  // 不进 npm test 就等于没有闸门（v8 · T01-01）。
+  { name: '探针 probe', script: 'run-probes.cjs' },
 ]
 if (!fast) boards.push({ name: '冒烟 smoke', script: 'run-smoke.cjs' })
 

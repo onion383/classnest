@@ -485,5 +485,10 @@ export function isRollbackable(list, i, busy) {
 
 // 自动反馈消息（回答提问 / 执行或取消提案后回填给 AI 的提示），不算「本轮真实提问」，也不渲染气泡
 export function isAutoMessage(m) {
-  return m.role === 'user' && (!!m._auto || /^(已执行|已取消|执行失败)：/.test(m.content || ''))
+  if (m.role !== 'user') return false
+  if (m._auto) return true
+  // 前缀只对「尚未落库的过渡消息」兜底：落库消息的自动标记由 process.auto 恢复成 _auto。
+  // 若对带 _id 的消息也按前缀判定，用户手打的「已执行：…」会被当成自动消息隐藏掉。
+  if (m._id != null) return false
+  return /^(已执行|已取消|执行失败)：/.test(m.content || '')
 }

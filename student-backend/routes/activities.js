@@ -77,23 +77,26 @@ router.post('/import', (req, res) => {
       return '';
     };
 
-    const startPos = maxPosition('activities');
-
-    const list = rows.map((row, idx) => {
-      const rowNo = idx + 1;
-      const theme = cell(row, ['主题', '活动主题', '名称']);
-      if (!theme) throw new Error(`第 ${rowNo} 行缺少「主题」`);
-      const data = cleanUp({
-        时间: cell(row, ['时间', '活动时间']),
-        主题: theme,
-        地点: cell(row, ['地点']),
-        参与人员: cell(row, ['参与人员', '参与人']),
-        简介: cell(row, ['简介', '说明']),
-      }, EDITABLE, 'activities');
-      return { ...data, created_at: now(), position: startPos + idx + 1 };
-    });
-
-    const ids = activityStore.insertMany(list);
+    // 序号分配与批量插入必须在同一事务内（K01-06）：事务外先读 maxPosition，
+    // 并发 POST 会占用同一序号，导入行与手工新增行 position 重复。
+    let list = [];
+    const ids = db.transaction(() => {
+      const startPos = maxPosition('activities');
+      list = rows.map((row, idx) => {
+        const rowNo = idx + 1;
+        const theme = cell(row, ['主题', '活动主题', '名称']);
+        if (!theme) throw new Error(`第 ${rowNo} 行缺少「主题」`);
+        const data = cleanUp({
+          时间: cell(row, ['时间', '活动时间']),
+          主题: theme,
+          地点: cell(row, ['地点']),
+          参与人员: cell(row, ['参与人员', '参与人']),
+          简介: cell(row, ['简介', '说明']),
+        }, EDITABLE, 'activities');
+        return { ...data, created_at: now(), position: startPos + idx + 1 };
+      });
+      return activityStore.insertMany(list);
+    })();
     // created = 本次真正新建的行，供前端登记可撤销的批量导入（Q2-06）
     res.json({ message: `成功导入 ${list.length} 条活动`, created: readRowsByIds('activities', ids) });
   } catch (err) {

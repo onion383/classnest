@@ -94,6 +94,16 @@ jobs:
       - name: 错误边界检查
         run: npm run check:boundaries
 
+      # 生成物 ↔ 生成器对账：这三条过去只在本地手工跑，漂移进不了流水线（Q4-02/Q4-03/Q4-04）
+      - name: IPC 策略生成物同源（没漂移）
+        run: npm run check:ipc-policy
+
+      - name: IPC 通道生成物同源（没漂移）
+        run: npm run channels:gen -- --check
+
+      - name: 数据库结构清单对账（空库 initSchema ↔ EXPECTED）
+        run: npm run check:schema
+
       - name: 快测（单元 + 行为）
         run: npm test
 

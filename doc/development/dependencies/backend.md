@@ -30,7 +30,7 @@
 ### [`multer`](../../../student-backend/node_modules/multer) 2.5.0（声明 `^2.4.0`） · MIT · 文件上传中间件
 - 用途：multipart 上传。
 - 使用位置：[`app.js`](../../../student-backend/app.js)（班费收据）、[`routes/ai/ai.upload.js`](../../../student-backend/routes/ai/ai.upload.js)（AI 附件，临时目录）。
-- **备注**：收据限制 10MB + 扩展名/MIME/魔数三重校验。
+- **备注**：收据上传按类型分档（`services/uploadSignatures.js`）：图片 20MB、PDF 30MB、OOXML 30MB、OLE 30MB、视频 200MB、文本（md）5MB；再叠加扩展名 / MIME / 魔数三重校验，超限直接拒绝。
 
 ### [`pdf-parse`](../../../student-backend/node_modules/pdf-parse) 2.4.5 · Apache-2.0 · PDF 解析库
 - 用途：PDF 文本提取。

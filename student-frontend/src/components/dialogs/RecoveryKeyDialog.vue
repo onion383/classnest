@@ -8,7 +8,7 @@
           <button type="button" @click="downloadTxt" class="bg-info hover:bg-info-hover text-text-inverse px-3 py-2 rounded-lg text-sm flex-1">下载文本</button>
           <button type="button" @click="copyPhrase" class="bg-info hover:bg-info-hover text-text-inverse px-3 py-2 rounded-lg text-sm flex-1">复制</button>
         </div>
-        <input v-model="copyWords" placeholder="抄写前 3 个词（可带序号、可不带空格）" autocomplete="off" class="border border-border bg-surface text-text p-2 w-full rounded-lg" @keydown.enter="submit" />
+        <input v-model="copyWords" placeholder="抄写前 3 个词（可带序号、可不带空格）" autocomplete="off" class="border border-border bg-surface text-text p-2 w-full rounded-lg" @keydown.enter="submit" aria-label="抄写前 3 个词（可带序号、可不带空格）"/>
         <p v-if="errorText" class="text-xs text-danger mt-2">{{ errorText }}</p>
         <p v-else class="text-xs text-text-muted mt-2">{{ downloaded ? '已保存到本地，抄写前 3 个词后即可继续。' : '请先点「下载文本」保存到本地，再抄写前 3 个词。' }}</p>
         <div class="flex justify-center gap-2 mt-4">

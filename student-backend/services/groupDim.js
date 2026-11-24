@@ -6,7 +6,7 @@
 // 成员移动、导入的合并追加），整条搬进来 —— 事务边界跟着数据操作走，路由只收结果。
 // 反过来，能由路由先算出来的判断（维度存不存在、是不是内置、组数/人数上限）仍留在路由。
 const { db } = require('../db')
-const { ensureProvisionalStudent, applyRowStudentRef } = require('./provisionalStudents')
+const { ensureProvisionalStudent, applyRowStudentRef, resolvePickedForImport } = require('./provisionalStudents')
 
 // ============ 维度 ============
 
@@ -225,6 +225,25 @@ function renameGroup(id, name) {
   db.prepare('UPDATE groups SET name = ? WHERE id = ?').run(String(name).trim(), id)
 }
 
+// 批量改名（组名自动编号）：整批一个事务。任何一个 id 不存在就整体回滚，
+// 避免出现「前 6 个组叫第X组、后 2 个还是旧名」的半截状态。
+function renameGroupsBatch(items) {
+  const stmt = db.prepare('UPDATE groups SET name = ? WHERE id = ?')
+  let updated = 0
+  db.transaction(() => {
+    for (const { id, name } of items) {
+      const r = stmt.run(String(name).trim(), id)
+      if (!r.changes) {
+        const err = new Error(`小组 ${id} 不存在`)
+        err.status = 404
+        throw err
+      }
+      updated++
+    }
+  })()
+  return updated
+}
+
 // 删除组（级联成员 + 同维度重排）
 function deleteGroup(id, dimensionId) {
   const tx = db.transaction(() => {
@@ -375,7 +394,7 @@ function moveMember(memberId, sourceGroupId, targetGroupId, targetIndex) {
 // 智能分组写回：清空该维度下所有小组成员，再按顺序把姓名写回对应（第 i 组 → groups[i]）
 // 与单条新增同口径：写回的姓名也要有学生记录（智能分组的结果理论上全来自名册，
 // 但接口允许传任意姓名，漏了这一步就会留下「成员存在、名册查无此人」的孤儿）。
-function replaceGroupMembers(dimId, groupsInput) {
+function replaceGroupMembers(dimId, groupsInput, studentIds) {
   const groups = db.prepare('SELECT id FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId)
   const tx = db.transaction(() => {
     const delMembers = db.prepare('DELETE FROM group_members WHERE group_id = ?')
@@ -386,8 +405,14 @@ function replaceGroupMembers(dimId, groupsInput) {
       names.forEach((name, i) => {
         const n = String(name || '').trim()
         if (!n) return
-        const stu = ensureProvisionalStudent(n)
-        insert.run(g.id, stu && stu.id ? stu.id : null, n, '', i + 1)
+        // 智能分组结果来自名册（带 id），写回时用 id 定人；同名两人不再被并成一条。
+        // 没给 id（外部直接调接口 / 名册外姓名）时维持旧的按姓名认人。
+        const picked = studentIds && studentIds[`${gi}:${i}`]
+        const stu = picked === undefined || picked === null
+          ? ensureProvisionalStudent(n)
+          : resolvePickedForImport(picked, n)
+        const nameStored = stu && stu.name ? stu.name : n
+        insert.run(g.id, stu && stu.id ? stu.id : null, nameStored, '', i + 1)
       })
     })
   })
@@ -397,7 +422,8 @@ function replaceGroupMembers(dimId, groupsInput) {
 /**
  * 导入成员：语义是「合并追加」—— 同名小组存在则复用，不存在时按 allowCreateGroups 决定
  * 是新建还是报错；同一小组内重复姓名跳过，不会重复写入。
- * entries: [{ groupName, memberName, remark, rowNo }]，按行顺序处理（报错带行号）。
+ * entries: [{ groupName, memberName, remark, rowNo, picked? }]，按行顺序处理（报错带行号）。
+ * picked 为同名选人结果（学生 id / 'new'）：传了就按用户选的人落 id，没传维持按姓名认人。
  * 返回 { createdGroups, addedMembers, skippedMembers }；出错抛 Error，外层事务整体回滚。
  */
 function importMembers({ dimId, entries, allowCreateGroups, perGroupLimit, maxGroupCount }) {
@@ -415,7 +441,7 @@ function importMembers({ dimId, entries, allowCreateGroups, perGroupLimit, maxGr
     const maxMemberSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM group_members WHERE group_id = ?')
     const countGroups = db.prepare('SELECT COUNT(*) AS n FROM groups WHERE dimension_id = ?')
 
-    for (const { groupName, memberName, remark, rowNo } of entries) {
+    for (const { groupName, memberName, remark, rowNo, picked } of entries) {
       let group = findGroup.get(dimId, groupName)
       if (!group) {
         if (!allowCreateGroups) {
@@ -439,8 +465,13 @@ function importMembers({ dimId, entries, allowCreateGroups, perGroupLimit, maxGr
         throw new Error(`第 ${rowNo} 行：「${group.name}」人数已达上限 ${perGroupLimit} 人`)
       }
       const sort = (maxMemberSort.get(group.id).m || 0) + 1
-      const stu = ensureProvisionalStudent(memberName)
-      insertMember.run(group.id, stu && stu.id ? stu.id : null, memberName, remark, sort)
+      // 同名选人优先：用户选了具体人（含 'new'）就落那个 id；没选维持旧的按姓名认人。
+      // 非法 id 由 resolvePickedForImport 抛 400，外层事务整体回滚。
+      const stu = picked === undefined || picked === null
+        ? ensureProvisionalStudent(memberName)
+        : resolvePickedForImport(picked, memberName)
+      const memberNameStored = stu && stu.name ? stu.name : memberName
+      insertMember.run(group.id, stu && stu.id ? stu.id : null, memberNameStored, remark, sort)
       addedMembers += 1
     }
   })
@@ -461,6 +492,7 @@ module.exports = {
   groupCount,
   addGroup,
   renameGroup,
+  renameGroupsBatch,
   deleteGroup,
   memberById,
   memberCount,

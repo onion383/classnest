@@ -43,6 +43,7 @@
     "select-folder",
     "save-background-image",
     "save-file",
+    "save-file-from-path",
     "screenshot-capture",
     "screenshot-region",
     "screenshot-region-show",

@@ -61,6 +61,8 @@ ${functionSource(src, 'fetchRemoteSearch', { async: true })}
   const remoteSearching = { value: false }
   const remotePage = { value: 0 }
   const remoteHasMore = { value: false }
+  // 截断提示状态（词数超限/拼音候选降级）：行为本身不参与防抖判定，但被赋值时必须存在
+  const remoteTruncated = { value: { terms: false, used: 0, total: 0, pinyin: false } }
   const calls = []
   const deferreds = []
   const axios = {
@@ -74,12 +76,12 @@ ${functionSource(src, 'fetchRemoteSearch', { async: true })}
     },
   }
   const factory = new Function(
-    'keyword', 'remoteResults', 'remoteSearching', 'remotePage', 'remoteHasMore',
+    'keyword', 'remoteResults', 'remoteSearching', 'remotePage', 'remoteHasMore', 'remoteTruncated',
     'axios', 'REMOTE_SOURCE', 'buildRemoteResults', 'createLatest',
     scope,
   )
   const api = factory(
-    keyword, remoteResults, remoteSearching, remotePage, remoteHasMore,
+    keyword, remoteResults, remoteSearching, remotePage, remoteHasMore, remoteTruncated,
     axios, { endpoint: '/api/search' }, (groups) => (groups ? groups.flat() : []), createLatest,
   )
   // 信号在 fetchRemoteSearch 里创建，abortRemote() 之后会把 remoteAbort 置空，

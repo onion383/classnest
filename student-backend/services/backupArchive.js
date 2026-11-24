@@ -20,6 +20,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { pipeline } = require('node:stream/promises')
+const { Transform } = require('node:stream')
 const { createZipWriter } = require('./zipStream')
 const { sanitizeEntryName } = require('./zipWriter')
 const { createRequire } = require('node:module')
@@ -125,25 +126,40 @@ function isUnsafeName(raw) {
 /**
  * 把 zip 解到 destDir（逐条流式写，不整包进内存）。
  * 任何不安全条目名 → 整个包拒绝。
+ *
+ * 资源闸（N2-06）：恶意构造的备份包可以靠「高压缩比条目」在解压阶段撑爆磁盘，
+ * 或塞几十万个小条目耗 CPU。这里限条目数与解压后的累计字节（按**实际写入**字节算，
+ * 不信任 ZIP 头里声明的 uncompressedSize），超限即中断并让调用方拿到 400。
+ * 上限与 ZIP32 的 4GB 硬限对齐：打包侧本来就写不出更大的包。
  */
+const MAX_ENTRIES = 20000
+const MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
+const MAX_ENTRY_BYTES = 4 * 1024 * 1024 * 1024
+
 function extractZip(zipPath, destDir) {
   const root = path.resolve(destDir)
   return new Promise((resolve, reject) => {
     yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
       if (err) return reject(err)
       let entries = 0
-      zip.on('error', reject)
+      let totalBytes = 0
+      let rejected = false
+      const fail = (e) => { if (!rejected) { rejected = true; reject(e) } }
+      zip.on('error', fail)
       zip.on('entry', (entry) => {
+        if (rejected) return
         const rawName = entry.fileName
         // 目录条目：自己建目录即可，不依赖包里的空目录
         if (/\/$/.test(rawName)) { zip.readEntry(); return }
+        entries += 1
+        if (entries > MAX_ENTRIES) return fail(new Error(`备份包条目过多（上限 ${MAX_ENTRIES} 个）`))
         if (isUnsafeName(rawName)) {
-          return reject(new Error(`备份包包含不安全的路径：${rawName}`))
+          return fail(new Error(`备份包包含不安全的路径：${rawName}`))
         }
         const safe = sanitizeEntryName(rawName)
         const target = path.resolve(root, safe)
         if (target !== root && !target.startsWith(root + path.sep)) {
-          return reject(new Error(`备份包条目越界：${rawName}`))
+          return fail(new Error(`备份包条目越界：${rawName}`))
         }
         // entry 回调由 yauzl 在事件循环里调用，这里同步抛错不会进 Promise 的 reject，
         // 会变成 uncaughtException 直接崩掉后端（路径冲突：目标是已存在的文件/权限问题等）。
@@ -151,18 +167,28 @@ function extractZip(zipPath, destDir) {
         try {
           fs.mkdirSync(path.dirname(target), { recursive: true })
           zip.openReadStream(entry, (e, rs) => {
-            if (e) return reject(e)
+            if (e) return fail(e)
             try {
-              pipeline(rs, fs.createWriteStream(target))
-                .then(() => { entries += 1; zip.readEntry() })
-                .catch(reject)
-            } catch (err) { reject(err) }
+              let entryBytes = 0
+              const guard = new Transform({
+                transform(chunk, _enc, cb) {
+                  entryBytes += chunk.length
+                  totalBytes += chunk.length
+                  if (entryBytes > MAX_ENTRY_BYTES) return cb(new Error('备份包单个条目解压后过大'))
+                  if (totalBytes > MAX_TOTAL_BYTES) return cb(new Error(`备份包解压后总大小超过上限（${MAX_TOTAL_BYTES} 字节）`))
+                  cb(null, chunk)
+                },
+              })
+              pipeline(rs, guard, fs.createWriteStream(target))
+                .then(() => { zip.readEntry() })
+                .catch(fail)
+            } catch (err) { fail(err) }
           })
         } catch (err) {
-          reject(err)
+          fail(err)
         }
       })
-      zip.on('end', () => resolve({ entries }))
+      zip.on('end', () => { if (!rejected) resolve({ entries }) })
       zip.readEntry()
     })
   })
@@ -179,8 +205,12 @@ async function verifyManifest(destDir, manifest) {
   const problems = []
   const files = Array.isArray(manifest && manifest.files) ? manifest.files : []
   if (!files.length) problems.push('清单里没有任何文件项')
+  const root = path.resolve(destDir)
   for (const rec of files) {
     const abs = path.resolve(destDir, rec.path)
+    // 与 extractZip 同一根目录约束（K04-06）：被篡改的清单不能借 verify 去 stat/读哈希
+    // 目录外的文件。落盘侧已挡穿越条目，这里补上清单侧的第二道闸。
+    if (abs !== root && !abs.startsWith(root + path.sep)) { problems.push(`清单路径越界：${rec.path}`); continue }
     let st
     try { st = fs.statSync(abs) } catch (_) { problems.push(`缺少文件：${rec.path}`); continue }
     if (st.size !== rec.size) { problems.push(`大小不符：${rec.path}（清单 ${rec.size}，实际 ${st.size}）`); continue }
@@ -188,6 +218,14 @@ async function verifyManifest(destDir, manifest) {
       const got = await sha256File(abs)
       if (got !== rec.sha256) problems.push(`内容校验失败：${rec.path}`)
     }
+  }
+  // 反向核对（N2-04）：解压目录里出现清单没登记的文件也要报。
+  // 只放过包自身的两个元文件；其余「多出来的」一律视为被人为夹带。
+  const allowed = new Set(files.map((r) => String(r.path).replace(/\\/g, '/')))
+  allowed.add(META_ENTRY)
+  allowed.add(MANIFEST_ENTRY)
+  for (const it of listFiles(root)) {
+    if (!allowed.has(it.rel)) problems.push(`包内存在未登记文件：${it.rel}`)
   }
   return problems
 }
@@ -217,8 +255,22 @@ async function extractAndVerify(zipPath, destDir) {
 /**
  * 用 srcDir 替换 destDir（同卷 rename，快且原子性最好）。
  * 旧目录不删除，改名成 `<destDir>.bak-<stamp>` —— 出问题时用户还能拿回来。
+ * 但回滚壳只建不收会让反复恢复 N 次留 N 份完整旧目录（N2-10），
+ * 所以每次替换后只保留最近两代 `.bak`（当前 + 上一代），更早的清掉。
  * @returns {string|null} 备份目录路径（没有旧目录时为 null）
  */
+function pruneDirBackups(destDir) {
+  try {
+    const parent = path.dirname(destDir)
+    const prefix = path.basename(destDir) + '.bak-'
+    const olds = fs.readdirSync(parent).filter((n) => n.startsWith(prefix)).sort()
+    const drop = olds.slice(0, Math.max(0, olds.length - 2))
+    for (const n of drop) {
+      try { fs.rmSync(path.join(parent, n), { recursive: true, force: true }) } catch (_) { /* 占用中留给下次 */ }
+    }
+  } catch (_) { /* 目录不可读时不阻断恢复 */ }
+}
+
 function replaceDir(srcDir, destDir, stamp) {
   let bak = null
   if (fs.existsSync(destDir)) {
@@ -228,6 +280,7 @@ function replaceDir(srcDir, destDir, stamp) {
   fs.mkdirSync(path.dirname(destDir), { recursive: true })
   if (fs.existsSync(srcDir)) fs.renameSync(srcDir, destDir)
   else fs.mkdirSync(destDir, { recursive: true })
+  if (bak) pruneDirBackups(destDir)
   return bak
 }
 

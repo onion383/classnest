@@ -23,11 +23,13 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
 const require = createRequire(import.meta.url)
 const { killTree } = require('../tools/killTree.cjs')
 import { dirname, join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '../..')
-const TMP = join(ROOT, 'testjs/tmp')
+// 临时产物放系统临时目录，不用仓库内 testjs/tmp（并行/残留场景互不污染，T01-10）
+const TMP = join(tmpdir(), 'classnest-testjs')
 const PORT = 9222
 
 const opt = { exe: '', real: false, wait: 2500, cwd: '', onlyJson: false }

@@ -94,14 +94,24 @@ function findPackageDir(explicit) {
 }
 
 // 生产依赖存在性：能 resolve 到才算「打包后不会启动即崩」。
+// 根 manifest 只有 koffi；后端原生/懒加载依赖在 student-backend/package.json（T02-02）。
 function checkProdDeps(root = ROOT) {
-  let pkg = {}
-  try { pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) } catch (_) { return [] }
-  return Object.keys(pkg.dependencies || {}).map((name) => {
+  const manifests = [
+    path.join(root, 'package.json'),
+    path.join(root, 'student-backend', 'package.json'),
+  ]
+  const names = new Set()
+  for (const mf of manifests) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(mf, 'utf8'))
+      for (const n of Object.keys(pkg.dependencies || {})) names.add(n)
+    } catch (_) { /* 清单缺失跳过 */ }
+  }
+  return [...names].map((name) => {
     let ok = false
     let resolved = ''
     try {
-      resolved = require.resolve(name, { paths: [root] })
+      resolved = require.resolve(name, { paths: [root, path.join(root, 'student-backend')] })
       ok = true
     } catch (_) { /* 解析失败就是缺 */ }
     return { name, ok, resolved }

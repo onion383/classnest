@@ -21,8 +21,11 @@ const http = require('http')
 const assert = require('assert/strict')
 
 const BACKEND = path.join(__dirname, '../../student-backend')
-const Database = require(path.join(BACKEND, 'node_modules/better-sqlite3-multiple-ciphers'))
-const express = require(path.join(BACKEND, 'node_modules/express'))
+// 依赖解析走 createRequire（T01-06）：不再假设依赖一定落在 student-backend/node_modules，
+// 依赖提升到仓库根或换包管理器布局时同样可用。
+const backendRequire = require('module').createRequire(path.join(BACKEND, 'package.json'))
+const Database = backendRequire('better-sqlite3-multiple-ciphers')
+const express = backendRequire('express')
 
 const conn = new Database(':memory:')
 require(path.join(BACKEND, 'schema/schema.js')).initSchema(conn)
@@ -143,7 +146,11 @@ async function main() {
     || conn.prepare("INSERT INTO group_dimensions (name, is_default, sort_order, male_group_count, female_group_count) VALUES ('宿舍组', 1, 1, 0, 0)").run().lastInsertRowid
 
   await request('PUT', `/api/group-manage/dimensions/${dimId}`, { male_group_count: 2, female_group_count: 1 })
-  const dorm1 = conn.prepare('SELECT id FROM groups WHERE dimension_id = ? ORDER BY sort_order LIMIT 1').get(dimId).id
+  // 维度存在但没有 groups 行时（新建维度尚未生成小组），先补播种一条，避免 .id 抛 TypeError（T01-06）
+  let dorm1 = conn.prepare('SELECT id FROM groups WHERE dimension_id = ? ORDER BY sort_order LIMIT 1').get(dimId)?.id
+  if (!dorm1) {
+    dorm1 = conn.prepare("INSERT INTO groups (dimension_id, name, sort_order) VALUES (?, '第 1 组', 0)").run(dimId).lastInsertRowid
+  }
   conn.prepare("INSERT INTO group_members (group_id, member_name, sort_order) VALUES (?, '甲', 0)").run(dorm1)
   conn.prepare("INSERT INTO group_members (group_id, member_name, sort_order) VALUES (?, '乙', 1)").run(dorm1)
 

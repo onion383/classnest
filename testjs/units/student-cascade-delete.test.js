@@ -95,7 +95,7 @@ test('Q2-03 复现：级联删除会把七处一起抹掉，且快照必须包�
   assert.equal(removed.scoreRows.length, 1)
   assert.equal(removed.groupRows.length, 1)
   assert.equal(removed.cadreRows.length, 1)
-  assert.deepEqual(removed.seatCells, [{ row: 0, col: 0, cell: 1 }])
+  assert.deepEqual(removed.seatCells, [{ row: 0, col: 0, cell: 1, table: 'seat_layout' }])
   // 值日 slot 现在带 table 字段（#9a：模板也要统计/清理/撤销）；当前表场景是 duty_layout。
   assert.deepEqual(removed.dutySlots, [
     { mode: 'daily', item: '扫地', day: '周一', index: 0, value: '张三', table: 'duty_layout' },
@@ -167,6 +167,36 @@ test('影响预览与清理共用同一份匹配：一个对象格只算 1 个�
   conn.prepare("UPDATE seat_slots SET seats = ? WHERE kind = 'current'")
     .run(JSON.stringify([[{ student_id: 1, name: '张三' }]]))
   assert.equal(studentRelations(ZHANG).seat, 1)
+})
+
+test('K05-01：座位模板也统计/清理/撤销，应用模板不会把已删学生带回来', () => {
+  const conn = freshDb()
+  // 当前表 1 处 + 模板表 1 处；值日同理
+  conn.prepare("UPDATE seat_slots SET rows = 1, cols = 2, seats = ?, types = ? WHERE kind = 'template'")
+    .run(JSON.stringify([[1, null]]), JSON.stringify([[0, 0]]))
+  conn.prepare("UPDATE duty_slots SET cells = ? WHERE kind = 'template'")
+    .run(JSON.stringify({ daily: { 扫地: { 周一: ['张三'] } }, big: {} }))
+
+  const rel = studentRelations(ZHANG)
+  assert.equal(rel.seat, 2, '当前表 + 模板都要计入影响预览')
+  assert.equal(rel.duty, 2, '值日当前表 + 模板同样计入')
+
+  const removed = cascadeDelete(conn)
+  const tplSeats = JSON.parse(conn.prepare("SELECT seats FROM seat_slots WHERE kind = 'template'").get().seats)
+  const tplDuty = JSON.parse(conn.prepare("SELECT cells FROM duty_slots WHERE kind = 'template'").get().cells)
+  assert.deepEqual(tplSeats, [[null, null]], '模板座位里的张三也被清掉')
+  assert.deepEqual(tplDuty.daily.扫地.周一, [], '模板值日里的张三也被清掉')
+  // 快照带来源表，撤销才能写回模板
+  assert.ok(removed.seatCells.some(c => c.table === 'seat_template'), '模板格子的来源表必须记录')
+  assert.ok(removed.dutySlots.some(s => s.table === 'duty_template'), '模板值日的来源表必须记录')
+
+  executors.student_cascade_delete.undo(removed)
+  assert.deepEqual(
+    JSON.parse(conn.prepare("SELECT seats FROM seat_slots WHERE kind = 'template'").get().seats),
+    [[1, null]], '撤销把模板座位原位放回')
+  assert.deepEqual(
+    JSON.parse(conn.prepare("SELECT cells FROM duty_slots WHERE kind = 'template'").get().cells).daily.扫地.周一,
+    ['张三'], '撤销把模板值日原位插回')
 })
 
 test('validate：缺 student 整行直接拒绝，避免执行时只删一半', () => {

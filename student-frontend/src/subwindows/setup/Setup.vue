@@ -227,7 +227,7 @@
               <div v-if="subKey === 'info'" class="pane">
                 <div class="f-row">
                   <label class="f-label">安全等级</label>
-                  <AppSelect v-model="account.securityLevel" :options="securityLevels" placeholder="请选择模式" class="flex-1 min-w-0" />
+                  <AppSelect v-model="account.securityLevel" aria-label="安全等级" :options="securityLevels" placeholder="请选择模式" class="flex-1 min-w-0" />
                 </div>
                 <div class="f-row">
                   <label class="f-label">用户名</label>
@@ -235,8 +235,7 @@
                     v-model.trim="account.username"
                     class="f-input"
                     placeholder="2-30 个字符"
-                    autocomplete="off"
-                  />
+                    autocomplete="off" aria-label="2-30 个字符"/>
                 </div>
                 <template v-if="canSetPassword">
                   <div class="f-row">
@@ -246,8 +245,7 @@
                       type="password"
                       class="f-input"
                       placeholder="至少 6 位"
-                      autocomplete="new-password"
-                    />
+                      autocomplete="new-password" aria-label="至少 6 位"/>
                   </div>
                   <div class="f-row">
                     <label class="f-label">确认密码</label>
@@ -256,8 +254,7 @@
                       type="password"
                       class="f-input"
                       placeholder="再次输入密码"
-                      autocomplete="new-password"
-                    />
+                      autocomplete="new-password" aria-label="再次输入密码"/>
                   </div>
                 </template>
                 <p v-if="account.securityLevel === 'plain'" class="f-hint ind">明文模式下数据库不加密，任何程序都可直接读取；之后可在系统设置中升级为加密等级。</p>
@@ -280,8 +277,7 @@
                     v-model="recovery.copyWords"
                     class="f-input"
                     placeholder="可带序号、可不带空格"
-                    autocomplete="off"
-                  />
+                    autocomplete="off" aria-label="可带序号、可不带空格"/>
                 </div>
                 <p v-if="errorMsg" class="f-error">{{ errorMsg }}</p>
               </div>
@@ -293,19 +289,19 @@
             <div class="pane">
               <div class="f-row">
                 <label class="f-label">班级名称 <i class="req">*</i></label>
-                <input v-model.trim="classInfo.name" class="f-input" placeholder="如：高一（3）班" autocomplete="off" />
+                <input v-model.trim="classInfo.name" class="f-input" placeholder="如：高一（3）班" autocomplete="off" aria-label="如：高一（3）班"/>
               </div>
               <div class="f-row">
                 <label class="f-label">学期名称 <i class="req">*</i></label>
-                <input v-model.trim="semester.name" class="f-input" placeholder="如：2026秋季学期" autocomplete="off" />
+                <input v-model.trim="semester.name" class="f-input" placeholder="如：2026秋季学期" autocomplete="off" aria-label="如：2026秋季学期"/>
               </div>
               <div class="f-row">
                 <label class="f-label">开始日期</label>
-                <input v-model="semester.start" type="date" class="f-input" />
+                <input v-model="semester.start" type="date" class="f-input" aria-label="开始日期" />
               </div>
               <div class="f-row">
                 <label class="f-label">结束日期</label>
-                <input v-model="semester.end" type="date" class="f-input" />
+                <input v-model="semester.end" type="date" class="f-input" aria-label="结束日期" />
               </div>
               <p v-if="errorMsg" class="f-error">{{ errorMsg }}</p>
               <p class="f-hint">学期起止日期已按当前月份填好推荐值，可直接修改。</p>
@@ -1058,7 +1054,13 @@ async function finish() {
   // 本次调用开始时是否已有账号：学期保存失败后用户再点「完成」，不能重复建号
   const isNewAccount = !accountCreated.value
   try {
-    await waitBackend()
+    const backendReady = await waitBackend()
+    // 探活超时返回值必须判：后端没起来时继续建号只会再等一轮网络错误（F05-02）
+    if (!backendReady) {
+      errorMsg.value = '后端尚未就绪，请稍后重试'
+      busy.value = false
+      return
+    }
     // 1) 建号：引导里所有设置填完之后才真正落库（见账户步骤的 defer 注释）
     if (isNewAccount) {
       try {

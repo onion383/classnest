@@ -12,6 +12,8 @@ const path = require('path')
 const { moveReceiptsToTrash } = require('../../student-backend/services/receiptTrash')
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trash-probe-'))
+// service 抛错也要回收临时目录（T02-06）
+process.on('exit', () => { try { fs.rmSync(root, { recursive: true, force: true }) } catch (_) { /* 已清理 */ } })
 const uploads = path.join(root, 'uploads')
 const trash = path.join(root, 'receipt-trash')
 fs.mkdirSync(uploads, { recursive: true })

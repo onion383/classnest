@@ -27,13 +27,16 @@ const Database = backendRequire('better-sqlite3-multiple-ciphers')
 const { initSchema } = require('../../student-backend/schema/schema')
 const store = require('../../student-backend/services/slotStore')
 
+// 表/视图清单以 schema/tableRegistry.js 为唯一来源（T04-07）：
+// 原先这三个数组是 DDL 之外的第二份副本，新增/删除表只需改 DDL，测试清单不动也照样绿。
+const REG = require('../../student-backend/schema/tableRegistry')
+
+// 「合并表」是业务语义（多行槽位并进物理表），保留为语义特例；
+// 但它的每个名字都必须真的在注册表里，防止注册表删表后这里还留着幽灵断言。
 const MERGED_TABLES = ['schedule_slots', 'duty_slots', 'seat_slots', 'domain_history']
-const LOGICAL_VIEWS = [
-  'schedule', 'master_schedule',
-  'duty_settings', 'duty_layout', 'duty_template', 'duty_weight', 'duty_draft',
-  'seat_layout', 'seat_template', 'seat_weight', 'seat_draft',
-  'schedule_history', 'duty_history', 'seat_history',
-]
+// 逻辑表（slotStore 的 key）+ 三张历史只读视图，全部由注册表导出
+const LOGICAL_VIEWS = [...REG.ALL_LOGICAL, ...REG.HISTORY_VIEWS]
+// 已下线、不得再以物理表存在的旧对象（注册表不收录历史包袱，只能作为「必须不存在」的反向断言）
 const DROPPED_TABLES = [
   'schedule', 'master_schedule', 'schedule_settings', 'schedule_history',
   'duty_settings', 'duty_layout', 'duty_template', 'duty_weight', 'duty_draft', 'duty_history',
@@ -74,9 +77,21 @@ const { now, isDateStr } = require('../../student-backend/utils/sql')
 test('建表：四个合并表存在，旧单例表全部退化为只读视图', () => {
   const conn = fresh()
   const { tables, views } = objects(conn)
-  MERGED_TABLES.forEach((t) => assert.ok(tables.has(t), `缺少合并表 ${t}`))
+  MERGED_TABLES.forEach((t) => {
+    assert.ok(REG.ALL_PHYSICAL.includes(t), `合并表 ${t} 必须登记在 tableRegistry（否则本文件的语义断言会变成幽灵）`)
+    assert.ok(tables.has(t), `缺少合并表 ${t}`)
+  })
+  // 双向对账：库里的表/视图必须与注册表完全一致。
+  // 只断言「注册表里的都存在」挡不住「DDL 多建了一张没登记的表」；
+  // 只断言「库里的都在注册表」挡不住「注册表登记了却没建」。两边都要。
+  const actualTables = [...tables].filter((t) => !t.startsWith('sqlite_')).sort()
+  assert.deepEqual(actualTables, [...REG.ALL_PHYSICAL].sort(), '物理表必须与 tableRegistry.ALL_PHYSICAL 完全一致')
   LOGICAL_VIEWS.forEach((v) => assert.ok(views.has(v), `缺少逻辑视图 ${v}`))
-  DROPPED_TABLES.forEach((t) => assert.ok(!tables.has(t), `旧表 ${t} 仍以物理表存在`))
+  assert.deepEqual([...views].sort(), [...LOGICAL_VIEWS].sort(), '视图必须与注册表的逻辑表 + 历史视图完全一致')
+  DROPPED_TABLES.forEach((t) => {
+    assert.ok(!tables.has(t), `旧表 ${t} 仍以物理表存在`)
+    // 只要求「不再以物理表存在」：这些名字多数仍作为逻辑槽位 / 历史视图合法存在
+  })
   conn.close()
 })
 

@@ -4,6 +4,7 @@
 //   node testjs/probe/ocr-probe.mjs "班费支出 500 元"  # 自定义单行文字
 //   OCR_TEXT="第一行|第二行" node testjs/probe/ocr-probe.mjs   # 用 | 分隔多行
 // 说明：仅 Windows 有效（底层调用系统 OCR 能力）；路径全部相对仓库根目录解析，可在任意 cwd 下执行。
+//       报告模式：识别结果只打印、不做断言，恒以退出码 0 结束（不是漏了判定）。
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'

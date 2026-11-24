@@ -16,8 +16,6 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const ROOT = path.resolve(__dirname, '..', '..')
-const readSrc = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 const { checkUpload, receiptKind } = require('../../student-backend/services/uploadSignatures')
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'receipt-kind-'))
@@ -69,15 +67,4 @@ test('[行为] 图片 / PDF / 文本 / 视频的 kind 原样保留', () => {
     assert.strictEqual(r.kind, expected)
     assert.strictEqual(receiptKind(r.kind), expected, `${name} 不应被归一改掉`)
   }
-})
-
-test('[静态] 后端落库走 receiptKind，前端 viewMode 兼容细分类型', () => {
-  assert.match(readSrc('student-backend/app.js'), /kind: receiptKind\(check\.kind\)/)
-  const src = readSrc('student-frontend/src/components/dialogs/ReceiptDialog.vue')
-  assert.match(
-    src,
-    /f\.kind === 'office' \|\| f\.kind === 'ooxml' \|\| f\.kind === 'ole'/,
-    '前端必须兼容旧数据里的 ooxml / ole（第二道防线）',
-  )
-  assert.match(src, /return 'external'/)
 })

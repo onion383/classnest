@@ -54,10 +54,10 @@
       <!-- 记录设置：两个入口共用一份（同一张表，规则不该有两套），所以这里注明 -->
       <div class="border-t border-border mt-3 pt-3 flex items-center gap-2 flex-wrap text-xs text-text-muted flex-shrink-0">
         <span>记录方式</span>
-        <AppSelect :model-value="config.granularity" :options="GRAN_OPTIONS" compact class="w-32"
+        <AppSelect :model-value="config.granularity" aria-label="记录方式" :options="GRAN_OPTIONS" compact class="w-32"
           @change="onGranularity" />
         <span class="ml-1">保留</span>
-        <AppSelect :model-value="config.keep" :options="keepOptions" compact class="w-24"
+        <AppSelect :model-value="config.keep" aria-label="记录保留条数" :options="keepOptions" compact class="w-24"
           @change="onKeep" />
         <span class="ml-auto">已记 {{ total }} 条</span>
         <button type="button" @click="askClear = true" :disabled="!total"

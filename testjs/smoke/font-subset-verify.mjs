@@ -19,12 +19,13 @@
  * 退出码：0 全部覆盖；2 有缺字；3 产物缺失（先跑 pdf-subset-verify.mjs，视为环境不具备跳过）
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(__dirname, '..', '..')
-const TMP = path.join(ROOT, 'testjs', 'tmp')
+const TMP = path.join(os.tmpdir(), 'classnest-smoke')
 
 // ---- sfnt 表目录 ----
 function parseTables(buf) {

@@ -25,6 +25,7 @@
           <!-- 下拉字段 -->
           <AppSelect
             v-if="f.control === 'select'"
+            :aria-label="f.name"
             v-model="form[f.name]"
             :options="selectOptions(f)"
             class="w-full"
@@ -35,6 +36,7 @@
             v-model="form[f.name]"
             type="date"
             autocomplete="off"
+            :aria-label="f.name"
             class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"
           />
           <!-- 数字字段 -->
@@ -44,16 +46,14 @@
             type="number"
             step="1"
             :placeholder="`请输入${f.name}`"
-            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"
-          />
+            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="`请输入${f.name}`"/>
           <input
             v-else-if="f.type === '小数'"
             v-model.number="form[f.name]"
             type="number"
             step="0.5"
             :placeholder="`请输入${f.name}`"
-            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"
-          />
+            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="`请输入${f.name}`"/>
           <!-- 文字及其他字段 -->
           <input
             v-else
@@ -61,8 +61,7 @@
             type="text"
             autocomplete="off"
             :placeholder="`请输入${f.name}`"
-            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"
-          />
+            class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="`请输入${f.name}`"/>
         </div>
       </div>
       <CustomScrollbar :target="bodyRef" />

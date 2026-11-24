@@ -18,6 +18,7 @@
 import { ref } from 'vue'
 import axios from 'axios'
 import { useNotification } from './useNotification.js'
+import { createLatest } from '../utils/latestOnly.js'
 
 const LEVELS = ['none', 'read', 'write']
 
@@ -59,6 +60,22 @@ export function usePrivacyConfig(scope = 'ai') {
     return n
   }
 
+  // 读路径代次：load 只认最后一次；写路径在途时 load 的旧快照不能盖回乐观值（F04-07）。
+  // pendingWrites 用计数而非布尔：同一字段可能有一次在途 + 一次排队。
+  const loadSeq = createLatest()
+  const pendingWrites = new Map()
+  function markPending(key) { pendingWrites.set(key, (pendingWrites.get(key) || 0) + 1) }
+  function clearPending(key) {
+    const n = (pendingWrites.get(key) || 0) - 1
+    if (n > 0) pendingWrites.set(key, n)
+    else pendingWrites.delete(key)
+  }
+  // 写请求结束后作废所有在途 load：它们的快照可能早于本次写入落库
+  function settleWrite(key) {
+    clearPending(key)
+    loadSeq.invalidate()
+  }
+
   function patchTable(key, patch) {
     cfg.value = {
       ...cfg.value,
@@ -67,10 +84,25 @@ export function usePrivacyConfig(scope = 'ai') {
   }
 
   async function load() {
+    const my = loadSeq.begin()
     try {
       const r = await axios.get(url)
-      if (r.data && r.data.success) cfg.value = { ...cfg.value, ...(r.data.data || {}) }
+      if (!loadSeq.isCurrent(my)) return
+      if (!(r.data && r.data.success)) return
+      const data = { ...(r.data.data || {}) }
+      // 写路径在途的字段保留本地乐观值，旧快照只补其余字段
+      for (const k of pendingWrites.keys()) delete data[k]
+      if (Array.isArray(data.tables) && pendingWrites.size) {
+        const local = new Map((cfg.value.tables || []).map((t) => [t.key, t]))
+        data.tables = data.tables.map((t) => {
+          if (!pendingWrites.has('table:' + t.key)) return t
+          const cur = local.get(t.key)
+          return cur ? { ...t, level: cur.level } : t
+        })
+      }
+      cfg.value = { ...cfg.value, ...data }
     } catch (e) {
+      if (!loadSeq.isCurrent(my)) return
       error.value = '读取设置失败：' + (e.response?.data?.error || e.message)
     }
   }
@@ -82,6 +114,7 @@ export function usePrivacyConfig(scope = 'ai') {
     const prev = cfg.value[key]
     error.value = ''
     cfg.value = { ...cfg.value, [key]: value }
+    markPending(key)
     try {
       const r = await axios.put(url, { [key]: value })
       if (seqByKey.get(key) !== seq) return // 已有更新的一次请求在飞，丢弃这次回包
@@ -91,6 +124,8 @@ export function usePrivacyConfig(scope = 'ai') {
       cfg.value = { ...cfg.value, [key]: prev }
       error.value = '保存失败：' + (e.response?.data?.error || e.message)
       notify.error(error.value)
+    } finally {
+      settleWrite(key)
     }
   }
 
@@ -103,6 +138,7 @@ export function usePrivacyConfig(scope = 'ai') {
     const prev = cur
     error.value = ''
     patchTable(t.key, { level })
+    markPending(key)
     try {
       const r = await axios.put(url, { table: t.key, level })
       if (seqByKey.get(key) !== seq) return
@@ -112,6 +148,8 @@ export function usePrivacyConfig(scope = 'ai') {
       patchTable(t.key, { level: prev })
       error.value = '保存失败：' + (e.response?.data?.error || e.message)
       notify.error(error.value)
+    } finally {
+      settleWrite(key)
     }
   }
 

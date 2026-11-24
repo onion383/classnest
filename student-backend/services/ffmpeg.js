@@ -87,6 +87,23 @@ function dirsIn(dir) {
   try { return fs.readdirSync(dir); } catch (_) { return []; }
 }
 
+// 下载前记录缓存目录的顶层子目录；下载成功后清掉不再被使用的新旧版本目录。
+// 缓存的二进制可再生，多版本切换/反复下载留下的旧包没有保留价值（P2-09）。
+async function pruneOldVersions(cacheDir, beforeDirs, foundPath) {
+  const root = path.resolve(cacheDir)
+  const keep = new Set()
+  let p = path.resolve(foundPath || '')
+  while (p.startsWith(root + path.sep)) {
+    keep.add(p)
+    p = path.dirname(p)
+  }
+  for (const name of beforeDirs) {
+    const full = path.resolve(cacheDir, name)
+    if (keep.has(full)) continue
+    await fsp.rm(full, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
 // 递归检测目录内是否存在符号链接（用于解压后的安全校验）
 function hasSymlink(dir) {
   let entries;
@@ -160,6 +177,8 @@ async function ensureFfmpeg() {
     // 上次中断残留的锁（进程崩溃/超时）直接清掉再重试
     await fsp.rm(INFLIGHT_PATH, { force: true }).catch(() => {});
     await fsp.mkdir(CACHE_DIR, { recursive: true });
+    // 记录解压前已有的顶层目录，成功后据此清理旧版本
+    const beforeDirs = dirsIn(CACHE_DIR).filter((n) => isDir(path.join(CACHE_DIR, n)));
     await fsp.writeFile(INFLIGHT_PATH, '1', 'utf8');
 
     const zipPath = path.join(CACHE_DIR, 'tmp.mp4zip');
@@ -194,6 +213,7 @@ async function ensureFfmpeg() {
     await fsp.unlink(INFLIGHT_PATH).catch(() => {});
 
     const found = findFfmpeg([CACHE_DIR]);
+    if (found) await pruneOldVersions(CACHE_DIR, beforeDirs, found);
     return found || '';
   } catch (err) {
     await fsp.rm(INFLIGHT_PATH, { force: true }).catch(() => {});
@@ -237,4 +257,6 @@ module.exports = {
   resolveFfmpegPath, ensureFfmpeg, download, MAX_REDIRECTS,
   // 仅供单元测试注入本地 http 假服务器，生产代码不要用
   __setTransport: (t) => { transport = t || https; },
+  // 仅供单元测试：直接验证旧版本目录清理
+  __pruneOldVersions: pruneOldVersions,
 };

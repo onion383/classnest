@@ -54,7 +54,11 @@ app.whenReady().then(async () => {
   let text = ''
   let done = false
   let evalError = ''
-  const deadline = Date.now() + 5000
+  // 内部轮询截止必须与外部 watchdog 同源（T03-13）：
+  //   早先硬编码 5000，调用方即使传 30000 也会在 5 秒时先判超时，放宽的参数根本没生效。
+  //   留 1 秒余量给「读文本 + 打印」，保证先由内部给出明确的 PROBE_FAIL，而不是被 watchdog 打断。
+  const internalBudget = Math.max(1000, timeoutMs - 1000)
+  const deadline = Date.now() + internalBudget
   for (;;) {
     try {
       text = await win.webContents.executeJavaScript(READ_OUT)
@@ -77,7 +81,7 @@ app.whenReady().then(async () => {
     return
   }
   if (!done) {
-    console.log('PROBE_FAIL 断言页未在 5 秒内写完（__probeDone 未置位）')
+    console.log(`PROBE_FAIL 断言页未在 ${Math.round(internalBudget / 1000)} 秒内写完（__probeDone 未置位）`)
     app.exit(2)
     return
   }

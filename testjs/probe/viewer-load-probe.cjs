@@ -20,6 +20,10 @@ const BACKEND_MODULES = path.join(BACKEND, 'node_modules')
 
 // 隔离环境：必须早于 require dbManager（它在加载时校验主密钥）
 const DATA_DIR = makeTempDir('banji-viewer-load-')
+// 异步链里任何一步抛错都要回收隔离目录（T02-06）
+process.on('exit', () => {
+  try { fs.rmSync(DATA_DIR, { recursive: true, force: true }) } catch (_) { /* 已清理 */ }
+})
 process.env.DB_MASTER_KEY = 'viewer-load-probe-master-key'
 process.env.DATA_DIR = DATA_DIR
 process.env.ALBUM_THUMBS_DIR = path.join(DATA_DIR, 'album-thumbs')
@@ -268,4 +272,9 @@ app.whenReady().then(async () => {
   // Electron 里 sqlite 句柄同样在进程内开着，删不掉就靠重试 + 明确告警，不再无声无息。
   await removeDirWithRetry(DATA_DIR)
   app.exit(0)
+}).catch(async (e) => {
+  // 异常必须非零退出，并顺手清掉临时目录（T02-08 / T02-06：过去 without catch 会静默挂住或退 0）
+  console.error('探针异常：', e && e.stack || e)
+  await removeDirWithRetry(DATA_DIR).catch(() => {})
+  app.exit(1)
 })

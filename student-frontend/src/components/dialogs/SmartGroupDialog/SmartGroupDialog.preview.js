@@ -56,7 +56,7 @@ export function useSmartGroupPreview(ctx) {
       if (!ctx.arranged.value) return ctx.showReject('请先点击「开始排表」生成分组结果')
       const result = ctx.lastResult.value
       if (!result) return ctx.showReject('尚未生成分组结果')
-      ctx.emit('confirm', { groups: outputGroups(ctx, result) })
+      ctx.emit('confirm', { groups: outputGroups(ctx, result), studentIds: outputStudentIds(ctx, result) })
     }
   }
 }
@@ -91,4 +91,24 @@ function outputGroups(ctx, result) {
     }
     return arr.map(x => x.name)
   })
+}
+
+// 同一次分组结果的 id 矩阵：key = `${组号}:${组内位置}`，与 groups 的下标一一对应。
+// 智能分组本来就按名册学生对象（带 id）排，emit 时只丢姓名会退化成后端按姓名认人——
+// 同名两人就会被并成一个人。带上 id 后由写回路径直接落权威字段。
+function outputStudentIds(ctx, result) {
+  const { members, leaders } = result
+  const out = {}
+  members.forEach((set, g) => {
+    const arr = [...set].map(si => ({ si, id: ctx.roster.value[si]?.id }))
+    const li = leaders[g]
+    if (li != null) {
+      const idx = arr.findIndex(x => x.si === li)
+      if (idx > 0) { arr.unshift(arr.splice(idx, 1)[0]) }
+    }
+    arr.forEach((x, i) => {
+      if (x.id != null && x.id !== '') out[`${g}:${i}`] = Number(x.id)
+    })
+  })
+  return out
 }

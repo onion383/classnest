@@ -7,7 +7,7 @@ const { validateRow } = require('../services/businessRules');
 const { reorderRows } = require('../services/tableService');
 const { readRowsByIds } = require('../services/createdRows');
 const leaveStore = require('../services/leaveStore');
-const { resolveOne } = require('../services/provisionalStudents');
+const { resolveOne, resolvePickedForImport } = require('../services/provisionalStudents');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['姓名', '类型', '开始时间', '结束时间', '家长联系电话', '学生联系电话', '状态', '返校时间', '备注'];
@@ -50,6 +50,7 @@ router.get('/', (req, res) => {
 
 // POST /api/leaves 添加请假（学生联系方式从学生表自动带出）
 router.post('/', (req, res) => {
+  try {
     const body = req.body || {};
   const data = {};
 
@@ -109,6 +110,10 @@ router.post('/', (req, res) => {
   const result = buildInsert('leave_records', data);
   renumber('leave_records');
   res.json({ id: result.lastInsertRowid, message: '添加请假成功' });
+  } catch (err) {
+    // 跨字段校验（结束早于开始等）是业务错误 → 400；带 status 的异常按其状态返回
+    res.status((err && err.status) || 400).json({ error: err.message });
+  }
 });
 
 // PUT /api/leaves/:id 编辑
@@ -153,7 +158,8 @@ router.put('/:id', (req, res) => {
     }
   }
 
-  buildUpdate('leave_records', row, req.params.id);
+  const result = buildUpdate('leave_records', row, req.params.id);
+  if (!result || result.changes === 0) return res.status(404).json({ error: '记录不存在' });
     res.json({ message: '修改成功' });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -197,7 +203,7 @@ router.post('/today-columns', (req, res) => {
 // 入参沿用 ImportExcel 的 { fields, rows }；表头顺序可任意调整。
 router.post('/import', (req, res) => {
   try {
-    const { fields, rows } = req.body || {};
+    const { fields, rows, studentIds } = req.body || {};
     if (!Array.isArray(fields) || !Array.isArray(rows)) {
       return res.status(400).json({ error: '缺少有效的字段或数据' });
     }
@@ -236,7 +242,13 @@ router.post('/import', (req, res) => {
         const name = cell(row, ['姓名']);
         const xuehao = cell(row, ['学号']);
         let student = null;
-        if (xuehao) {
+        // 导入前用户已为同名行选人：他的决定优先（选中的 id / 新同学），不再按姓名猜。
+        const picked = studentIds && studentIds[String(idx)];
+        if (picked !== undefined) {
+          const chosen = resolvePickedForImport(picked, name);
+          if (chosen) student = leaveStore.findStudentById(chosen.id) || { id: chosen.id, 姓名: chosen.name };
+        }
+        if (!student && xuehao) {
           // 学号不唯一（可空、可重复）：只有「恰好 1 条」才能定人。
           // 撞到 2 条就退回按姓名认人，绝不静默取第一条 —— 那会把整张表记到同一个学生头上。
           const byXuehao = leaveStore.findStudentsByXuehao(xuehao);
@@ -296,9 +308,35 @@ router.post('/import', (req, res) => {
 
 // DELETE /api/leaves/:id 删除
 router.delete('/:id', (req, res) => {
-    leaveStore.removeById(Number(req.params.id));
+    const result = leaveStore.removeById(Number(req.params.id));
+  if (!result || result.changes === 0) return res.status(404).json({ error: '记录不存在' });
   renumber('leave_records');
   res.json({ message: '删除成功' });
+});
+
+// POST /api/leaves/return-batch 批量销假（「全部销假」一次往返）
+// 逐条 POST 的旧路径在 40 人时就是 40 次 loopback；这里用同一事务写完全部，
+// 返回成功/不存在两份 id，前端按 id 落撤销快照，仍保持「一条失败不影响其余」。
+const RETURN_BATCH_MAX = 500;
+router.post('/return-batch', (req, res) => {
+  const raw = req.body && req.body.ids;
+  if (!Array.isArray(raw)) return res.status(400).json({ error: '请提供要销假的记录 id 数组' });
+  const ids = [...new Set(raw.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!ids.length) return res.status(400).json({ error: '请提供至少一个有效的记录 id' });
+  if (ids.length > RETURN_BATCH_MAX) {
+    return res.status(400).json({ error: `一次最多销假 ${RETURN_BATCH_MAX} 条` });
+  }
+  const time = now();
+  const updatedIds = [];
+  const missingIds = [];
+  db.transaction(() => {
+    for (const id of ids) {
+      const result = leaveStore.markReturned(id, time);
+      if (result.changes === 0) missingIds.push(id);
+      else updatedIds.push(id);
+    }
+  })();
+  res.json({ updated: updatedIds.length, updatedIds, missingIds });
 });
 
 // POST /api/leaves/:id/return 销假（标记已返校）
@@ -313,13 +351,6 @@ router.post('/:id/unreturn', (req, res) => {
     const result = leaveStore.markUnreturned(Number(req.params.id));
   if (result.changes === 0) return res.status(404).json({ error: '记录不存在' });
   res.json({ message: '已撤销销假' });
-});
-
-// POST /api/leaves/:id/cancel 取消请假
-router.post('/:id/cancel', (req, res) => {
-    const result = leaveStore.markCanceled(Number(req.params.id));
-  if (result.changes === 0) return res.status(404).json({ error: '记录不存在' });
-  res.json({ message: '已取消请假' });
 });
 
 module.exports = router;

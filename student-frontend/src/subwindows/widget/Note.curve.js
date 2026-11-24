@@ -3,7 +3,9 @@
 
 export function calcW(speed, cfg) {
   if (cfg.minW === cfg.maxW) return cfg.w
-  return cfg.maxW - (cfg.maxW - cfg.minW) * Math.min(speed / 5, 1)
+  // 非有限/负速度（采样异常或指针事件缺字段）会让结果变成 NaN 或超过 maxW（F05-04）
+  const s = Number.isFinite(speed) && speed > 0 ? speed : 0
+  return cfg.maxW - (cfg.maxW - cfg.minW) * Math.min(s / 5, 1)
 }
 
 // ====== Centripetal Catmull-Rom 样条插值 (alpha=0.5) ======

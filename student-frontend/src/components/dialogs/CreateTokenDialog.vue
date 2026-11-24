@@ -10,7 +10,7 @@
         <div class="flex items-center gap-4">
           <label class="text-sm font-medium text-text w-20 flex-shrink-0">令牌名称</label>
           <input v-model="form.label" maxlength="80" placeholder="如「Claude Desktop」，留空用默认名"
-            class="flex-1 min-w-0 border border-border bg-surface text-text px-3 py-2 rounded" />
+            class="flex-1 min-w-0 border border-border bg-surface text-text px-3 py-2 rounded" aria-label="如「Claude Desktop」，留空用默认名"/>
         </div>
         <div class="flex items-start gap-4">
           <label class="text-sm font-medium text-text w-20 flex-shrink-0 pt-1.5">令牌有效期</label>

@@ -87,18 +87,31 @@ router.get('/conversations/:id/messages', (req, res) => {
   }
 });
 
+// 单条消息 / 过程块 / 附件的长度上限（K02-06）：没有上限时一次错误请求就能把
+// 几十 MB 文本写进库，sqlite 与前端渲染都会被拖垮。附件按「本轮上传的文本」计。
+const MAX_MSG_CHARS = 200000;
+const MAX_PROCESS_CHARS = 100000;
+const MAX_ATTACHMENTS = 20;
+const MAX_ATTACH_CHARS = 200000;
+
 // POST /api/ai/conversations/:id/messages —— 追加一条消息；默认截断过长历史
 router.post('/conversations/:id/messages', (req, res) => {
   try {
     if (!conversationExists(req.params.id)) return res.status(404).json({ error: '会话不存在' });
     const { role, content, process, attachments } = req.body;
     if (!role || typeof content !== 'string') return res.status(400).json({ error: '缺少消息内容' });
+    if (content.length > MAX_MSG_CHARS) return res.status(400).json({ error: `消息过长（上限 ${MAX_MSG_CHARS} 字符）` });
     // 过程块（步骤 / 思维链 / 耗时）以 JSON 字符串落库
     let processJson = '';
     if (process) { try { processJson = JSON.stringify(process); } catch (_) { processJson = ''; } }
+    if (processJson.length > MAX_PROCESS_CHARS) return res.status(400).json({ error: '过程块过大' });
     // 本轮上传的文件（{name, text}）随消息落库，后续轮次仍可读取（完整上下文）
     let attachmentsJson = '';
     if (Array.isArray(attachments) && attachments.length) {
+      if (attachments.length > MAX_ATTACHMENTS) return res.status(400).json({ error: `一次最多附带 ${MAX_ATTACHMENTS} 个文件` });
+      if (attachments.some((a) => a && typeof a.text === 'string' && a.text.length > MAX_ATTACH_CHARS)) {
+        return res.status(400).json({ error: `附件文本过长（单个上限 ${MAX_ATTACH_CHARS} 字符）` });
+      }
       try { attachmentsJson = JSON.stringify(attachments.filter((a) => a && a.name && a.text)); } catch (_) { attachmentsJson = ''; }
     }
     const info = aiConversationStore.insertMessage(req.params.id, role, content, processJson, attachmentsJson);
@@ -120,8 +133,10 @@ router.put('/conversations/:id/messages/:mid', (req, res) => {
     if (!conversationExists(req.params.id)) return res.status(404).json({ error: '会话不存在' });
     const { content, process } = req.body;
     if (typeof content !== 'string') return res.status(400).json({ error: '缺少消息内容' });
+    if (content.length > MAX_MSG_CHARS) return res.status(400).json({ error: `消息过长（上限 ${MAX_MSG_CHARS} 字符）` });
     let processJson = '';
     if (process) { try { processJson = JSON.stringify(process); } catch (_) { processJson = ''; } }
+    if (processJson.length > MAX_PROCESS_CHARS) return res.status(400).json({ error: '过程块过大' });
     aiConversationStore.updateMessage(req.params.id, req.params.mid, content, processJson);
     aiConversationStore.touch(req.params.id);
     res.json({ success: true });
@@ -244,20 +259,21 @@ router.post('/chat/stream', async (req, res) => {
   const blocks = [];   // record 表格 / chart 图表数据块（拼到正文末尾，前端渲染）
   // 联网搜索开关：仅当请求未显式关闭（webSearch === false）时下发 web_search 工具
   const webSearchOn = !!(req.body && req.body.webSearch !== false);
-  const ctx = { blocks, slug: req.user && req.user.dbSlug, images: tools().latestUserImages(messages), attachments, signal: clientGone.signal, cfg: s };
-  // 对话标题：数据访问记录里「谁读了什么」的那个「谁」（每轮取一次，工具层直接用）。
-  ctx.convTitle = conversationId ? aiConversationStore.getTitle(conversationId) : '';
-  // 子助手轨迹实时下发：增量事件挂到当前工具步骤 id 上，前端据此把片段追加到那一格过程块。
-  // 只在工具执行期间有 stepId，没有宿主步骤时不下发（避免前端收到孤儿事件）。
-  ctx.stepId = null;
-  ctx.emitSub = (p) => {
-    if (!ctx.stepId) return;
-    send({ type: 'sub_step', stepId: ctx.stepId, ...p });
-  };
   // 预算闸门：主对话与子助手共用同一本账（审查 v4 · B03-10）。
   // 超限后不再继续调用模型，把已有信息收尾成最终回答，避免「模型自己无限循环调工具」。
   const budget = createBudget();
-  ctx.budget = budget;
+  const ctx = {
+    blocks, slug: req.user && req.user.dbSlug, images: tools().latestUserImages(messages), attachments, signal: clientGone.signal, cfg: s, budget,
+    // 对话标题：数据访问记录里「谁读了什么」的那个「谁」（每轮取一次，工具层直接用）。
+    convTitle: conversationId ? aiConversationStore.getTitle(conversationId) : '',
+    // 子助手轨迹实时下发：增量事件挂到当前工具步骤 id 上，前端据此把片段追加到那一格过程块。
+    // 只在工具执行期间有 stepId，没有宿主步骤时不下发（避免前端收到孤儿事件）。
+    stepId: null,
+    emitSub: (p) => {
+      if (!ctx.stepId) return;
+      send({ type: 'sub_step', stepId: ctx.stepId, ...p });
+    },
+  };
   const steps = [];    // 过程块：本轮所有步骤（过程文本 / 工具调用）
   let stepSeq = 0;
   const startedAt = Date.now();

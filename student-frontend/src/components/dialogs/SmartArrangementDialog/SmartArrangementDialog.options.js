@@ -4,6 +4,17 @@ import { useSeatDraft } from '../../../composables/useSeatDraft.js'
 import { useNotification } from '../../../composables/useNotification.js'
 import { buildSeatLikeRows, fromDenseSeats } from '../../../composables/useSeatGrid.geometry.js'
 import { nextTick } from 'vue'
+
+// 语义句里的下拉位没有可见标签，用「选项类别」生成可访问名（见 segmentsOf · label）
+const SEGMENT_LABELS = {
+  groups: '分组范围',
+  students: '学生',
+  relation: '关系类型',
+  swapTypes: '调换方式',
+  lockModes: '锁定方式',
+  genders: '性别',
+  innerOrder: '组内顺序',
+}
 export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
   return {
     // ==================== 位置工具 ====================
@@ -88,7 +99,12 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
       if (!reg || !reg.segments) return []
       return reg.segments.map((s, idx) => s.t === 'text'
         ? { ...s, idx }
-        : { ...s, idx, options: ctx.resolveOptions(s.options, node) })
+        : {
+            ...s,
+            idx,
+            options: ctx.resolveOptions(s.options, node),
+            label: s.placeholder || SEGMENT_LABELS[s.options] || '选项',
+          })
     },
     // 把注册表里的选项标识解析成实际选项数组
     resolveOptions(kind, node) {
@@ -209,12 +225,14 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
       const src = ctx.baseSeats.value
       let pseudoId = -1
       const pseudoCache = {}
+      // id → 学生：逐格 find 是 O(R·C·N)，先建索引（P3-02）
+      const byId = new Map(ctx.students.value.map(s => [s.id, s]))
       for (let r = 0; r < ctx.rows.value; r++) {
         const row = []
         for (let c = 0; c < ctx.cols.value; c++) {
           const val = src?.[r]?.[c]
           let student = null
-          if (typeof val === 'number') student = ctx.students.value.find(s => s.id === val) || null
+          if (typeof val === 'number') student = byId.get(val) || null
           else if (typeof val === 'string' && val.trim()) {
             const n = val.trim()
             if (!pseudoCache[n]) pseudoCache[n] = { id: pseudoId--, 姓名: n }
@@ -231,6 +249,30 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
     extractOriginalPairs() {
       const pairs = []
       const singles = []
+      // 入座值有三种形状：数字 id / 字符串姓名 / 对象。过去只解析数字，
+      // 字符串与对象格既不进 pairs 也不进 singles，锁同桌时这些人的原同桌关系被丢掉（F03-06）。
+      // 这里与 initGrid 同口径：字符串按同名复用临时学生，对象取 val（有真实 id 则回名册找）。
+      const pseudoCache = new Map()
+      let pseudoId = -1
+      const byId = new Map(ctx.students.value.map(s => [s.id, s]))
+      const ensurePseudo = (n) => {
+        if (!pseudoCache.has(n)) pseudoCache.set(n, { id: pseudoId--, 姓名: n })
+        return pseudoCache.get(n)
+      }
+      const toStudent = (v) => {
+        if (typeof v === 'number') return byId.get(v) || null
+        if (typeof v === 'string') {
+          const n = v.trim()
+          return n ? ensurePseudo(n) : null
+        }
+        if (v && typeof v === 'object') {
+          const hit = v.id != null ? byId.get(v.id) : null
+          return hit || v
+        }
+        return null
+      }
+      // 临时学生没有稳定 id（每次调用重新编号），统一用姓名做身份键
+      const keyOf = (s) => (s && typeof s.id === 'number' && s.id > 0 ? `id:${s.id}` : `name:${(s && s.姓名) || ''}`)
       const used = new Set()
       const src = ctx.baseSeats.value
       for (let r = 0; r < ctx.rows.value; r++) {
@@ -241,24 +283,24 @@ export function useSmartArrangementOptions(ctx, CONDITION_REGISTRY) {
           const paired = ctx.mode.value === 'single' ? true : ctx.isDeskmateCols(c, c + 1)
           const a = row[c]
           const b = paired ? row[c + 1] : undefined
-          const sa = typeof a === 'number' ? ctx.students.value.find(s => s.id === a) : null
-          const sb = typeof b === 'number' ? ctx.students.value.find(s => s.id === b) : null
+          const sa = toStudent(a)
+          const sb = toStudent(b)
           if (sa && sb) {
             pairs.push([sa, sb])
-            used.add(sa.id)
-            used.add(sb.id)
+            used.add(keyOf(sa))
+            used.add(keyOf(sb))
           } else if (sa) {
             singles.push(sa)
-            used.add(sa.id)
+            used.add(keyOf(sa))
           } else if (sb) {
             singles.push(sb)
-            used.add(sb.id)
+            used.add(keyOf(sb))
           }
           c += paired ? 2 : 1
         }
       }
-      const orphans = ctx.students.value.filter(s => !used.has(s.id))
-      return { pairs, singles, orphans }
+      const orphans = ctx.students.value.filter(s => !used.has(`id:${s.id}`))
+      return { pairs, singles, orphans, keyOf }
     },
 
     // 构建 GridView 预览用的显示行

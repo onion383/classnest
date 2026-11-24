@@ -60,7 +60,9 @@ export function matchKeywords(text, keywords, q, pinyinMatch) {
   if (lower.includes(q)) return true
   if (keywords.some(k => k && String(k).toLowerCase().includes(q))) return true
   if (pinyinMatch) {
-    try { if (pinyinMatch(lower, q)) return true } catch (_) {}
+    // 间隔号会打断拼音库的音节切分（如「阿·依古扎」），喂库前剥掉分隔符与空白。
+    const pyText = lower.replace(/[·・.．\s]/g, '')
+    try { if (pinyinMatch(pyText, q)) return true } catch (_) {}
   }
   return false
 }

@@ -15,6 +15,7 @@
 //   outcome = 'ok' | 'fail' | 'canceled'。
 // 本模块据此把「失败」**抛出去**，把「取消」**安静吞掉** —— 这样语义才和用户的心智模型对上：
 //   用户点了取消 → 不打扰；保存失败了 → 必须告诉他。
+import axios from 'axios'
 import { INVOKE } from '../electronChannels.js'
 import { sanitizeFileName } from './fileName.js'
 import { classifySaveResult } from './saveResult.js'
@@ -39,5 +40,27 @@ export async function saveBlobWithDialog(defaultName, blob) {
   }
   if (kind === 'canceled') return ''
   // 失败：把原因抛出去，让调用方的 catch 弹错误提示（原先被静默吞成「取消」）
+  throw new Error((result && result.error) || '保存文件失败')
+}
+
+// N2-07：业务 ZIP 走磁盘中转 —— 后端把整包写到临时文件，主进程只搬文件，
+// 不再把几十上百 MB 的包塞进 SAVE_FILE 的 50MB IPC 通道。
+// 入参与 /api/data/zip 一致（entries / receiptGroups / includeReceipts / password / filename）。
+// 返回值语义与 saveBlobWithDialog 相同：路径 = 成功，'' = 取消，抛错 = 失败。
+export async function saveZipWithDialog(defaultName, body) {
+  const safeName = sanitizeFileName(defaultName)
+  const { data } = await axios.post('/api/data/zip-to-file', { ...body, filename: safeName })
+  if (!data || !data.path) throw new Error((data && data.error) || '导出文件生成失败')
+  const result = await window.electron.invoke(INVOKE.SAVE_FILE_FROM_PATH, {
+    defaultName: data.filename || safeName,
+    srcPath: data.path,
+  })
+  const kind = classify(result)
+  if (kind === 'ok') {
+    if (!result.filePath) throw new Error((result && result.error) || '保存文件失败（未返回文件路径）')
+    window.electron.invoke(INVOKE.OPEN_FILE, { filePath: result.filePath }).catch(() => {})
+    return result.filePath
+  }
+  if (kind === 'canceled') return ''
   throw new Error((result && result.error) || '保存文件失败')
 }

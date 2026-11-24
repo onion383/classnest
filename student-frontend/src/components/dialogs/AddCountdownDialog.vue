@@ -18,11 +18,11 @@
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label class="block text-sm text-text-secondary mb-1">名称 <span class="text-danger">*</span></label>
-          <input v-model="form.name" type="text" placeholder="如：期末考试 / 放假 / 高考" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+          <input v-model="form.name" type="text" placeholder="如：期末考试 / 放假 / 高考" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="如：期末考试 / 放假 / 高考"/>
         </div>
         <div>
           <label class="block text-sm text-text-secondary mb-1">截止日 <span class="text-danger">*</span></label>
-          <input v-model="form.deadline" type="date" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+          <input v-model="form.deadline" type="date" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="截止日" />
         </div>
       </div>
 

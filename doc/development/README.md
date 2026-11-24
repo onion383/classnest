@@ -33,7 +33,7 @@
 | --- | --- |
 | [main-process/README.md](./main-process/README.md) | `electron/` 全部模块：整体机制（协议、窗口、后端 fork/心跳、托盘、启动计时、打包精简）、目录树与主进程标准 |
 | [main-process/entry.md](./main-process/entry.md) | 入口 `main.js`：加载期顺序、主窗口、`whenReady` 编排、引导/低版本提示、迁移与加密流程、入口 IPC、退出收尾 |
-| [main-process/modules.md](./main-process/modules.md) | 24 个 `main.*.js` 模块清单：职责、关键导出 / IPC 通道、依赖与被依赖 |
+| [main-process/modules.md](./main-process/modules.md) | 32 个 `main.*.js` 模块清单：职责、关键导出 / IPC 通道、依赖与被依赖 |
 | [main-process/root-files.md](./main-process/root-files.md) | `electron/` 根文件（`preload.js`、`startup.html`、图标、`afterPack.js`、IPC 清单）与 `inno/`、`installer-assets/` 安装器素材 |
 
 ### 2.3 后端

@@ -76,21 +76,31 @@ function proofSrc() {
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
 }
 
-test('接线：缺 proof 分支按写方法 + sessionId 判定，nonce 去重仍在有 proof 路径', () => {
-  const src = proofSrc()
+// 判据抽成函数，正例与变异反证共用（T07-02）
+function wiringGuard(src) {
   const fn = src.slice(src.indexOf('function requestAuthProof'), src.indexOf('function cleanupSessions'))
   const noProof = fn.slice(fn.indexOf('if (!raw)'), fn.indexOf('const parts'))
-  assert.match(noProof, /POST|PUT|PATCH|DELETE/, '缺 proof 分支没有写方法判定')
-  assert.match(noProof, /req\.sessionId/, '缺 proof 分支没有 sessionId 判定')
-  assert.match(fn, /usedNonces\.has\(n\)/, '有 proof 路径的 nonce 去重被改坏了')
-  assert.match(fn, /usedNonces\.set\(n/, 'nonce 一次性消费被改坏了')
+  const checks = {
+    writeMethod: /POST|PUT|PATCH|DELETE/.test(noProof),
+    sessionId: /req\.sessionId/.test(noProof),
+    nonceHas: /usedNonces\.has\(n\)/.test(fn),
+    nonceSet: /usedNonces\.set\(n/.test(fn),
+    hasBranch: noProof.length > 0 && fn.length > 0,
+  }
+  return { ok: Object.values(checks).every(Boolean), checks }
+}
+
+test('接线：缺 proof 分支按写方法 + sessionId 判定，nonce 去重仍在有 proof 路径', () => {
+  const r = wiringGuard(proofSrc())
+  assert.ok(r.ok, `接线判据未通过：${JSON.stringify(r.checks)}`)
 })
 
-test('变异反证：把缺 proof 分支改回无条件 next 后，行为判据必须失败', () => {
+test('变异反证：把缺 proof 分支改回无条件放行后，行为判据必须失败', () => {
   const src = proofSrc()
+  assert.equal(wiringGuard(src).ok, true, '基线必须通过，否则反证无意义')
   const fn = src.slice(src.indexOf('function requestAuthProof'), src.indexOf('function cleanupSessions'))
-  const noProof = fn.slice(fn.indexOf('if (!raw)'), fn.indexOf('const parts'))
-  const mutated = noProof.replace(/if \(req\.sessionId && writeMethod\) return fail\([^;]*;/, '/*MUTATED*/')
-  assert.ok(mutated !== noProof, '变异没匹配到强制判定')
-  assert.ok(!/return fail/.test(mutated), '变异后缺 proof 应无条件放行 —— 判据应判失败')
+  const mutatedFn = fn.replace(/if \(req\.sessionId && writeMethod\) return fail\([^;]*;/, '/*MUTATED*/')
+  assert.ok(mutatedFn !== fn, '变异没匹配到强制判定')
+  const mutatedSrc = src.replace(fn, mutatedFn)
+  assert.equal(wiringGuard(mutatedSrc).ok, false, '判据假绿：缺 proof 无条件放行仍判 PASS')
 })

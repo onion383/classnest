@@ -47,10 +47,25 @@ function ok(cond, msg) {
 // 上传目录的真实位置是 <dataDir>/content/uploads（dbManager.paths.js 的 uploadsDir）。
 // 早先探针自己也按 <dataDir>/uploads 造夹具，于是 handler 拼错根目录也照样全绿 —— 假绿。
 const uploads = path.join(resolveContentDir(), 'uploads')
+const receiptTrash = path.join(resolveContentDir(), 'receipt-trash')
 fs.mkdirSync(uploads, { recursive: true })
+fs.mkdirSync(receiptTrash, { recursive: true })
 fs.writeFileSync(path.join(uploads, 'ok.pdf'), 'PDF')
 fs.writeFileSync(path.join(uploads, 'bad.exe'), 'MZ')
+fs.writeFileSync(path.join(receiptTrash, 'ok.docx'), 'DOCX')
+fs.writeFileSync(path.join(receiptTrash, 'bad.exe'), 'MZ')
 fs.writeFileSync(path.join(path.dirname(uploads), 'outside.pdf'), 'X')
+// handler 抛错时也要清掉夹具文件（T02-06）
+process.on('exit', () => {
+  const fixtures = [
+    path.join(uploads, 'ok.pdf'), path.join(uploads, 'bad.exe'),
+    path.join(receiptTrash, 'ok.docx'), path.join(receiptTrash, 'bad.exe'),
+    path.join(path.dirname(uploads), 'outside.pdf'),
+  ]
+  for (const p of fixtures) {
+    try { fs.rmSync(p, { force: true }) } catch (_) { /* 已删除 */ }
+  }
+})
 
 ;(async () => {
   const h = handlers.get('open-upload-file')
@@ -58,6 +73,16 @@ fs.writeFileSync(path.join(path.dirname(uploads), 'outside.pdf'), 'X')
 
   const r1 = await h({}, { relPath: '/uploads/ok.pdf' })
   ok(r1 && r1.outcome === 'ok' && opened.length === 1, 'uploads 内的 pdf 能交给系统打开')
+
+  // 收据回收站里的 Office 也要能「本地查看」；不传 area 的旧调用仍只认 uploads
+  const rTrash = await h({}, { relPath: 'ok.docx', area: 'receiptTrash' })
+  ok(rTrash && rTrash.outcome === 'ok' && opened[opened.length - 1] === path.join(receiptTrash, 'ok.docx'),
+    'receiptTrash 里的 docx 能交给系统打开')
+  const rTrashExe = await h({}, { relPath: 'bad.exe', area: 'receiptTrash' })
+  ok(rTrashExe && rTrashExe.outcome === 'fail' && !opened.some((p) => p === path.join(receiptTrash, 'bad.exe')),
+    '回收站里的 .exe 同样被执行黑名单拦下')
+  const rTrashEscape = await h({}, { relPath: '../../outside.pdf', area: 'receiptTrash' })
+  ok(rTrashEscape && rTrashEscape.outcome === 'fail', 'receiptTrash 的 basename 压平也跳不出根目录')
 
   const r2 = await h({}, { relPath: '../../outside.pdf' })
   ok(r2 && r2.outcome === 'fail', '有 ../ 的路径被拒（basename 压平后找不到文件）')

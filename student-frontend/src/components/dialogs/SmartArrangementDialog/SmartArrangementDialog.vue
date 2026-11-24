@@ -22,7 +22,7 @@
            选「全部同学」= 按学生表里的全班同学排（没入座的补进空位） -->
       <div class="mb-3 flex items-center gap-3">
         <label class="text-sm font-medium shrink-0">选择数据源</label>
-        <AppSelect v-model="dataSource" :options="dataSourceOptions" class="w-44" @change="onDataSourceChange" />
+        <AppSelect v-model="dataSource" aria-label="选择数据源" :options="dataSourceOptions" class="w-44" @change="onDataSourceChange" />
         <span class="text-xs text-text-muted">{{ dataSourceHint }}</span>
       </div>
 
@@ -62,6 +62,7 @@
                   <span v-if="s.t === 'text'" class="text-text-inverse/90">{{ s.v }}</span>
                   <AppSelect
                     v-else
+                    :aria-label="`${node.label}：${s.label}`"
                     :model-value="getField(node, s.path)"
                     :options="s.options"
                     :placeholder="s.placeholder"

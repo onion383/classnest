@@ -1,39 +1,82 @@
 // =========================================================================
-// updater.js —— 版本更新（自建：GitHub Releases + Inno Setup 静默升级）
+// updater.js —— 版本更新（自建：GitHub Releases + 用户手动安装）
 //
 // 已移除 electron-updater，改为自建三段式流程：
 //   1) 检查：请求 GitHub releases/latest，比较 tag 与当前版本；
 //   2) 下载：把 release 里的 Inno 安装包资产下到 userData 临时目录（边下边报进度）；
-//   3) 安装：update-install 时用 Inno 静默参数启动安装包并退出本进程（装完自动重启）。
-// 主进程是更新状态的唯一权威来源，渲染层通过 from-main{type:'update-state'} 订阅；
-// IPC 通道名与状态字段与旧实现完全一致，前端无需任何改动。
+//   3) 安装：update-install 只做安装前复核，再用 shell.openPath 打开安装包，
+//      交给 Windows 正常安装向导（UAC / SmartScreen 由用户确认），程序不静默执行、不退出。
+//      这样安装包即使未签名，也不会在后台绕过用户提示直接运行（V8 C-6 的中间态）。
+// 主进程是更新状态的唯一权威来源，渲染层通过 from-main{type:'update-state'} 订阅。
+//
+// dev 无发布包时：设 CLASSNEST_UPDATE_MOCK_BASE=http://127.0.0.1:18499 可让本地 mock
+// Release 服务替代 GitHub（仅 dev 生效，且只认回环地址）；此时「安装」改为在文件管理器
+// 里定位安装包——绝不执行下载的假 exe，流程仍可完整触发。见 testjs/tools/dev-update-mock.cjs。
 //
 // 依赖注入：状态广播只发给主窗口，用 sendToMain(payload) 由 main.js 提供
 // （内部自带 mainWindow 空判与 isDestroyed 判空，本模块不直接持有窗口引用）。
-// registerUpdateIpc(send, { stopBackend }) 的 stopBackend 由 main.js 注入：安装前要等
-// 后端子进程退出，否则它还占着数据库文件，安装器 /CLOSEAPPLICATIONS 会替换失败。
 // =========================================================================
 
-const { app } = require('electron')
+const { app, shell } = require('electron')
 const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
-const { isPackaged } = require('./main.env')
-const { assertHttpsUrl, verifyDownloadedFile, sha256File, pickSetupAssetName } = require('./main.update-integrity')
+const { isDev, isPackaged } = require('./main.env')
+const {
+  assertAllowedDownloadUrl, verifyDownloadedFile, sha256File, pickSetupAssetName, isLocalMockUrl,
+  digestFromTrustManifest, resolveDigestTrust,
+} = require('./main.update-integrity')
+const { safeReject } = require('./main.ipc-contract')
 
 // GitHub 仓库信息（原先在 electron-builder.json 的 publish 里，现仅保留在代码常量中）
 const UPDATE_REPO = { owner: 'onion383', repo: 'classnest' }
+const GITHUB_RELEASES_API = `https://api.github.com/repos/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest`
+// 独立 digest 清单：走 raw 域名 + 仓库文件，与 Release 资产不是同一个权限边界。
+const GITHUB_TRUST_URL = `https://raw.githubusercontent.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/main/release-trust.json`
+
+// 纯函数：解析更新源。dev + 显式配置 + 回环 http → 用本地 mock，否则恒用 GitHub。
+// 打包环境无视 env —— 避免通过环境变量把正式用户的更新源换掉（那等于换信任根）。
+function resolveUpdateEndpoints(env = process.env, dev = isDev) {
+  const raw = dev ? String(env.CLASSNEST_UPDATE_MOCK_BASE || '') : ''
+  const mockBase = raw && isLocalMockUrl(raw) ? new URL(raw).origin : ''
+  return {
+    apiUrl: mockBase ? `${mockBase}/releases/latest` : GITHUB_RELEASES_API,
+    trustUrl: mockBase ? `${mockBase}/release-trust.json` : GITHUB_TRUST_URL,
+    allowLocalMock: !!mockBase,
+    mockBase,
+  }
+}
+
+// 读独立摘要清单；拿不到就返回 null 让上层降级并提示，绝不挡住检查流程。
+async function fetchTrustDigest(endpoints, version) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT)
+  try {
+    const res = await fetch(endpoints.trustUrl, {
+      headers: { 'User-Agent': 'ClassNest', 'Cache-Control': 'no-cache' },
+      signal: controller.signal,
+    })
+    if (!res.ok) return null
+    return digestFromTrustManifest(await res.text(), version)
+  } catch (_) {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
 // 检查超时沿用既有 10s 风格；下载体积较大，整体超时放宽到 5 分钟
 const UPDATE_CHECK_TIMEOUT = 10000
 const UPDATE_DOWNLOAD_TIMEOUT = 300000
 
 // 更新状态快照：主进程是唯一权威来源，渲染层通过 from-main{type:'update-state'} 订阅
 let updateState = {
-  status: 'idle', // idle | checking | available | downloading | downloaded | not-available | error
+  status: 'idle', // idle | checking | available | downloading | downloaded | opened | not-available | error
   currentVersion: app.getVersion(),
   latestVersion: null,
   percent: 0,
   error: null,
+  digestSource: null, // manifest | asset-only | size-only | conflict
+  digestWarning: '',  // 非 manifest 来源时给用户看的提示
 }
 
 // 已下载到本地的安装包绝对路径（供 update-install 使用）
@@ -62,16 +105,55 @@ function setUpdateState(patch) {
   broadcastUpdateState()
 }
 
-// 版本比较：a > b 返回 1，a < b 返回 -1，相等返回 0
-function compareVersions(a, b) {
-  const pa = String(a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
-  const pb = String(b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
-  const len = Math.max(pa.length, pb.length)
+// 版本比较：a > b 返回 1，a < b 返回 -1，相等返回 0。
+// 按 SemVer 口径处理预发布段（E02-03）：`1.0.0-beta.2` 过去被 parseInt 吞成 0.0.0，
+// 与正式版比较失真。规则：
+//   · 主版本段按数字比（缺失补 0）；
+//   · 主版本相等时，有预发布段 < 无预发布段（1.0.0-rc < 1.0.0）；
+//   · 预发布段逐项比：数字项按数值、数字项 < 字母项、字母项按字典序，前缀相同则短的小。
+function splitVersion(v) {
+  const s = String(v || '').trim().replace(/^v/i, '')
+  const dash = s.indexOf('-')
+  const core = dash >= 0 ? s.slice(0, dash) : s
+  const pre = dash >= 0 ? s.slice(dash + 1) : ''
+  return {
+    core: core.split('.').map((n) => {
+      const m = /^\d+/.exec(n)
+      return m ? Number(m[0]) : 0
+    }),
+    pre: pre ? pre.split('.') : [],
+  }
+}
+function comparePre(a, b) {
+  if (!a.length && !b.length) return 0
+  if (!a.length) return 1   // 无预发布 > 有预发布
+  if (!b.length) return -1
+  const len = Math.max(a.length, b.length)
   for (let i = 0; i < len; i++) {
-    const diff = (pa[i] || 0) - (pb[i] || 0)
-    if (diff !== 0) return diff > 0 ? 1 : -1
+    if (a[i] === undefined) return -1
+    if (b[i] === undefined) return 1
+    const na = /^\d+$/.test(a[i])
+    const nb = /^\d+$/.test(b[i])
+    if (na && nb) {
+      const d = Number(a[i]) - Number(b[i])
+      if (d !== 0) return d > 0 ? 1 : -1
+    } else if (na !== nb) {
+      return na ? -1 : 1   // 数字项 < 字母项
+    } else if (a[i] !== b[i]) {
+      return a[i] > b[i] ? 1 : -1
+    }
   }
   return 0
+}
+function compareVersions(a, b) {
+  const pa = splitVersion(a)
+  const pb = splitVersion(b)
+  const len = Math.max(pa.core.length, pb.core.length)
+  for (let i = 0; i < len; i++) {
+    const diff = (pa.core[i] || 0) - (pb.core[i] || 0)
+    if (diff !== 0) return diff > 0 ? 1 : -1
+  }
+  return comparePre(pa.pre, pb.pre)
 }
 
 // 把底层报错转成对用户友好的提示
@@ -88,11 +170,11 @@ function friendlyUpdateError(err) {
 }
 
 // 请求 GitHub Releases 最新发布（带超时中断，失败抛错交由上层映射为友好文案）
-async function fetchLatestRelease() {
+async function fetchLatestRelease(endpoints = resolveUpdateEndpoints()) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT)
   try {
-    const url = `https://api.github.com/repos/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest`
+    const url = endpoints.apiUrl
     const res = await fetch(url, {
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'ClassNest' },
       signal: controller.signal,
@@ -119,10 +201,10 @@ function pickSetupAsset(release) {
 }
 
 // 开发/调试路径：仅直连探测 GitHub Releases，不下载、不安装
-async function checkUpdateViaGitHub() {
+async function checkUpdateViaGitHub(endpoints = resolveUpdateEndpoints()) {
   setUpdateState({ status: 'checking', error: null, percent: 0 })
   try {
-    const data = await fetchLatestRelease()
+    const data = await fetchLatestRelease(endpoints)
     const latest = String((data && data.tag_name) || '').replace(/^v/i, '')
     const current = app.getVersion()
     if (latest && compareVersions(latest, current) > 0) {
@@ -159,7 +241,7 @@ function normalizeAssetFileName(rawName, fallback) {
 }
 
 // 下载安装包到 userData/update-cache 并推送 downloading 进度；失败时清理半成品并抛出
-async function downloadInstaller(asset, version) {
+async function downloadInstaller(asset, version, endpoints = resolveUpdateEndpoints()) {
   const { Readable } = require('stream')
   const { pipeline } = require('stream/promises')
   const dir = path.join(app.getPath('userData'), 'update-cache')
@@ -176,16 +258,22 @@ async function downloadInstaller(asset, version) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), UPDATE_DOWNLOAD_TIMEOUT)
   try {
-    // 下载地址必须是 HTTPS：否则 release 资产可被替换成明文/本地地址
+    // 下载地址必须是 HTTPS（dev mock 时额外放行本地回环）；
+    // 否则 release 资产可被替换成明文/本地地址。
     const downloadUrl = String(asset.browser_download_url || '')
-    assertHttpsUrl(downloadUrl)
+    assertAllowedDownloadUrl(downloadUrl, { allowLocalMock: endpoints.allowLocalMock })
+    // 独立清单优先：与资产摘要冲突就是同源攻击信号，直接拒装。
+    // 清单拿不到不挡流程，降级为资产摘要并把告警带到界面上。
+    const manifestDigest = await fetchTrustDigest(endpoints, version)
+    const trust = resolveDigestTrust({ manifestDigest, assetDigest: asset.digest })
+    if (trust.decision === 'reject') throw new Error(trust.reason + '，已取消更新')
     const res = await fetch(downloadUrl, {
       headers: { 'User-Agent': 'ClassNest' },
       signal: controller.signal,
     })
     if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`)
-    // 重定向后的最终地址同样必须是 HTTPS（GitHub 会跳到 objects.githubusercontent.com）
-    if (res.url) assertHttpsUrl(res.url)
+    // 重定向后的最终地址同样受协议约束（GitHub 会跳到 objects.githubusercontent.com）
+    if (res.url) assertAllowedDownloadUrl(res.url, { allowLocalMock: endpoints.allowLocalMock })
     const expectedSize = Number(asset.size) || Number(res.headers.get('content-length')) || 0
     let received = 0
     // Node fetch 返回 web ReadableStream，转成 Node 流后边写边算百分比
@@ -203,17 +291,15 @@ async function downloadInstaller(asset, version) {
       setUpdateState({ status: 'downloading', percent })
     })
     await pipeline(nodeStream, fs.createWriteStream(target))
-    // 完整性校验：大小 +（发布方提供时）SHA-256。原先只比 Content-Length，
-    // 既挡不住资产被替换，也挡不住中间劫持（B01-12）。
-    const verified = await verifyDownloadedFile({ filePath: target, expectedSize, digest: asset.digest })
+    // 完整性校验：大小 + 权威 digest（独立清单优先，资产摘要次之）。
+    const verified = await verifyDownloadedFile({ filePath: target, expectedSize, digest: trust.digest })
     if (!verified.ok) throw new Error(verified.error)
-    if (verified.verified === 'size-only') {
-      console.warn('[update] 发布资产未提供 digest，本次仅按大小校验：', fileName)
-    }
+    if (trust.decision === 'warn') console.warn('[update]', trust.reason, '：', fileName)
     downloadedInstallerPath = target
     // 记下本次算出的哈希：安装前要拿它再算一遍，防止「下载后本地被替换」的 TOCTOU。
     downloadedInstallerDigest = verified.sha256 || null
     downloadedInstallerSize = expectedSize
+    setUpdateState({ digestSource: trust.source, digestWarning: trust.reason })
   } catch (err) {
     try { fs.rmSync(target, { force: true }) } catch (_) { /* 忽略 */ }
     downloadedInstallerPath = null
@@ -225,14 +311,15 @@ async function downloadInstaller(asset, version) {
   }
 }
 
-// 打包环境完整流程：checking → （无更新）not-available / （有更新）available → downloading → downloaded
-async function runUpdateFlow() {
-  if (!isPackaged || updateFlowRunning) return
+// 完整流程：checking → （无更新）not-available / （有更新）available → downloading → downloaded。
+// 打包环境恒跑；dev 仅配置的 mock 源可跑（否则保持原来的「只探测不下载」）。
+async function runUpdateFlow(endpoints = resolveUpdateEndpoints()) {
+  if ((!isPackaged && !endpoints.allowLocalMock) || updateFlowRunning) return
   updateFlowRunning = true
   // 同步先推 checking（在首个 await 之前，保证 update-check 返回的快照即 checking）
   setUpdateState({ status: 'checking', error: null, percent: 0 })
   try {
-    const release = await fetchLatestRelease()
+    const release = await fetchLatestRelease(endpoints)
     const latest = String((release && release.tag_name) || '').replace(/^v/i, '')
     const current = app.getVersion()
     if (!latest || compareVersions(latest, current) <= 0) {
@@ -245,7 +332,7 @@ async function runUpdateFlow() {
       setUpdateState({ status: 'error', error: '未找到安装包（发布资产中缺少 Setup 安装程序）' })
       return
     }
-    await downloadInstaller(asset, latest)
+    await downloadInstaller(asset, latest, endpoints)
     setUpdateState({ status: 'downloaded', latestVersion: latest, percent: 100, error: null })
   } catch (err) {
     setUpdateState({ status: 'error', error: friendlyUpdateError(err) })
@@ -274,44 +361,42 @@ function pruneUpdateCache() {
   } catch (_) { /* 清理失败不影响更新功能 */ }
 }
 
+// 安装动作纯函数：打包环境恒「打开」；只有 dev + 显式 mock 才「定位」假包（绝不执行）。
+function resolveInstallAction({ dev = isDev, allowLocalMock = false } = {}) {
+  return dev && allowLocalMock ? 'reveal' : 'open'
+}
+
 // 注册版本更新相关的 IPC 通道。send(payload) 由 main.js 提供，用于向主窗口推 update-state。
-function registerUpdateIpc(send, deps = {}) {
+function registerUpdateIpc(send) {
   if (typeof send === 'function') sendToMain = send
-  const stopBackend = typeof deps.stopBackend === 'function' ? deps.stopBackend : () => Promise.resolve()
 
   pruneUpdateCache()
 
   IPC.handle(CH.GET_APP_VERSION, () => app.getVersion())
 
   // 检查更新：进入「关于」页 / 手动点击触发；立即返回当前状态快照，后续变化走 from-main 广播
-  IPC.handle(CH.UPDATE_CHECK, async () => {
-    if (isPackaged) {
-      // 打包环境：后台走完整「检查 + 下载」流程（立即返回，结果靠事件推送）
-      runUpdateFlow()
+  IPC.handle(CH.UPDATE_CHECK, safeReject(async () => {
+    const endpoints = resolveUpdateEndpoints()
+    if (isPackaged || endpoints.allowLocalMock) {
+      // 打包 / dev mock：后台走完整「检查 + 下载」流程（立即返回，结果靠事件推送）
+      runUpdateFlow(endpoints)
       return { ...updateState }
     }
-    // 未打包（开发/调试）：仅直连探测，不下载、不安装
-    await checkUpdateViaGitHub()
+    // dev 未配置 mock：仅直连探测，不下载、不安装
+    await checkUpdateViaGitHub(endpoints)
     return { ...updateState }
-  })
+  }))
 
-  // 用户确认后：以 Inno 静默参数启动已下载的安装包，随后退出本进程（安装器装完会自动重启）
-  //
-  // 安装前必须**复核**安装包，不能只查 existsSync：
-  //   下载时校验过 sha256 ≠ 此刻文件还是那个文件。两次之间存在可利用的窗口 ——
-  //   同一台机器上的另一个进程可以把 update-cache 里的 exe 换掉，
-  //   而这里是**以 /SILENT 参数直接执行它**（TOCTOU）。
-  //   所以：重算哈希，与下载时记下的凭据比对；对不上就拒绝安装（宁可让用户重新下载）。
-  //   路径也要确认仍位于 update-cache 目录内 —— downloadedInstallerPath 只由下载流程写入，
-  //   这里再兜一次，防止将来有人把别处的路径塞进来。
-  // 安装互斥：双击「立即安装」时第二次点击会落在「上百 MB 哈希重算」窗口里，
-  // 没有这把锁就会 spawn 两个安装器（审查 v5 · V5-027）。
+  // 用户点「打开安装包」后：复核 → 打开安装包交用户手动装。
+  // 不静默 spawn、不停后端、不退出应用：未签名包也绕不过 Windows 的 UAC / SmartScreen。
+  // 复核仍保留：下载时校验过 ≠ 此刻文件还是那个文件（TOCTOU）；对不上就清掉并要求重下。
+  // 互斥锁仍保留：哈希复核是异步的，双击会在窗口期重复触发两次打开。
   let installBusy = false
   IPC.on(CH.UPDATE_INSTALL, async () => {
-    if (!isPackaged) return
+    const endpoints = resolveUpdateEndpoints()
+    if (!isPackaged && !endpoints.allowLocalMock) return
     if (installBusy) return
     installBusy = true
-    let launched = false
     try {
     if (!downloadedInstallerPath || !fs.existsSync(downloadedInstallerPath)) {
       setUpdateState({ status: 'error', error: '安装包尚未下载完成' })
@@ -346,47 +431,25 @@ function registerUpdateIpc(send, deps = {}) {
       setUpdateState({ status: 'error', error: '安装包校验失败：' + (err?.message || String(err)) })
       return
     }
-    // spawn 的失败是**异步 error 事件**（exe 被删 / 权限不足等），同步 try/catch 抓不到：
-    // 原实现 spawn 后立刻 app.quit()，用户看到应用直接消失却没有任何错误提示。
-    // 改为等 'spawn' 确认真的起来了才走退出；'error' 先到则报错并留在应用里。
-    await new Promise((resolve) => {
-      let settled = false
-      const finish = () => { if (settled) return; settled = true; resolve() }
-      try {
-        const { spawn } = require('child_process')
-        // Inno 静默安装参数：
-        //   /SILENT             无界面安装
-        //   /CLOSEAPPLICATIONS  自动关闭占用目标文件的旧进程
-        //   /RESTARTAPPLICATIONS 安装完成后自动重启被关闭的应用
-        const child = spawn(resolved, ['/SILENT', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS'], {
-          detached: true,
-          stdio: 'ignore',
-        })
-        child.once('error', (err) => {
-          setUpdateState({ status: 'error', error: friendlyUpdateError(err) })
-          finish()
-        })
-        child.once('spawn', async () => {
-          child.unref()
-          // 先停后端：它还占着数据库文件，安装器替换文件会失败（7-4）。
-          try { await stopBackend() } catch (_) { /* 停不掉也不能卡住安装 */ }
-          launched = true
-          app.isQuitting = true
-          setTimeout(() => app.quit(), 500)
-          finish()
-        })
-        // 极端情况：既不 spawn 也不 error（底层异常），不能把 IPC 永久挂住
-        setTimeout(finish, 10000)
-      } catch (err) {
-        setUpdateState({ status: 'error', error: friendlyUpdateError(err) })
-        finish()
+      if (resolveInstallAction({ allowLocalMock: endpoints.allowLocalMock }) === 'reveal') {
+        // dev mock：假 exe 绝不执行，只在文件管理器里定位，让流程可见且零执行风险
+        try { shell.showItemInFolder(resolved) } catch (_) { /* 定位失败不影响状态 */ }
+      } else {
+        // 交给 Windows 正常安装向导；openPath 返回非空字符串表示失败
+        const openError = await shell.openPath(resolved)
+        if (openError) {
+          setUpdateState({ status: 'error', error: '打开安装包失败，请手动运行：' + resolved })
+          return
+        }
       }
-    })
+      setUpdateState({ status: 'opened', percent: 100, error: null })
     } finally {
-      // 成功启动安装器后保持锁住：进程虽有 500ms 后才退出，但这段窗口仍可能被再次点击
-      if (!launched) installBusy = false
+      installBusy = false
     }
   })
 }
 
-module.exports = { registerUpdateIpc, runUpdateFlow, normalizeAssetFileName }
+module.exports = {
+  registerUpdateIpc, runUpdateFlow, normalizeAssetFileName,
+  resolveUpdateEndpoints, resolveInstallAction,
+}

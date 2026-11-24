@@ -17,6 +17,9 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const {
+  analyze, walk, keyName, memberPath, findFunction, scriptBlocks,
+} = require('../_source-scan.cjs')
 
 const ROOT = path.join(__dirname, '../..')
 const WIDGET_DIR = path.join(ROOT, 'student-frontend/src/subwindows/widget')
@@ -31,28 +34,116 @@ function stripComments(src) {
 
 const read = (rel) => stripComments(fs.readFileSync(path.join(ROOT, rel), 'utf8'))
 
+// 调用名：hideForCapture() 或 captureHide.hideForCapture()
+function calleeName(callee) {
+  if (!callee) return null
+  if (callee.type === 'Identifier') return callee.name
+  if (callee.type === 'MemberExpression' && !callee.computed) return keyName(callee.property)
+  return null
+}
+
 test('captureHide.js 是「藏/还原」的唯一实现', () => {
-  const code = read('student-frontend/src/subwindows/widget/captureHide.js')
-  const hide = code.match(/style\.visibility\s*=\s*'hidden'/g) || []
-  const restore = code.match(/style\.visibility\s*=\s*''/g) || []
-  assert.equal(hide.length, 1, 'captureHide 里应当只有一处隐藏')
-  assert.equal(restore.length, 1, 'captureHide 里应当只有一处还原')
-  assert.match(code, /requestAnimationFrame\(\(\) => requestAnimationFrame/, '必须等两帧再返回（合成器提交 + DWM 更新）')
+  const src = fs.readFileSync(path.join(ROOT, 'student-frontend/src/subwindows/widget/captureHide.js'), 'utf8')
+  // 为什么用 AST 而不是 /style\.visibility\s*=\s*'hidden'/g 计数：
+  // 这条判据要守「整个文件只有一处隐藏、一处还原」，正则只认单引号，改成双引号就算 0 处（假红），
+  // 而字符串注释里的同句又会算进去（旧的 stripComments 挡不住模板串）。
+  const { ast } = analyze(src)
+  const hideFn = findFunction(ast, 'hideForCapture')
+  const restoreFn = findFunction(ast, 'restoreAfterCapture')
+  assert.ok(hideFn, '应有 hideForCapture')
+  assert.ok(restoreFn, '应有 restoreAfterCapture')
+
+  const hideSets = []
+  const restoreSets = []
+  walk(ast.program, (node) => {
+    if (node.type !== 'AssignmentExpression' || !node.right || node.right.type !== 'StringLiteral') return
+    if (memberPath(node.left) !== 'document.documentElement.style.visibility') return
+    if (node.right.value === 'hidden') hideSets.push(node)
+    else if (node.right.value === '') restoreSets.push(node)
+  })
+  assert.equal(hideSets.length, 1, 'captureHide 里应当只有一处隐藏')
+  assert.equal(restoreSets.length, 1, 'captureHide 里应当只有一处还原')
+  assert.ok(hideSets[0].start >= hideFn.start && hideSets[0].end <= hideFn.end, '隐藏应写在 hideForCapture 里')
+  assert.ok(restoreSets[0].start >= restoreFn.start && restoreSets[0].end <= restoreFn.end, '还原应写在 restoreAfterCapture 里')
+
+  // 必须等两帧再返回（合成器提交 + DWM 更新）：外层 rAF 的回调里再调一次 rAF。
+  let doubleRaf = false
+  walk(ast.program, (node) => {
+    if (node.type !== 'CallExpression' || calleeName(node.callee) !== 'requestAnimationFrame') return
+    const cb = node.arguments[0]
+    if (!cb || !cb.body) return
+    walk(cb.body, (inner) => {
+      if (inner.type === 'CallExpression' && calleeName(inner.callee) === 'requestAnimationFrame') doubleRaf = true
+    })
+  })
+  assert.ok(doubleRaf, '必须等两帧再返回（合成器提交 + DWM 更新）')
 })
 
 test('浮窗里所有截屏调用方都自己藏、并传 hideWidget:false', () => {
   const files = fs.readdirSync(WIDGET_DIR).filter((f) => f.endsWith('.vue'))
-  const callers = files.filter((f) => /SCREENSHOT_CAPTURE/.test(fs.readFileSync(path.join(WIDGET_DIR, f), 'utf8')))
+  // 「调用方」= 真的引用了 INVOKE.SCREENSHOT_CAPTURE（AST MemberExpression），
+  // 不是文件里出现过这个字符串 —— 注释掉的旧截屏代码、日志文案都不会再被误算。
+  const callers = []
+  const parsed = new Map()
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(WIDGET_DIR, f), 'utf8')
+    const { ast } = analyze(scriptBlocks(src))
+    let isCaller = false
+    walk(ast.program, (node) => {
+      if (memberPath(node) === 'INVOKE.SCREENSHOT_CAPTURE') isCaller = true
+    })
+    if (isCaller) {
+      callers.push(f)
+      parsed.set(f, ast)
+    }
+  }
   assert.ok(callers.length >= 2, `应至少有便签与一键截屏两个调用方，实际：${callers.join(',')}`)
   for (const f of callers) {
-    const code = read(path.posix.join('student-frontend/src/subwindows/widget', f))
-    assert.match(code, /from '\.\/captureHide\.js'/, `${f} 必须从 captureHide.js 引入隐藏逻辑`)
-    assert.match(code, /hideForCapture\(\)/, `${f} 抓屏前没隐藏自己`)
-    assert.match(code, /restoreAfterCapture\(\)/, `${f} 抓屏后没恢复显示（失败时窗口会一直隐身）`)
-    assert.match(code, /hideWidget:\s*false/, `${f} 应传 hideWidget:false —— 主进程那段对透明窗口无效，白等 150ms`)
+    const ast = parsed.get(f)
+    // 从 captureHide.js 具名引入 hideForCapture / restoreAfterCapture
+    let importDecl = null
+    walk(ast.program, (node) => {
+      if (node.type === 'ImportDeclaration' && node.source.value === './captureHide.js') importDecl = node
+    })
+    assert.ok(importDecl, `${f} 必须从 captureHide.js 引入隐藏逻辑`)
+    const imported = new Set(importDecl.specifiers
+      .filter((s) => s.type === 'ImportSpecifier')
+      .map((s) => (s.imported.name || s.imported.value)))
+    assert.ok(imported.has('hideForCapture'), `${f} 必须引入 hideForCapture`)
+    assert.ok(imported.has('restoreAfterCapture'), `${f} 必须引入 restoreAfterCapture`)
+
+    const called = new Set()
+    walk(ast.program, (node) => {
+      if (node.type === 'CallExpression') {
+        const name = calleeName(node.callee)
+        if (name) called.add(name)
+      }
+    })
+    assert.ok(called.has('hideForCapture'), `${f} 抓屏前没隐藏自己`)
+    assert.ok(called.has('restoreAfterCapture'), `${f} 抓屏后没恢复显示（失败时窗口会一直隐身）`)
+
+    // SCREENSHOT_CAPTURE 的选项对象必须显式 hideWidget:false
+    let captureCall = null
+    walk(ast.program, (node) => {
+      if (node.type !== 'CallExpression') return
+      if (node.arguments.some((a) => memberPath(a) === 'INVOKE.SCREENSHOT_CAPTURE')) captureCall = node
+    })
+    assert.ok(captureCall, `${f} 找不到 SCREENSHOT_CAPTURE 调用`)
+    const opts = captureCall.arguments.find((a) => a.type === 'ObjectExpression')
+    const hideWidget = opts && opts.properties.find(
+      (p) => p.type === 'ObjectProperty' && keyName(p.key) === 'hideWidget',
+    )
+    assert.ok(hideWidget && hideWidget.value.type === 'BooleanLiteral' && hideWidget.value.value === false,
+      `${f} 应传 hideWidget:false —— 主进程那段对透明窗口无效，白等 150ms`)
+
     // 不许自己再写一份 visibility 操作（否则「唯一实现」立刻失效）
-    assert.ok(!/documentElement\.style\.visibility/.test(code),
-      `${f} 不要自己操作 visibility，改用 captureHide.js`)
+    let ownVisibility = false
+    walk(ast.program, (node) => {
+      if (node.type === 'MemberExpression' && memberPath(node) === 'document.documentElement.style.visibility') {
+        ownVisibility = true
+      }
+    })
+    assert.ok(!ownVisibility, `${f} 不要自己操作 visibility，改用 captureHide.js`)
   }
 })
 

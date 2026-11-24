@@ -170,6 +170,111 @@ test('复合类型不校验：doc_update 即使当前状态对不上也走原逻
 })
 
 // ---------------------------------------------------------------------------
+// Q2-02 / Q2-05 · 格子类冲突比对下沉到 flip 内核（undo 与 redo 两侧）
+// ---------------------------------------------------------------------------
+test('grid_cell：跳过中间改动直接 flip → 拒绝，当前格不被覆盖', async () => {
+  fx.reset()
+  undoStore.writeDocColumn('schedule', 'cells', [['C']]) // 手改后的现状
+  const id = undoStore.push({
+    key: 'schedule', type: 'grid_cell', label: '',
+    payload: { table: 'schedule', row: 0, col: 0, oldValue: 'A', newValue: 'B' }, origin: '',
+  })
+  const r = await undoRecords.flip(id, 1, 0, 'undo')
+  assert.match(r.error || '', /又被改过/)
+  assert.equal(undoStore.findById(id).dir, 1, '拒绝后方向不变，仍可重试')
+  assert.deepEqual(undoStore.readDocColumn('schedule', 'cells').cells, '[["C"]]', '不得覆盖手改的 C')
+
+  // 正例：当前仍是记录写入的 B → 正常退回 A（否则上面只是「永远拒绝」）
+  undoStore.writeDocColumn('schedule', 'cells', [['B']])
+  const ok = await undoRecords.flip(id, 1, 0, 'undo')
+  assert.equal(ok.ok, true, JSON.stringify(ok))
+  assert.deepEqual(undoStore.readDocColumn('schedule', 'cells').cells, '[["A"]]')
+})
+
+test('grid_cell redo：撤销后格子又被手改 → 拒绝重做（Q2-05）', async () => {
+  fx.reset()
+  undoStore.writeDocColumn('schedule', 'cells', [['A']]) // 撤销后的状态
+  const id = undoStore.push({
+    key: 'schedule', type: 'grid_cell', label: '',
+    payload: { table: 'schedule', row: 0, col: 0, oldValue: 'A', newValue: 'B' }, origin: '',
+  })
+  undoStore.claimDir(id, 0, 1) // 已在 undo 侧
+  undoStore.writeDocColumn('schedule', 'cells', [['X']]) // 撤销后又被手改
+  const r = await undoRecords.flip(id, 0, 1, 'redo')
+  assert.match(r.error || '', /又被改过/)
+  assert.equal(undoStore.findById(id).dir, 0, '拒绝后仍在 undo 侧')
+})
+
+// ---------------------------------------------------------------------------
+// Q2-03 · duty_weight 必须能撤销（白名单漏项时 validate 直接报「网格表无效」）
+// ---------------------------------------------------------------------------
+test('duty_weight：grid_snapshot 可撤销，权重回到快照值（Q2-03）', async () => {
+  fx.reset()
+  const oldValue = { daily: { 扫地: { 周一: 1 } }, big: {} }
+  const newValue = { daily: { 扫地: { 周一: 5 } }, big: {} }
+  undoStore.writeDocColumn('duty_weight', 'weights', newValue)
+  const id = undoStore.push({
+    key: 'duty_weight', type: 'grid_snapshot', label: '',
+    payload: { table: 'duty_weight', oldValue, newValue }, origin: '',
+  })
+  const r = await undoRecords.flip(id, 1, 0, 'undo')
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.equal(undoStore.readDocColumn('duty_weight', 'weights').weights, JSON.stringify(oldValue))
+})
+
+// ---------------------------------------------------------------------------
+// Q2-12 · 项目/星期已从设置删除时，撤销不许重建不可见键
+// ---------------------------------------------------------------------------
+test('duty_cell：项目已从设置删除 → 拒绝重建（Q2-12）', async () => {
+  fx.reset()
+  const id = undoStore.push({
+    key: 'duty_layout', type: 'duty_cell', label: '',
+    payload: { table: 'duty_layout', mode: 'daily', item: '拖地', day: '周一', index: 0, oldValue: '张三', newValue: '' },
+    origin: '',
+  })
+  const r = await undoRecords.flip(id, 1, 0, 'undo')
+  assert.match(r.error || '', /已被删除/)
+  assert.equal(undoStore.findById(id).dir, 1, '拒绝后仍可重试')
+  // 反证：仍在设置里的项目（扫地）允许撤销，否则上面只是「一律拒绝」
+  const id2 = undoStore.push({
+    key: 'duty_layout', type: 'duty_cell', label: '',
+    payload: { table: 'duty_layout', mode: 'daily', item: '扫地', day: '周一', index: 0, oldValue: '张三', newValue: '' },
+    origin: '',
+  })
+  const r2 = await undoRecords.flip(id2, 1, 0, 'undo')
+  assert.equal(r2.ok, true, JSON.stringify(r2))
+})
+
+// ---------------------------------------------------------------------------
+// Q2-04 · 复合回插类：显式 id 已被新数据占用时业务化拒绝
+// ---------------------------------------------------------------------------
+test('student_cascade_delete：学生 id 已被新数据占用 → 业务化拒绝（Q2-04）', async () => {
+  fx.reset()
+  seedOne(fx.conn, { id: 5, name: '新学生' })
+  const id = undoStore.push({
+    key: 'students', type: 'student_cascade_delete', label: '',
+    payload: {
+      student: { id: 5, 姓名: '旧学生' },
+      leaveRows: [], scoreRows: [], groupRows: [], cadreRows: [], seatCells: [], dutySlots: [],
+    }, origin: '',
+  })
+  const r = await undoRecords.flip(id, 1, 0, 'undo')
+  assert.match(r.error || '', /已被重新创建/)
+  assert.equal(fx.conn.prepare('SELECT 姓名 FROM students WHERE id = 5').get().姓名, '新学生', '不得覆盖新数据')
+})
+
+test('rows_batch_delete：批内某行 id 已被占用 → 拒绝整批回插（Q2-04）', async () => {
+  fx.reset()
+  seedOne(fx.conn, { id: 6, name: '重新录入' })
+  const id = undoStore.push({
+    key: 'students', type: 'rows_batch_delete', label: '',
+    payload: { table: 'students', rows: [{ id: 6, 姓名: '被删的旧人' }] }, origin: '',
+  })
+  const r = await undoRecords.flip(id, 1, 0, 'undo')
+  assert.match(r.error || '', /已被重新创建/)
+})
+
+// ---------------------------------------------------------------------------
 // 变异反证：把 checkExpected 换成「永远通过」，跳批拒绝用例必须变成成功吞数据
 // ---------------------------------------------------------------------------
 test('变异反证：去掉 expected 校验后，跳批撤销会成功覆盖手改（证明拦截确实生效）', async () => {

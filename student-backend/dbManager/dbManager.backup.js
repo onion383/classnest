@@ -6,6 +6,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 const {
   getDatabase, dbFilePath, wrapKey, unwrapKey, sqlKey,
   registryFindBySlug, registryUpsert, registrySetEncrypted,
@@ -43,7 +44,24 @@ function exportBundle(slug) {
 //   · srcPath：磁盘上的现成库文件（v3 ZIP 解包后的产物）——**优先**，直接内核复制，JS 堆零驻留；
 //   · data：base64 字符串（旧 v2 JSON 包与单测用）——要先解码成 Buffer 再写，100MB 库会在
 //     堆里同时存在 base64 字符串（约 133MB）+ 解码 Buffer（100MB），这是 2-11 要消掉的峰值。
-function restoreBundle({ slug, username, data, srcPath, dbKey, encrypted = true }) {
+// 同一库的恢复备份只保留最近一份：`.bak-<stamp>` 是回滚壳，不是版本历史。
+function pruneDbBackups(filePath, keepPath) {
+  try {
+    const dir = path.dirname(filePath);
+    const prefix = path.basename(filePath) + '.bak-';
+    const olds = fs.readdirSync(dir).filter((n) => n.startsWith(prefix));
+    const keep = keepPath ? path.basename(keepPath) : olds.sort().pop();
+    for (const n of olds) {
+      if (n === keep) continue;
+      try { fs.rmSync(path.join(dir, n), { force: true }); } catch (_) { /* 忽略 */ }
+    }
+  } catch (_) { /* 清理失败不影响恢复结果 */ }
+}
+
+// srcWal：旧备份包可能带着导出时没能 checkpoint 的 -wal（见 checkpointForBackup）。
+// 恢复侧必须履约「同一组文件名放回去」的契约 —— 把 WAL 落位后由 SQLite 重放，
+// 而不是像以前那样只挑 .db、再把唯一能补回尾页的 WAL 直接删掉（v8 · N2-01）。
+function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted = true }) {
   if (!slug || !username || (typeof srcPath !== 'string' && typeof data !== 'string')) {
     throw new Error('备份数据不完整');
   }
@@ -69,17 +87,31 @@ function restoreBundle({ slug, username, data, srcPath, dbKey, encrypted = true 
   // 备份包可能上传到一半/损坏，直接覆盖会把「能用的旧库」也一起毁掉，
   // 而且损坏的库一旦登记就能通过登录校验，故障延后且更难排查（审查 v4 · B05-13）。
   const tmpPath = filePath + '.restore-tmp';
+  const tmpWal = tmpPath + '-wal';
+  const cleanTmp = () => {
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.rmSync(tmpPath + suffix, { force: true }); } catch (_) { /* 忽略 */ }
+    }
+  };
+  cleanTmp();
   if (typeof srcPath === 'string') {
     fs.copyFileSync(srcPath, tmpPath);
+    // WAL 必须与主文件同 basename 落位，SQLite 才会认它并重放；
+    // -shm 是可重建的临时索引（可能来自另一台机器的热状态），不拷。
+    if (typeof srcWal === 'string' && fs.existsSync(srcWal)) fs.copyFileSync(srcWal, tmpWal);
   } else {
     fs.writeFileSync(tmpPath, Buffer.from(data, 'base64'));
   }
+  let bakPath = null;
   try {
     const Database = getDatabase();
     let conn = null;
     try {
       conn = new Database(tmpPath);
       if (encrypted && dbKey) conn.pragma(`key = '${sqlKey(dbKey)}'`);
+      // 有 WAL 时先合并尾页：完整性校验、后续换文件都以「自包含的 .db」为准。
+      // 否则校验只覆盖主文件页，WAL 里的最新提交既没被校验也没被保留。
+      try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* 非 WAL 模式无 WAL 可合并 */ }
       let first;
       try {
         const r = conn.pragma('integrity_check');
@@ -97,18 +129,29 @@ function restoreBundle({ slug, username, data, srcPath, dbKey, encrypted = true 
     } finally {
       if (conn) { try { conn.close(); } catch (_) { /* 已关闭 */ } }
     }
-    fs.copyFileSync(tmpPath, filePath);
+    // 覆盖前留一份旧库：rename 是原子的，但「包能打开、内容却不是想要的」时用户仍需回退；
+    // 与目录替换的 .bak-<stamp> 口径一致。
+    if (fs.existsSync(filePath)) {
+      bakPath = `${filePath}.bak-${Date.now()}`;
+      fs.copyFileSync(filePath, bakPath);
+    }
+    // 同目录 rename 是原子替换；copyFileSync 会先截断目标，中途崩溃会留下半写库。
+    fs.renameSync(tmpPath, filePath);
+    pruneDbBackups(filePath, bakPath);
   } finally {
-    try { fs.rmSync(tmpPath, { force: true }); } catch (_) { /* 忽略 */ }
+    cleanTmp();
   }
-  // 覆盖 .db 后必须清掉同名的 -wal/-shm 残留，否则旧库的日志会被 New 库重放导致损坏
+  // 覆盖 .db 后必须清掉同名的 -wal/-shm 残留，否则旧库的日志会被新库重放导致损坏
   for (const suffix of ['-wal', '-shm']) {
     try { fs.rmSync(filePath + suffix, { force: true }); } catch (_) { /* 忽略 */ }
   }
+  // 覆盖前的原登记：恢复后续步骤（目录/记忆）失败时，调用方要能把库文件与登记一起回滚（K04-04）。
+  const prevRec = registryFindBySlug(slug);
   // 用本机主密钥重新包裹库钥匙后登记，后续登录走常规主密钥路径即可打开；
   // 明文库无需钥匙，wrapped_key 留空占位（NOT NULL 约束）
   registryUpsert(slug, username, encrypted ? wrapKey(dbKey) : '', encrypted ? 1 : 0);
-  return { slug };
+  // bakPath / prevRec 供「库已换、目录阶段失败」时整体回滚（见 services/bundleRestore.js）
+  return { slug, bakPath, prevRec };
 }
 
 // ---------- 就地切换单个库的落盘加密方式（加密 <-> 明文） ----------

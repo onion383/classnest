@@ -70,14 +70,18 @@ function loadUsbSave(writeFileSync) {
   const src = fs.readFileSync(USB, 'utf8')
   const pathFn = extractFn(src, 'getUsbConfigPath')
   const saveFn = extractFn(src, 'saveUsbAutoOpenConfig')
+  // saveUsbAutoOpenConfig 已改用 main.atomic-write 的原子写；单测按同一语义注入
+  // 一个「直接落盘」的替身（真实原子写另有 atomic-write.test.js 覆盖 tmp+rename）。
+  const atomicStub = (file, obj) => writeFileSync(file, JSON.stringify(obj))
   const factory = new Function(
-    'fs', 'path', 'app',
+    'fs', 'path', 'app', 'atomicWriteJsonSync',
     `${pathFn}\n${saveFn}\nreturn { getUsbConfigPath, saveUsbAutoOpenConfig };`,
   )
   return factory(
     { writeFileSync },
     path,
     { getPath: () => path.join(ROOT, '.tmp-test-userdata') },
+    atomicStub,
   )
 }
 

@@ -203,6 +203,14 @@ function restoreAll() {
   }
 }
 process.on('exit', restoreAll)
+// exit 钩子不响应强杀：补 SIGINT/SIGTERM，正常 Ctrl+C / 进程被要求退出时先还原（T03-08）。
+// SIGKILL 无法拦截，这类极端情况仍需从 git 恢复。
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    try { restoreAll() } catch (_) { /* 尽力还原 */ }
+    process.exit(sig === 'SIGINT' ? 130 : 143)
+  })
+}
 
 function applyMutant(m) {
   const p = path.join(ROOT, FILES[m.file])

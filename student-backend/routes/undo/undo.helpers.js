@@ -48,7 +48,8 @@ function writeGridArray(table, column, value) {
 // 表名走白名单，不接收调用方的任意字符串；名单在 schema/tableRegistry.js
 // （与 seatWrite 的「当前座位」白名单同源），读取在 undoStore.readSeatGeometry。
 
-// 座位表的**当前** rows/cols（非座位表返回 null）。
+// 网格表的**当前**几何（非网格表返回 null）。
+// 座位表的几何是 rows/cols 列；课表这类矩阵的几何是当前 cells 的形状（Q2-06）。
 // 撤销一条单格记录前用它判断「布局是否已经变小」—— 见 undo.executors 的 grid_cell.validate。
 function currentSeatGeometry(table) {
   const rec = undoStore.readSeatGeometry(table)
@@ -87,9 +88,6 @@ function warnGeometryDrift(table, tag, geom, explicitRows, explicitCols) {
   if (bad.length) console.warn(`[undo] ${table} ${tag} 的几何字段与 types 快照不一致（以 types 为准）：${bad.join('，')}`)
 }
 
-function writeGeometryCounts(table, rows, cols) {
-  undoStore.writeGeometryCounts(table, rows, cols)
-}
 // 单元格展示文案：value 可能是纯值（座位 id/姓名、人名），也可能是课表 {course} 对象，
 // 统一取可读文本；null/undefined 视为「空」。
 function cellText(v) {
@@ -119,7 +117,6 @@ module.exports = {
   readGridArray,
   withGridCache,
   writeGridArray,
-  writeGeometryCounts,
   currentSeatGeometry,
   geometryOfSnapshot,
   warnGeometryDrift,

@@ -124,7 +124,9 @@ export function useScheduleMaster(ctx, { API_BASE }) {
       const fromLessonIdx = fromRow._lessonIdx, toLessonIdx = toRow._lessonIdx;
       if (fromLessonIdx === undefined || toLessonIdx === undefined) return;
       const srcCells = ctx.masterCells.value;
-      if (!Array.isArray(srcCells) || fromLessonIdx < 0 || fromLessonIdx >= srcCells.length) return;
+      // 与实行课表同口径：目标下标也要做边界检查，splice 越界会静默钳位导致行序错位。
+      if (!Array.isArray(srcCells) || fromLessonIdx < 0 || fromLessonIdx >= srcCells.length
+        || toLessonIdx < 0 || toLessonIdx >= srcCells.length) return;
       const prev = JSON.parse(JSON.stringify(ctx.masterCells.value));
       // 移动语义：同上
       const newCells = [...ctx.masterCells.value];
@@ -141,11 +143,13 @@ export function useScheduleMaster(ctx, { API_BASE }) {
     },
     async onMasterSwapColumns(fromIdx, toIdx) {
       if (fromIdx === toIdx) return;
+      const cols = ctx.masterColHeaders.value.length;
+      // 列交换双向边界检查（与 active 表一致）
+      if (fromIdx < 0 || fromIdx >= cols || toIdx < 0 || toIdx >= cols) return;
       const fromHeader = ctx.masterColHeaders.value[fromIdx] ?? `列${fromIdx + 1}`, toHeader = ctx.masterColHeaders.value[toIdx] ?? `列${toIdx + 1}`;
       const prev = JSON.parse(JSON.stringify(ctx.masterCells.value));
       // 移动语义：同 active 表（表头固定，只移动数据列）
       // 同样先按列数补齐/截齐，避免行长短不一时 splice 产出 undefined 单元格
-      const cols = ctx.masterColHeaders.value.length;
       const newCells = ctx.masterCells.value.map(row => {
         const r = Array.isArray(row) ? [...row] : [];
         while (r.length < cols) r.push({ course: '' });
@@ -171,13 +175,20 @@ export function useScheduleMaster(ctx, { API_BASE }) {
       });
       if (rowIdx < flat.length) {
         const target = flat[rowIdx].item;
-        if (field === 'label') target.name = value;
-        else if (field === 'time') {
-          const parts = value.split('-');
-          if (parts.length === 2) {
-            target.start = parts[0].trim();
-            target.end = parts[1].trim();
-          }
+        if (field === 'label') {
+          const label = String(value ?? '').trim();
+          if (!label) { ctx.notifyError('行标签不能为空'); return; }
+          target.name = label;
+        } else if (field === 'time') {
+          // 与实行课表同口径：非法格式立即提示，不静默保留旧值。
+          const m = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})\s*[-~—]\s*(\d{1,2}):(\d{2})$/);
+          if (!m) { ctx.notifyError('时间段格式应为 HH:MM-HH:MM'); return; }
+          const start = `${m[1].padStart(2, '0')}:${m[2]}`;
+          const end = `${m[3].padStart(2, '0')}:${m[4]}`;
+          const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+          if (toMin(end) <= toMin(start)) { ctx.notifyError('结束时间必须晚于开始时间'); return; }
+          target.start = start;
+          target.end = end;
         }
         ctx.masterSettings.value.sections = sections;
         ctx.saveMaster();

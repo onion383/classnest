@@ -43,6 +43,8 @@ const assert = (ok, msg) => {
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'select-db-file-'))
+// handler 抛错也要回收临时目录（含 65MB 稀疏文件，T02-06）
+process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true }) } catch (_) { /* 已清理 */ } })
 const dbPath = path.join(tmp, 'sub', 'demo.db')
 fs.mkdirSync(path.dirname(dbPath), { recursive: true })
 fs.writeFileSync(dbPath, 'x')

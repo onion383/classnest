@@ -11,12 +11,14 @@
 // db 为多库代理：本模块只读写当前请求绑定的班主任库。
 const { db } = require('../db');
 const store = require('./slotStore');
-const { DUTY_TABLES } = require('../schema/tableRegistry');
+const { DUTY_TABLES, SEAT_CURRENT_SLOTS } = require('../schema/tableRegistry');
 const { countDutyRefs, collectDutyRefs, removeDutyName } = require('./dutyCells');
 
-function readSeats() {
+// 座位与值日同构：当前表 + 模板都会在「应用模板/当前表为空回退」时被复制回当前表，
+// 因此删除学生的统计/清理/撤销都必须覆盖两张（K05-01）。清单从注册表取，不再手抄。
+function readSeats(table = 'seat_layout') {
   try {
-    const rec = store.getDoc('seat_layout');
+    const rec = store.getDoc(table);
     return rec ? JSON.parse(rec.seats) : [];
   } catch (_) {
     return [];
@@ -51,7 +53,7 @@ function studentRelations(student) {
   // 座位预览与清理共用 seatRefCells 的同一份匹配逻辑：
   // 原先这里另写一套「ids 命中数 + names 命中数」，一个 {student_id, name} 对象格
   // 会被同时计入两次（一个座位显示成 2 个），而且与真正清理的口径慢慢就会分叉。
-  const seat = seatRefCells(student).hits.length;
+  const seat = seatRefCount(student);
 
   // 当前表 + 模板都统计（模板引用会在「应用模板」或当前表为空时被重新显示）。
   // cells 是 {daily,big} 打包结构，统计交给 dutyCells 逐模式遍历。
@@ -65,8 +67,8 @@ function studentRelations(student) {
 // 「统计到的」必须就是「会被清掉的」，否则预览数字和实际清理结果会分叉。
 // 记录**原位**信息不只是为了计数：撤销时要只把被清掉的格子放回去，而不是整块覆盖
 // （整块覆盖会把删除之后用户对座位表的其它改动一并抹掉）。
-function seatRefCells(student) {
-  const seats = readSeats();
+function seatRefCells(student, table = 'seat_layout') {
+  const seats = readSeats(table);
   const hits = [];
   if (!Array.isArray(seats)) return { seats: [], hits };
   for (let r = 0; r < seats.length; r++) {
@@ -87,14 +89,26 @@ function seatRefCells(student) {
   return { seats, hits };
 }
 
+// 统计两张座位表（当前 + 模板）的命中总数。
+function seatRefCount(student) {
+  return SEAT_CURRENT_SLOTS.reduce((n, table) => n + seatRefCells(student, table).hits.length, 0);
+}
+
 // 清空座位里指向该生的格子（命中 id 或姓名），返回 { removed, cells }
-// cells 是「被清掉的原位与原值」，供撤销时精确回填。
+// cells 是「被清掉的原位与原值 + 来源表」，供撤销时精确回填。
 function purgeSeatRelation(student) {
-  const { seats, hits } = seatRefCells(student);
-  if (!hits.length) return { removed: 0, cells: [] };
-  for (const h of hits) seats[h.row][h.col] = null;
-  store.setDoc('seat_layout', { seats: JSON.stringify(seats) });
-  return { removed: hits.length, cells: hits };
+  let removed = 0;
+  const cells = [];
+  // 当前表 + 模板都清；每格带 table，撤销/重做才能写回正确的那张表（与值日同口径）。
+  for (const table of SEAT_CURRENT_SLOTS) {
+    const { seats, hits } = seatRefCells(student, table);
+    if (!hits.length) continue;
+    for (const h of hits) seats[h.row][h.col] = null;
+    store.setDoc(table, { seats: JSON.stringify(seats) });
+    removed += hits.length;
+    for (const h of hits) cells.push({ ...h, table });
+  }
+  return { removed, cells };
 }
 
 // 移除值日表里该生的引用，返回 { removed, slots }
@@ -123,29 +137,45 @@ function purgeDutyRelation(student) {
 // ---------- 撤销/重做「删除学生」时的座位与值日回填 ----------
 // 只动被清掉的位置，不整块覆盖：用户可能在删除之后又调整过座位/值日，
 // 整块回写会把那些改动一起抹掉。
+// 撤销/重做按「来源表」分组写回（与 restoreDutySlots 同口径）：老快照没有 table 字段，
+// 一律当当前表处理，保证历史撤销记录仍可用。
+function groupSeatCellsByTable(cells) {
+  const byTable = new Map();
+  for (const h of cells) {
+    const table = SEAT_CURRENT_SLOTS.includes(h.table) ? h.table : 'seat_layout';
+    if (!byTable.has(table)) byTable.set(table, []);
+    byTable.get(table).push(h);
+  }
+  return byTable;
+}
+
 function restoreSeatCells(cells) {
   if (!Array.isArray(cells) || !cells.length) return;
-  const seats = readSeats();
-  if (!Array.isArray(seats)) return;
-  for (const h of cells) {
-    const row = seats[h.row];
-    // 布局已经删掉这一行：宁可少恢复一个人，也不在已删除的行上造幽灵座位
-    if (!Array.isArray(row)) continue;
-    while (row.length <= h.col) row.push(null);
-    row[h.col] = h.cell;
+  for (const [table, list] of groupSeatCellsByTable(cells)) {
+    const seats = readSeats(table);
+    if (!Array.isArray(seats)) continue;
+    for (const h of list) {
+      const row = seats[h.row];
+      // 布局已经删掉这一行：宁可少恢复一个人，也不在已删除的行上造幽灵座位
+      if (!Array.isArray(row)) continue;
+      while (row.length <= h.col) row.push(null);
+      row[h.col] = h.cell;
+    }
+    store.setDoc(table, { seats: JSON.stringify(seats) });
   }
-  store.setDoc('seat_layout', { seats: JSON.stringify(seats) });
 }
 
 function clearSeatCells(cells) {
   if (!Array.isArray(cells) || !cells.length) return;
-  const seats = readSeats();
-  if (!Array.isArray(seats)) return;
-  for (const h of cells) {
-    const row = seats[h.row];
-    if (Array.isArray(row) && h.col < row.length) row[h.col] = null;
+  for (const [table, list] of groupSeatCellsByTable(cells)) {
+    const seats = readSeats(table);
+    if (!Array.isArray(seats)) continue;
+    for (const h of list) {
+      const row = seats[h.row];
+      if (Array.isArray(row) && h.col < row.length) row[h.col] = null;
+    }
+    store.setDoc(table, { seats: JSON.stringify(seats) });
   }
-  store.setDoc('seat_layout', { seats: JSON.stringify(seats) });
 }
 
 function restoreDutySlots(slots) {

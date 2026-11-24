@@ -144,7 +144,10 @@ main()
     console.log(failed ? `\n失败 ${failed} 条` : '\n全部通过')
     process.exit(failed ? 1 : 0)
   })
-  .catch((e) => {
+  .catch(async (e) => {
     console.error(e && e.stack ? e.stack : e)
+    // 失败路径也要回收隔离数据目录（T02-05）
+    try { require('../../student-backend/dbManager/dbManager').closeAll?.() } catch (_) { /* 已关闭 */ }
+    await removeDirWithRetry(DATA_DIR).catch(() => {})
     process.exit(1)
   })

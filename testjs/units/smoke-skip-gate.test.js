@@ -37,28 +37,23 @@ test('runner：--require-pass 解析与 SKIP 判失败的判定逻辑真实有�
   // 接线判据
   assert.match(code, /requirePass:\s*\[\]/, '参数容器必须有 requirePass')
   assert.match(code, /--require-pass=/, '必须解析 --require-pass')
-  assert.match(code, /missingRequired/, '必须有未运行关键用例的判定')
-  assert.match(code, /process\.exit\(fail\.length \|\| missingRequired\.length \? 1 : 0\)/, 'SKIP 的关键用例必须让退出码为 1')
+  assert.match(code, /resolveSmokeExit\(results,\s*opt\.requirePass\)/, '汇总必须调用真实判定函数')
+  assert.match(code, /process\.exit\(exit\)/, '退出码必须来自判定函数结果')
 
-  // 真跑汇总判定：把结果数组喂进去，验退出码与输出
-  function judge(results, requirePass) {
-    const pass = results.filter((r) => r.code === 0)
-    const fail = results.filter((r) => r.code !== 0 && r.code !== null)
-    const skip = results.filter((r) => r.code === null)
-    const missingRequired = requirePass.filter((key) =>
-      !results.some((r) => r.file.includes(key) && r.code === 0)
-    )
-    return { exit: fail.length || missingRequired.length ? 1 : 0, missingRequired, pass, fail, skip }
-  }
+  // 真跑汇总判定：直接 require runner 里的真函数（T07-01）。
+  // 原先这里手抄了一份 judge() 副本，runner 改了判定口径、副本不动，测试仍绿。
+  const { resolveSmokeExit } = require(RUNNER)
   const files = [
     { file: 'secure-channel-retry.js', code: null }, // SKIP
     { file: 'font-subset-verify.mjs', code: null },  // 合理跳过
     { file: 'unzip-safe-test.cjs', code: 0 },
   ]
-  assert.equal(judge(files, ['secure-channel-retry']).exit, 1, '关键用例 SKIP 必须失败')
+  assert.equal(resolveSmokeExit(files, ['secure-channel-retry']).exit, 1, '关键用例 SKIP 必须失败')
   const passed = files.map((r) => r.file === 'secure-channel-retry.js' ? { ...r, code: 0 } : r)
-  assert.equal(judge(passed, ['secure-channel-retry']).exit, 0, '关键用例 PASS 才通过')
+  assert.equal(resolveSmokeExit(passed, ['secure-channel-retry']).exit, 0, '关键用例 PASS 才通过')
   const absent = files.filter((r) => r.file !== 'secure-channel-retry.js')
-  assert.equal(judge(absent, ['secure-channel-retry']).exit, 1, '关键用例未被收集也必须失败')
-  assert.equal(judge(absent, []).exit, 0, '未点名时合理跳过不应失败')
+  assert.equal(resolveSmokeExit(absent, ['secure-channel-retry']).exit, 1, '关键用例未被收集也必须失败')
+  assert.equal(resolveSmokeExit(absent, []).exit, 0, '未点名时合理跳过不应失败')
+  // 失败项本身也必须让退出码为 1（SKIP 判定不能顺带放过 FAIL）
+  assert.equal(resolveSmokeExit([{ file: 'x.cjs', code: 1 }], []).exit, 1, '有失败项必须退出 1')
 })

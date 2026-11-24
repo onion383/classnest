@@ -90,5 +90,6 @@ classnest/
 - **三张 AI 表只读**：`AiGridPreview`（AI 排布预览表）/ `AiProposalTable`（AI 提案明细表）/ `AiRecordTable`（AI 记录预览表）只做预览，不要改造成可编辑表。
 - **网格不要虚拟滚动**：`rowspan`（跨行合并）切片会错位，拖拽又依赖完整 `DOM`（页面元素树）；`GridView`（网格表）与 `AiGridPreview`（AI 排布预览表）都受影响。
 - **字段标准要同步**：`fields`（字段列表，`DynamicTable`（动态列表格）用）与 `colHeaders`（列头列表，`GridView`（网格表）用）必须与 `useTableCRUD`（表格组合式函数）/ 后端动态列接口一致，否则表头与数据错位。
+- **`ctx` 运行时字段先声明**：表格组件的 `ctx`（共享上下文对象）中所有 `_` 开头的运行时字段，必须在创建时的对象字面量里先声明（初值 `null` / `0` / `false`）；禁止 `delete ctx.xxx`（删除属性）与 `ctx[...]`（动态键），否则对象会进入字典模式。判据见 [ctx-shape.test.js](../../../../testjs/units/ctx-shape.test.js)，完整清单见 [ctx 共享上下文清单](../../../开发文档/ctx共享上下文-形状与热路径清单.md)。
 
 ---

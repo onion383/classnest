@@ -62,6 +62,33 @@ async function assign(roster, G, stages) {
 }
 
 // =========================================================================
+// 数据源：重名成员不能借用第一个同名学生的 id / 性别（F03-05）
+// =========================================================================
+test('table 数据源：重名成员按临时对象处理，不误用第一个同名学生的属性', async () => {
+  const { buildRoster } = await loadPipeline()
+  const students = [
+    { id: 1, 姓名: '张三', 性别: '男' },
+    { id: 2, 姓名: '张三', 性别: '女' },
+    { id: 3, 姓名: '李四', 性别: '男' },
+  ]
+  const groups = [{ members: [{ member_name: '张三' }, { member_name: '李四' }] }]
+  const roster = buildRoster({ dataSource: 'table', students, groups })
+  const zhangsan = roster.find(s => s.姓名 === '张三')
+  assert.ok(zhangsan, '重名成员仍要出现在名册里（不能丢人）')
+  assert.equal(zhangsan.id, undefined, '重名时不能猜 id')
+  assert.equal(zhangsan.性别, undefined, '重名时不能猜性别')
+  // 唯一命中的姓名仍取真实名册对象
+  assert.equal(roster.find(s => s.姓名 === '李四').id, 3)
+})
+
+test('table 数据源：姓名只命中一个名册对象时保留真实 id / 性别', async () => {
+  const { buildRoster } = await loadPipeline()
+  const students = [{ id: 1, 姓名: '张三', 性别: '男' }]
+  const roster = buildRoster({ dataSource: 'table', students, groups: [{ members: [{ member_name: '张三' }] }] })
+  assert.deepEqual(roster, [{ id: 1, 姓名: '张三', 性别: '男' }])
+})
+
+// =========================================================================
 // 守恒：single 模式绝不能丢学生
 // 这几个用例都是旧实现的失手点（性别比例悬殊时子池容量不足 → break 丢弃）
 // =========================================================================

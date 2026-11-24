@@ -1,8 +1,6 @@
 <template>
   <!-- 导出表格组件 -->
-  <Teleport to="body">
-  <Transition name="dialog">
-  <div v-if="effectiveVisible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]">
+  <DialogShell :visible="effectiveVisible" :z-index="10001">
     <div ref="cardRef" class="bg-surface p-5 rounded-lg min-w-[400px] max-w-xl shadow-card border border-border dialog-card">
       <h3 class="text-lg font-bold mb-3">{{ title }}</h3>
 
@@ -47,12 +45,12 @@
 
       <div class="mb-4">
         <p class="font-semibold mb-2">导出格式：</p>
-        <AppSelect v-model="exportFormat" class="w-full" :options="formatOptions" no-scroll />
+        <AppSelect v-model="exportFormat" aria-label="导出格式" class="w-full" :options="formatOptions" no-scroll />
       </div>
 
       <div class="mb-4">
         <label class="font-semibold block mb-1">文件名</label>
-        <input v-model="filename" class="filename-input border border-border bg-surface text-text p-2 w-full !rounded-[12px]" />
+        <input v-model="filename" class="filename-input border border-border bg-surface text-text p-2 w-full !rounded-[12px]" aria-label="文件名" />
       </div>
 
       <div class="text-right">
@@ -62,14 +60,13 @@
         </button>
       </div>
     </div>
-  </div>
-  </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
 import { ref, computed, watch, toRef, onMounted, nextTick } from 'vue'
 import AppSelect from '../../base/AppSelect.vue'
+import DialogShell from '../../base/DialogShell.vue'
 import { useNotification } from '../../../composables/useNotification';
 import { useExportFormats } from './ExportExcel.exporters.js';
 import { localDateStr } from '../../../utils/dateTime.js';
@@ -242,14 +239,17 @@ async function doExport() {
     exporting.value = true
     exportProgress.value = 10
     try {
-      await props.customExport({
+      const saved = await props.customExport({
         format: exportFormat.value,
         filename: filename.value,
         reportProgress,
       })
-      reportProgress(100)
-      emit('export-finish');
-      close();
+      if (saved) {
+        reportProgress(100)
+        emit('export-finish');
+        close();
+      }
+      // saved 为空串：用户在系统保存框点了取消，保留弹窗（与单文件/分组导出同口径，F02-02）
     } catch (err) {
       // 失败保留弹窗，便于改完选项重试（与下方各格式的失败处理一致）
       console.error('导出失败:', err);

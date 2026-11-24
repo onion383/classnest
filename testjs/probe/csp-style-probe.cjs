@@ -114,6 +114,12 @@ app.whenReady().then(async () => {
   const loaded = out.sheets.filter((s) => s.rules > 0).length
   console.log(`\nCSP 报错 ${violations.length} 条` + (violations.length ? '：\n  ' + violations.map((v) => v.slice(0, 120)).join('\n  ') : ''))
   console.log(`html[data-theme]=${out.theme} data-mode=${out.mode}  ← 主题抢跑脚本是否执行`)
+  // 判定必须参与退出码：只打印的话，CSP 拦截 / 样式被 media=print 挡住时自动化仍是绿（T01-03）
+  const ok = applied && violations.length === 0
   console.log(`判定：HTML 声明的 ${declared.length} 个样式表全部 media=all → ${applied ? '是（样式已应用）' : '否（被 print 挡住 = 界面无样式）'}；有规则的样式表 ${loaded} 张`)
-  app.quit()
+  if (!ok) {
+    console.error('✗ 样式未生效或存在 CSP 违规')
+    if (violations.length) console.error('  ' + violations.map((v) => v.slice(0, 120)).join('\n  '))
+  }
+  app.exit(ok ? 0 : 1)
 })

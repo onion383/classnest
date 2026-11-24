@@ -58,6 +58,9 @@ test('两个登出入口：先标记再请求，并提示「已退出登录」',
     const atReq = src.indexOf('AUTH_API.logout')
     assert.ok(atMark > 0 && atReq > 0, `${rel} 缺少标记或登出请求`)
     assert.ok(atMark < atReq, `${rel} 必须先标记再发登出请求（请求本身可能 401）`)
-    assert.ok(src.indexOf('已退出登录') > src.indexOf('clearAuth()'), `${rel} 提示应在清登录态之后`)
+    // 先锚定「清登录态」确实存在，再比顺序：缺失时 indexOf 返回 -1 会让顺序断言恒真（T06-02）
+    const atClear = src.indexOf('clearAuth()')
+    assert.ok(atClear >= 0, `${rel} 登出入口没有 clearAuth()，无法确认清登录态发生在提示之前`)
+    assert.ok(src.indexOf('已退出登录') > atClear, `${rel} 提示应在清登录态之后`)
   }
 })

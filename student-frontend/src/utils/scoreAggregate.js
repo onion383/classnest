@@ -60,8 +60,10 @@ export function aggregatePersonal(records, mode = 'add') {
     if (tag) r.name = `${r.name}（${tag}）`
   }
 
-  const max = Math.max(...rows.map((r) => Math.abs(r.value)))
-  for (const r of rows) r._max = max || 1
+  // 空行集时 Math.max() = -Infinity，而 -Infinity 是 truthy，`max || 1` 兜不住（F05-05）。
+  // 用 0 作为初值 + 非有限值兜底，进度条分母永远 ≥ 1。
+  const max = Math.max(0, ...rows.map((r) => Math.abs(r.value)))
+  for (const r of rows) r._max = Number.isFinite(max) && max > 0 ? max : 1
   return rows
 }
 

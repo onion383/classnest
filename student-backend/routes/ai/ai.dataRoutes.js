@@ -13,6 +13,7 @@ const { resolveNameCellsDetailed } = require('../../services/seatWrite');
 const dbManager = require('../../dbManager/dbManager');
 const { READ_TABLES, JSON_WRITE_TABLES } = require('./ai.constants');
 const { writeScope } = require('../../services/aiWriteScope');
+const { readScope } = require('../../services/aiReadScope');
 const { tableColumns, displayColumns, serializeColVal, clearTableColumnsCache } = require('./ai.helpers');
 const { safeJson } = require('../../utils/json');
 const { localDateStr, mondayOf } = require('../../utils/date');
@@ -28,6 +29,9 @@ router.get('/records/:table', (req, res) => {
   try {
     const table = req.params.table;
     if (!READ_TABLES[table]) return res.status(400).json({ error: '不支持的数据表' });
+    // 与列表/预览同口径：被老师设成「完全禁止」的表，按 id 取整条记录同样不许读
+    // （K02-09：这个端点过去只查 READ_TABLES，没复核 closed_tables）。
+    if (!readScope.isTableReadable(table)) return res.status(403).json({ error: readScope.closedError(table).error });
     const ids = String(req.query.ids || '')
       .split(',')
       .map((s) => Number(s.trim()))
@@ -215,6 +219,12 @@ router.post('/apply-batch', (req, res) => {
         const at = `第 ${i + 1} 个操作`;
         const action = String(op.action || '');
         const table = String(op.table || '');
+        // 写闸门收口：apply-batch 的 doc 分支走 applyDocWrite 自己会查，行式 add/update/delete
+        // 过去只查 BATCH_ROW_TABLES —— 老师把表设成只读/完全禁止后，仍能从这里写进去
+        // （K02-01 / N3-03）。放在分支之前，任何 action 都绕不过去。
+        if (table && writeScope.readonlyTables().includes(table)) {
+          throw new Error(`${at}：${writeScope.readonlyError(table).error}`);
+        }
         if (action === 'doc') {
           const r = applyDocWrite(table, op.id, op.values);
           if (r.error) throw new Error(`${at}：${r.error}`);
@@ -305,20 +315,6 @@ router.post('/apply-batch', (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
-});
-
-// POST /api/ai/snapshot —— 立即创建一份整库快照（加密 .db 副本），自动保留最近 20 份
-router.post('/snapshot', async (req, res) => {
-    const r = await tools().runSnapshotCreate({ slug: currentSlug(req) });
-  if (r.error) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, snapshot: r.snapshot, count: r.count });
-});
-
-// GET /api/ai/snapshots —— 列出已有快照（最新在前）
-router.get('/snapshots', (req, res) => {
-    const r = tools().runSnapshotList({ slug: currentSlug(req) });
-  if (r.error) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, count: r.count, snapshots: r.snapshots });
 });
 
 // POST /api/ai/snapshot/restore —— 还原到指定快照（覆盖整库，须老师在界面二次确认后才调用）

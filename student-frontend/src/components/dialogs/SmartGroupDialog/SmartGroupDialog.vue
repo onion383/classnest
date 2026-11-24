@@ -20,7 +20,7 @@
            选「现有分组表格」= 只把当前各小组里已有的人重新分组（组数不变） -->
       <div class="mb-3 flex items-center gap-3">
         <label class="text-sm font-medium shrink-0">选择数据源</label>
-        <AppSelect v-model="dataSource" :options="dataSourceOptions" class="w-44" @change="onDataSourceChange" />
+        <AppSelect v-model="dataSource" aria-label="选择数据源" :options="dataSourceOptions" class="w-44" @change="onDataSourceChange" />
         <span class="text-xs text-text-muted">{{ dataSourceHint }}</span>
       </div>
 
@@ -50,20 +50,20 @@
               </span>
               <!-- 特殊关系 -->
               <template v-if="st.type === 'relation'">
-                <AppSelect v-model="st.kind" :options="[{ value: 'together', label: '在一组' }, { value: 'apart', label: '不在一组' }]" class="w-28" />
-                <AppSelect v-model="st.a" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
+                <AppSelect v-model="st.kind" aria-label="特殊关系类型" :options="[{ value: 'together', label: '在一组' }, { value: 'apart', label: '不在一组' }]" class="w-28" />
+                <AppSelect v-model="st.a" aria-label="特殊关系学生一" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
                 <span class="text-text-inverse/90">和</span>
-                <AppSelect v-model="st.b" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
+                <AppSelect v-model="st.b" aria-label="特殊关系学生二" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
               </template>
               <!-- 指定身份 -->
               <template v-else-if="st.type === 'identity'">
-                <AppSelect v-model="st.kind" :options="[{ value: 'leader', label: '担任' + leaderTitle }, { value: 'not-leader', label: '不担任' + leaderTitle }]" class="w-32" />
-                <AppSelect v-model="st.studentId" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
+                <AppSelect v-model="st.kind" aria-label="身份指定方式" :options="[{ value: 'leader', label: '担任' + leaderTitle }, { value: 'not-leader', label: '不担任' + leaderTitle }]" class="w-32" />
+                <AppSelect v-model="st.studentId" aria-label="指定身份学生" :options="poolStudentOptions" placeholder="选择学生" class="w-32" />
               </template>
               <!-- 性别比例 -->
               <template v-else-if="st.type === 'gender'">
                 <span class="text-text-secondary">性别比例</span>
-                <AppSelect v-model="st.mode" :options="[{ value: 'balanced', label: '男女尽量均匀' }, { value: 'single', label: '全为男生或女生（每组同一性别）' }]" class="w-64" />
+                <AppSelect v-model="st.mode" aria-label="性别比例方式" :options="[{ value: 'balanced', label: '男女尽量均匀' }, { value: 'single', label: '全为男生或女生（每组同一性别）' }]" class="w-64" />
               </template>
               <!-- 满足率与关闭按钮靠右成组：关闭键永远贴行尾，不随满足率有无而漂移 -->
               <span class="ml-auto flex items-center gap-2 shrink-0">

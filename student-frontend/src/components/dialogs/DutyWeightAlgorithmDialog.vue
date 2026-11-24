@@ -19,16 +19,16 @@
       <div class="border border-border rounded-lg p-4 mb-4 flex-shrink-0">
         <div class="flex items-center gap-4 mb-3">
           <span class="text-sm font-medium text-text w-24 flex-shrink-0">中心区域</span>
-          <AppSelect v-model="centerType" :options="centerTypeOptions" class="w-40" />
+          <AppSelect v-model="centerType" aria-label="中心区域类型" :options="centerTypeOptions" class="w-40" />
         </div>
 
         <div v-if="centerType === 'point'" class="flex items-center gap-4 flex-wrap">
           <span class="text-sm text-text-muted w-24 flex-shrink-0">中心位置</span>
           <label class="text-sm text-text-secondary">项目
-            <AppSelect v-model="pointItem" :options="itemOptions" class="w-32 ml-1" />
+            <AppSelect v-model="pointItem" aria-label="中心位置项目" :options="itemOptions" class="w-32 ml-1" />
           </label>
           <label v-if="is2d" class="text-sm text-text-secondary">星期
-            <AppSelect v-model="pointDay" :options="dayOptions" class="w-24 ml-1" />
+            <AppSelect v-model="pointDay" aria-label="中心位置星期" :options="dayOptions" class="w-24 ml-1" />
           </label>
         </div>
 
@@ -36,17 +36,17 @@
           <span class="text-sm text-text-muted w-24 flex-shrink-0">项目范围</span>
           <!-- flex 布局：AppSelect 根节点是 div（块级），放在 label 里会上下堆叠，这里强制排成一行 -->
           <label class="flex items-center gap-2 text-sm text-text-secondary">
-            <AppSelect v-model="itemStart" :options="itemOptions" class="w-28 flex-shrink-0" />
+            <AppSelect v-model="itemStart" aria-label="项目范围起始" :options="itemOptions" class="w-28 flex-shrink-0" />
             <span class="mx-1">~</span>
-            <AppSelect v-model="itemEnd" :options="itemOptions" class="w-28 flex-shrink-0" />
+            <AppSelect v-model="itemEnd" aria-label="项目范围结束" :options="itemOptions" class="w-28 flex-shrink-0" />
           </label>
         </div>
         <div v-if="centerType === 'rect' && is2d" class="flex items-center gap-4 flex-wrap mt-2">
           <span class="text-sm text-text-muted w-24 flex-shrink-0">星期范围</span>
           <label class="flex items-center gap-2 text-sm text-text-secondary">
-            <AppSelect v-model="dayStart" :options="dayOptions" class="w-24 flex-shrink-0" />
+            <AppSelect v-model="dayStart" aria-label="星期范围起始" :options="dayOptions" class="w-24 flex-shrink-0" />
             <span class="mx-1">~</span>
-            <AppSelect v-model="dayEnd" :options="dayOptions" class="w-24 flex-shrink-0" />
+            <AppSelect v-model="dayEnd" aria-label="星期范围结束" :options="dayOptions" class="w-24 flex-shrink-0" />
           </label>
         </div>
       </div>

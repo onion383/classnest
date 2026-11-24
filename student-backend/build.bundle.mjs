@@ -92,13 +92,18 @@ function listBackendSources(dir, out = []) {
     if (NOT_BUNDLED.has(entry.name)) continue;
     const rel = path.relative(HERE, full).split(path.sep).join('/');
     if (NOT_BUNDLED_DIRS.some((prefix) => rel.startsWith(prefix))) continue;
-    out.push(path.relative(process.cwd(), full).split(path.sep).join('/'));
+    out.push(path.relative(HERE, full).split(path.sep).join('/'));
   }
   return out;
 }
 
 // =========================================================================
-const inlined = new Set(Object.keys(result.metafile.inputs).map((p) => p.split(path.sep).join('/')));
+// 两侧统一归一成「相对 HERE」：esbuild 的 metafile 键是绝对路径，
+// 直接与 cwd 相对路径比对会在 cwd ≠ HERE 时全部误判（K01-11）。
+const inlined = new Set(Object.keys(result.metafile.inputs).map((p) => {
+  const abs = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+  return path.relative(HERE, abs).split(path.sep).join('/');
+}));
 const missing = listBackendSources(HERE).filter((rel) => !inlined.has(rel));
 if (missing.length) {
   console.error('[bundle] 以下源码没有进 bundle（大概率是动态 require 导致 esbuild 没跟到）：');

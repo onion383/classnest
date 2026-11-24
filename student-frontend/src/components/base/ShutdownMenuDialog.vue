@@ -1,7 +1,5 @@
 <template>
-  <Teleport to="body">
-  <Transition name="dialog">
-    <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10006] pointer-events-auto" @click.self="cancel">
+  <DialogShell :visible="visible" :z-index="10006" @overlay="cancel">
       <div class="shutdown-card dialog-card">
         <!-- 顶部条：左侧小标签 + 右侧 X 关闭 -->
         <div class="shutdown-header">
@@ -70,9 +68,7 @@
           <button class="shutdown-cancel" @click="cancel">取消</button>
         </div>
       </div>
-    </div>
-  </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
@@ -80,6 +76,7 @@
 import { ref } from 'vue'
 import '../../styles/dialog-transition.css'
 import IconGlyph from '../../components/base/IconGlyph.vue'
+import DialogShell from './DialogShell.vue'
 
 defineOptions({ name: 'ShutdownMenuDialog' })
 defineProps({

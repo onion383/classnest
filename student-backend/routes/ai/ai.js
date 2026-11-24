@@ -10,6 +10,9 @@ const router = express.Router();
 const { READ_TABLES, WRITE_TABLES } = require('./ai.constants');
 router.use(require('./ai.memory'));
 router.use(require('./ai.skills'));
+// 注意：app.js 对 /api/ai 另有一条「首屏快路径」直挂同一个 ai.config 模块
+// （慢机器上完整 router 注册要等让路链）。此处保留是为了 ai router 被单独挂载时
+// /config 仍可用；两处复用同一模块，配置读写只有一份实现（Q3-04 确认非缺陷）。
 router.use(require('./ai.config'));
 router.use(require('./ai.conversations'));
 router.use(require('./ai.dataRoutes'));

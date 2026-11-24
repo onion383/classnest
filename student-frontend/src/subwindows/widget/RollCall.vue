@@ -80,17 +80,22 @@ async function fetchStudents() {
   // 默认只点正式学生（formal=1）；只有设置里显式开了「点名包含临时学生」才取全量。
   // 开关读不到时按默认（过滤）处理，不静默把临时学生放进来。
   const includeProvisional = !!settings?.data?.data?.rollcallIncludeProvisional
-  const res = await axios.get(includeProvisional ? '/api/students' : '/api/students?formal=1')
-  const all = res.data.data || []
-  if (!settings?.data?.data?.rollcallExcludeAbsent) return { list: all, excludedCount: 0 }
+  // 学生名单与请假记录互不依赖：可并行拉，少一个往返（P3-16）。
+  const studentsReq = axios.get(includeProvisional ? '/api/students' : '/api/students?formal=1')
+  if (!settings?.data?.data?.rollcallExcludeAbsent) {
+    const res = await studentsReq
+    return { list: res.data.data || [], excludedCount: 0 }
+  }
 
+  let res
   let leaves
   try {
-    leaves = await axios.get('/api/leaves')
+    ;[res, leaves] = await Promise.all([studentsReq, axios.get('/api/leaves')])
   } catch (_) {
     // 拿不到请假记录时宁可不点，也不能拿全班名单冒充「已排除不在校」
     throw new Error('无法获取请假记录，为避免点到不在校的同学，本次点名已取消')
   }
+  const all = res.data.data || []
   return filterPresentStudents(all, leaves.data.data || [])
 }
 

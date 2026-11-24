@@ -1,11 +1,10 @@
 <template>
-  <Teleport to="body">
-    <Transition name="dialog">
-      <div
-        v-if="visible"
-        class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10002] pointer-events-auto no-dialog-pulse"
-        @click.self="$emit('close')"
-      >
+  <DialogShell
+    :visible="visible"
+    :z-index="10002"
+    overlay-class="bg-black/50 pointer-events-auto no-dialog-pulse"
+    @overlay="$emit('close')"
+  >
         <div class="bg-surface p-5 rounded-xl w-[520px] max-w-[92vw] shadow-lg dialog-card">
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-lg font-bold text-text flex items-center gap-2"><IconGlyph name="palette" tint="current" glyph :size="18" /> 切换主题</h3>
@@ -43,15 +42,14 @@
 
           <p class="mt-3 text-xs text-text-muted">点击主题即可实时预览效果。</p>
         </div>
-      </div>
-    </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
 import { useThemeStore } from '../../stores/theme'
 import AppSwitch from './AppSwitch.vue'
 import IconGlyph from '../../components/base/IconGlyph.vue'
+import DialogShell from './DialogShell.vue'
 
 defineProps({ visible: { type: Boolean, default: false } })
 defineEmits(['close'])

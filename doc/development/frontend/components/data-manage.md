@@ -11,11 +11,19 @@ classnest/
     └── src/
         └── components/
             └── data-manage/
+                ├── AccessLogDialog.vue  # 数据访问记录弹窗
+                ├── AiPrivacyPanel.vue  # AI 数据保护面板
                 ├── DataExportPanel.vue  # 数据导出面板
                 ├── DataManageDialog.vue  # 数据管理弹窗
                 ├── ExportChatDialog.vue  # 对话导出
                 ├── ExportMarkdownDialog.vue  # Markdown 导出
-                └── MarkdownEditDialog.vue  # Markdown 编辑
+                ├── MarkdownEditDialog.vue  # Markdown 编辑
+                ├── McpPermissionsDialog.vue  # MCP 数据权限弹窗
+                ├── McpProposalsDialog.vue  # MCP 提案弹窗
+                ├── McpSettingsPanel.vue  # MCP 服务设置面板
+                ├── McpTokensDialog.vue  # MCP 令牌弹窗
+                ├── PrivacyToggles.vue  # 敏感信息混淆开关组
+                └── TableScopeList.vue  # 表权限档清单
 ```
 <!-- doc-tree:end -->
 

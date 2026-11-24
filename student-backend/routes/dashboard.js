@@ -28,7 +28,7 @@ function safe(fn, fallback) {
 //   · students 只用人数与值日展示的 id→姓名。
 // 全量记录仍由 /api/scores、/api/fee-records、/api/students 按需拉。
 // 口径与改造前 DashboardView 的三个 computed 逐行对齐（顺序、正负、月份前缀都不改）。
-function buildSummary({ students, scoreAgg, fees, today }) {
+function buildSummary({ studentCount, scoreAgg, feeAgg, today }) {
   // 今日 Top4 由 SQL 直接算（COUNT + 前缀 LIKE + 数值降序 + LIMIT 4），
   // 不再把整张成绩表读进内存再 filter/sort/slice（v6 · 2-23）。
   const topScores = ((scoreAgg && scoreAgg.top) || []).map((s) => {
@@ -39,24 +39,17 @@ function buildSummary({ students, scoreAgg, fees, today }) {
   });
 
   const monthPrefix = today.slice(0, 7); // YYYY-MM，与前端 pad2(month) 同一口径
-  let feeBalance = 0;
-  let monthIncome = 0;
-  let monthExpense = 0;
-  for (const r of fees) {
-    const amount = Number((r && r['收支金额']) || 0);
-    const isExpense = String((r && r['收支类型']) || '').trim() === '支出';
-    feeBalance += isExpense ? -Math.abs(amount) : Math.abs(amount);
-    if (String((r && r['收支时间']) || '').startsWith(monthPrefix)) {
-      if (isExpense) monthExpense += Math.abs(amount);
-      else monthIncome += Math.abs(amount);
-    }
-  }
+  // 余额/月收支由 SQL 聚合（K03-09）：不再把整张班费表读进内存逐行累加。
+  // feeAgg 由调用方传入，保持 buildSummary 纯函数、便于单测。
+  const feeBalance = Number((feeAgg && feeAgg.balance) || 0);
+  const monthIncome = Number((feeAgg && feeAgg.income) || 0);
+  const monthExpense = Number((feeAgg && feeAgg.expense) || 0);
 
   return {
-    studentCount: students.length,
+    studentCount,
     // 仅用于「有没有记录」的按钮文案与探针回读，不含任何明细
     scoreCount: (scoreAgg && scoreAgg.count) || 0,
-    feeCount: fees.length,
+    feeCount: Number((feeAgg && feeAgg.count) || 0),
     topScores,
     feeBalance,
     monthIncome,
@@ -95,16 +88,16 @@ router.get('/', (req, res) => {
   const scoreAgg = read('scores', () => require('./scores').dashboardSummary(today), { count: 0, top: [] });
   const activities = read('activities', () => require('./activities').readAll(), []);
   const album = read('album', () => require('./album').readAlbums(), []);
-  // students / fee_records 由动态表路由服务（在 app.js 内联创建），直接复用其查询实现取行数组。
-  const { queryAll } = require('../services/tableService');
-  const students = read('students', () => queryAll('students').data, []);
-  const fees = read('fees', () => queryAll('fee_records').data, []);
+  // students / fee_records 只取首页要用的列与聚合（K03-09），不再整表读入内存。
+  const { studentsLite, feeSummary } = require('../services/dashboardAgg');
+  const students = read('students', () => studentsLite(), []);
+  const monthPrefix = today.slice(0, 7);
+  const feeAgg = read('fees', () => feeSummary(monthPrefix), { count: 0, balance: 0, income: 0, expense: 0 });
 
   // 摘要化（v6 · 2-1）：整包从「全量 students/scores/fees」收敛到聚合值 + 轻量名册。
   // 名册只留 id/姓名 —— 首页值日卡片要按 id 显示姓名，其余字段（电话/备注等）一律不下发。
-  const summary = buildSummary({ students, scoreAgg, fees, today });
-  const studentsLite = students.map((s) => ({ id: s.id, 姓名: s['姓名'] }));
-  const payload = { schedule, duty, countdowns, leaves, students: studentsLite, activities, album, summary };
+  const summary = buildSummary({ studentCount: students.length, scoreAgg, feeAgg, today });
+  const payload = { schedule, duty, countdowns, leaves, students, activities, album, summary };
 
   res.json(payload);
 

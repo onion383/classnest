@@ -131,7 +131,7 @@
           </div>
           <div class="tb-sub-row">
             <span class="tb-sub-label">粗细</span>
-            <input type="range" min="1" max="30" v-model.number="brushSize" class="tb-slider" />
+            <input type="range" min="1" max="30" v-model.number="brushSize" class="tb-slider" aria-label="画笔粗细" />
             <span class="tb-size">{{ brushSize }}</span>
           </div>
           <div class="tb-sub-row">
@@ -143,7 +143,7 @@
         <template v-if="subTool === 'eraser'">
           <div class="tb-sub-row">
             <span class="tb-sub-label">大小</span>
-            <input type="range" min="5" max="40" v-model.number="eraserSize" class="tb-slider" />
+            <input type="range" min="5" max="40" v-model.number="eraserSize" class="tb-slider" aria-label="橡皮大小" />
             <span class="tb-size">{{ eraserSize }}</span>
           </div>
         </template>
@@ -336,10 +336,13 @@ function pos(e) {
   const r = canvasRect || drawCanvas.value.getBoundingClientRect()
   const cssX = e.clientX - r.left
   const cssY = e.clientY - r.top
-  // CSS 显示尺寸和 canvas 内部分辨率可能不同，需要缩放坐标
+  // CSS 显示尺寸和 canvas 内部分辨率可能不同，需要缩放坐标。
+  // 容器 0 宽高（刚挂载/被折叠）时直接除会得到 NaN/Infinity，坐标写进笔画就再也擦不掉（F05-03）。
+  const sx = r.width > 0 ? canvasW / r.width : 1
+  const sy = r.height > 0 ? canvasH / r.height : 1
   return {
-    x: cssX * (canvasW / r.width),
-    y: cssY * (canvasH / r.height)
+    x: cssX * sx,
+    y: cssY * sy
   }
 }
 

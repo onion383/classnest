@@ -151,6 +151,13 @@ function restoreAll() {
   }
 }
 process.on('exit', restoreAll)
+// exit 钩子不响应强杀：补 SIGINT/SIGTERM 先还原（T03-08）；SIGKILL 仍需从 git 恢复。
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    try { restoreAll() } catch (_) { /* 尽力还原 */ }
+    process.exit(sig === 'SIGINT' ? 130 : 143)
+  })
+}
 
 function applyMutant(m) {
   const p = path.join(ROOT, FILES[m.file])

@@ -194,3 +194,27 @@ test('undo 路由：非整数 / 非正数的 :id 必须被拒（不能靠 NaN �
     '每处 :id 路由都必须对收敛失败回 400（路由 ' + idRoutes.length + ' 处 / 守卫 ' + guards.length + ' 处）'
   )
 })
+
+test('undo 路由：小数/0/非数字 :id 真打 HTTP 必须回 400（T04-06）', async () => {
+  // 上面的静态对齐只能证明「函数被调用了」，证明不了函数体判据方向没写反。
+  // 这里挂真路由发真请求：收敛函数若写错（例如漏掉 <= 0），'0' 会被当成合法 id 放过去。
+  const { createBackendDb } = require('./_db-express-fixture.cjs')
+  const fx = createBackendDb({ label: 'undo-id-http' })
+  try {
+    fx.reset()
+    await fx.mount('/api/undo', 'student-backend/routes/undo/undo.js')
+    for (const bad of ['1.5', '0', 'abc', '-3']) {
+      const r = await fx.call('POST', `/${bad}/undo`, {})
+      assert.equal(r.status, 400, `POST /:id/undo id=${bad} 必须 400（实际 ${r.status} ${r.text}）`)
+      assert.ok(r.json && r.json.error, `id=${bad} 的 400 必须带错误信息`)
+      // 必须由「id 非法」拦下，而不是收敛放行后靠「记录不存在」碰巧回 400
+      assert.match(String(r.json.error), /id 无效/, `id=${bad} 应由收敛函数拒绝（实际「${r.json.error}」）`)
+    }
+    // 合法但不存在的 id：应回业务 400（记录不存在），不能 500
+    const missing = await fx.call('POST', '/999999/undo', {})
+    assert.equal(missing.status, 400, `合法但不存在的 id 应回业务 400（实际 ${missing.status} ${missing.text}）`)
+    assert.ok(missing.json && missing.json.error, '必须带错误信息')
+  } finally {
+    fx.close()
+  }
+})

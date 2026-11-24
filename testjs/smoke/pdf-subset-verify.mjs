@@ -12,6 +12,7 @@
  * 跑法：node testjs/smoke/pdf-subset-verify.mjs
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -28,7 +29,8 @@ const autoTable = autoTableMod.default || autoTableMod.autoTable
 
 const WASM = path.join(ROOT, 'student-frontend/src/wasm/hb-subset.wasm')
 const FULL = path.join(ROOT, 'student-frontend/public/NotoSansSC-6.ttf')
-const OUT = path.join(ROOT, 'testjs/tmp/subset-out.ttf')
+// 产物放系统临时目录：不往仓库树里写、多次运行也不累积（T03-10）
+const OUT = path.join(os.tmpdir(), 'classnest-smoke', 'subset-out.ttf')
 
 const HEAD = ['姓名', '学号', '性别', '语文', '数学', '英语', '总分', '备注']
 const SURNAME = '王李张刘陈杨黄赵周吴徐孙马朱胡林郭何高罗'

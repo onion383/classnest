@@ -9,8 +9,10 @@
 
 const { app, shell } = require('electron')
 const { CH, IPC } = require('./channels')
+const { safeReject } = require('./main.ipc-contract')
 const path = require('path')
 const fs = require('fs')
+const { atomicWriteJsonSync } = require('./main.atomic-write')
 
 const fsp = fs.promises
 
@@ -34,7 +36,8 @@ function loadUsbAutoOpenConfig() {
 // 重启后 loadUsbAutoOpenConfig 读不到文件又回退成 false，用户的选择静默丢失（#46）。
 function saveUsbAutoOpenConfig(enabled) {
   try {
-    fs.writeFileSync(getUsbConfigPath(), JSON.stringify({ enabled }))
+    // 原子写：写盘中途掉电时保留旧配置，不会留下半截 JSON 让重启后回退默认值（E02-01）
+    atomicWriteJsonSync(getUsbConfigPath(), { enabled })
     return { ok: true }
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) }
@@ -119,7 +122,7 @@ function registerUsbIpc() {
 
   // 设置开关：持久化并实时启停监听。
   // 先落盘、后改运行时状态：写盘失败时不能假装已启用（界面显示开着、重启后变回关闭）。
-  IPC.handle(CH.SET_USB_AUTO_OPEN, (event, enabled) => {
+  IPC.handle(CH.SET_USB_AUTO_OPEN, safeReject((event, enabled) => {
     const next = !!enabled
     const saved = saveUsbAutoOpenConfig(next)
     if (!saved.ok) {
@@ -129,7 +132,7 @@ function registerUsbIpc() {
     if (next) startUsbWatch()
     else stopUsbWatch()
     return { enabled: usbAutoOpenEnabled, saved: true }
-  })
+  }))
 }
 
 module.exports = { registerUsbIpc, loadUsbAutoOpenConfig, startUsbWatch, isUsbAutoOpenEnabled }

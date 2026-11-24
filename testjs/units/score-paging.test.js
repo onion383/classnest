@@ -16,27 +16,27 @@ const { createBackendDb } = require('./_db-express-fixture.cjs')
 
 // 公共夹具会在 require 任何 student-backend 模块之前设好主密钥与 DATA_DIR
 const fx = createBackendDb({ label: 'score-paging' })
-const conn = fx.conn
 
+// 连接一律现取：夹具文档明确 reset() 会换连接，模块级缓存旧引用会打到已关闭的库（T07-08）。
 const TODAY = localDateStr()
-const ins = conn.prepare(
+const ins = () => fx.conn.prepare(
   'INSERT INTO score_records (student_id, 姓名, 学号, 类型, 项目, 分值, 原因, 加分时间, created_at, source, group_name) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
 )
 
 // 30 条个人（时间递减）+ 10 条小组 + 5 条历史记录 source 为空（旧数据，前端算作个人）
 const seed = () => {
-  conn.transaction(() => {
+  fx.conn.transaction(() => {
     for (let i = 0; i < 30; i++) {
       const t = `2026-09-${String(28 - (i % 28)).padStart(2, '0')} 10:00:00`
-      ins.run(null, `学生${i + 1}`, `2026${String(i + 1).padStart(3, '0')}`, '加分', '课堂表现', i % 5, '表现好', t, t, 'personal', null)
+      ins().run(null, `学生${i + 1}`, `2026${String(i + 1).padStart(3, '0')}`, '加分', '课堂表现', i % 5, '表现好', t, t, 'personal', null)
     }
     for (let i = 0; i < 10; i++) {
       const t = `2026-09-${String(28 - (i % 28)).padStart(2, '0')} 11:00:00`
-      ins.run(null, null, null, '加分', '小组竞赛', i, '小组表现好', t, t, 'group', `第${i + 1}小组`)
+      ins().run(null, null, null, '加分', '小组竞赛', i, '小组表现好', t, t, 'group', `第${i + 1}小组`)
     }
     for (let i = 0; i < 5; i++) {
       const t = `2026-08-${String(20 - i).padStart(2, '0')} 09:00:00`
-      ins.run(null, `老学生${i}`, `2025${i}`, '加分', '旧数据', i, '', t, t, null, null)
+      ins().run(null, `老学生${i}`, `2025${i}`, '加分', '旧数据', i, '', t, t, null, null)
     }
   })()
 }
@@ -127,11 +127,11 @@ test('dashboard 聚合：Top4 与「全量 + filter/sort/slice」旧逻辑逐项
     [4, '赵六', 1, '扣分', 'personal', null],
   ]
   for (const [sid, name, v, type, source, group] of rows) {
-    ins.run(null, name, sid ? `2026${String(sid).padStart(3, '0')}` : null, type, '课堂表现', v, '', t, t, source, group)
+    ins().run(null, name, sid ? `2026${String(sid).padStart(3, '0')}` : null, type, '课堂表现', v, '', t, t, source, group)
   }
 
   // 旧逻辑（全量读 + JS 处理）
-  const all = conn.prepare('SELECT * FROM score_records ORDER BY 加分时间 DESC, id DESC').all()
+  const all = fx.conn.prepare('SELECT * FROM score_records ORDER BY 加分时间 DESC, id DESC').all()
   const legacy = all
     .filter((s) => s && s['加分时间'] && String(s['加分时间']).startsWith(TODAY))
     .sort((a, b) => Number(b['分值'] || 0) - Number(a['分值'] || 0))
@@ -168,4 +168,16 @@ test('date 过滤：某一天的全部记录，供今日时间轴单独拉', asy
   // date + source 可组合
   const g = await get(`?date=${TODAY}&source=group`)
   assert.ok(g.data.every((r) => r.source === 'group' && String(r.加分时间).startsWith(TODAY)))
+})
+
+test('DELETE /api/scores/:id：真删除，不存在回 404（X2-01）', async () => {
+  const first = (await get()).data[0]
+  assert.ok(first && first.id, '前置：库里至少有一条记录')
+  const del = await fetch(`${base}/${first.id}`, { method: 'DELETE' })
+  assert.equal(del.status, 200, '后端必须真的注册 DELETE 路由')
+  const after = (await get()).data
+  assert.ok(!after.some((r) => r.id === first.id), '记录应从库中消失')
+
+  const again = await fetch(`${base}/${first.id}`, { method: 'DELETE' })
+  assert.equal(again.status, 404, '重复删除回 404，不能假装成功')
 })

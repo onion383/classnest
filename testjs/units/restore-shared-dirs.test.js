@@ -91,11 +91,39 @@ test('dirPlanOf：三个全局共享目录标 merge，per-slug 目录不标', ()
   }
 })
 
+// 注释剥离必须是词法级的（T07-09）：裸 `/\/\/[^\n]*/g` 会把 'http://...' 这类
+// 字符串里的 `//` 也当注释删掉，后续正则窗口被错误裁剪 → 漏检。
+// 保守做法：先摘块注释，再只摘**行首**的 `//` 注释（字符串里的 `//` 不会在行首）。
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/[^\n]*/gm, '')
+}
+
+// 接线判据抽成纯函数，便于把变异后的源码回喂同一判据（T07-02），
+// 而不是「变异完只断言副作用、不复跑判据」。
+function wiringGuard(source) {
+  const src = stripComments(source)
+  const sharedMerged = /it\.merge[\s\S]{0,120}mergeDir\(src, it\.dest\)/.test(src)
+  const perSlugReplaced = /replaceDir\(src, it\.dest, stamp\)/.test(src)
+  return {
+    ok: sharedMerged && perSlugReplaced,
+    why: sharedMerged ? (perSlugReplaced ? '' : 'per-slug 目录未走 replaceDir') : '共享目录未走 mergeDir',
+  }
+}
+
 test('applyVerifiedBundle 对共享目录走 merge、对 per-slug 走 replace（接线）', () => {
   const src = fs.readFileSync(path.join(ROOT, 'student-backend/services/bundleRestore.js'), 'utf8')
-    .replace(/\/\/[^\n]*/g, '')
-  assert.match(src, /it\.merge[\s\S]{0,120}mergeDir\(src, it\.dest\)/, '共享目录未走 mergeDir')
-  assert.match(src, /replaceDir\(src, it\.dest, stamp\)/, 'per-slug 目录仍应走 replaceDir')
+  const r = wiringGuard(src)
+  assert.ok(r.ok, r.why)
+})
+
+test('变异反证：把共享目录的 mergeDir 换成 replaceDir，接线判据必须失败', () => {
+  const real = fs.readFileSync(path.join(ROOT, 'student-backend/services/bundleRestore.js'), 'utf8')
+  assert.equal(wiringGuard(real).ok, true, '基线必须通过，否则反证无意义')
+  const mutated = real.replace(/mergeDir\(src, it\.dest\)/, 'replaceDir(src, it.dest, stamp)')
+  assert.notEqual(mutated, real, '变异没匹配到 mergeDir 调用')
+  assert.equal(wiringGuard(mutated).ok, false, '判据假绿：共享目录退化为 replace 仍判 PASS')
 })
 
 // ————————————————————————— ③ 变异反证 —————————————————————————

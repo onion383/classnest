@@ -27,6 +27,9 @@ registerUserScopedReset(() => {
   provisional.value = []
   inflight = null
   revision++
+  // 登出/换号要连资源句柄一起释放：interval 与 focus 监听不该跨账号存活（F04-09）。
+  // 下次登录由 startTodoCenter 幂等重建。
+  if (disposables) { disposables.dispose(); disposables = null }
 })
 
 /** 拉临时学生名单；在途请求复用，避免首屏与 focus 事件各发一次 */

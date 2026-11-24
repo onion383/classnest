@@ -69,13 +69,13 @@ test('增量主循环：mtime 相同但缩略图丢了 → 必须补生成', () 
   assert.match(body, /present\.add\(old\.id\)/, '补完要把 id 记进集合，避免同一轮重复生成')
 })
 
-test('增量：mtime 变了仍无条件重建（源图变了，跳过会显示旧图）', () => {
+test('增量：mtime 或文件大小变了仍无条件重建（源图变了，跳过会显示旧图）', () => {
   const body = fnBody(stripComments(read()), 'incrementalScan')
-  const changedAt = body.indexOf('if (old.mtime !== mtime)')
-  assert.ok(changedAt > 0, '找不到 mtime 变化分支')
+  const changedAt = body.indexOf('if (old.mtime !== mtime || old.file_size !== st.size)')
+  assert.ok(changedAt > 0, '找不到「mtime 或大小变化」分支（只判 mtime 会漏掉保留时间戳的替换）')
   const seg = body.slice(changedAt, body.indexOf('} else if', changedAt))
-  assert.match(seg, /genThumb\(/, 'mtime 变了必须重新生成，不能因为「已有缩略图」就跳过')
-  assert.ok(!/present\.has/.test(seg), 'mtime 变化分支不许判 present —— 那会留着旧图')
+  assert.match(seg, /genThumb\(/, '源图变了必须重新生成，不能因为「已有缩略图」就跳过')
+  assert.ok(!/present\.has/.test(seg), '变化分支不许判 present —— 那会留着旧图')
 })
 
 test('增量续扫补缺也用同一判据（版本 + 文件在不在），不能只看 thumb_path', () => {

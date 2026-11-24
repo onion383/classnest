@@ -13,11 +13,13 @@
 const { app, BrowserWindow } = require('electron')
 const { waitFor, waitForStable } = require('../tools/waitFor.cjs')
 const fs = require('fs')
+const os = require('os')
 const path = require('path')
 const { execFileSync } = require('child_process')
 
 const ROOT = path.join(__dirname, '..', '..')
-const OUT = path.join(ROOT, 'testjs', 'tmp', 'card-anim')
+// 产物落平台临时目录，不再写仓库（T01-10）
+const OUT = path.join(os.tmpdir(), 'classnest-probe', 'card-anim')
 const DURATION = 260
 
 const ENTRY = `

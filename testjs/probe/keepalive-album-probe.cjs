@@ -21,12 +21,14 @@
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 const { pathToFileURL } = require('url')
 
 const BACKEND = path.join(__dirname, '..', '..', 'student-backend')
 const sharp = require(path.join(BACKEND, 'node_modules', 'sharp'))
 
-const TMP = path.join(__dirname, '..', 'tmp', 'keepalive-probe')
+// 三个 keepalive 探针曾共用仓库内 testjs/tmp/keepalive-probe，并行运行会互相覆盖（T01-10）
+const TMP = path.join(os.tmpdir(), 'classnest-probe', 'keepalive-album')
 const IMG_DIR = path.join(TMP, 'imgs')
 
 // 缩略图规格与后端一致（THUMB_VERSION=4 → 512px / q82），否则解码成本不可比
@@ -156,14 +158,15 @@ async function runOne(win, cfg, label) {
   await win.loadURL(pathToFileURL(file).href)
   // 等首屏图片完全加载并解码（模拟「用户已经看了一会儿相册」的正常状态）
   await wait(1200)
-  await win.webContents.executeJavaScript(
-    `Promise.all([...document.querySelectorAll('img')].map(i => i.decode().catch(()=>{})))`
-  )
+  // 解码失败必须计数：吞掉后「全部解码(ms)」与帧数据看起来正常，探针却已失去意义（T01-12）
+  const decodeFails = await win.webContents.executeJavaScript(
+    `Promise.all([...document.querySelectorAll('img')].map(i => i.decode().then(() => 0).catch(() => 1)))`
+  ).then((a) => a.reduce((s, v) => s + v, 0))
   await wait(200)
   const r = await win.webContents.executeJavaScript(`window.__detach(900)`).then(() =>
     win.webContents.executeJavaScript(`window.__run()`)
   )
-  return r
+  return { ...r, decodeFails }
 }
 
 app.whenReady().then(async () => {
@@ -183,6 +186,7 @@ app.whenReady().then(async () => {
   console.log('\n变体            图片数  首帧(ms)  全部解码(ms)  最长帧间隔(ms)  稳定(ms)')
   console.log('─'.repeat(78))
   const rows = []
+  let failed = 0
   try {
     for (const c of CASES) {
       const r = await runOne(win, c, c.label)
@@ -195,13 +199,19 @@ app.whenReady().then(async () => {
         String(r.maxGap).padStart(14),
         String(r.settled).padStart(9)
       )
+      if (r.decodeFails > 0) {
+        failed++
+        console.log(`  ✗ ${c.label} 有 ${r.decodeFails} 张图片解码失败，测量结果不可用`)
+      }
     }
     console.log('\n前 12 帧时间点：')
     for (const r of rows) console.log('  ' + r.label.padEnd(16), r.frames.join(', '))
   } catch (e) {
+    failed++
     console.error('探针异常：', e && e.message)
   } finally {
     win.destroy()
   }
-  app.exit(0)
+  // 异常/解码失败必须回传退出码，否则失败会被 quit 成「通过」（T01-12）
+  app.exit(failed ? 1 : 0)
 })

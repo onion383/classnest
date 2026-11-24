@@ -26,6 +26,62 @@ function assertHttpsUrl(rawUrl) {
   return u;
 }
 
+// 本地回环 http 仅在 dev + 显式 mock 配置时放行，用于在没有发布包时走通整条流程。
+// 两个约束缺一不可：① 只认 127.0.0.1 / localhost，不认局域网 IP；
+//                    ② 由调用方传 allowLocalMock（仅 dev 环境为 true），生产恒为 HTTPS。
+function isLocalMockUrl(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || ''));
+    return u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost');
+  } catch (_) {
+    return false;
+  }
+}
+function assertAllowedDownloadUrl(rawUrl, { allowLocalMock = false } = {}) {
+  if (allowLocalMock && isLocalMockUrl(rawUrl)) return new URL(String(rawUrl));
+  return assertHttpsUrl(rawUrl);
+}
+
+// =========================================================================
+// 独立 digest 清单（release-trust.json）
+//
+// GitHub Releases 的 asset.digest 与下载地址同源：能改资产的人就能连 digest 一起改。
+// 清单放在仓库里经 raw.githubusercontent.com 读取，与 Release 是不同的权限边界；
+// 两者不一致时直接拒装 —— 这是「没有代码签名证书」前提下能拿到的最强免费信任锚。
+// =========================================================================
+const SHA256_DIGEST_RE = /^sha256:[0-9a-f]{64}$/i
+
+function normalizeDigest(raw) {
+  const d = String(raw || '').toLowerCase()
+  return SHA256_DIGEST_RE.test(d) ? d : null
+}
+
+// 从清单 JSON 里取指定版本的 digest；格式不对/没这一版都返回 null（由上层降级并提示）
+function digestFromTrustManifest(json, version) {
+  try {
+    const data = typeof json === 'string' ? JSON.parse(json) : json
+    const entries = data && data.entries
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return null
+    const key = String(version || '').trim().replace(/^v/i, '')
+    return normalizeDigest(entries[key] || entries['v' + key])
+  } catch (_) {
+    return null
+  }
+}
+
+// 决策：清单优先、与资产摘要冲突则拒装；清单缺失时降级为资产来源并标记告警。
+// 返回 { decision: 'ok' | 'warn' | 'reject', digest, source, reason }
+function resolveDigestTrust({ manifestDigest, assetDigest } = {}) {
+  const m = normalizeDigest(manifestDigest)
+  const a = normalizeDigest(assetDigest)
+  if (m && a && m !== a) {
+    return { decision: 'reject', digest: m, source: 'conflict', reason: '发布清单与发布资产摘要不一致' }
+  }
+  if (m) return { decision: 'ok', digest: m, source: 'manifest', reason: '' }
+  if (a) return { decision: 'warn', digest: a, source: 'asset-only', reason: '独立摘要清单不可用，仅按发布资产摘要校验' }
+  return { decision: 'warn', digest: null, source: 'size-only', reason: '独立摘要清单与资产摘要均不可用，仅按大小校验' }
+}
+
 // 流式计算文件 sha256（安装包上百 MB，不能整个读进内存）
 function sha256File(filePath) {
   return new Promise((resolve, reject) => {
@@ -79,4 +135,8 @@ function pickSetupAssetName(names) {
   return null
 }
 
-module.exports = { assertHttpsUrl, sha256File, verifyDownloadedFile, pickSetupAssetName }
+module.exports = {
+  assertHttpsUrl, assertAllowedDownloadUrl, isLocalMockUrl,
+  digestFromTrustManifest, resolveDigestTrust,
+  sha256File, verifyDownloadedFile, pickSetupAssetName,
+}

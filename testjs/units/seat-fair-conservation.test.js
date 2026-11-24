@@ -212,8 +212,15 @@ test('块内本来有空位：不丢人、不凭空造人', async () => {
 // 「逐对重算」的参考实现逐格一致（下面这份参考实现就是改造前的口径，故意不复用缓存）。
 // =========================================================================
 // 参考实现：逐对重算 + 同序全排列枚举（与改造前逐行等价，供对拍用）
+// 溢出罚分（T07-04）：块大小可能不等，组比块大时源实现会加 `spill * costBound`。
+// 参考实现原先只算 Σ ls*ws，等大块夹具里 spill 恒为 0 所以测不出差异；
+// 补齐同一公式后，不等块夹具才能对拍出罚分口径是否一致。
 function referenceOrder(studLeds, blockWeights, allowInner) {
   const n = studLeds.length
+  let maxW = 1
+  for (const ws of blockWeights) for (const v of ws) if (Math.abs(v) > maxW) maxW = Math.abs(v)
+  const allAbsLed = studLeds.reduce((t, ls) => t + ls.reduce((a, v) => a + Math.abs(v), 0), 0)
+  const costBound = allAbsLed * Math.max(1, maxW) + 1
   const costOf = (i, j) => {
     let ls = studLeds[i]
     let ws = blockWeights[j]
@@ -223,7 +230,8 @@ function referenceOrder(studLeds, blockWeights, allowInner) {
     }
     let sum = 0
     for (let k = 0; k < Math.min(ls.length, ws.length); k++) sum += ls[k] * ws[k]
-    return sum
+    const spill = studLeds[i].length - blockWeights[j].length
+    return spill > 0 ? sum + spill * costBound : sum
   }
   const a = Array.from({ length: n }, (_, i) => i)
   let best = null, bestCost = Infinity
@@ -246,7 +254,10 @@ function referenceOrder(studLeds, blockWeights, allowInner) {
 
 // 6 行 × 6 列 + unit='six' → 2×3 = 6 个等大块（每块 6 格），正好落在全排列分支
 function makeSixBySix(weightOf, ledOf) {
-  const rows = 6, cols = 6
+  return makeGrid(6, 6, weightOf, ledOf)
+}
+
+function makeGrid(rows, cols, weightOf, ledOf) {
   const grid = Array.from({ length: rows }, () => Array(cols).fill(null))
   const weights = Array.from({ length: rows }, (_, r) => Array.from({ length: cols }, (_, c) => weightOf(r, c)))
   const ledger = {}
@@ -308,6 +319,33 @@ for (const innerOrder of ['no', 'yes']) {
     )
   })
 }
+
+// 2-2b 不等大块：6×5 按 six 切成 [6,6,3,6,6,3]，溢出罚分必须进对拍（T07-04）。
+// 大块学生账本 10、小块学生账本 0、权重全 1：
+//   · 不计罚分时「大组塞进小块」只算 3×10，比「大组进大块」6×10 更小，会被误选；
+//   · 计罚分后 spill(3)×costBound 足够大，最优解必然是「人数与格子数一致」的对应。
+test('2-2b 不等大块：溢出罚分口径与逐对重算一致，大组不得被塞进小块', async () => {
+  const fixture = makeGrid(6, 5, () => 1, (r, c) => (c === 4 ? 0 : 10))
+  const before = fixture.grid.map(row => row.map(s => s && { ...s }))
+  const { grid, splitRegion } = await runFairOn([fixture.region], fixture, 'no')
+  const blocks = splitRegion(fixture.region, 'six')
+  const sizes = blocks.map(b => b.pos.length)
+  assert.deepEqual(sizes, [6, 6, 3, 6, 6, 3], '夹具必须先造出不等大块，否则罚分分支仍是休眠的')
+
+  const studLeds = blocks.map(b => b.pos.map(p => before[p.r][p.c].__led))
+  const blockWeights = blocks.map(b => b.pos.map(p => fixture.weights[p.r][p.c]))
+  const ref = referenceOrder(studLeds, blockWeights, false)
+  assert.deepEqual(
+    blocks.map(b => b.pos.map(p => grid[p.r][p.c].id)),
+    expectedIdsByBlock(blocks, ref, before, fixture.weights, 'no'),
+    '不等大块下，记忆化实现必须与逐对重算（含 spill 罚分）参考实现逐格一致',
+  )
+  // 罚分生效的直接判据：每人都有位置，且每个来源组都落到同样大小的块上
+  ref.forEach((j, i) => {
+    assert.equal(blocks[j].pos.length, blocks[i].pos.length,
+      `来源组 ${i}（${blocks[i].pos.length} 人）被塞进了 ${blocks[j].pos.length} 格的块 —— 溢出罚分没生效`)
+  })
+})
 
 test('2-2 记忆化等价 · 两个作用域各自独立：后一块不能复用前一块的代价', async () => {
   // A 区（行 0-2）权重逐块递增、B 区（行 3-5）逐块递减，账本单调递增。

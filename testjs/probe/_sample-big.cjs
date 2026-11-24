@@ -16,9 +16,11 @@
 
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
 
 const BACKEND = path.join(__dirname, '..', '..', 'student-backend')
-const TMP = path.join(__dirname, '..', 'tmp', 'viewer-open-probe')
+// 样本图放系统临时目录：多次运行不再往仓库里堆（T02-09）
+const TMP = path.join(os.tmpdir(), 'classnest-probe', 'viewer-open-probe')
 const BIG = path.join(TMP, 'big.jpg')
 const THUMB = path.join(TMP, 'thumb.jpg')
 

@@ -74,14 +74,19 @@ function isMediaRequest(req) {
 }
 
 // 明文模式下的凭据来源（Authorization / Cookie / 查询参数）。
-function plainToken(req) {
+// query 必须单独标出来：登录 JWT 不允许经 URL 使用（会进 Referer / 日志），
+// 只有媒体路径可以（K01-07）。
+function plainTokenInfo(req) {
   const headerToken = (req.headers.authorization || '').split(' ')[1];
-  if (headerToken) return headerToken;
+  if (headerToken) return { token: headerToken, from: 'header' };
   const cookie = req.headers.cookie || '';
   const match = cookie.match(/(?:^|;\s*)token=([^;]+)/);
-  if (match) return decodeURIComponent(match[1]);
-  if (req.query && req.query.token) return String(req.query.token);
-  return null;
+  if (match) return { token: decodeURIComponent(match[1]), from: 'cookie' };
+  if (req.query && req.query.token) return { token: String(req.query.token), from: 'query' };
+  return { token: null, from: 'none' };
+}
+function plainToken(req) {
+  return plainTokenInfo(req).token;
 }
 
 // 统一解析凭据来源，返回 { token, source }：
@@ -102,7 +107,7 @@ function resolveAuth(req) {
     }
     return { token: null, source: 'none' };
   }
-  return { token: plainToken(req), source: 'plain' };
+  return { token: plainToken(req), source: plainTokenInfo(req).from === 'query' ? 'plain-query' : 'plain' };
 }
 
 // 兼容旧调用：只返回 token 字符串
@@ -203,8 +208,10 @@ function auth(requiredRoles = []) {
     try {
       const user = verifyToken(token, { allowMedia: isMediaRequest(req) });
       const _t2 = Date.now();
-      // 查询串里的凭据必须是受限媒体凭据：登录 JWT 不允许再通过 URL 使用
-      if (source === 'media' && user.scope !== 'media') throw new Error('媒体凭据无效');
+      // 查询串里的凭据必须是受限媒体凭据：登录 JWT 不允许再通过 URL 使用。
+      // plain 模式同样覆盖（K01-07）：过去只看 source==='media'，明文模式下
+      // 把登录 JWT 拼进 URL 就能调业务接口。
+      if ((source === 'media' || source === 'plain-query') && user.scope !== 'media') throw new Error('媒体凭据无效');
       if (requiredRoles.length > 0 && !requiredRoles.includes(user.role)) {
         return res.status(403).json({ error: '权限不足' });
       }

@@ -67,6 +67,21 @@ test('方向B 限流：读/搜索/写各走自己的桶，写还看老师的待�
 
   const call = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text)
 
+  await t.test('write 预占原语：checkAndConsume 原子计数 + release 可回退（K04-01）', () => {
+    rate._setLimitsForTest({ write: { perMin: 2, pendingMax: 999, label: '提案提交' } })
+    assert.equal(rate.checkAndConsume('k0401', 'write').ok, true)
+    assert.equal(rate.checkAndConsume('k0401', 'write').ok, true)
+    assert.equal(rate.checkAndConsume('k0401', 'write').ok, false, '第 3 次必须被拒（同步预占，无 await 窗口）')
+    rate.release('k0401', 'write')
+    assert.equal(rate.checkAndConsume('k0401', 'write').ok, true, '回退一次后应重新放行')
+    rate.release('k0401', 'write')
+    rate.release('k0401', 'write')
+    rate.release('k0401', 'write')
+    assert.equal(rate.checkAndConsume('k0401', 'write').ok, true, 'release 最低到 0，不会变负数')
+    rate._resetForTest()
+    rate._setLimitsForTest(TEST_LIMITS)
+  })
+
   await t.test('搜索有自己的桶：2 次正常，第 3 次被拒且带 retry_after', async () => {
     assert.equal((await call('search', { q: '限流' })).ok, true)
     assert.equal((await call('search', { q: '限流' })).ok, true)

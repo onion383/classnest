@@ -18,6 +18,9 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const {
+  analyze, walk: walkAst, keyName, memberPath,
+} = require('../_source-scan.cjs')
 
 const SRC = path.join(__dirname, '../../student-frontend/src')
 
@@ -33,52 +36,78 @@ const files = walk(SRC)
 const rel = (f) => path.relative(SRC, f).replace(/\\/g, '/')
 
 function scriptOf(s) {
-  return (s.match(/<script[^>]*>([\s\S]*?)<\/script>/) || [])[1] || ''
+  const blocks = []
+  const re = /<script\b[^>]*>([\s\S]*?)<\/script>/g
+  let m
+  while ((m = re.exec(s))) blocks.push(m[1])
+  return blocks.join('\n')
 }
-function stripComments(s) {
-  return s.split('\n').map((l) => (/(^\s*\/\/)/.test(l) ? '' : l.replace(/\/\/.*$/, ''))).join('\n')
+
+function sourceOf(file) {
+  const s = fs.readFileSync(file, 'utf8')
+  return file.endsWith('.vue') ? scriptOf(s) : s
+}
+
+// 在 AST 上找出「带 _bg 的对象字面量」，并判断它是不是某个 extra 属性的直接值。
+// 为什么不用 /extra\s*:\s*\{[^}]*_bg/：`[^}]*` 只跨一层花括号，extra 里再嵌对象
+// （或 _bg 写成 `_bg: rgb(...)` 前面先有别的嵌套）就匹配不到 —— 漏报。
+// 为什么豁免不再按「文件里出现 useSeatGrid 字样」整文件放行：
+// 按真实引用关系判定 —— 只有包在 buildSeatLikeRows(...) / useSeatGrid(...) 实参范围里的
+// extra._bg 才真的会被 `...(v.extra || {})` 摊平；同文件其它位置塞的 _bg 仍要报。
+function styleCells(ast, code) {
+  const flattenSpans = []
+  walkAst(ast.program, (node) => {
+    if (node.type !== 'CallExpression') return
+    const p = memberPath(node.callee)
+    if (p === 'buildSeatLikeRows' || p === 'useSeatGrid') flattenSpans.push([node.start, node.end])
+  })
+  const inFlatten = (node) => flattenSpans.some(([a, b]) => node.start >= a && node.end <= b)
+
+  const extraCells = []
+  const topLevelCells = []
+  walkAst(ast.program, (node, parents) => {
+    if (node.type !== 'ObjectExpression') return
+    const bg = node.properties.find((p) => p.type !== 'SpreadElement' && keyName(p.key) === '_bg')
+    if (!bg) return
+    const parent = parents[parents.length - 1]
+    const isExtraValue = parent && parent.type === 'ObjectProperty'
+      && parent.value === node && keyName(parent.key) === 'extra'
+    const entry = { node, bg, line: code.slice(0, node.start).split('\n').length }
+    if (isExtraValue) extraCells.push({ ...entry, flattened: inFlatten(node) })
+    else topLevelCells.push(entry)
+  })
+  return { extraCells, topLevelCells }
 }
 
 test('约定：GridView 的 _bg/_fg 不许藏在 cell.extra 里（除非走 useSeatGrid 摊平）', () => {
   const bad = []
   for (const f of files) {
-    const s = stripComments(fs.readFileSync(f, 'utf8'))
-    // 只看真正构造 extra 的地方：extra: { ... _bg ... }
-    const usesExtraStyle = /extra\s*:\s*\{[^}]*_bg/.test(s)
-    if (!usesExtraStyle) continue
-    // 走 useSeatGrid 摊平路径的合法
-    if (/useSeatGrid|buildSeatLikeRows/.test(s)) continue
-    bad.push(rel(f))
+    const code = sourceOf(f)
+    if (!code.trim()) continue
+    const { ast } = analyze(code)
+    for (const cell of styleCells(ast, code).extraCells) {
+      if (!cell.flattened) {
+        bad.push(`${rel(f)}:${cell.line}`)
+        break
+      }
+    }
   }
   assert.deepEqual(bad, [],
     '以下文件把 GridView 格子配色塞进 cell.extra，但没走 useSeatGrid 摊平 → 颜色不生效：\n' + bad.join('\n'))
 })
 
-// 找出源码里所有「对象字面量」的最内层内容（含嵌套花括号，如模板字符串里的 ${...}）。
-// 用括号配对扫描，不能用 /\{[^{}]*\}/ —— 模板字符串 `rgb(${x})` 里有花括号，正则会漏。
-function objectLiterals(src) {
-  const out = []
-  const stack = []
-  for (let i = 0; i < src.length; i++) {
-    const ch = src[i]
-    if (ch === '{') stack.push(i)
-    else if (ch === '}') {
-      const start = stack.pop()
-      if (start !== undefined) out.push(src.slice(start + 1, i))
-    }
-  }
-  return out
-}
-
 test('约定：直接写在 cell 顶层的 _bg 必须同时给 _fg（深底白字/浅底深字）', () => {
   const bad = []
   for (const f of files) {
-    const s = stripComments(fs.readFileSync(f, 'utf8'))
-    for (const o of objectLiterals(s)) {
-      // 只看**赋值**写法：`_bg:`（带冒号）。`cell._bg != null` 是读取，不算。
-      if (!/_bg\s*:/.test(o)) continue
-      if (o.includes('extra')) continue // extra 内部另算
-      if (!/_fg\s*:/.test(o)) { bad.push(`${rel(f)}: ${o.replace(/\s+/g, ' ').slice(0, 90)}`); break }
+    const code = sourceOf(f)
+    if (!code.trim()) continue
+    const { ast } = analyze(code)
+    for (const cell of styleCells(ast, code).topLevelCells) {
+      // 只看同一个对象字面量里是否也有 _fg；`cell._bg != null` 是读取，不是属性节点，天然排除。
+      if (!cell.node.properties.some((p) => p.type !== 'SpreadElement' && keyName(p.key) === '_fg')) {
+        bad.push(`${rel(f)}:${cell.line} 缺少 _fg`)
+        break
+      }
     }
   }
   assert.deepEqual(bad, [], '以下格子给了 _bg 但没给 _fg（深底上是黑字，看不清）：\n' + bad.join('\n'))

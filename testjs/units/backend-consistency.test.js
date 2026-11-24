@@ -27,6 +27,7 @@ const fx = createBackendDb({
 })
 
 const { renameUsernameWithCompensation } = require('../../student-backend/services/accountRename')
+const albumStore = require('../../student-backend/services/albumStore')
 
 test.before(() => fx.mount('/api/album', 'student-backend/routes/album.js'))
 test.after(() => fx.close())
@@ -172,18 +173,19 @@ test('renameOutcome：响应里没有 renamed 字段时不得报错（其他表�
   assert.equal(out.message, '')
 })
 
-test('album 的 PATCH /:id：相册名与路径必须清洗（零宽字符/控制字符不能原样落库）', async () => {
+test('album 改名：相册名与路径必须清洗（零宽字符/控制字符不能原样落库）', async () => {
   const conn = fx.reset()
   conn.prepare(
     "INSERT INTO albums (id, name, folder_path, kind, sort_order, created_at, updated_at) VALUES (1, '相册甲', 'C:/x', 'folder', 0, '', '')"
   ).run()
 
   // 名字里塞零宽字符（U+200B）与控制字符，路径里塞首尾空格
-  const r = await fx.call('PATCH', '/api/album/1', {
+  const r = albumStore.updateAlbumFieldsChecked(1, {
     name: '相\u200b册\u0007甲',
-    folder_path: '  C:/x  ',
-  })
-  assert.equal(r.status, 200, '修改应成功（实际 ' + r.status + '：' + r.text.slice(0, 160) + '）')
+    folderPath: '  C:/x  ',
+    kind: 'folder',
+  }, '')
+  assert.equal(r.ok, true, '清洗后应能写入')
 
   const row = conn.prepare('SELECT name, folder_path FROM albums WHERE id = 1').get()
   assert.ok(
@@ -194,14 +196,14 @@ test('album 的 PATCH /:id：相册名与路径必须清洗（零宽字符/控�
   assert.equal(row.folder_path, 'C:/x', '路径应去掉首尾空格（实际 ' + JSON.stringify(row.folder_path) + '）')
 })
 
-test('album 的 PATCH /:id：清洗后为空的名字必须被拒（不能写进空名相册）', async () => {
+test('album 改名：清洗后为空的名字必须被拒（不能写进空名相册）', async () => {
   const conn = fx.reset()
   conn.prepare(
     "INSERT INTO albums (id, name, folder_path, kind, sort_order, created_at, updated_at) VALUES (1, '相册甲', 'C:/x', 'folder', 0, '', '')"
   ).run()
 
-  const r = await fx.call('PATCH', '/api/album/1', { name: '   ' })
-  assert.equal(r.status, 400, '空名应被拒（实际 ' + r.status + '：' + r.text.slice(0, 160) + '）')
+  const r = albumStore.updateAlbumFieldsChecked(1, { name: '   ', kind: 'folder' }, '')
+  assert.equal(r.ok, false, '空名应被拒')
   const row = conn.prepare('SELECT name FROM albums WHERE id = 1').get()
   assert.equal(row.name, '相册甲', '原名不该被覆盖（实际 ' + JSON.stringify(row.name) + '）')
 })

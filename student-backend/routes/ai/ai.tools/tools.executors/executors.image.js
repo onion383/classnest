@@ -10,6 +10,11 @@ const {
 const dutyConfig = require('../../../../services/dutyConfig');
 // 座位列头/行走廊判定：走廊是真实列，列号必须按座位列序号算（见 services/seatGrid.js）
 const { SEAT_CELL, columnLabels, rowIsAisle } = require('../../../../services/seatGrid');
+const { readScope } = require('../../../../services/aiReadScope');
+
+// export_image 取样的三张表：出图会把真名/课程排布整块带出去，必须与读闸门同口径。
+// 目标名是工具入参（schedule/seat/duty），落库表名才是 closed_tables 的取值。
+const IMAGE_TARGET_TABLE = { schedule: 'schedule', seat: 'seat_layout', duty: 'duty_layout' };
 
 // 课表行标签：优先按 settings.sections 的节次结构取 lesson 行，退化为 periods/pass 序号
 function buildScheduleRowLabels(settings, cells) {
@@ -128,6 +133,13 @@ function buildExportImage({ targets, mode, filename } = {}) {
     if (!list.length) return { error: 'targets 只能是 schedule/seat/duty 中的一个或多个' };
   }
   const m = mode === 'big' ? 'big' : 'daily';
+  // 出图链路过去整条没接读闸门（K02-04 / N3-16）：老师把座位/值日表设成「完全禁止」后，
+  // 仍可让 AI 导出一张带全部姓名的 PNG。任何一个目标被关都拒绝整次导出，
+  // 明确告诉模型是哪张表被关（而不是悄悄少导一张）。
+  for (const t of list) {
+    const key = IMAGE_TARGET_TABLE[t];
+    if (key && !readScope.isTableReadable(key)) return { error: readScope.closedError(key).error };
+  }
   const items = [];
   for (const t of list) {
     const built = t === 'schedule' ? buildScheduleImage() : t === 'seat' ? buildSeatImage() : buildDutyImage(m);

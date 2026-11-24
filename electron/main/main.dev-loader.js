@@ -38,8 +38,10 @@ function loadUrlWithRetry(win, url, retries = 150, intervalMs = 200) {
   const req = http.get(url, (res) => {
     let body = ''
     res.setEncoding('utf8')
-    // dev 子页面只有几 KB：读够判据就停止累积，但仍继续消费流（避免占着 socket）
-    res.on('data', (chunk) => { if (body.length < 16 * 1024) body += chunk })
+    // dev 子页面只有几 KB：读够判据就停止累积，但仍继续消费流（避免占着 socket）。
+    // 阈值留足 256KB：归属判据找的是 HTML 头部之后才出现的 module 入口标签，
+    // 16KB 在页面变大后会把自家页面误判成第三方继续重试（E01-10）。
+    res.on('data', (chunk) => { if (body.length < 256 * 1024) body += chunk })
     res.on('end', () => {
       // 只认 HTTP 200 会在 dev 端口被别的程序占住时把**第三方页面**加载进来，
       // 而 preload 已注入 window.electron（含 get-master-key）—— 能力暴露给陌生页面。
@@ -140,8 +142,9 @@ function pollViteAndNavigate(win, retries = 100, slow = false) {
   const req = http.get(ports.frontendOrigin + '/', (res) => {
     let body = ''
     res.setEncoding('utf8')
-    // dev 的 index.html 只有几 KB：读够判据就停止累积，但仍继续消费流（避免占着 socket）
-    res.on('data', (chunk) => { if (body.length < 16 * 1024) body += chunk })
+    // dev 的 index.html 只有几 KB：读够判据就停止累积，但仍继续消费流（避免占着 socket）。
+    // 与子页面同阈值 256KB（E01-10）。
+    res.on('data', (chunk) => { if (body.length < 256 * 1024) body += chunk })
     res.on('end', () => {
       if (res.statusCode !== 200 || !looksLikeOurVite(body)) {
         // 只在首次与每 30 次提示：端口长期被别的服务占着时，这条会按 1s/次 的节奏

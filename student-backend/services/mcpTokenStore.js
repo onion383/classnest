@@ -43,8 +43,17 @@ function readAll() {
   }
 }
 
+// core 索引写盘必须原子：直接 writeFileSync 会先截断目标，断电/崩溃时留下半截 JSON，
+// readAll 解析失败兜底 [] → 所有令牌瞬间不可用（K04-03）。写临时文件再同卷 rename 原子替换。
 function writeAll(list) {
-  fs.writeFileSync(FILE, JSON.stringify(list, null, 2), { encoding: 'utf8', mode: 0o600 });
+  const tmp = `${FILE}.tmp-${process.pid}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(list, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, FILE);
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }); } catch (_) { /* 清理失败不掩盖原始错误 */ }
+    throw e;
+  }
 }
 
 // 有效期只认界面给的五档，别的（缺省/负数/乱填）一律按「不过期」处理。
@@ -155,6 +164,25 @@ function revoke(id, slug) {
   return changed;
 }
 
+// 按班级整批撤销：改密 / 恢复词重置 / 删账号这类「凭证变更」必须让该班所有
+// MCP 集成凭据一起失效（N3-04）。普通登出是否联动属产品取舍，不在本函数里替调用方决定。
+// 返回实际撤销条数；没有可撤销的令牌返回 0（幂等）。
+function revokeBySlug(slug) {
+  if (!slug || typeof slug !== 'string') return 0;
+  const list = readAll();
+  let changed = 0;
+  const now = new Date().toISOString();
+  for (const x of list) {
+    if (x.slug !== slug || x.revoked_at) continue;
+    x.revoked_at = now;
+    changed += 1;
+    try { dbManager.withDb(x.slug, () => db.prepare('DELETE FROM mcp_tokens WHERE hash = ?').run(x.hash)); }
+    catch (_) { /* 班级库暂时打不开不阻断撤销：core 已 revoked，鉴权层已生效 */ }
+  }
+  if (changed) writeAll(list);
+  return changed;
+}
+
 // 彻底删除记录：从 core 索引里整条抹掉，界面列表不再显示。
 // 与 revoke 的区别：revoke 只标记失效、留条目供追溯；remove 是「去除记录」。
 // 只允许删已经撤销/过期的令牌，活着的有效令牌要先走 revoke，避免误删后失去追溯。
@@ -170,4 +198,4 @@ function remove(id, slug) {
   return true;
 }
 
-module.exports = { create, verify, list, getPlain, revoke, remove, hashToken, FILE };
+module.exports = { create, verify, list, getPlain, revoke, revokeBySlug, remove, hashToken, FILE };

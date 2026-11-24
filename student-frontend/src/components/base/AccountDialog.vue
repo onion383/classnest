@@ -1,11 +1,10 @@
 <template>
-  <Teleport to="body">
-    <Transition name="dialog">
-      <div
-        v-if="visible"
-        class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10002] pointer-events-auto no-dialog-pulse"
-        @click.self="$emit('close')"
-      >
+  <DialogShell
+    :visible="visible"
+    :z-index="10002"
+    overlay-class="bg-black/50 pointer-events-auto no-dialog-pulse"
+    @overlay="$emit('close')"
+  >
         <div class="bg-surface p-5 rounded-xl w-[340px] max-w-[92vw] shadow-lg dialog-card">
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-lg font-bold text-text flex items-center gap-2"><IconGlyph name="user" tint="current" glyph :size="18" /> 账户</h3>
@@ -22,9 +21,7 @@
             @click="confirmOpen = true"
           >退出登录</button>
         </div>
-      </div>
-    </Transition>
-  </Teleport>
+  </DialogShell>
 
   <!-- 二次确认：确认后才退出 -->
   <ConfirmDialog
@@ -45,6 +42,7 @@ import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import ConfirmDialog from './ConfirmDialog.vue'
+import DialogShell from './DialogShell.vue'
 import { clearMediaToken } from '../../utils/apiUrl'
 import { AUTH_API } from '../../utils/apiPaths.js'
 import { useNotification } from '../../composables/useNotification.js'

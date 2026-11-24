@@ -16,6 +16,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const ROOT = path.join(__dirname, '../..')
+const scan = require('../_source-scan.cjs')
 const VUE = 'student-frontend/src/views/ScheduleView/ScheduleView.vue'
 const ACTIVE = 'student-frontend/src/views/ScheduleView/ScheduleView.active.js'
 const MASTER = 'student-frontend/src/views/ScheduleView/ScheduleView.master.js'
@@ -27,9 +28,22 @@ const stripComments = (s) => s
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^[ \t]*\/\/.*$/gm, '')
 
-// 模块返回对象里的方法名：定义都写在 `return {` 内、缩进 4 空格（更深的是函数体里的调用，不算）。
+// 模块 return 出去的对象里的键名（T07-10）：
+// 原正则只认「4 空格缩进 + name(」，把 `saveActive: async () => {}`、缩进被格式化的
+// 方法、简写属性 `return { saveActive }` 全漏掉 —— 漏掉的方法会被当成「未定义」误红，
+// 或反过来让真正的未定义调用蒙混过关。改为用 AST 取每个 return 的对象字面量键。
 function methodKeys(src) {
-  return [...src.matchAll(/\n {4}(?:async )?([A-Za-z_$][\w$]*)\s*\(/g)].map(m => m[1])
+  const { ast } = scan.analyze(src)
+  const names = new Set()
+  scan.walk(ast.program, (node) => {
+    if (node.type !== 'ReturnStatement' || !node.argument || node.argument.type !== 'ObjectExpression') return
+    for (const p of node.argument.properties) {
+      if (p.type !== 'ObjectProperty' && p.type !== 'ObjectMethod') continue
+      const k = scan.keyName(p.key)
+      if (k) names.add(k)
+    }
+  })
+  return [...names]
 }
 
 function missingMethods(vueSrc, moduleSrcs) {

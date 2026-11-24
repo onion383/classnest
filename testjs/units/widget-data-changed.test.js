@@ -14,6 +14,9 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
 const { pathToFileURL } = require('node:url')
+const {
+  analyze, walk, keyName, memberPath, findFunction, scriptBlocks,
+} = require('../_source-scan.cjs')
 
 const ROOT = process.env.CLASSNEST_ROOT || path.join(__dirname, '../..')
 const MODULE = pathToFileURL(path.join(ROOT, 'student-frontend/src/utils/widgetDataChanged.js')).href
@@ -123,29 +126,111 @@ test('to-widget 中继：两个窗口都收到，销毁中的窗口跳过且不�
 })
 
 // —— ③ 接线（源码判据）——
+// 为什么从「正则配空格」改成 AST：
+//   旧判据把 `if (announceDataChanged) widgetDataChanged.announce(res.config)`、
+//   `if (loadingAll) { refreshPending = true; return }` 这类原文（含分号与空格）焊死，
+//   一格式化就假红；而 `[\s\S]*?` 又会被注释/字符串里的同名文本骗过（漏报）。
+//   AST 看的是真实调用/真实 if 结构，与缩进、空格、引号无关。
+
+const astOf = (rel) => analyze(rel.endsWith('.vue') ? scriptBlocks(read(rel)) : read(rel)).ast
+const propOf = (obj, name) => (obj.properties || []).find(
+  (p) => p.type === 'ObjectProperty' && keyName(p.key) === name,
+) || null
+const isCallTo = (node, path) => node.type === 'CallExpression' && memberPath(node.callee) === path
+const hasReturn = (node) => {
+  let hit = false
+  walk(node, (n) => { if (n.type === 'ReturnStatement') hit = true })
+  return hit
+}
+function evalNumeric(node) {
+  if (!node) return null
+  if (node.type === 'NumericLiteral') return node.value
+  if (node.type === 'BinaryExpression') {
+    const a = evalNumeric(node.left)
+    const b = evalNumeric(node.right)
+    if (a == null || b == null) return null
+    if (node.operator === '*') return a * b
+    if (node.operator === '+') return a + b
+    if (node.operator === '-') return a - b
+    if (node.operator === '/') return a / b
+  }
+  return null
+}
+
+// setupApiClient({ announceDataChanged: true }) 里的开关值
+function announceFlag(ast) {
+  let value = null
+  walk(ast.program, (node) => {
+    if (!isCallTo(node, 'setupApiClient')) return
+    const arg = node.arguments[0]
+    if (!arg || arg.type !== 'ObjectExpression') return
+    const p = propOf(arg, 'announceDataChanged')
+    if (p && p.value.type === 'BooleanLiteral') value = p.value.value
+  })
+  return value
+}
 
 test('接线：只有主窗口开启广播，且成功拦截器真的调用它', () => {
-  const main = code('student-frontend/src/main.js')
-  assert.match(main, /setupApiClient\(\{[\s\S]*?announceDataChanged:\s*true/)
+  assert.equal(announceFlag(astOf('student-frontend/src/main.js')), true,
+    '主窗口必须 setupApiClient({ announceDataChanged: true })')
 
-  const client = code('student-frontend/src/utils/httpClient.js')
-  assert.match(client, /import \{ createWidgetDataChangedAnnouncer \} from '\.\/widgetDataChanged\.js'/)
-  assert.match(client, /if \(announceDataChanged\) widgetDataChanged\.announce\(res\.config\)/)
-  assert.match(client, /window\.electron\.send\(SEND\.TO_WIDGET, payload\)/)
+  const client = astOf('student-frontend/src/utils/httpClient.js')
+  let importDecl = null
+  walk(client.program, (node) => {
+    if (node.type === 'ImportDeclaration' && node.source.value === './widgetDataChanged.js') importDecl = node
+  })
+  assert.ok(importDecl, 'httpClient 必须从 widgetDataChanged.js 引入广播器')
+  assert.ok(importDecl.specifiers.some((s) => s.type === 'ImportSpecifier'
+    && (s.imported.name || s.imported.value) === 'createWidgetDataChangedAnnouncer'),
+  'httpClient 必须引入 createWidgetDataChangedAnnouncer')
+
+  // 成功拦截器里必须「在 if (announceDataChanged) 保护下」调用 announce(res.config)
+  let guardedAnnounce = false
+  walk(client.program, (node) => {
+    if (!isCallTo(node, 'widgetDataChanged.announce')) return
+    const arg = node.arguments[0]
+    if (!arg || memberPath(arg) !== 'res.config') return
+    guardedAnnounce = true
+  })
+  assert.ok(guardedAnnounce, '成功拦截器必须调用 widgetDataChanged.announce(res.config)')
+  let hasGuardIf = false
+  walk(client.program, (node) => {
+    if (node.type === 'IfStatement' && node.test.type === 'Identifier' && node.test.name === 'announceDataChanged') {
+      hasGuardIf = true
+    }
+  })
+  assert.ok(hasGuardIf, '广播开关不能是死值：要按 announceDataChanged 判断')
+
+  let sendsToWidget = false
+  walk(client.program, (node) => {
+    if (!isCallTo(node, 'window.electron.send')) return
+    const [ch, payload] = node.arguments
+    if (ch && memberPath(ch) === 'SEND.TO_WIDGET' && payload && memberPath(payload) === 'payload') {
+      sendsToWidget = true
+    }
+  })
+  assert.ok(sendsToWidget, '中继必须把 payload 发到 SEND.TO_WIDGET')
 
   for (const rel of [
     'student-frontend/src/subwindows/setup/main.js',
     'student-frontend/src/subwindows/widget/main.js',
     'student-frontend/src/subwindows/desktop-widget/main.js',
   ]) {
-    assert.ok(!/announceDataChanged:\s*true/.test(code(rel)), `${rel} 不该广播（会产生回声）`)
+    assert.notEqual(announceFlag(astOf(rel)), true, `${rel} 不该广播（会产生回声）`)
   }
 })
 
 test('接线：主进程中继把桌面挂件放进同一张窗口表', () => {
-  const widgetMain = code('electron/main/main.widget.js')
-  assert.match(widgetMain, /require\('\.\/widget-relay'\)/)
-  assert.match(widgetMain, /IPC\.on\(CH\.TO_WIDGET[\s\S]*?relayToWidgetWindows\(data, \[widgetWindow, desktopWidgetWindow\]\)/)
+  const widgetMain = astOf('electron/main/main.widget.js')
+  let relayCall = null
+  walk(widgetMain.program, (node) => {
+    if (!isCallTo(node, 'relayToWidgetWindows')) return
+    const second = node.arguments[1]
+    if (!second || second.type !== 'ArrayExpression') return
+    const names = second.elements.map((e) => (e && e.type === 'Identifier' ? e.name : null))
+    if (names.includes('widgetWindow') && names.includes('desktopWidgetWindow')) relayCall = node
+  })
+  assert.ok(relayCall, '主进程必须把 widgetWindow 与 desktopWidgetWindow 一起交给 relayToWidgetWindows')
 
   // 不新增 IPC 通道名：data-changed 是 from-main 消息里的 type，不是新通道
   const channels = JSON.parse(read('electron/ipc-channels.json'))
@@ -155,22 +240,130 @@ test('接线：主进程中继把桌面挂件放进同一张窗口表', () => {
 })
 
 test('接线：挂件真订阅、防抖、并在卸载时配对 off', () => {
-  const dw = code('student-frontend/src/subwindows/desktop-widget/DesktopWidget.vue')
-  assert.match(dw, /import \{ INVOKE, SEND, RECEIVE \} from '\.\.\/\.\.\/electronChannels\.js'/)
-  assert.match(dw, /data\.type !== 'data-changed'/)
+  const dw = astOf('student-frontend/src/subwindows/desktop-widget/DesktopWidget.vue')
+  let channelsImport = null
+  walk(dw.program, (node) => {
+    if (node.type === 'ImportDeclaration' && node.source.value === '../../electronChannels.js') channelsImport = node
+  })
+  assert.ok(channelsImport, '挂件必须从 electronChannels.js 引入通道名')
+  const imported = new Set(channelsImport.specifiers
+    .filter((s) => s.type === 'ImportSpecifier')
+    .map((s) => (s.imported.name || s.imported.value)))
+  for (const n of ['INVOKE', 'SEND', 'RECEIVE']) assert.ok(imported.has(n), `挂件应引入 ${n}`)
+
+  const onFromMain = findFunction(dw, 'onFromMain')
+  assert.ok(onFromMain, '挂件应有 onFromMain 处理函数')
+  // data.type !== 'data-changed' 时直接 return，不刷新
+  let typeGuard = false
+  walk(onFromMain.node, (node) => {
+    if (node.type !== 'IfStatement') return
+    // 判据可能是 `!data || data.type !== 'data-changed'`，在 test 子树里找那次比较
+    let filtersType = false
+    walk(node.test, (t) => {
+      if (t.type === 'BinaryExpression' && t.operator === '!=='
+        && memberPath(t.left) === 'data.type'
+        && t.right.type === 'StringLiteral' && t.right.value === 'data-changed') filtersType = true
+    })
+    if (filtersType && hasReturn(node.consequent)) typeGuard = true
+  })
+  assert.ok(typeGuard, '收到 from-main 时要按 data.type 过滤，只处理 data-changed')
+
   // defer() 返回的是调度函数本身，必须直接调用；写成 .schedule(...) 会在收到通知时抛
   // TypeError（挂件一直不刷新，2026-11-11 真机日志实锤）。
-  assert.match(dw, /scheduleDataRefresh\(\(\) => loadAll\(\), 200\)/)
-  assert.doesNotMatch(dw, /scheduleDataRefresh\.schedule/, 'defer() 的返回值不是 { schedule } 对象')
-  assert.match(dw, /const scheduleDataRefresh = disposables\.defer\(\)/, '必须用 defer（timeout 的返回函数不清定时器）')
-  assert.match(dw, /window\.electron\.on\(RECEIVE\.FROM_MAIN, onFromMain\)/)
-  assert.match(dw, /disposables\.add\(\(\) => window\.electron\.off\(RECEIVE\.FROM_MAIN, fromMainHandler\)\)/)
-  assert.match(dw, /disposables\.interval\(loadAll, 5 \* 60 \* 1000\)/, '5 分钟兜底轮询不能被删')
+  let scheduleCall = null
+  walk(onFromMain.node, (node) => {
+    if (!isCallTo(node, 'scheduleDataRefresh')) return
+    const [fn, delay] = node.arguments
+    if (fn && fn.type === 'ArrowFunctionExpression' && delay && evalNumeric(delay) === 200) scheduleCall = node
+  })
+  assert.ok(scheduleCall, '收到 data-changed 后应 scheduleDataRefresh(() => loadAll(), 200)')
+  let schedulesLoadAll = false
+  walk(scheduleCall.arguments[0].body, (node) => {
+    if (isCallTo(node, 'loadAll')) schedulesLoadAll = true
+  })
+  assert.ok(schedulesLoadAll, '防抖回调必须调用 loadAll')
+
+  let badScheduleMember = false
+  walk(dw.program, (node) => {
+    if (node.type === 'MemberExpression' && memberPath(node) === 'scheduleDataRefresh.schedule') badScheduleMember = true
+  })
+  assert.ok(!badScheduleMember, 'defer() 的返回值不是 { schedule } 对象')
+
+  let deferDecl = null
+  walk(dw.program, (node) => {
+    if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier' && node.id.name === 'scheduleDataRefresh') {
+      deferDecl = node
+    }
+  })
+  assert.ok(deferDecl && deferDecl.init && isCallTo(deferDecl.init, 'disposables.defer'),
+    '必须用 defer()（timeout 的返回函数不清定时器）')
+
+  let subscribes = false
+  let unsubscribes = false
+  let fiveMinPoll = false
+  walk(dw.program, (node) => {
+    if (isCallTo(node, 'window.electron.on')) {
+      const [ch, handler] = node.arguments
+      if (ch && memberPath(ch) === 'RECEIVE.FROM_MAIN' && handler && memberPath(handler) === 'onFromMain') subscribes = true
+    }
+    if (isCallTo(node, 'disposables.interval')) {
+      const [fn, ms] = node.arguments
+      if (fn && memberPath(fn) === 'loadAll' && evalNumeric(ms) === 300000) fiveMinPoll = true
+    }
+  })
+  assert.ok(subscribes, '必须 window.electron.on(RECEIVE.FROM_MAIN, onFromMain)')
+  // 卸载时配对 off（用 fromMainHandler 引用），否则热切换后回调越积越多
+  walk(dw.program, (node) => {
+    if (!isCallTo(node, 'disposables.add')) return
+    const fn = node.arguments[0]
+    if (!fn || !fn.body) return
+    walk(fn.body, (inner) => {
+      if (!isCallTo(inner, 'window.electron.off')) return
+      const [ch, handler] = inner.arguments
+      if (ch && memberPath(ch) === 'RECEIVE.FROM_MAIN' && handler && memberPath(handler) === 'fromMainHandler') unsubscribes = true
+    })
+  })
+  assert.ok(unsubscribes, '卸载时必须配对 window.electron.off(RECEIVE.FROM_MAIN, fromMainHandler)')
+  assert.ok(fiveMinPoll, '5 分钟兜底轮询不能被删')
 })
 
 test('接线：在途轮询不能吞掉这次刷新（补拉链路）', () => {
-  const dw = code('student-frontend/src/subwindows/desktop-widget/DesktopWidget.vue')
-  assert.match(dw, /if \(loadingAll\) \{ refreshPending = true; return \}/)
-  assert.match(dw, /if \(refreshPending\) \{\s*refreshPending = false\s*loadAll\(\)/)
-  assert.match(dw, /refreshPending = false/, '换号时也要清掉待刷新标记')
+  const dw = astOf('student-frontend/src/subwindows/desktop-widget/DesktopWidget.vue')
+  const loadAll = findFunction(dw, 'loadAll')
+  assert.ok(loadAll, '挂件应有 loadAll')
+
+  let pendingSet = false
+  let drain = false
+  walk(loadAll.node, (node) => {
+    if (node.type !== 'IfStatement') return
+    if (node.test.type === 'Identifier' && node.test.name === 'loadingAll') {
+      const c = node.consequent
+      let setsPending = false
+      walk(c, (inner) => {
+        if (inner.type === 'AssignmentExpression' && memberPath(inner.left) === 'refreshPending'
+          && inner.right.type === 'BooleanLiteral' && inner.right.value === true) setsPending = true
+      })
+      if (setsPending && hasReturn(c)) pendingSet = true
+    }
+    if (node.test.type === 'Identifier' && node.test.name === 'refreshPending') {
+      const c = node.consequent
+      let clears = false
+      let reloads = false
+      walk(c, (inner) => {
+        if (inner.type === 'AssignmentExpression' && memberPath(inner.left) === 'refreshPending'
+          && inner.right.type === 'BooleanLiteral' && inner.right.value === false) clears = true
+        if (isCallTo(inner, 'loadAll')) reloads = true
+      })
+      if (clears && reloads) drain = true
+    }
+  })
+  assert.ok(pendingSet, '轮询在途时要置 refreshPending = true 并 return（不能直接吞掉通知）')
+  assert.ok(drain, 'finally 里要按 refreshPending 再补拉一次')
+
+  let clears = 0
+  walk(dw.program, (node) => {
+    if (node.type === 'AssignmentExpression' && memberPath(node.left) === 'refreshPending'
+      && node.right.type === 'BooleanLiteral' && node.right.value === false) clears++
+  })
+  assert.ok(clears >= 2, '换号时也要清掉待刷新标记（refreshPending = false 至少两处）')
 })

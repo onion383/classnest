@@ -104,7 +104,11 @@ test('真实 mcp-token-store 测试不会删掉外部 DATA_DIR 里的令牌索�
     timeout: 60000,
   })
   assert.equal(r.status, 0, r.stdout + r.stderr)
-  assert.match(r.stdout, /# tests 2/, '孙进程必须真的跑完 mcp-token-store 的两条测试')
+  // 只校验「真的跑了且全通过」，不钉死兄弟文件的用例数（T05-04：增删用例不该让本用例红）
+  const total = r.stdout.match(/# tests (\d+)/)
+  const passed = r.stdout.match(/# pass (\d+)/)
+  assert.ok(total && Number(total[1]) > 0, '孙进程必须真的跑完 mcp-token-store 的测试')
+  assert.equal(Number(passed && passed[1]), Number(total[1]), '孙进程的测试必须全部通过\n' + r.stdout)
   assert.ok(fs.existsSync(tokenFile), '外部 DATA_DIR 的令牌索引绝不能被测试删掉')
   assert.equal(fs.readFileSync(tokenFile, 'utf8'), 'SENTINEL-DO-NOT-DELETE', '外部目录内容必须原封不动')
 })

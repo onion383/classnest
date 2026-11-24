@@ -11,6 +11,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const Module = require('node:module')
 const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
 const fx = createBackendDb({ label: 'student-namesake' })
@@ -86,11 +87,30 @@ test('接线：group/cadre 匹配都带 student_id IS NULL 兜底，不再无条
   }
 })
 
+// 把源码按 transform 变异后重新编译成模块：require 走原目录（拿到同一个 db 代理），
+// 这样变异体真的调用原 SQL / 原逻辑，而不是对字符串做正则（T08-02）。
+function loadMutated(rel, transform) {
+  const abs = path.join(ROOT, rel)
+  const src = fs.readFileSync(abs, 'utf8')
+  const out = transform(src)
+  assert.notEqual(out, src, '变异未匹配到目标代码')
+  const m = new Module(abs, null)
+  m.filename = abs
+  m.paths = Module._nodeModulePaths(path.dirname(abs))
+  m._compile(out, abs)
+  return m.exports
+}
+
 test('变异反证：把兜底改回无条件姓名 OR，行为判据必须失败', () => {
-  const s = src()
-  const mutated = s.replace(/student_id = \? OR \(student_id IS NULL AND TRIM\(member_name\) = TRIM\(\?\)\)/g,
-    'student_id = ? OR TRIM(member_name) = TRIM(?)')
-  assert.ok(mutated !== s, '变异没匹配到 group 兜底')
-  assert.ok(/FROM group_members WHERE student_id = \? OR TRIM\(member_name\)/.test(mutated),
-    '变异后应出现无条件姓名 OR（原 bug 形态）')
+  // 原 bug 形态：有效 id 的删除也按姓名 OR —— 同名学生 B 的行会被一起删掉
+  const mutated = loadMutated('student-backend/services/studentRelations.js', (s) => s.replace(
+    /student_id = \? OR \(student_id IS NULL AND TRIM\(member_name\) = TRIM\(\?\)\)/g,
+    'student_id = ? OR TRIM(member_name) = TRIM(?)',
+  ))
+  const conn = seedNamesakes()
+  const purged = mutated.purgeStudentRelations(ZHANG_WEI_1, { group: true, cadre: true })
+
+  assert.equal(purged.group, 3, '变异后 A 的清理把同名学生 B 的分组行也删了（原 bug 复现）')
+  assert.equal(conn.prepare('SELECT COUNT(*) AS c FROM group_members WHERE student_id = 2').get().c, 0,
+    '正例判据「同名学生 B 的关联完好」在变异后必然失败')
 })

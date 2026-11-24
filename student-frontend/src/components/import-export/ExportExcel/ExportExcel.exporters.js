@@ -115,7 +115,8 @@ export function useExportFormats(ctx) {
       const body = rows.slice(1);
       let html = `<div style="text-align:center; font-size:20px; font-weight:bold; margin-bottom:12px;">${ctx.escapeHtml(filename)}</div>`;
       html += '<table style="border-collapse:collapse; margin:0 auto; border-radius:0;">';
-      html += `<thead><tr style="background-color:${EXPORT_HEAD_BG}; color:${EXPORT_HEAD_FG};">${head.map(h => `<th style="${SCREENSHOT_CELL}">${h}</th>`).join('')}</tr></thead><tbody>`;
+      // 表头同样要转义（F03-08）：组名/列名允许用户输入，含 `<` 会破坏导出页结构
+      html += `<thead><tr style="background-color:${EXPORT_HEAD_BG}; color:${EXPORT_HEAD_FG};">${head.map(h => `<th style="${SCREENSHOT_CELL}">${ctx.escapeHtml(String(h ?? ''))}</th>`).join('')}</tr></thead><tbody>`;
       for (const r of body) {
         const cells = r.map((c, i) => {
           let style = SCREENSHOT_CELL;

@@ -18,11 +18,11 @@
       <div v-if="isEdit && mode === 'personal'" class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label class="block text-sm text-text-secondary mb-1">学生姓名</label>
-          <input readonly :value="editingRecord.姓名 || '-'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" />
+          <input readonly :value="editingRecord.姓名 || '-'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" aria-label="学生姓名" />
         </div>
         <div>
           <label class="block text-sm text-text-secondary mb-1">学号</label>
-          <input readonly :value="editingRecord.学号 || '-'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" />
+          <input readonly :value="editingRecord.学号 || '-'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" aria-label="学号" />
         </div>
       </div>
 
@@ -30,11 +30,11 @@
       <div v-if="isEdit && mode === 'group'" class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label class="block text-sm text-text-secondary mb-1">小组</label>
-          <input readonly :value="editingRecord.group_name || '-'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" />
+          <input readonly :value="editingRecord.group_name || '-'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" aria-label="小组" />
         </div>
         <div>
           <label class="block text-sm text-text-secondary mb-1">成员数</label>
-          <input readonly :value="editingRecord.成员数 ?? '-'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" />
+          <input readonly :value="editingRecord.成员数 ?? '-'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" aria-label="成员数" />
         </div>
       </div>
 
@@ -48,8 +48,7 @@
             placeholder="输入姓名搜索"
             class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"
             @focus="listVisible = true"
-            @blur="delayHide"
-          />
+            @blur="delayHide" aria-label="输入姓名搜索"/>
           <div
             v-if="listVisible"
             ref="studentListRef"
@@ -85,12 +84,14 @@
         <div class="grid grid-cols-2 gap-3">
           <AppSelect
             v-model="activeDimId"
+            aria-label="分组维度"
             @change="onDimChange"
             :options="dimOptions"
             class="w-full"
           />
           <AppSelect
             v-model="selectedGroupId"
+            aria-label="选择小组"
             :options="groupOptions"
             class="w-full"
           />
@@ -124,7 +125,7 @@
       <!-- 项目 -->
       <div class="mb-3">
         <label class="block text-sm text-text-secondary mb-1">项目 <span class="text-danger">*</span></label>
-        <input v-model="form.project" type="text" placeholder="如：卫生 / 纪律 / 学习 / 助人" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+        <input v-model="form.project" type="text" placeholder="如：卫生 / 纪律 / 学习 / 助人" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="如：卫生 / 纪律 / 学习 / 助人"/>
         <div class="flex flex-wrap gap-1.5 mt-1.5">
           <button
             v-for="p in commonProjects"
@@ -140,18 +141,18 @@
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label class="block text-sm text-text-secondary mb-1">分值 <span class="text-danger">*</span></label>
-          <input v-model.number="form.score" type="number" min="0.5" step="0.5" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+          <input v-model.number="form.score" type="number" min="0.5" step="0.5" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="分值" />
         </div>
         <div>
           <label class="block text-sm text-text-secondary mb-1">加分时间</label>
-          <input v-model="form.time" type="datetime-local" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+          <input v-model="form.time" type="datetime-local" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="加分时间" />
         </div>
       </div>
 
       <!-- 原因 -->
       <div class="mb-4">
         <label class="block text-sm text-text-secondary mb-1">原因</label>
-        <textarea v-model="form.reason" rows="2" :placeholder="mode === 'group' ? '如：本周卫生评比第一名（时间轴将显示「XX小组 因为 原因 加X分」）' : '如：主动打扫教室卫生（时间轴将显示「XXX 因为 原因 加X分」）'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"></textarea>
+        <textarea v-model="form.reason" rows="2" :placeholder="mode === 'group' ? '如：本周卫生评比第一名（时间轴将显示「XX小组 因为 原因 加X分」）' : '如：主动打扫教室卫生（时间轴将显示「XXX 因为 原因 加X分」）'" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" :aria-label="mode === 'group' ? '如：本周卫生评比第一名（时间轴将显示「XX小组 因为 原因 加X分」）' : '如：主动打扫教室卫生（时间轴将显示「XXX 因为 原因 加X分」）'"></textarea>
       </div>
 
       <div class="flex justify-end gap-2">
@@ -173,6 +174,7 @@ import DialogShell from '../base/DialogShell.vue'
 import '../../styles/dialog-transition.css'
 import { useNotification } from '../../composables/useNotification.js'
 import { formatDateTimeLocal } from '../../utils/dateTime.js'
+import { normSearchText } from '../../utils/tableSearch.js'
 import { createLatest } from '../../utils/latestOnly.js'
 
 defineOptions({ name: 'AddScoreDialog' })
@@ -218,8 +220,9 @@ const form = ref({
 const PROVISIONAL_ID = '__provisional__'
 const filteredStudents = computed(() => {
   const raw = String(keyword.value || '').trim()
-  const kw = raw.toLowerCase()
-  const matched = props.students.filter(s => !kw || String(s.姓名 || '').toLowerCase().includes(kw))
+  // 与表格搜索同口径：全半角 / 空白差异不影响命中（Q1-03）
+  const kw = normSearchText(raw)
+  const matched = props.students.filter(s => !kw || normSearchText(s.姓名).includes(kw))
   if (raw && matched.length === 0) {
     return [{ id: PROVISIONAL_ID, 姓名: raw, 学号: '', is_provisional: true }]
   }

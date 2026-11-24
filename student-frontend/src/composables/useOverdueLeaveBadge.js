@@ -33,6 +33,8 @@ registerUserScopedReset(() => {
   rows.value = []
   inflight = null
   revision++
+  // 登出/换号要释放定时器与 focus 监听，别让上一账号的轮询空转（F04-09）
+  if (disposables) { disposables.dispose(); disposables = null }
 })
 
 export function isOverdueLeave(row, now) {

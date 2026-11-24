@@ -158,7 +158,9 @@ export function useScheduleCommon(ctx, { SECTION_NAMES }) {
       while (cells.length < lessonCount) cells.push(Array(dayCount).fill({ course: '' }));
       cells = cells.slice(0, lessonCount).map(row => {
         while (row.length < dayCount) row.push({ course: '' });
-        return row;
+        // 双向对齐（F07-05）：表头缩短后，旧 cells 行尾多出的列必须裁掉，
+        // 否则导出/快照/AI 仍会读到渲染层看不见的悬空列。
+        return row.slice(0, dayCount);
       });
       return cells;
     },

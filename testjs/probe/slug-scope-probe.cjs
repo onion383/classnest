@@ -16,6 +16,9 @@
 //   把新写法逐条改回旧写法，要求对应判据**必须报警**。判据太松 = 假绿。
 //
 // 跑法：node testjs/probe/slug-scope-probe.cjs
+//
+// 常量约束（T02-10）：判据靠「源码里出现 slugScopes 的某个写法」，底座 API 改名或
+// 接线方式变化时本探针会红。改 utils/slugScopes.js 的导出名请同步这里。
 // =========================================================================
 const fs = require('node:fs')
 const path = require('node:path')
@@ -147,7 +150,9 @@ const CHECKS = [
         }
       }
       // 扫描「看起来像跨库状态」的新名字：不在清单里就要人工判定
-      const declRe = /(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+(?:Map|Set)\s*\(/g
+      // 只认**模块级**声明（行首无缩进）：函数内 `const excludeSet = new Set(...)` 是请求内局部量，
+      // 按请求回收，不是跨库状态。不锚定行首会把局部量误报成待判定（T02-10：判据太粗会假红）。
+      const declRe = /^(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+(?:Map|Set)\s*\(/gm
       for (const file of Object.keys(KNOWN)) {
         const text = s[file] || ''
         let m
@@ -186,8 +191,10 @@ const MUTATIONS = [
   },
   {
     name: '配额改回单桶 size', expect: 'C5', file: 'routes/album.js',
-    from: 'pendingInChild.totalSize() + n',
-    to: 'pendingInChild.size + n',
+    // 原锚点 `pendingInChild.totalSize() + n` 已被「额度与 pending 解耦」的修复删掉，
+    // 改为在清扫函数里注入一次 totalSize() 调用（等价于退回「用 pending 记额度」的写法）
+    from: 'for (const [, bucket] of pendingInChild.entries()) {',
+    to: 'void pendingInChild.totalSize(); for (const [, bucket] of pendingInChild.entries()) {',
   },
   {
     name: 'thumbReport 退回全局数组', expect: 'C6', file: 'worker.scan.js',

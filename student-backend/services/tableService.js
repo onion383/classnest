@@ -44,14 +44,39 @@ function fieldTypeMap(tableName) {
 
 // whereSql 只接受**服务端代码里的常量**（如 'is_provisional = 0'），不接用户输入，
 // 因此不需要参数化；调用方是 createDynamicTableRouter 的 listWhere 选项。
-function queryAll(tableName, whereSql = '') {
+// 分页可选（P3-10）：不传 limit 时行为与改造前完全一致（整表 + fields）。
+// 传了 limit 才多带 total/limit/offset，供前端做「无限滚动 / 分页」。
+// 上限 5000：既防「一次要 10 万行」，也不至于让正常页大小被卡。
+const MAX_PAGE_SIZE = 5000;
+
+function normalizePaging(paging) {
+  if (!paging) return null;
+  const limit = Number(paging.limit);
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error('limit 必须是正整数');
+  if (limit > MAX_PAGE_SIZE) throw new Error(`limit 不能超过 ${MAX_PAGE_SIZE}`);
+  const offset = Number(paging.offset == null ? 0 : paging.offset);
+  if (!Number.isInteger(offset) || offset < 0) throw new Error('offset 必须是非负整数');
+  return { limit, offset };
+}
+
+function queryAll(tableName, whereSql = '', paging = null) {
   assertValidTable(tableName);
   const where = whereSql ? ` WHERE ${whereSql}` : '';
-  const results = db.prepare(`SELECT * FROM ${tableName}${where} ORDER BY position ASC`).all();
+  const page = normalizePaging(paging);
+  let results;
+  let total;
+  if (page) {
+    total = db.prepare(`SELECT COUNT(*) AS n FROM ${tableName}${where}`).get().n;
+    results = db.prepare(`SELECT * FROM ${tableName}${where} ORDER BY position ASC LIMIT ? OFFSET ?`)
+      .all(page.limit, page.offset);
+  } else {
+    results = db.prepare(`SELECT * FROM ${tableName}${where} ORDER BY position ASC`).all();
+  }
   let fields = getFields(tableName);
   if (fields.length === 0 && results.length > 0) {
     fields = Object.keys(results[0]).filter(k => k !== 'id' && k !== 'position').map(k => ({ name: k, type: '文字' }));
   }
+  if (page) return { data: results, fields, total, limit: page.limit, offset: page.offset };
   return { data: results, fields };
 }
 

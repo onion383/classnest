@@ -1021,8 +1021,12 @@ let appsSaveQueue = Promise.resolve()
 function saveApps(attempt = 0) {
   // 未成功读取过就绝不写入：否则会把数据库里有、但本次还没读到的旧列表覆盖掉
   if (!appsLoaded.value) return appsSaveQueue
-  // 快照在任务真正发出时才取：排队期间用户可能又改了，重试更不能写回旧快照
-  const put = () => axios.put('/api/widget-settings/apps', { desktopApps: apps.value.slice(0, MAX_APPS) })
+  // 快照在任务真正发出时才取：排队期间用户可能又改了，重试更不能写回旧快照。
+  // 执行时再查一次 appsLoaded：登出/换号后队列里残留的任务必须直接作废（F04-05）。
+  const put = () => {
+    if (!appsLoaded.value) return undefined
+    return axios.put('/api/widget-settings/apps', { desktopApps: apps.value.slice(0, MAX_APPS) })
+  }
   // 前一个成功与否都继续排队（catch 吞掉），否则一次失败会把后续保存全卡死
   appsSaveQueue = appsSaveQueue.catch(() => {}).then(put).catch(() => {
     if (attempt < 2) {
@@ -1058,14 +1062,12 @@ async function loadAll() {
   // 旧响应回来后不能再写回 ref（否则挂件残留上一用户的课表/值日 —— 审查 v5 · V5-007）。
   const token = loadAllGuard.begin()
   try {
-    const [scheduleRes, dutyRes, countdownsRes, leavesRes, studentsRes] = await Promise.all([
-      axios.get('/api/schedule').catch(() => ({ data: { cells: [], settings: {} } })),
-      axios.get('/api/duty').catch(() => ({ data: { cells: {}, settings: {} } })),
-      axios.get('/api/countdowns').catch(() => ({ data: [] })),
-      axios.get('/api/leaves').catch(() => ({ data: { data: [] } })),
-      axios.get('/api/students').catch(() => ({ data: { data: [] } })),
-    ])
+    // P3-14：一轮只发 1 个概览请求，替代 5 份全量文档（名册只含 id/姓名）。
+    // 整包失败时保留旧数据；单项缺失按「该项没回来」处理，不覆盖已有值。
+    const res = await axios.get('/api/widget-overview').catch(() => null)
     if (!loadAllGuard.isCurrent(token)) return
+    const overview = res && res.data && typeof res.data === 'object' && !Array.isArray(res.data) ? res.data : null
+    if (!overview) return
     // 响应校验：只接受 { cells, settings } 形态。网络层偶发会把未解密的 { d } 信封
     // （或 Vite 代理的 HTML）当成 200 正常响应返回，直接赋值会让 settings.sections /
     // settings.items 抛错、整块白板——此时保留上一次的数据（默认值是空课表）。
@@ -1074,11 +1076,11 @@ async function loadAll() {
       if (!payload.settings || typeof payload.settings !== 'object') return prev
       return payload
     }
-    schedule.value = pickDoc(scheduleRes.data, schedule.value)
-    duty.value = pickDoc(dutyRes.data, duty.value)
-    countdowns.value = Array.isArray(countdownsRes.data) ? countdownsRes.data : (countdownsRes.data.data || [])
-    leaves.value = Array.isArray(leavesRes.data) ? leavesRes.data : (leavesRes.data.data || [])
-    students.value = Array.isArray(studentsRes.data) ? studentsRes.data : (studentsRes.data.data || [])
+    schedule.value = pickDoc(overview.schedule, schedule.value)
+    duty.value = pickDoc(overview.duty, duty.value)
+    if (Array.isArray(overview.countdowns)) countdowns.value = overview.countdowns
+    if (Array.isArray(overview.leaves)) leaves.value = overview.leaves
+    if (Array.isArray(overview.students)) students.value = overview.students
   } catch (_) {
     // 静默失败，保留旧数据
   } finally {
@@ -1113,6 +1115,8 @@ function resetBusinessState() {
   appsLoaded.value = false
   appsLoadLogged = false
   notLoggedIn.value = false
+  // 跟用户走的保存队列也要作废（F04-05）：否则登出瞬间已排队的 PUT 仍会按新用户的空列表发出去
+  appsSaveQueue = Promise.resolve()
 }
 
 function onAuthChanged() {

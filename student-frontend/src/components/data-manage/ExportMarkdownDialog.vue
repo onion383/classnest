@@ -1,19 +1,17 @@
 <template>
   <!-- 导出 Markdown 文件：只有「导出格式 + 文件名」两步（无选择步骤） -->
-  <Teleport to="body">
-  <Transition name="dialog">
-  <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="cancel">
+  <DialogShell :visible="visible" :z-index="10001" @overlay="cancel">
     <div class="bg-surface p-5 rounded-lg min-w-[400px] max-w-xl shadow-card border border-border dialog-card">
       <h3 class="text-lg font-bold mb-3">导出选项</h3>
 
       <div class="mb-4">
         <p class="font-semibold mb-2">导出格式：</p>
-        <AppSelect v-model="exportFormat" class="w-full" :options="FORMAT_OPTIONS" no-scroll />
+        <AppSelect v-model="exportFormat" aria-label="导出格式" class="w-full" :options="FORMAT_OPTIONS" no-scroll />
       </div>
 
       <div class="mb-4">
         <label class="font-semibold block mb-1">文件名</label>
-        <input v-model="filename" class="filename-input border border-border bg-surface text-text p-2 w-full !rounded-[12px]" />
+        <input v-model="filename" class="filename-input border border-border bg-surface text-text p-2 w-full !rounded-[12px]" aria-label="文件名" />
       </div>
 
       <div class="text-right">
@@ -21,14 +19,13 @@
         <button @click="doExport" :disabled="exporting" class="bg-info text-text-inverse border-none px-4 py-1.5 rounded-lg cursor-pointer disabled:opacity-50">{{ exporting ? '导出中…' : '导出' }}</button>
       </div>
     </div>
-  </div>
-  </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
 import { ref, watch } from 'vue'
 import AppSelect from '../base/AppSelect.vue'
+import DialogShell from '../base/DialogShell.vue'
 import { useNotification } from '../../composables/useNotification'
 import { runTableExport, FORMAT_OPTIONS, FORMAT_LABELS } from '../../composables/exportFormats.js'
 import { saveBlobWithDialog } from '../../utils/saveFile.js'
@@ -42,6 +39,8 @@ const props = defineProps({
   defaultFilename: { type: String, default: 'Markdown文件' },
 })
 const emit = defineEmits(['update:visible'])
+// Esc 关闭由 DialogShell 统一处理（含焦点还原与 Tab 圈定）
+
 const { success: notifySuccess, error: notifyError } = useNotification()
 
 const exportFormat = ref('md')

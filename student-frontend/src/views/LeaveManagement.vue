@@ -49,6 +49,7 @@
       :existingFields="leaveFields"
       :requiredFields="['姓名', '开始时间', '结束时间']"
       :templateName="'请假记录标准导入表'"
+      :students="students"
       @import-data="onImportData"
       @cancel="importDialogVisible = false"
     />
@@ -449,10 +450,10 @@ function recordLeaveUpdate(before, id, origin = '') {
   const after = snapshotLeaveRow(id)
   if (after) recordRowUpdate('leave_records', before, after, origin)
 }
-async function onImportData({ fields, rows }) {
+async function onImportData({ fields, rows, studentIds }) {
   importDialogVisible.value = false
   try {
-    const res = await axios.post(`${API}/leaves/import`, { fields, rows })
+    const res = await axios.post(`${API}/leaves/import`, { fields, rows, studentIds })
     notifySuccess(res.data.message || '导入成功')
     await loadAll()
     // 后端回传本次真正新建的行：一次导入只记一条撤销，不受每 key 50 条上限截断
@@ -530,25 +531,29 @@ function handleOverdueReturnAll() {
     }
   }
 }
-// 后端只有单条销假接口，所以逐条调用（串行，避免并发写库）；
-// 一条失败不影响其余，失败项留在列表里供重试。整批撤销共用一个 origin，
-// 一次 Ctrl+Z 就能退完，不会变成按 N 次。
+// 「全部销假」：一次批量端点写完（P3-11），不再逐条串行 POST。
+// 一条失败不影响其余：后端在同一事务里返回 updatedIds / missingIds，
+// 成功项留在 done 里落撤销快照，缺失项按姓名提示并留在列表供重试。
+// 整批撤销共用一个 origin，一次 Ctrl+Z 就能退完，不会变成按 N 次。
 async function runOverdueReturnAll(list) {
   overdueBusy.value = true
   const origin = list.length > 1 ? newUndoBatchId() : ''
   const done = []
   const failedNames = []
   let lastErr = null
+  // 撤销需要「改前快照」，必须在发请求前取
+  const snapshots = new Map(list.map((rec) => [rec.id, snapshotLeaveRow(rec.id) || { ...rec }]))
   try {
+    let updatedIds = null
+    try {
+      const res = await axios.post(`${API}/leaves/return-batch`, { ids: list.map((rec) => rec.id) })
+      updatedIds = new Set((res.data && res.data.updatedIds) || [])
+    } catch (err) {
+      lastErr = err
+    }
     for (const rec of list) {
-      const before = snapshotLeaveRow(rec.id) || { ...rec }
-      try {
-        await axios.post(`${API}/leaves/${rec.id}/return`)
-        done.push({ id: rec.id, before })
-      } catch (err) {
-        failedNames.push(rec.姓名)
-        lastErr = err
-      }
+      if (updatedIds && updatedIds.has(rec.id)) done.push({ id: rec.id, before: snapshots.get(rec.id) })
+      else failedNames.push(rec.姓名)
     }
     if (done.length) {
       // 一次全表刷新后再取 after 快照，别逐条刷界面
@@ -700,7 +705,8 @@ async function saveColumnOrder(table, from, to) {
   if (from === to) return
   const keys = { active: activeLeaveFields, returned: returnedLeaveFields, records: leaveFields }
   const key = keys[table]
-  const arr = [...key.value]
+  const before = [...key.value] // 失败要能退回改前列序，否则界面与库短暂不一致（F06-05）
+  const arr = [...before]
   const [moved] = arr.splice(from, 1)
   if (!moved) return
   arr.splice(to, 0, moved)
@@ -708,6 +714,7 @@ async function saveColumnOrder(table, from, to) {
   try {
     await axios.post(`${API}/leaves/today-columns`, { table, order: arr.map(f => f.name) })
   } catch (err) {
+    key.value = before
     notifyError('列顺序保存失败')
   }
 }

@@ -20,12 +20,14 @@ const assert = require('node:assert/strict')
 const { createBackendDb } = require('./_db-express-fixture.cjs')
 
 const fx = createBackendDb({ label: 'leave-provisional' })
-const conn = fx.conn
+// 连接随 reset 变化：每个用例独立库，写路径互不累积（T06-04）
+let conn = fx.conn
 
 let base
 test.before(async () => {
   base = await fx.mount('/api/leaves', 'student-backend/routes/leaves.js')
 })
+test.beforeEach(() => { conn = fx.reset() })
 test.after(() => fx.close())
 
 const postTo = async (path, body) => {

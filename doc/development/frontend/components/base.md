@@ -24,6 +24,7 @@ classnest/
         │       ├── IconGlyph.vue  # 统一图标
         │       ├── LeaveTimeline.vue  # 通用时间轴
         │       ├── MediaViewer.vue  # 媒体查看器
+        │       ├── MoreMenu.vue  # 更多操作菜单
         │       ├── NotificationToast.vue  # 全局通知
         │       ├── SearchBar.vue  # 搜索面板
         │       ├── SearchDialog.vue  # 全局搜索弹窗
@@ -31,6 +32,7 @@ classnest/
         │       ├── StatBarList.vue  # 条形统计列表
         │       ├── Tabs.vue  # 标签页
         │       ├── ThemePickerDialog.vue  # 主题选择
+        │       ├── TodoBell.vue  # 待处理胶囊
         │       ├── ViewSwitch.vue  # 视图切换
         │       └── WeekSwitcher.vue  # 周切换条
         ├── composables/

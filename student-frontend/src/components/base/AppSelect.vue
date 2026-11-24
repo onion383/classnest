@@ -5,6 +5,9 @@
       type="button"
       class="av-select__trigger"
       :disabled="disabled"
+      :aria-expanded="open"
+      aria-haspopup="listbox"
+      :aria-label="ariaLabel || undefined"
       @click="toggle"
       @keydown.down.prevent="move(1)"
       @keydown.up.prevent="move(-1)"
@@ -25,6 +28,9 @@
         <li
           v-for="(opt, i) in list"
           :key="opt.value == null ? i : opt.value"
+          role="option"
+          :aria-selected="opt.value === resolved?.value"
+          :aria-disabled="opt.disabled ? 'true' : undefined"
           class="av-select__option"
           :class="{ 'av-select__option--active': i === hoverIdx, 'av-select__option--selected': opt.value === resolved?.value, 'av-select__option--disabled': opt.disabled }"
           @mouseenter="hoverIdx = i"
@@ -33,7 +39,7 @@
           <span class="av-select__option-label">{{ opt.label }}</span>
           <IconGlyph name="check" tint="current" glyph v-if="opt.value === resolved?.value" class="av-select__check" :size="14" :stroke-width="1.8" />
         </li>
-        <li v-if="!list.length" class="av-select__option av-select__option--empty">无选项</li>
+        <li v-if="!list.length" class="av-select__option av-select__option--empty" role="presentation">无选项</li>
       </ul>
       <!-- 下拉候选：细滑块 + 无箭头 + 悬停淡入。菜单是 fixed + Teleport，滚动条用 fixed 模式跟随 -->
       <CustomScrollbar
@@ -73,7 +79,10 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
   // 不限高、不出内部滚动条：选项不多且需要一眼全部看到时用（如导出格式的 8 项，
   // 默认 220px 上限会把最后的「图片 / PDF」藏到折叠区外）
-  noScroll: { type: Boolean, default: false }
+  noScroll: { type: Boolean, default: false },
+  // 可访问名：触发器里只有当前值/占位符，placeholder 为空或只有一个图标时
+  // 读屏拿不到名称，调用方用这个字段补（F01-06）。
+  ariaLabel: { type: String, default: '' }
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])

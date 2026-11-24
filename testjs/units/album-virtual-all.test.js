@@ -20,33 +20,37 @@ const { createBackendDb } = require('./_db-express-fixture.cjs')
 // currentSlug 给固定值：虚拟相册复制完会清源行缩略图缓存（路径按 slug 推导），
 // 不给的话会算出怪路径。
 const fx = createBackendDb({ label: 'album-virtual-all', currentSlug: 'testslug' })
-const conn = fx.conn
+// 连接随 reset 变化：每个用例重新播种，避免互相依赖（T04-04）
+let conn = fx.conn
 
 const FOLDER_ID = 1
 const VIRTUAL_ID = 2
-const ins = conn.prepare(
-  'INSERT INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?,?,?,?,?,?,?,?,?)'
-)
-conn.prepare("INSERT INTO albums (id, name, folder_path, kind) VALUES (?,?,?,?)").run(FOLDER_ID, '文件夹册', 'D:\\photos', 'folder')
-conn.prepare("INSERT INTO albums (id, name, folder_path, kind) VALUES (?,?,?,?)").run(VIRTUAL_ID, '虚拟册', '', 'virtual')
-
 const FOLDER_PHOTOS = 12
 const VIRTUAL_PHOTOS = 5
-conn.transaction(() => {
-  for (let i = 0; i < FOLDER_PHOTOS; i++) {
-    ins.run(FOLDER_ID, `D:\\photos\\IMG_${i}.jpg`, `IMG_${i}.jpg`, 1000 + i,
-      `2026-05-${String((i % 28) + 1).padStart(2, '0')} 10:00:00`, `2026-05-${String((i % 28) + 1).padStart(2, '0')}`, '', 'exif', '')
-  }
-  for (let i = 0; i < VIRTUAL_PHOTOS; i++) {
-    ins.run(VIRTUAL_ID, `D:\\photos\\V_${i}.jpg`, `V_${i}.jpg`, 2000 + i,
-      `2026-06-0${i + 1} 10:00:00`, `2026-06-0${i + 1}`, '', 'exif', '')
-  }
-})()
+
+function seed(c) {
+  const ins = c.prepare(
+    'INSERT INTO album_photos (album_id, file_path, file_name, file_size, mtime, photo_date, exif_date, date_src, thumb_path) VALUES (?,?,?,?,?,?,?,?,?)'
+  )
+  c.prepare("INSERT INTO albums (id, name, folder_path, kind) VALUES (?,?,?,?)").run(FOLDER_ID, '文件夹册', 'D:\\photos', 'folder')
+  c.prepare("INSERT INTO albums (id, name, folder_path, kind) VALUES (?,?,?,?)").run(VIRTUAL_ID, '虚拟册', '', 'virtual')
+  c.transaction(() => {
+    for (let i = 0; i < FOLDER_PHOTOS; i++) {
+      ins.run(FOLDER_ID, `D:\\photos\\IMG_${i}.jpg`, `IMG_${i}.jpg`, 1000 + i,
+        `2026-05-${String((i % 28) + 1).padStart(2, '0')} 10:00:00`, `2026-05-${String((i % 28) + 1).padStart(2, '0')}`, '', 'exif', '')
+    }
+    for (let i = 0; i < VIRTUAL_PHOTOS; i++) {
+      ins.run(VIRTUAL_ID, `D:\\photos\\V_${i}.jpg`, `V_${i}.jpg`, 2000 + i,
+        `2026-06-0${i + 1} 10:00:00`, `2026-06-0${i + 1}`, '', 'exif', '')
+    }
+  })()
+}
 
 let base
 test.before(async () => {
   base = await fx.mount('/api/album', 'student-backend/routes/album.js')
 })
+test.beforeEach(() => { conn = fx.reset({ seed }) })
 test.after(() => fx.close())
 
 const post = async (body) => {

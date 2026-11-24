@@ -24,6 +24,8 @@ import { installLongTaskMarks } from './utils/inpLongtask'
 // 主进程按它打点，跨进程投递延迟不计入。纯诊断，不参与业务逻辑。
 import { mark } from './utils/perfMark.js'
 import { readFastStartup } from './utils/fastStartup.js'
+// 数值型设置的唯一解析规则（不能用 `parseFloat(x) || 默认值`：滑块 min=0，0 是合法值）
+import { readNumSetting } from './utils/numSetting.js'
 import { SEND, INVOKE, RECEIVE } from './electronChannels.js'
 
 // 401 提示条去重：记录最近一次已处理的 401 时间，避免同一瞬间并发 401 重复弹提示
@@ -111,11 +113,7 @@ document.documentElement.dataset.mode = savedMode
 const themeStylesReady = loadThemeStyles(savedTheme, savedMode)
 // 应用透明度
 // 注意：这里不能用 `parseFloat(x) || 默认值` —— 滑块 min=0，0（完全透明）是合法值，
-// 却会被 `||` 当成"没设置"而回退成默认值。必须用 Number.isFinite 判断。
-const readNumSetting = (key, fallback) => {
-  const v = parseFloat(localStorage.getItem(key))
-  return Number.isFinite(v) ? v : fallback
-}
+// 却会被 `||` 当成"没设置"而回退成默认值。规则统一在 utils/numSetting.js。
 const glassOpacity = readNumSetting(GLASS_KEY, 0.4)
 const bgMaskOpacity = readNumSetting(BG_MASK_KEY, 0.6)
 document.documentElement.style.setProperty('--glass-opacity', glassOpacity)
@@ -504,7 +502,9 @@ if (splashEl) {
     ])
   })
 
-  whenSplashReady.then(() => { splashReady = true; dropSplash() })
+  // 失败也要走同一条落地路径：当前各依赖都自带 catch，但一旦哪一环改成 reject，
+  // 只靠下面的 5 秒定时器会让首屏白等（SUPP-01）。catch 里再 dropSplash 是幂等的。
+  whenSplashReady.then(() => { splashReady = true; dropSplash() }, () => { splashReady = true; dropSplash() })
   // 兜底：路由守卫抛错/卡住时也移除，避免界面被永久挡在占位页后面。
   setTimeout(dropSplash, 5000)
   // 最后保险：无论哪条依赖卡住（后端信号丢失、样式/路由异常），12 秒后占位页必须让位。

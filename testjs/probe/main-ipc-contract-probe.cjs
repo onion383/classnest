@@ -21,9 +21,15 @@
 
 const fs = require('fs')
 const path = require('path')
+const { pathToFileURL } = require('url')
 
 const ROOT = path.resolve(__dirname, '..', '..')
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+
+// 通道名 → CH 常量名。主进程已全量走 CH.* 常量，源码里不再有 handle('save-file' 字面量，
+// 判据必须跟着常量走（T01-02 / E01-08：按旧字面量提取会落空 → 假红）。
+const { CH } = require(path.join(ROOT, 'electron/main/channels.js'))
+const CH_KEY_OF = Object.fromEntries(Object.entries(CH).map(([k, v]) => [v, k]))
 
 let failed = 0
 const failures = []
@@ -35,7 +41,17 @@ function assert(cond, msg) {
 // ⚠️ 只取函数体 '{...}' 是不够的：contract.safe(...) 这类**包装在箭头函数之外**，
 //    只看函数体就漏掉了「有没有包 safe」这个关键判据。
 function handlerBody(src, channel) {
-  const i = src.indexOf("handle('" + channel + "'")
+  const key = CH_KEY_OF[channel]
+  if (!key) return ''
+  let i = -1
+  for (const head of ['IPC.handle(CH.', 'ipcMain.handle(CH.']) {
+    const at = src.indexOf(head + key)
+    if (at < 0) continue
+    // 防止 SAVE_FILE 命中 SAVE_FILE_FROM_PATH
+    const after = src[at + head.length + key.length]
+    if (after && /[A-Za-z0-9_]/.test(after)) continue
+    if (i < 0 || at < i) i = at
+  }
   if (i < 0) return ''
   // 箭头函数的 '{'（不是参数解构的 '{'）
   const arrow = src.indexOf('=>', i)
@@ -257,19 +273,34 @@ assert(typeof contract.isCanceled === 'function', '契约层缺少 isCanceled()'
 
   // ============================================================
   // 判据 D：前端那一半 —— B01-06 是前后端闭环，只查主进程等于半个判据
+  // 三态判定已抽到 saveResult.js（纯函数），这里直接执行真实模块而不是找字面量
+  // （T01-02：判定抽走后再按 saveFile.js 找 'fail' 会假红）。
   // ============================================================
   const saveFileSrc = readCode('student-frontend/src/utils/saveFile.js')
   assert(saveFileSrc.length > 0, '找不到 student-frontend/src/utils/saveFile.js')
-  // 「失败」必须被抛出去（让调用方的 catch 弹提示），不能和「取消」一起被吞成空串
-  assert(!/kind\s*===\s*'canceled'\s*\|\|\s*kind\s*===\s*'fail'/.test(saveFileSrc),
-    '前端又把「失败」和「取消」一起吞成空串（B01-06：失败被静默，界面无提示）')
+  assert(/classifySaveResult/.test(saveFileSrc) && /classify\(result\)/.test(saveFileSrc),
+    '前端 saveFile.js 没有复用 saveResult.js 的三态判定（各写一份「只判 canceled」的副本会重现 B01-06）')
   assert(/throw\s+new\s+Error/.test(saveFileSrc),
     '前端没有把保存失败抛出去（B01-06：调用方的 catch 接不到，错误提示不出现）')
-  // 三态判定要齐全
-  for (const k of ['ok', 'fail', 'canceled']) {
-    assert(new RegExp("'" + k + "'").test(saveFileSrc),
-      `前端的结局判定缺少 '${k}' 分支（主进程返回的三种结果没被完整区分）`)
-  }
+
+  const saveResultSrc = read('student-frontend/src/utils/saveResult.js')
+  const { classifySaveResult } = await import(pathToFileURL(
+    path.join(ROOT, 'student-frontend/src/utils/saveResult.js')).href)
+  assert(typeof classifySaveResult === 'function', 'saveResult.js 未导出 classifySaveResult')
+  assert(saveResultSrc.length > 0, '找不到 student-frontend/src/utils/saveResult.js')
+  // 三态判定必须真的可区分（行为断言，不靠源码字面量）
+  assert(classifySaveResult({ outcome: 'ok', filePath: '/tmp/x' }) === 'ok',
+    "classifySaveResult 未把 outcome='ok' 判为成功")
+  assert(classifySaveResult({ outcome: 'fail', error: '磁盘满了' }) === 'fail',
+    "classifySaveResult 未把 outcome='fail' 判为失败（B01-06：失败被当成取消）")
+  assert(classifySaveResult({ outcome: 'canceled' }) === 'canceled',
+    "classifySaveResult 未把 outcome='canceled' 判为取消")
+  assert(classifySaveResult({ canceled: true }) === 'canceled',
+    'classifySaveResult 旧形状 { canceled:true } 未判为取消')
+  assert(classifySaveResult({ success: false, error: 'x' }) === 'fail',
+    'classifySaveResult 旧形状 { success:false } 未判为失败')
+  assert(classifySaveResult(null) === 'fail',
+    'classifySaveResult 对空返回值未判为失败（静默成功会骗过调用方）')
 
   // ---- 输出 ----
   if (failed) {

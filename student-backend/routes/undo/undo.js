@@ -80,7 +80,13 @@ router.post('/', (req, res) => {
   const { key, type, label, payload, origin } = req.body || {}
   if (!key || !type) return res.status(400).json({ error: '缺少参数' })
   if (!(type in executors)) return res.status(400).json({ error: `不支持的记录类型: ${type}` })
-  const id = pushRecord(key, type, label || '', payload || {}, origin || '')
+  const p = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}
+  // 入库前先跑执行器校验（Q2-08）：畸形负载（缺 rowId / 表名非法 / 网格坐标越界）
+  // 过去会先落库，直到用户点撤销才暴露，且那条记录永远无法回放。
+  const ex = executors[type]
+  const bad = ex.validate ? ex.validate(p) : null
+  if (bad) return res.status(400).json({ error: bad })
+  const id = pushRecord(String(key).slice(0, 200), type, String(label || '').slice(0, 200), p, String(origin || ''))
   res.json({ id })
 })
 
@@ -226,14 +232,6 @@ router.post('/:id/replay', async (req, res) => {
   const b = await rewindTo(id, 'redo')
   if (!b.ok) return res.status(400).json({ error: b.error })
   res.json({ ok: true, label: b.count > 1 ? `已重做 ${b.count} 项改动` : (b.labels[0] || ''), batch: b.count, change: { type: 'full_reload' } })
-})
-
-// 删除单条
-router.delete('/:id', (req, res) => {
-  const id = parseUndoId(req.params.id)
-  if (id == null) return res.status(400).json({ error: '记录 id 无效' })
-  undoStore.deleteById(id)
-  res.json({ ok: true })
 })
 
 // 清空某 key（?key=all 则清空全部）

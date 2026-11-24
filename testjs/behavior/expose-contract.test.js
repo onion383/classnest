@@ -14,6 +14,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const { analyze, walk: walkAst, scriptBlocks } = require('../_source-scan.cjs')
 
 const SRC = path.join(__dirname, '../../student-frontend/src')
 
@@ -52,21 +53,33 @@ const NON_INSTANCE_METHODS = new Set([
 ])
 
 // ---- 1) 收集每个组件的 defineExpose 键 ----
+// 为什么不用 /\{([\s\S]*?)\}/ 截取：非贪婪花括号遇到嵌套对象/方法体里的花括号会提前结束，
+// 之后的键就漏了（漏报），按逗号切还会被参数列表里的逗号误伤。
+// 这里用 AST 取 defineExpose 的对象字面量属性键：getter、方法简写、`foo: bar` 都是真实属性节点。
+function defineExposeKeys(vueSource) {
+  const code = scriptBlocks(vueSource)
+  const keys = new Set()
+  if (!code.trim()) return keys
+  const { ast } = analyze(code)
+  walkAst(ast.program, (node) => {
+    if (node.type !== 'CallExpression') return
+    if (!node.callee || node.callee.type !== 'Identifier' || node.callee.name !== 'defineExpose') return
+    const arg = node.arguments[0]
+    if (!arg || arg.type !== 'ObjectExpression') return
+    for (const prop of arg.properties) {
+      if (prop.type === 'SpreadElement' || prop.computed) continue
+      if (prop.key && prop.key.type === 'Identifier') keys.add(prop.key.name)
+      else if (prop.key && prop.key.type === 'StringLiteral') keys.add(prop.key.value)
+    }
+  })
+  return keys
+}
+
 const exposeOf = new Map() // 文件 → Set
 const globalExposed = new Set()
 for (const f of files) {
   if (!f.endsWith('.vue')) continue
-  const s = fs.readFileSync(f, 'utf8')
-  const keys = new Set()
-  for (const m of s.matchAll(/defineExpose\(\{([\s\S]*?)\}\)/g)) {
-    const block = m[1]
-    for (const g of block.matchAll(/get\s+([A-Za-z_$][\w$]*)\s*\(/g)) keys.add(g[1])
-    // 逗号切段后取每段首标识符：foo / foo() {...} / foo: x 都覆盖（含末键）
-    for (const part of block.split(',')) {
-      const g = part.trim().match(/^(?:get\s+|async\s+)?([A-Za-z_$][\w$]*)/)
-      if (g) keys.add(g[1])
-    }
-  }
+  const keys = defineExposeKeys(fs.readFileSync(f, 'utf8'))
   if (keys.size) {
     exposeOf.set(f, keys)
     for (const k of keys) globalExposed.add(k)

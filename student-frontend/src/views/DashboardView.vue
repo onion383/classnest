@@ -1,5 +1,5 @@
 <template>
-  <div class="dashboard-page">
+  <div class="dashboard-page" @keydown="onCardKeydown">
     <!-- 首屏不用整页骨架屏：组件直接挂载，卡片外壳、标题、时钟常驻，
          只有依赖 /api/dashboard 的数据区在 `initialLoading` 期间显示加载条。
          「数据在路上」时占位页是否还挡着，由「性能 → 快速启动」开关决定（utils/fastStartup.js）。 -->
@@ -23,19 +23,19 @@
         </div>
         <!-- 右三个数字随聚合接口更新：未就绪时给等宽灰条，不显示 0（0 会被读成"班里没人"） -->
         <div class="flex items-center gap-4 shrink-0">
-          <div class="stat-link flex items-baseline gap-1.5" @click="goTo('/students')" title="跳转：学生管理">
+          <div class="stat-link flex items-baseline gap-1.5" role="link" tabindex="0" @click="goTo('/students')" title="跳转：学生管理">
             <span v-if="initialLoading" class="skeleton-block sk-num"></span>
             <span v-else class="text-lg font-bold text-success leading-none">{{ attendance.present }}</span>
             <span class="text-xs text-text-muted">在校</span>
           </div>
           <div class="w-px h-6 bg-border"></div>
-          <div class="stat-link flex items-baseline gap-1.5" @click="goTo('/leaves')" title="跳转：请假管理">
+          <div class="stat-link flex items-baseline gap-1.5" role="link" tabindex="0" @click="goTo('/leaves')" title="跳转：请假管理">
             <span v-if="initialLoading" class="skeleton-block sk-num"></span>
             <span v-else class="text-lg font-bold text-warning leading-none">{{ attendance.onLeave }}</span>
             <span class="text-xs text-text-muted">请假</span>
           </div>
           <div class="w-px h-6 bg-border"></div>
-          <div class="stat-link flex items-baseline gap-1.5" @click="goTo('/schedule')" title="跳转：课程表">
+          <div class="stat-link flex items-baseline gap-1.5" role="link" tabindex="0" @click="goTo('/schedule')" title="跳转：课程表">
             <span v-if="initialLoading" class="skeleton-block sk-num"></span>
             <span v-else class="text-lg font-bold text-primary leading-none">{{ todayCourseCount }}</span>
             <span class="text-xs text-text-muted">课程</span>
@@ -103,7 +103,7 @@
          7 张卡的外壳与标题始终常驻，只有内容区在数据未就绪时换成加载条。 -->
     <div class="card-grid">
       <!-- 今日值日 -->
-        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/duty')" title="跳转：今日值日">
+        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" role="link" tabindex="0" @click="goTo('/duty')" title="跳转：今日值日">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="duty" :size="20" /> 今日值日
           </h2>
@@ -130,7 +130,7 @@
         </div>
 
         <!-- 班费剩余 -->
-        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/fee')" title="跳转：班费">
+        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" role="link" tabindex="0" @click="goTo('/fee')" title="跳转：班费">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center justify-between">
             <span class="flex items-center gap-2"><IconGlyph name="fee" :size="20" /> 班费剩余</span>
             <button class="text-text-muted hover:text-text transition-colors flex items-center" title="显示/隐藏金额" @click.stop="toggleFee">
@@ -160,7 +160,7 @@
         </div>
 
         <!-- 今日课程 -->
-        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/schedule')" title="跳转：课程表">
+        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" role="link" tabindex="0" @click="goTo('/schedule')" title="跳转：课程表">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="schedule" :size="20" /> 今日课程
           </h2>
@@ -183,7 +183,7 @@
           </template>
         </div>
       <!-- 今日加分 Top4 -->
-        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/scores')" title="跳转：加分管理">
+        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" role="link" tabindex="0" @click="goTo('/scores')" title="跳转：加分管理">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="score" :size="20" /> 今日加分
           </h2>
@@ -206,7 +206,7 @@
         </div>
 
         <!-- 今日活动（时间轴） -->
-        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/activities')" title="跳转：活动中心">
+        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" role="link" tabindex="0" @click="goTo('/activities')" title="跳转：活动中心">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="activity" :size="20" /> 今日活动
           </h2>
@@ -230,7 +230,7 @@
         </div>
 
         <!-- 今日请假 -->
-        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goTo('/leaves')" title="跳转：请假管理">
+        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" role="link" tabindex="0" @click="goTo('/leaves')" title="跳转：请假管理">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="leave" :size="20" /> 今日请假
             <span v-if="!initialLoading" class="ml-auto text-sm text-text-muted font-normal">{{ currentLeaveList.length }} 人</span>
@@ -254,7 +254,7 @@
         </div>
 
         <!-- 班级相册（随机一张） -->
-        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" @click="goToAlbumPhoto()" :title="albumPhotoId ? '点击查看这张照片' : '跳转：班级相册'">
+        <div class="bg-surface shadow rounded-xl p-5 border border-border card-link" role="link" tabindex="0" @click="goToAlbumPhoto()" :title="albumPhotoId ? '点击查看这张照片' : '跳转：班级相册'">
           <h2 class="text-base font-semibold text-text mb-3 flex items-center gap-2">
             <IconGlyph name="album" :size="20" /> 班级相册
             <button
@@ -516,7 +516,8 @@ async function saveClassInfo(data) {
 const attendance = computed(() => {
   const total = students.value.length
   const onLeave = leavesOn(leaves.value, today.value).length
-  return { total, onLeave, present: total - onLeave }
+  // 名册外的残留请假记录可能让 onLeave > total；「在校人数」不能出现负数（F06-07）
+  return { total, onLeave, present: Math.max(0, total - onLeave) }
 })
 
 // 今日课程
@@ -613,6 +614,18 @@ const monthIncome = computed(() => summary.value.monthIncome || 0)
 const monthExpense = computed(() => summary.value.monthExpense || 0)
 
 // ========== 方法 ==========
+// 统计项与卡片是 div 做点击（不是 a/button）：补 role/tabindex 后，Enter/Space 要能触发，
+// 否则键盘用户到不了学生管理/请假/课程表等入口（N5-14）。卡片内按钮交给原生处理。
+function onCardKeydown(e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return
+  const t = e.target
+  if (!t || !t.closest) return
+  if (t.closest('button, a, input, select, textarea')) return
+  const el = t.closest('[role="link"][tabindex="0"]')
+  if (!el) return
+  e.preventDefault()
+  el.click()
+}
 function goTo(to) {
   router.push(to)
 }
@@ -1053,6 +1066,13 @@ onBeforeUnmount(() => {
 .card-link:hover {
   border-color: rgba(59, 130, 246, 0.35);
   box-shadow: 0 4px 16px rgba(59, 130, 246, 0.10);
+}
+/* 键盘入口必须有可见焦点：卡片与右上统计项都是 div 做的链接（N5-14） */
+.card-link:focus-visible,
+.stat-link:focus-visible {
+  outline: 2px solid var(--color-primary, #2563eb);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 
 /* 看板卡片底部的入口按钮：空态写「去XX」，有数据写「转到XX页面」。

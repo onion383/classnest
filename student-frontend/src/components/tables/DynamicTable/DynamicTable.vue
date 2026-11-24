@@ -86,6 +86,7 @@
             <input
               v-if="!hideSelectAll"
               type="checkbox"
+              aria-label="全选"
               :checked="isAllSelected"
               :indeterminate.prop="isIndeterminate"
               @change="toggleAllSelect"
@@ -113,9 +114,14 @@
                 @mousedown.prevent="onColHandleDown($event, colIndex)"
                 @contextmenu.stop.prevent
               >⠿</span>
-              <span @click.stop="$emit('search', field.name)" class="cursor-pointer">
+              <button
+                type="button"
+                :aria-label="`搜索 ${field.label || field.name}`"
+                @click.stop="$emit('search', field.name)"
+                class="cursor-pointer bg-transparent border-0 p-0 text-inherit font-[inherit]"
+              >
                 {{ field.label || (field.name === 'id' ? 'ID' : field.name) }}<span v-if="isProtectedField(field)" class="text-warning ml-0.5" title="核心字段，禁止删除">*</span>
-              </span>
+              </button>
               <!-- 筛选入口：未筛选=放大镜，已筛选=漏斗；排序/值筛选都在面板里。
                    面板是懒加载 chunk，悬停按钮即预取，点开无需等待。 -->
               <button
@@ -193,6 +199,7 @@
               <td v-if="!readonly && !noSelect" class="border border-border px-1 text-center align-middle w-8" @click.stop>
                 <input
                   type="checkbox"
+                  :aria-label="`选择第${rowIndex + 1}行`"
                   :checked="selectedKeySet.has(row._rowKey)"
                   @change="toggleRowSelect(row._rowKey)"
                   :disabled="!!editingCell"
@@ -230,6 +237,7 @@
                 <template v-else-if="field.control === 'select'">
                   <AppSelect
                     v-if="row._isNew || isEditing(row, field.name)"
+                    :aria-label="`第${rowIndex + 1}行：${field.name}`"
                     v-model="row[field.name]"
                     :options="cellSelectOptions(field)"
                     @change="row._isNew ? $emit('updateNewRow', field.name, $event) : $emit('saveCell', row, field)"
@@ -238,7 +246,7 @@
                   <span v-else @dblclick="$emit('startEdit', row, field)" class="dcell block w-full min-h-[24px] leading-6 px-1 cursor-default">{{ row[field.name] || '' }}</span>
                 </template>
                 <template v-else-if="field.type === '日期' || field.control === 'datepicker'">
-                  <input type="date" v-if="row._isNew || isEditing(row, field.name)" v-model="row[field.name]" @blur="row._isNew ? null : $emit('saveCell', row, field)" class="w-full h-6 leading-6 px-1 py-0 border border-transparent bg-warning/10 focus:outline-none focus:border-primary box-border" />
+                  <input type="date" v-if="row._isNew || isEditing(row, field.name)" v-model="row[field.name]" :aria-label="field.name" @blur="row._isNew ? null : $emit('saveCell', row, field)" class="w-full h-6 leading-6 px-1 py-0 border border-transparent bg-warning/10 focus:outline-none focus:border-primary box-border" />
                   <span v-else @dblclick="$emit('startEdit', row, field)" class="block w-full min-h-[24px] leading-6 px-1 cursor-default">{{ row[field.name] || '' }}</span>
                 </template>
                 <template v-else>
@@ -249,6 +257,7 @@
                     @keyup.enter="onCellEnter(row, field)"
                     class="w-full h-6 leading-6 px-1 py-0 border border-transparent bg-warning/10 focus:outline-none focus:border-primary box-border"
                     :placeholder="field.name"
+                    :aria-label="field.name"
                     :ref="(el) => setCellInputRef(row, field, el)"
                   />
                   <span v-else @dblclick="$emit('startEdit', row, field)" class="dcell block w-full min-h-[24px] leading-6 px-1 cursor-default">{{ row[field.name] != null ? row[field.name] : '' }}</span>
@@ -536,8 +545,10 @@ const rowsAnimSilent = ref(false)
 const _rowsAnimTimer = ref(null)
       // 表格最大高度：内容超过此高度即启用纵向滚动（固定高度判断），默认 400，可由父组件按内容调整
 const fixedMaxHeight = ref(props.maxHeight)
-      // 列筛选状态：{ 列名: Set(允许出现的值) }。值为空表示该列未筛选（不参与过滤）
-const columnFilters = ref({})
+// 列筛选状态：列名 → Set(允许出现的值)，没有该键表示该列未筛选（不参与过滤）。
+// 用 Map 而非普通对象：筛选状态会反复增删列，普通对象的 delete 会把内部结构
+// 降级成字典模式，Map 的 delete 只是删哈希桶。
+const columnFilters = ref(new Map())
       // 当前打开筛选面板的列名（'' = 未打开）
 const filterField = ref('')
 // 筛选面板也是一层 Esc 层：打开时压进与弹窗共用的栈，
@@ -580,11 +591,11 @@ const newRowHasData = computed(() => {
       });
     })
     // 是否有任何列处于筛选状态
-const columnFilterActive = computed(() => { return Object.keys(ctx.columnFilters.value).length > 0; })
+const columnFilterActive = computed(() => { return ctx.columnFilters.value.size > 0; })
     // 实际渲染的行：columns 筛选后的结果。未筛选时直接返回原数组引用（零开销、不破坏行对象复用）
 const bodyRows = computed(() => {
       if (!ctx.columnFilterActive.value) return ctx.rows.value;
-      const active = Object.keys(ctx.columnFilters.value);
+      const active = [...ctx.columnFilters.value.keys()];
       return ctx.rows.value.filter(r => {
         // 正在录入的新行不参与筛选，否则一勾筛选它就凭空消失
         if (r._isNew) return true;
@@ -804,6 +815,28 @@ const ctx = {
   isIndeterminate,
   // 事件
   emit,
+  // 纯运行时值（不进响应式）：回执缓存、滚动位置、视口高度、ResizeObserver、估值锁。
+  // 回执缓存用 WeakMap 键为行对象，避免每次渲染逐行 JSON.parse。
+  // _viewportH 先按容器固定高度估一次窗口——否则第一帧会把全部行都画出来，
+  // 正好抵消掉虚拟滚动想省的那次整表渲染（挂载后再收缩窗口已经晚了）。
+  _receiptCache: new WeakMap(),
+  _scrollTop: 0,
+  _viewportH: fixedMaxHeight.value,
+  _ro: null,
+  _estLocked: false,
+  // 拖拽与交互的运行时字段：先声明再赋值，避免首次拖拽/滚动时给 ctx 新增键。
+  _rowGeom: null, _rowGeomContainer: null, _rowEls: null, _rowGhost: null, _rowGrab: null,
+  _rowSlotGhost: null, _rowSlotH: 0, _rowDropSig: null, _rowDropBox: null,
+  _rowPending: null, _rowRaf: 0, _rowMove: null, _rowUp: null, _rowAutoScroll: null,
+  _colGeom: null, _colGeomHeaderTop: null, _colGeomTblBottom: null, _colGeomContainer: null,
+  _colEls: null, _colSlotW: 0, _colSlotGhost: null, _colActive: false,
+  _colGhost: null, _colGrab: null, _colDropSig: null, _colDropBox: null,
+  _colPending: null, _colRaf: 0, _colMove: null, _colUp: null, _colAutoScroll: null,
+  _flipRows: null, _flipColCells: null, _suppressCellClick: false,
+  _scrollEndArmed: false, _activeTd: null,
+  _filterAnimTimer: null, _tableEnterCleanup: null, _snapshotRaf: 0,
+  _cancelRowTimer: null, _rowsAnimTimer: null, _emptyTimer: null,
+  _snapshotTimer: null, _colAnimTimer: null,
 }
 
 // 拖拽模块（行/列拖拽、落点高亮框与交换 FLIP 动画）与组件自身方法统一挂上 ctx
@@ -1001,7 +1034,7 @@ function initVirtual() {
     // ==================== 列筛选（表头放大镜/漏斗） ====================
     // 供 @mouseenter 预取使用：把懒加载 loader 包成函数，模板里才能引用到
 function preloadFilterPanel() { return loadColumnFilter(); }
-function isColumnFiltered(name) { return !!ctx.columnFilters.value[name]; }
+function isColumnFiltered(name) { return ctx.columnFilters.value.has(name); }
 function filterButtonTitle(name) {
       return ctx.isColumnFiltered(name) ? `${name}：已筛选（点击修改）` : `${name}：筛选 / 排序`;
     }
@@ -1028,13 +1061,13 @@ function closeFilter() {
 function onFilterToggle(value) {
       const field = ctx.filterField.value;
       if (!field) return;
-      const current = ctx.columnFilters.value[field];
+      const current = ctx.columnFilters.value.get(field);
       const sel = current ? new Set(current) : new Set(ctx.filterOptions.value.map(o => o.value));
       if (sel.has(value)) sel.delete(value);
       else sel.add(value);
       // 全部勾上 == 没筛选：直接清掉该列状态，图标回到放大镜
-      if (ctx.filterOptions.value.length && sel.size === ctx.filterOptions.value.length) delete ctx.columnFilters.value[field];
-      else ctx.columnFilters.value[field] = sel;
+      if (ctx.filterOptions.value.length && sel.size === ctx.filterOptions.value.length) ctx.columnFilters.value.delete(field);
+      else ctx.columnFilters.value.set(field, sel);
       // 计数只受「其它列」影响，本列勾选不变，故这里重算只为刷新勾选态
       ctx.filterOptions.value = ctx.buildFilterOptions(field);
     }
@@ -1046,12 +1079,12 @@ function onFilterSort(order) {
 function clearColumnFilter() {
       const field = ctx.filterField.value;
       if (!field) return;
-      delete ctx.columnFilters.value[field];
+      ctx.columnFilters.value.delete(field);
       ctx.filterOptions.value = ctx.buildFilterOptions(field);
     }
     // 面板里的值列表：只统计「通过其它列筛选」的行，实现后筛选的列跟着前面的条件收窄
 function buildFilterOptions(field) {
-      const others = Object.keys(ctx.columnFilters.value).filter(f => f !== field);
+      const others = [...ctx.columnFilters.value.keys()].filter(f => f !== field);
       const counts = new Map();
       for (const r of ctx.rows.value || []) {
         if (r._isSeparator || r._isNew) continue;
@@ -1059,13 +1092,13 @@ function buildFilterOptions(field) {
         const v = ctx.cellFilterValue(r, field);
         counts.set(v, (counts.get(v) || 0) + 1);
       }
-      const sel = ctx.columnFilters.value[field];
+      const sel = ctx.columnFilters.value.get(field);
       return [...counts.entries()]
         .map(([value, count]) => ({ value, count, selected: !sel || sel.has(value) }))
         .sort((a, b) => ctx.compareFilterValue(a.value, b.value));
     }
 function matchColumnFilter(row, field) {
-      const sel = ctx.columnFilters.value[field];
+      const sel = ctx.columnFilters.value.get(field);
       if (!sel) return true;
       return sel.has(ctx.cellFilterValue(row, field));
     }
@@ -1550,9 +1583,9 @@ watch(() => ctx.rows.value, (newVal, oldVal) => {
 watch(() => ctx.fields.value, (newFields) => {
   // 列被删/改名后，残留的筛选状态会让整表永久空表 → 只保留仍然存在的列
   const names = new Set((newFields || []).map(f => f.name));
-  Object.keys(columnFilters.value).forEach(n => {
-    if (!names.has(n)) delete columnFilters.value[n];
-  });
+  for (const n of [...columnFilters.value.keys()]) {
+    if (!names.has(n)) columnFilters.value.delete(n);
+  }
   if (filterField.value && !names.has(filterField.value)) closeFilter();
   // 增删/改名/移动列后重算列宽
   nextTick(() => snapshotWidths());
@@ -1564,18 +1597,7 @@ watch(selectedRowKeys, () => {
   });
 }, { immediate: true })
 
-// created 等价：非响应式运行时状态 + 首帧之前先估一次虚拟窗口
-// 收据数量缓存：WeakMap 键为行对象，避免每次渲染逐行 JSON.parse（不参与响应式）
-ctx._receiptCache = new WeakMap();
-// 虚拟滚动用的滚动位置/视口高度/ResizeObserver：纯运行时值，不进响应式
-ctx._scrollTop = 0;
-ctx._viewportH = 0;
-ctx._ro = null;
-// 估算行高是否已锁定（只取第一次实测均值，之后不再漂移，见 measureRows）
-ctx._estLocked = false;
-// 首帧之前就先按容器固定高度估一次窗口——否则第一帧会把全部行都画出来，
-// 正好抵消掉虚拟滚动想省的那次整表渲染（挂载后再收缩窗口已经晚了）。
-ctx._viewportH = fixedMaxHeight.value;
+// 首帧之前先按 ctx._viewportH 估算一次虚拟窗口
 syncVirtualActive();
 recalcWindow();
 

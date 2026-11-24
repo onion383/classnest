@@ -214,4 +214,8 @@ app.whenReady().then(async () => {
 
   win.destroy()
   app.exit(0)
+}).catch((e) => {
+  // 异常必须非零退出，读数路径恒 0（T02-08）
+  console.error('探针异常：', e && e.stack || e)
+  app.exit(1)
 })

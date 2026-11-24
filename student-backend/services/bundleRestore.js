@@ -51,6 +51,32 @@ function dirPlanOf(slug) {
   ]
 }
 
+// 目录阶段失败的补偿：把库文件换回恢复前的 .bak，并把 index 登记恢复原样。
+// 共享目录是 merge 语义，无法逐字节回滚（.bak 只覆盖 per-slug 整体替换目录），
+// 所以这里只保证「库与登记一致」，目录侧的 .bak 留给人工核对。
+function rollbackDbAfterFailedRestore(slug, result) {
+  try {
+    const file = dbManager.dbFilePath(slug)
+    dbManager.evictConn(slug, { force: true })
+    if (result && result.bakPath && fs.existsSync(result.bakPath)) {
+      fs.copyFileSync(result.bakPath, file)
+    }
+    for (const suffix of ['-wal', '-shm']) {
+      try { fs.rmSync(file + suffix, { force: true }) } catch (_) { /* 忽略 */ }
+    }
+    if (result && result.prevRec) {
+      dbManager.registryUpsert(slug, result.prevRec.username, result.prevRec.wrapped_key, result.prevRec.encrypted)
+    } else {
+      // 恢复前没有这个库（离线恢复新账号）：把刚登记的条目删掉，避免留下空登记
+      dbManager.registryDelete(slug)
+    }
+    aiHelpers.clearTableColumnsCache()
+  } catch (e) {
+    // 回滚本身失败只能留日志：不要再掩盖原始的目录阶段错误
+    console.error('[restore] 数据库回滚失败：', e.message)
+  }
+}
+
 /**
  * 把已校验的备份包落盘。
  *
@@ -93,28 +119,43 @@ async function applyVerifiedBundle({ tmpDir, meta, manifest, slug, username, bod
   // 这里不再自己写一遍（两处写库逻辑迟早会分叉）。
   // 传 srcPath 而不是 base64：解包出来的库文件已经在磁盘上，再读进内存转 base64 只会在
   // 100MB 级库上白占约 230MB 堆（133MB 字符串 + 100MB Buffer）—— 2-11 要消的就是这段。
-  const result = dbManager.restoreBundle({ slug, username, srcPath: path.join(dbDir, dbFile), dbKey, encrypted: isEncrypted })
+  // 旧包可能带着导出时未合并的 WAL：一并交给 restoreBundle 落位并重放，
+  // 否则「包里最新提交」会在换库时被丢弃（v8 · N2-01）。
+  const result = dbManager.restoreBundle({
+    slug, username,
+    srcPath: path.join(dbDir, dbFile),
+    srcWal: path.join(dbDir, `${dbFile}-wal`),
+    dbKey,
+    encrypted: isEncrypted,
+  })
   aiHelpers.clearTableColumnsCache()
 
   // 目录替换：只在包里**确实有内容**时替换。
   // 否则一个「只含库文件」的小包会把现有收据目录整片清空 —— 那是最典型的静默数据丢失。
+  // 整个「目录 + 记忆」段失败时把库文件与登记一起回滚（K04-04）：库已经换成备份包的新库，
+  // 若此时抛错却只回 400，用户会停在「库是新的、文件是旧的」的混合状态。
   const replaced = []
-  for (const it of dirPlanOf(slug)) {
-    const src = path.join(tmpDir, it.prefix)
-    let has = false
-    try { has = fs.statSync(src).isDirectory() && fs.readdirSync(src).length > 0 } catch (_) { has = false }
-    if (!has) continue
-    if (it.merge) {
-      // 共享目录：合并而非替换，保住其它班的文件（#11）
-      replaced.push({ dir: it.prefix, mergedFiles: mergeDir(src, it.dest) })
-    } else {
-      replaced.push({ dir: it.prefix, backup: replaceDir(src, it.dest, stamp) })
+  try {
+    for (const it of dirPlanOf(slug)) {
+      const src = path.join(tmpDir, it.prefix)
+      let has = false
+      try { has = fs.statSync(src).isDirectory() && fs.readdirSync(src).length > 0 } catch (_) { has = false }
+      if (!has) continue
+      if (it.merge) {
+        // 共享目录：合并而非替换，保住其它班的文件（#11）
+        replaced.push({ dir: it.prefix, mergedFiles: mergeDir(src, it.dest) })
+      } else {
+        replaced.push({ dir: it.prefix, backup: replaceDir(src, it.dest, stamp) })
+      }
     }
-  }
 
-  // AI 长期记忆：包里有就覆盖（v3 把它放在根目录 memory.md）
-  const memPath = path.join(tmpDir, 'memory.md')
-  if (fs.existsSync(memPath)) dbManager.writeMemory(slug, fs.readFileSync(memPath, 'utf8'))
+    // AI 长期记忆：包里有就覆盖（v3 把它放在根目录 memory.md）
+    const memPath = path.join(tmpDir, 'memory.md')
+    if (fs.existsSync(memPath)) dbManager.writeMemory(slug, fs.readFileSync(memPath, 'utf8'))
+  } catch (err) {
+    rollbackDbAfterFailedRestore(slug, result)
+    throw new Error(`恢复文件阶段失败，数据库已回滚到恢复前状态：${err.message}`)
+  }
 
   return {
     slug: result.slug || slug,

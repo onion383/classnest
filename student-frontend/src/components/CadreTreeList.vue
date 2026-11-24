@@ -36,8 +36,7 @@
           @focus="onInputFocus"
           @input="onInputChange"
           @keydown="onInputKeydown"
-          @blur="closeSuggest"
-        />
+          @blur="closeSuggest" aria-label="添加学生"/>
         <button
           type="button"
           class="chip"
@@ -123,7 +122,7 @@
             :class="['px-3 py-2 text-sm cursor-pointer hover:bg-info/10 truncate', { 'bg-info/20': idx === suggest.index }]"
             @mousedown.prevent="pickCandidate(s)"
             @mouseenter="suggest.index = idx"
-          >{{ s.姓名 }}</div>
+          >{{ studentRowLabel(s) }}</div>
         </div>
         <div v-else class="px-3 py-2 text-sm text-text-muted">无匹配学生</div>
       </div>
@@ -149,6 +148,8 @@ const emit = defineEmits(['add-child', 'edit', 'remove', 'remove-member', 'drop-
 const collapsed = ref(false)
 // 行内添加学生的输入内容
 const addKeyword = ref('')
+// 从候选点选的学生：同名时按 id 定人，不能靠输入框里的姓名再 find 一次
+const pickedStudent = ref(null)
 // 候选下拉状态（定位方式与座位表一致）
 const suggest = ref({ visible: false, index: 0, left: 0, top: 0, width: 0 })
 
@@ -279,8 +280,9 @@ function onInputKeydown(e) {
   }
   if (e.key === 'Escape') closeSuggest()
 }
-// 选中候选项：填入输入框
+// 选中候选项：记住选中的是哪一个（同名两人靠 id 区分），再填入输入框
 function pickCandidate(s) {
+  pickedStudent.value = s
   addKeyword.value = String(s.姓名 ?? '')
   closeSuggest()
 }
@@ -291,7 +293,19 @@ function closeSuggest() {
 function confirmAdd() {
   const name = String(addKeyword.value || '').trim()
   if (!name) return
-  const student = props.allStudents.find(s => String(s.姓名 || '').trim() === name)
+  // 点选的候选优先（学生对象带 id）：同名两人时不能按姓名取第一个。
+  // 手输姓名仍允许（兼容旧习惯），但同名歧义时提示从候选选，不静默挑一个。
+  const picked = pickedStudent.value
+  let student = null
+  if (picked && String(picked.姓名 || '').trim() === name) student = picked
+  else {
+    const matches = props.allStudents.filter(s => String(s.姓名 || '').trim() === name)
+    if (matches.length === 1) student = matches[0]
+    if (matches.length > 1) {
+      useNotification().error(`「${name}」有多位同学，请从下拉候选里选一位`)
+      return
+    }
+  }
   // 找不到对应学生时不能发 id:null（后端/父组件会当成合法成员写入），必须先提示
   if (!student) {
     useNotification().error(`未找到学生「${name}」，请从候选列表中选择`)
@@ -299,6 +313,7 @@ function confirmAdd() {
   }
   closeSuggest()
   addKeyword.value = ''
+  pickedStudent.value = null
   emit('add-student', { nodeId: props.node.id, student })
 }
 // 拖拽数据：JSON 携带类型与 id

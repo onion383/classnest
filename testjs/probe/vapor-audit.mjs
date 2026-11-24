@@ -11,6 +11,8 @@
 //           defineAsyncComponent（走 mountDynamicVNode interop）、模板 ref、$emit、<component :is>
 //
 // 用法：node testjs/probe/vapor-audit.mjs [--pending]   # --pending 只看未迁移的
+//
+// 报告模式：本脚本只输出审计表、不做断言，因此恒以退出码 0 结束（不是漏了判定）。
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'

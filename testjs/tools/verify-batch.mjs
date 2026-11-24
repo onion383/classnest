@@ -19,6 +19,7 @@
 // =========================================================================
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -106,7 +107,7 @@ const STEPS = [
     name: 'build',
     title: '前端构建',
     cmd: 'npx',
-    args: ['vite', 'build', '--outDir', '../testjs/tmp/build-verify', '--emptyOutDir'],
+    args: ['vite', 'build', '--outDir', path.join(os.tmpdir(), 'classnest-verify-build'), '--emptyOutDir'],
     cwd: path.join(ROOT, 'student-frontend'),
     optional: true,
   },
@@ -132,6 +133,9 @@ for (const step of STEPS) {
   const out = ((r.stdout || '') + (r.stderr || '')).trim()
   const code = r.status === null ? -1 : r.status
   const ok = code === 0
+  // 退出码 3 是各探针/冒烟的「环境不具备，主动跳过」（见 run-smoke.cjs）。
+  // 只有这种才允许 optional 步骤软失败；断言失败/崩溃/超时一律算真失败并拦批（T03-07）。
+  const envSkip = step.optional && code === 3
   // 输出尾部（成功时只给摘要，失败时给更多）
   const lines = out.split('\n')
   const tail = ok ? lines.slice(-12) : lines.slice(-40)
@@ -141,12 +145,12 @@ for (const step of STEPS) {
   results.push({
     name: step.name,
     title: step.title,
-    status: ok ? 'pass' : 'fail',
+    status: ok ? 'pass' : (envSkip ? 'skip' : 'fail'),
     code,
     secs,
     optional: !!step.optional,
   })
-  console.log(`  → ${ok ? '通过' : '失败'}（${secs}s）`)
+  console.log(`  → ${ok ? '通过' : (envSkip ? '环境不具备，跳过' : '失败')}（${secs}s）`)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,14 +162,11 @@ for (const r of results) {
 }
 
 const failed = results.filter((r) => r.status === 'fail')
-const hardFailed = failed.filter((f) => !f.optional)
+const hardFailed = failed
 console.log('')
 if (failed.length) {
-  // optional 环节（冒烟/构建）失败只提示、不算整体失败：它们依赖 Vite/5173 等环境，
-  // 在 CI 或未启动前端时失败属于环境错配，不该让「代码检查全过」变红
-  // （审查 v5 · V5-032：optional 字段原先没人读，写了等于没写）。
-  const soft = failed.filter((f) => f.optional)
-  if (soft.length) console.log(`可选环节失败 ${soft.length} 项（不影响结果）：${soft.map((f) => f.title).join('、')}`)
+  // optional 只影响「环境不具备（exit 3）」的归类；断言失败/崩溃/超时一律拦批。
+  console.log(`失败 ${failed.length} 项（可选环节的真失败也算）：${failed.map((f) => `${f.title}(exit ${f.code})`).join('、')}`)
 }
 if (hardFailed.length) {
   console.error(`失败 ${hardFailed.length} 项：${hardFailed.map((f) => f.title).join('、')}`)

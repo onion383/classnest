@@ -76,3 +76,45 @@ test('变异反证：抹掉 renameStudentRefs 调用后接线判据失败', () =
   assert.ok(mutated !== src, '变异没匹配到级联调用')
   assert.doesNotMatch(mutated, /renameStudentRefs\(old\['姓名'\], after\['姓名'\], id\)/, '变异后判据应失败')
 })
+
+// ---------- 写/读闸门：执行端必须与设置里的「只读 / 完全禁止」同口径 ----------
+// v8 · K02-01 / K02-09 / N3-16：闸门挂在入口、执行端漏挂，老师设了权限仍能写进/读出。
+test('守卫：只读表的 apply-batch 行式写必须整批拒绝且不落库（K02-01）', async () => {
+  const conn = fx.reset()
+  seed(conn)
+  const aiConfigStore = require(path.join(ROOT, 'student-backend/services/aiConfigStore'))
+  aiConfigStore.setPrivacy({ readonly_tables: ['students'] })
+  const r = await applyBatch([{ action: 'add', table: 'students', data: { 姓名: '李四' } }])
+  assert.equal(r.status, 400, JSON.stringify(r.json))
+  assert.match(String(r.json.error), /只读/)
+  assert.equal(conn.prepare('SELECT COUNT(*) AS n FROM students').get().n, 1, '被拒后不得落库')
+  // 变异反证：清空只读后同样请求必须成功，否则上面那条只是「永远拒绝」
+  aiConfigStore.setPrivacy({ readonly_tables: [] })
+  const r2 = await applyBatch([{ action: 'add', table: 'students', data: { 姓名: '李四' } }])
+  assert.equal(r2.status, 200, JSON.stringify(r2.json))
+})
+
+test('守卫：closed_tables 的 AI 记录预览必须 403（K02-09）', async () => {
+  const conn = fx.reset()
+  seed(conn)
+  const aiConfigStore = require(path.join(ROOT, 'student-backend/services/aiConfigStore'))
+  aiConfigStore.setPrivacy({ closed_tables: ['students'], readonly_tables: [] })
+  const res = await fetch(base + '/records/students?ids=1')
+  const j = await res.json()
+  assert.equal(res.status, 403, JSON.stringify(j))
+  assert.match(String(j.error), /设置/, '报错要指向设置面板，不能让模型以为数据为空')
+  aiConfigStore.setPrivacy({ closed_tables: [] })
+})
+
+test('守卫：完全禁止的学生/座位表，resolve_student 与 export_image 都必须拒绝（K02-02/04）', async () => {
+  fx.reset()
+  const aiConfigStore = require(path.join(ROOT, 'student-backend/services/aiConfigStore'))
+  const tools = require(path.join(ROOT, 'student-backend/routes/ai/ai.tools/tools'))
+  aiConfigStore.setPrivacy({ closed_tables: ['students', 'seat_layout'], readonly_tables: [] })
+  const found = await tools.runTool('resolve_student', { query: '张' })
+  assert.match(String(found.result.error || ''), /关闭/, 'resolve_student 必须走读闸门')
+  const img = await tools.runTool('export_image', { targets: ['seat'] })
+  assert.equal(img.result.ok, false, 'export_image 必须被拒')
+  assert.match(String(img.result.error || ''), /关闭/)
+  aiConfigStore.setPrivacy({ closed_tables: [] })
+})

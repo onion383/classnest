@@ -72,17 +72,26 @@ test('整行走廊仍整排写「走廊」', () => {
   assert.deepEqual(img.rows[2].slice(1), Array(4).fill('走廊'))
 })
 
+// 正例与变异反证共用同一判据（T07-02）：变异源码必须回喂它，才算真反证。
+function wiringGuard(src) {
+  const holeBranch = /t === SEAT_CELL\.HOLE\)\s*\{ line\.push\('空位'\); continue; \}/.test(src)
+  const fromSeatGrid = /const \{ SEAT_CELL, columnLabels, rowIsAisle \} = require\([^)]*seatGrid'\)/.test(src)
+  return {
+    ok: holeBranch && fromSeatGrid,
+    why: holeBranch ? (fromSeatGrid ? '' : 'SEAT_CELL 未从 services/seatGrid 取') : '缺少 HOLE→「空位」分支',
+  }
+}
+
 test('接线：图片执行器按 SEAT_CELL.HOLE 输出「空位」（不是只判「是不是空」）', () => {
   const src = fs.readFileSync(path.join(ROOT, IMAGE_SRC), 'utf8')
-  assert.match(src, /t === SEAT_CELL\.HOLE\)\s*\{ line\.push\('空位'\); continue; \}/,
-    '必须显式判 HOLE 并写「空位」；只判 v == null 会把空位和有桌无人混成一类')
-  assert.match(src, /const \{ SEAT_CELL, columnLabels, rowIsAisle \} = require\([^)]*seatGrid'\)/,
-    'SEAT_CELL 要从 services/seatGrid 取，别在本地写死 2')
+  const r = wiringGuard(src)
+  assert.ok(r.ok, r.why)
 })
 
 test('变异反证：删掉 HOLE 分支后，接线判据必须失败', () => {
   const src = fs.readFileSync(path.join(ROOT, IMAGE_SRC), 'utf8')
+  assert.equal(wiringGuard(src).ok, true, '基线必须通过，否则反证无意义')
   const mutated = src.replace(/\s*\/\/ 空位格（types=2）[\s\S]*?if \(t === SEAT_CELL\.HOLE\) \{ line\.push\('空位'\); continue; \}\r?\n/, '\n')
   assert.ok(mutated !== src, '变异没匹配到 HOLE 分支')
-  assert.doesNotMatch(mutated, /SEAT_CELL\.HOLE/, '变异后应无 HOLE 判据（空位会退回空串）')
+  assert.equal(wiringGuard(mutated).ok, false, '判据假绿：删掉 HOLE 分支仍判 PASS')
 })

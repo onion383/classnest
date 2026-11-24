@@ -172,6 +172,9 @@ function runAggregate({ table, metrics, group_by, where, where_range, where_rang
 //   写请假/加分前先确认目标学生，降低重名、同拼音写错人的风险。
 //   拼音匹配复用前端同款依赖 pinyin-match（懒加载，加载失败时退化为文本/学号匹配）。
 function runResolveStudent({ query, limit }) {
+  // 「完全禁止」的表连候选都不许出：resolve_student 返回的是真名/学号，
+  // 过去这是唯一一条完全没接读闸门的学生读取旁路（K02-02 / N3-16）。
+  if (!readScope.isTableReadable('students')) return { error: readScope.closedError('students').error };
   const q = String(query == null ? '' : query).trim();
   if (!q) return { error: '缺少要匹配的内容（query），请给出学生姓名、拼音或学号片段' };
   const cols = tableColumns('students');

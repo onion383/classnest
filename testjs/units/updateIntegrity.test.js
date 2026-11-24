@@ -7,7 +7,11 @@ const crypto = require('node:crypto')
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { assertHttpsUrl, sha256File, verifyDownloadedFile, pickSetupAssetName } = require('../../electron/main/main.update-integrity')
+const {
+  assertHttpsUrl, assertAllowedDownloadUrl, isLocalMockUrl,
+  digestFromTrustManifest, resolveDigestTrust,
+  sha256File, verifyDownloadedFile, pickSetupAssetName,
+} = require('../../electron/main/main.update-integrity')
 
 const tmpDir = path.join(os.tmpdir(), 'update-integrity-' + process.pid)
 
@@ -17,6 +21,49 @@ test('assertHttpsUrl：只接受 https，拒绝 http/file 与非法串', () => {
   assert.throws(() => assertHttpsUrl('file:///C:/a.exe'), /HTTPS/)
   assert.throws(() => assertHttpsUrl('not a url'), /无效/)
   assert.throws(() => assertHttpsUrl(''), /无效/)
+})
+
+test('assertAllowedDownloadUrl：本地 mock 只放行回环 http，且必须显式允许', () => {
+  assert.equal(isLocalMockUrl('http://127.0.0.1:18499/download/a.exe'), true)
+  assert.equal(isLocalMockUrl('http://localhost:18499/download/a.exe'), true)
+  assert.equal(isLocalMockUrl('http://192.168.1.9:18499/download/a.exe'), false, '局域网地址不放行')
+  assert.equal(isLocalMockUrl('https://example.com/a.exe'), false)
+  assert.equal(isLocalMockUrl('not a url'), false)
+
+  const mockUrl = 'http://127.0.0.1:18499/download/a.exe'
+  assert.ok(assertAllowedDownloadUrl(mockUrl, { allowLocalMock: true }))
+  assert.throws(() => assertAllowedDownloadUrl(mockUrl), /HTTPS/, '没开 mock 时 http 必须拒')
+  assert.throws(() => assertAllowedDownloadUrl('http://192.168.1.9:18499/a.exe', { allowLocalMock: true }), /HTTPS/)
+  assert.ok(assertAllowedDownloadUrl('https://example.com/a.exe', { allowLocalMock: true }), 'https 恒放行')
+})
+
+test('digestFromTrustManifest：只认合法 sha256，缺版本/坏 JSON 都返回 null', () => {
+  const d = 'sha256:' + 'a'.repeat(64)
+  const json = JSON.stringify({ schema: 1, entries: { '0.1.0': d } })
+  assert.equal(digestFromTrustManifest(json, '0.1.0'), d)
+  assert.equal(digestFromTrustManifest(json, 'v0.1.0'), d, 'tag 带 v 也能取到')
+  assert.equal(digestFromTrustManifest(json, '9.9.9'), null)
+  assert.equal(digestFromTrustManifest('{bad', '0.1.0'), null)
+  assert.equal(digestFromTrustManifest({ entries: { '0.1.0': 'sha256:xyz' } }, '0.1.0'), null)
+  assert.equal(digestFromTrustManifest({ entries: [] }, '0.1.0'), null)
+})
+
+test('resolveDigestTrust：清单优先，冲突拒装，缺失降级且带告警来源', () => {
+  const d = 'sha256:' + 'a'.repeat(64)
+  const d2 = 'sha256:' + 'b'.repeat(64)
+  assert.deepEqual(resolveDigestTrust({ manifestDigest: d, assetDigest: d }),
+    { decision: 'ok', digest: d, source: 'manifest', reason: '' })
+  assert.equal(resolveDigestTrust({ manifestDigest: d, assetDigest: null }).source, 'manifest', '清单有、资产无 → 仍走强校验')
+  const conflict = resolveDigestTrust({ manifestDigest: d, assetDigest: d2 })
+  assert.equal(conflict.decision, 'reject')
+  assert.match(conflict.reason, /不一致/)
+  const assetOnly = resolveDigestTrust({ manifestDigest: null, assetDigest: d })
+  assert.equal(assetOnly.decision, 'warn')
+  assert.equal(assetOnly.source, 'asset-only')
+  const sizeOnly = resolveDigestTrust({ manifestDigest: null, assetDigest: null })
+  assert.equal(sizeOnly.decision, 'warn')
+  assert.equal(sizeOnly.source, 'size-only')
+  assert.equal(resolveDigestTrust({ manifestDigest: 'sha256:bad', assetDigest: d }).source, 'asset-only', '清单格式非法按缺失处理')
 })
 
 test('verifyDownloadedFile：大小与 sha256 校验，缺 digest 时降级为仅大小校验', async () => {

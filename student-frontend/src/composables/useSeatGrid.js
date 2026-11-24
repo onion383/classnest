@@ -4,9 +4,11 @@ import { recordGridCellUndo, recordGridSnapshotUndo, newUndoBatchId, flushUndoSt
 import { useNotification } from './useNotification.js'
 import { createSerialSaver } from '../utils/serialSaver.js'
 import { createRowReuseCache } from '../utils/rowReuse.js'
+import { createLatest } from '../utils/latestOnly.js'
 import {
   CELL, normalizeTypes, columnKinds, seatColumnIndices, rowIsAisle,
   generateColHeaders, buildSeatLikeRows, applyEditedRows, reshapeGeometry,
+  relocateDuplicateSeats, occupiedSeatLabels,
   usableSeatCount, toggleHole, clearHoles, insertAisleRow, removeGridRow, SEAT_MAX_ROWS,
   insertAisleColumn, removeGridColumn, SEAT_MAX_GRID_COLS,
 } from './useSeatGrid.geometry.js'
@@ -32,6 +34,9 @@ export function useSeatGrid(apiBase, options = {}) {
   const settings = ref({})
   const settingsVisible = ref(false)
   const currentEditExcludeIds = ref([])
+  // 已入座学生的位置标签：候选列表里照常显示这些人，标注「已排座：第X行 第Y座」，
+  // 选中即移动（原格在 onCellsUpdate 里清空）。不是「剔除」，所以不复用 excludeIds。
+  const currentEditOccupied = ref({})
   // 行对象复用缓存：编辑一格时只重建真正变化的那一行，避免整表重画
   const reuseRows = createRowReuseCache()
 
@@ -95,9 +100,15 @@ export function useSeatGrid(apiBase, options = {}) {
     seats.value = applyEditedRows(seats.value, newRows, cols.value, types.value, resolveCellValue)
   }
 
+  // 读路径代次：挂载/手动刷新与保存失败后的回滚重拉可能并发，
+  // 旧响应不能覆盖期间已在内存里的座位草稿（F04-10）。
+  const loadSeq = createLatest()
+
   async function load() {
+    const my = loadSeq.begin()
     try {
       const res = await axios.get(apiBase)
+      if (!loadSeq.isCurrent(my)) return
       rows.value = res.data.rows
       cols.value = res.data.cols
       mode.value = res.data.mode || 'single'
@@ -106,7 +117,24 @@ export function useSeatGrid(apiBase, options = {}) {
       settings.value = res.data.settings || {}
       loaded.value = true
       loadError.value = false
-    } catch (e) { console.error(e); loadError.value = true }
+    } catch (e) {
+      if (!loadSeq.isCurrent(my)) return
+      console.error(e); loadError.value = true
+    }
+  }
+
+  // 用外部已取到的数据填充（P3-15：座位概览接口一次回 active/master/weight）。
+  // 与 load() 的落值口径逐项一致；同时开新代次，作废在途的旧 load 响应。
+  function hydrate(data) {
+    loadSeq.begin()
+    rows.value = data.rows
+    cols.value = data.cols
+    mode.value = data.mode || 'single'
+    seats.value = data.seats || []
+    types.value = normalizeTypes(data.types, rows.value, cols.value)
+    settings.value = data.settings || {}
+    loaded.value = true
+    loadError.value = false
   }
 
   // 串行保存器：每次编辑都 PUT 整块座位，连续操作会并发发出多个 PUT —— 后端按到达顺序写库，
@@ -157,6 +185,17 @@ export function useSeatGrid(apiBase, options = {}) {
     // next 必须是快照而非 seats.value 引用：提交被排队后，后续编辑会改同一个数组，
     // 引用会让本次提交/撤销记录读到后来才设的值（#23）。
     const next = seats.value.map(r => [...r])
+
+    // 候选选中了已入座的学生：同一个人现在占两格。以本次变化的格为新位置，
+    // 把旧格清掉（纯函数只认数字 id，姓名串不动）。清掉的格也要进 changed，
+    // 否则撤销批次只退新格、旧格永远空着。relocate 原地改 next 这份快照。
+    const prelim = []
+    for (let r = 0; r < Math.max(prev.length, next.length); r += 1) {
+      for (let c = 0; c < Math.max(prev[r]?.length || 0, next[r]?.length || 0); c += 1) {
+        if ((prev[r]?.[c] ?? null) !== (next[r]?.[c] ?? null)) prelim.push([r, c])
+      }
+    }
+    relocateDuplicateSeats(next, prelim, types.value)
     const changed = []
     const maxR = Math.max(prev.length, next.length)
     for (let r = 0; r < maxR; r++) {
@@ -268,7 +307,11 @@ export function useSeatGrid(apiBase, options = {}) {
         if (id && !(ri === seatRowIdx && ci === colIdx)) occupied.add(id)
       })
     })
-    currentEditExcludeIds.value = Array.from(occupied)
+    const ids = Array.from(occupied)
+    // 座位表：不剔除已入座学生，改为带位置标注（选中即移动）。
+    // 值日等其它表走 onCellDblClick 的另一份实现，不受影响。
+    currentEditExcludeIds.value = []
+    currentEditOccupied.value = occupiedSeatLabels(seats.value, cols.value, types.value, rows.value, ids)
   }
 
   // 设置：newCols 是「座位列数」（用户视角），内部换算成网格总列数再落库。
@@ -514,9 +557,9 @@ export function useSeatGrid(apiBase, options = {}) {
   }
 
   return {
-    loaded, loadError, rows, cols, seats, types, mode, settings, settingsVisible, currentEditExcludeIds,
+    loaded, loadError, rows, cols, seats, types, mode, settings, settingsVisible, currentEditExcludeIds, currentEditOccupied,
     colHeaders, displayRows, exportFields, exportRows,
-    load, save, saveSeats, onCellsUpdate, onSwapRows, onSwapColumns, onCellDblClick, saveSettings,
+    load, hydrate, save, saveSeats, onCellsUpdate, onSwapRows, onSwapColumns, onCellDblClick, saveSettings,
     generateColHeaders, seatColumnIndices,
     // 设置空位（画笔）
     holeMode, usableSeats, enterHoleMode, exitHoleMode, toggleHoleAt, clearAllHoles, confirmHoleMode,

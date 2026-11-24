@@ -17,6 +17,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const ROOT = path.join(__dirname, '../..')
+const scan = require('../_source-scan.cjs')
 const VIEW_DIR = path.join(ROOT, 'student-frontend/src/views/SettingsView')
 const VIEW = path.join(VIEW_DIR, 'SettingsView.vue')
 const MODULES = ['SettingsView.appearance.js', 'SettingsView.data.js', 'SettingsView.search.js']
@@ -31,14 +32,22 @@ function templateOf(src) {
   return src.slice(start, end)
 }
 
-/** 三个逻辑模块 return 出去的方法名（约定：对象顶层方法，缩进 4 空格）
- *  必须允许 `async` 前缀 —— 「回收微缩图」的 sweepThumbs 就是 async 方法，
- *  旧正则只认 `    name(` 导致它没被纳入检查，漏掉了「没解构进模板」的真实故障。 */
+/** 三个逻辑模块 return 出去的对象键名（T07-10）
+ *  原正则依赖「4 空格缩进 + name(」：`async` 已补，但缩进被格式化、简写属性
+ *  `return { sweepThumbs }`、`name: async () => {}` 仍然会漏。改为 AST 取 return 的对象字面量键。 */
 function ctxMethodNames() {
   const names = new Set()
   for (const f of MODULES) {
     const s = fs.readFileSync(path.join(VIEW_DIR, f), 'utf8')
-    for (const m of s.matchAll(/^ {4}(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) names.add(m[1])
+    const { ast } = scan.analyze(s)
+    scan.walk(ast.program, (node) => {
+      if (node.type !== 'ReturnStatement' || !node.argument || node.argument.type !== 'ObjectExpression') return
+      for (const p of node.argument.properties) {
+        if (p.type !== 'ObjectProperty' && p.type !== 'ObjectMethod') continue
+        const k = scan.keyName(p.key)
+        if (k) names.add(k)
+      }
+    })
   }
   return names
 }

@@ -14,6 +14,7 @@ const { app, safeStorage } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
+const { atomicWriteFileSync, atomicWriteJsonSync } = require('./main.atomic-write')
 
 // Node 编译缓存（code cache）：把主进程启动过程中加载的模块字节码缓存到磁盘，
 // 下一次启动直接复用、跳过解析 + 编译（仅对 Node 侧模块生效，收益在后续启动）。
@@ -55,8 +56,10 @@ function saveAppConfig(patch) {
   if (!next.dataDir) delete next.dataDir
   // 写失败必须抛错：否则「切配置」这一步会静默失败，而调用方（如数据目录搬迁）
   // 会继续删掉旧目录，导致数据在新目录、配置却指向已删除的旧目录。
+  // 原子写：中途掉电只会留下旧配置，不会把 app-config.json 截断成半截 JSON
+  // 导致下次启动回退默认数据目录（E01-05）。
   try {
-    fs.writeFileSync(getAppConfigPath(), JSON.stringify(next, null, 2))
+    atomicWriteJsonSync(getAppConfigPath(), next, 2)
   } catch (err) {
     console.error('[main] 写入 app-config 失败:', err?.message || err)
     throw new Error('配置文件写入失败：' + (err?.message || err))
@@ -121,6 +124,28 @@ let dbMasterKeyPromise = null
 // 「已有密钥不可确认」是致命错误：必须穿透外层兜底，绝不能被降级成运行期随机值。
 class DbMasterKeyUnavailableError extends Error {}
 
+// 密钥备份轮转：每次重加密/解密失败都留一份 .bak-<ts>，长期排查会持续堆积（E01-06）。
+// 保留最近 N 份足够回溯，更旧的直接删；清理失败不影响主流程。
+const KEY_BACKUP_KEEP = 5
+function pruneKeyBackups(keyFile) {
+  try {
+    const dir = path.dirname(keyFile)
+    const prefix = path.basename(keyFile) + '.bak-'
+    const backups = fs.readdirSync(dir)
+      .filter((n) => n.startsWith(prefix))
+      .map((n) => {
+        const full = path.join(dir, n)
+        let mtime = 0
+        try { mtime = fs.statSync(full).mtimeMs } catch (_) { /* 读不到按最旧处理 */ }
+        return { full, mtime }
+      })
+      .sort((a, b) => b.mtime - a.mtime)
+    for (const f of backups.slice(KEY_BACKUP_KEEP)) {
+      try { fs.unlinkSync(f.full) } catch (_) { /* 删不掉留着，下次再试 */ }
+    }
+  } catch (_) { /* 目录不可读时不影响主流程 */ }
+}
+
 async function resolveDbMasterKey() {
   // 主密钥文件与数据库同目录存放，随数据目录一起迁移；解析用配置后的 dataDir，保证两者一致
   const keyFile = resolveDbMasterKeyPath()
@@ -141,7 +166,8 @@ async function resolveDbMasterKey() {
             const fresh = await safeStorage.encryptStringAsync(result)
             const backupFile = `${keyFile}.bak-${Date.now()}`
             fs.copyFileSync(keyFile, backupFile)
-            fs.writeFileSync(keyFile, fresh)
+            pruneKeyBackups(keyFile)
+            atomicWriteFileSync(keyFile, fresh)
             console.log('[main] DB 主密钥密文已按新安全级别重新加密，旧密文备份:', backupFile)
           } catch (reErr) {
             console.error('[main] DB 主密钥重加密失败，保留原密文:', reErr?.message || reErr)
@@ -154,6 +180,7 @@ async function resolveDbMasterKey() {
         const backupFile = `${keyFile}.bak-${Date.now()}`
         try {
           fs.copyFileSync(keyFile, backupFile)
+          pruneKeyBackups(keyFile)
           console.error('[main] DB 主密钥解密失败，已保留原密文并备份:', err?.message || err, '→', backupFile)
         } catch (backupErr) {
           console.error('[main] DB 主密钥解密失败，备份也失败（原密文未动）:', backupErr?.message || backupErr)
@@ -170,7 +197,7 @@ async function resolveDbMasterKey() {
     if (available) {
       try {
         fs.mkdirSync(path.dirname(keyFile), { recursive: true })
-        fs.writeFileSync(keyFile, await safeStorage.encryptStringAsync(key))
+        atomicWriteFileSync(keyFile, await safeStorage.encryptStringAsync(key))
       } catch (err) {
         console.error('[main] DB 主密钥持久化失败，将仅本次运行有效:', err?.message || err)
       }

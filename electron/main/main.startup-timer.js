@@ -12,6 +12,8 @@
 
 const path = require('path')
 const fs = require('fs')
+const { atomicWriteFileSync } = require('./main.atomic-write')
+const { dropPartialUtf8Head } = require('./main.logRotator')
 
 const marks = []
 const startTime = Date.now()
@@ -188,8 +190,11 @@ function saveLog(filePath) {
     try {
       const st = fs.statSync(filePath)
       if (st.size > 512 * 1024) {
-        const tail = fs.readFileSync(filePath, 'utf8').slice(-256 * 1024)
-        fs.writeFileSync(filePath, '（历史日志已截断，仅保留最近部分）\n' + tail)
+        // 按字节取尾部后先丢掉半截多字节字符，避免首行出现替换符（E02-04）；
+        // 重写走原子替换，崩溃时不会只剩半截日志。
+        const buf = fs.readFileSync(filePath)
+        const tail = dropPartialUtf8Head(buf.subarray(buf.length - 256 * 1024))
+        atomicWriteFileSync(filePath, '（历史日志已截断，仅保留最近部分）\n' + tail.toString('utf8'))
       }
     } catch (_) { /* 首次启动文件不存在，忽略 */ }
     const lines = marks.map((m, i) => {

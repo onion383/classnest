@@ -17,7 +17,7 @@
       <!-- 编辑模式：只读学生姓名 -->
       <div v-if="isEdit" class="mb-3">
         <label class="block text-sm text-text-secondary mb-1">请假学生</label>
-        <input readonly :value="editingRecord.姓名" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" />
+        <input readonly :value="editingRecord.姓名" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border text-text-muted" aria-label="请假学生" />
       </div>
 
       <!-- 学生选择（带候选列表 + 自动带出联系方式） -- 仅新增模式 -->
@@ -30,8 +30,7 @@
             placeholder="输入姓名搜索"
             class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"
             @focus="listVisible = true"
-            @blur="delayHide"
-          />
+            @blur="delayHide" aria-label="输入姓名搜索"/>
           <div
             v-if="listVisible"
             ref="studentListRef"
@@ -43,8 +42,7 @@
               class="px-3 py-2 text-sm cursor-pointer hover:bg-primary/10 transition-theme"
               @mousedown.prevent="selectStudent(s)"
             >
-              <span class="text-text">{{ s.姓名 }}</span>
-              <span v-if="s.学号" class="ml-2 text-xs text-text-muted">{{ s.学号 }}</span>
+              <span class="text-text">{{ studentRowLabel(s) }}</span>
             </div>
             <div v-if="!filteredStudents.length" class="px-3 py-2 text-sm text-text-muted">无匹配学生</div>
           </div>
@@ -64,11 +62,11 @@
       <div v-if="selected || isEdit" class="grid grid-cols-2 gap-3 mb-3 text-sm">
         <div>
           <label class="block text-text-secondary mb-1">家长联系电话 <span class="text-text-muted text-xs">(可双击编辑)</span></label>
-          <input v-model="form.parentPhone" type="text" class="w-full px-3 py-2 rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+          <input v-model="form.parentPhone" type="text" class="w-full px-3 py-2 rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="家长联系电话" />
         </div>
         <div>
           <label class="block text-text-secondary mb-1">学生联系电话 <span class="text-text-muted text-xs">(可双击编辑)</span></label>
-          <input v-model="form.studentPhone" type="text" class="w-full px-3 py-2 rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+          <input v-model="form.studentPhone" type="text" class="w-full px-3 py-2 rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="学生联系电话" />
         </div>
       </div>
 
@@ -106,11 +104,11 @@
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs text-text-muted mb-1">开始时间</label>
-            <input v-model="form.startLocal" type="datetime-local" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+            <input v-model="form.startLocal" type="datetime-local" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="开始时间" />
           </div>
           <div>
             <label class="block text-xs text-text-muted mb-1">结束时间</label>
-            <input v-model="form.endLocal" type="datetime-local" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" />
+            <input v-model="form.endLocal" type="datetime-local" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="结束时间" />
           </div>
         </div>
       </div>
@@ -118,7 +116,7 @@
       <!-- 备注 -->
       <div class="mb-4">
         <label class="block text-sm text-text-secondary mb-1">备注</label>
-        <textarea v-model="form.remark" rows="2" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary"></textarea>
+        <textarea v-model="form.remark" rows="2" class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary" aria-label="备注"></textarea>
       </div>
 
       <div class="flex justify-end gap-2">
@@ -138,6 +136,7 @@ import DialogShell from '../base/DialogShell.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { formatDateTimeLocal, formatDateTime } from '../../utils/dateTime.js'
+import { studentRowLabel } from '../../utils/studentLabel.js'
 
 defineOptions({ name: 'AddLeaveDialog' })
 

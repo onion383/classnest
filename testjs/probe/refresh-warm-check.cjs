@@ -7,11 +7,13 @@
 
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
+const os = require('os')
 const fs = require('fs')
 const { pathToFileURL } = require('url')
 
 const DIST = path.join(__dirname, '../../student-frontend/dist')
-const OUT = path.join(__dirname, '../tmp/refresh-warm')
+// 产物放系统临时目录：多次运行不再往仓库里堆（T02-09）
+const OUT = path.join(os.tmpdir(), 'classnest-probe', 'refresh-warm')
 
 let failed = 0
 const check = (name, ok, extra) => {

@@ -15,9 +15,11 @@ const fs = require('fs')
 const os = require('os')
 
 const ROOT = path.resolve(__dirname, '..', '..')
-const TMP = path.join(os.tmpdir(), 'ai-limits-unit-' + process.pid)
+// 独占临时数据目录：不继承外部 DATA_DIR（可能是真实用户数据目录），退出时清理（T03-12）。
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-limits-unit-' + process.pid + '-'))
 process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'unit-test-master-key'
-process.env.DATA_DIR = process.env.DATA_DIR || TMP
+process.env.DATA_DIR = TMP
+process.on('exit', () => { try { fs.rmSync(TMP, { recursive: true, force: true }) } catch (_) { /* 占用中留给系统 */ } })
 
 const { normalizeToolCalls } = require(path.join(ROOT, 'student-backend/routes/ai/ai.llm.js'))
 const snap = require(path.join(ROOT, 'student-backend/routes/ai/ai.tools/tools.executors/executors.snapshot.js'))

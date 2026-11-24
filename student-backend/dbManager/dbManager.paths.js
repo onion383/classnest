@@ -44,7 +44,12 @@ const sessionsPath = path.join(coreDir, '.sessions.json');
 const authPolicyPath = path.join(coreDir, '.auth-policy.json');
 const lastDbPath = path.join(coreDir, '.last-db');
 function dbFilePath(slug) {
-  return path.join(coreDir, `${slug}.db`);
+  // 第二道闸（K01-16）：路径安全不能只依赖 registry 查得到 —— slug 会从包 meta / token
+  // 等外部输入一路传进来。与 snapshotsDir / skillsDir 同一白名单，非法直接拒绝，
+  // 绝不落到 path.join 里（否则 `../` 可拼出 core 之外的路径）。
+  const s = String(slug == null ? '' : slug);
+  if (!/^[A-Za-z0-9_@-]+$/.test(s)) throw new Error('非法的库标识');
+  return path.join(coreDir, `${s}.db`);
 }
 
 // ---- content：用户内容（随备份包走） ----

@@ -44,6 +44,10 @@ const BASE = require('../../config/ports.cjs').frontendOrigin
 const BACKEND = require('../../config/ports.cjs').backendOrigin
 const CDP_HOST = `127.0.0.1:${PORT}`
 
+// 默认账号口令只服务本地开发；CI / 无头环境必须显式给环境变量，避免把开发便利当成真实凭据口径（T01-04）
+if (process.env.CI && (!process.env.MODE_PROBE_USER || !process.env.MODE_PROBE_PASS)) {
+  throw new Error('CI 环境必须设置 MODE_PROBE_USER / MODE_PROBE_PASS')
+}
 const USER = process.env.MODE_PROBE_USER || 'test1314'
 const PASS = process.env.MODE_PROBE_PASS || 'test1234'
 const ROUTES = (process.env.MODE_PROBE_ROUTES || '/students,/seats,/schedule,/duty,/scores,/').split(',').map(s => s.trim()).filter(Boolean)
@@ -398,10 +402,15 @@ async function ensureRunner() {
   } else console.log('[mode] Vite 已在运行')
 
   const electronPath = require('electron')
+  // 子进程环境隔离（T01-04）：宿主 IDE / 同机 Electron 注入的 ELECTRON_RUN_AS_NODE
+  // 会让 electron 退化成纯 Node（不建窗口），NODE_OPTIONS 的 --require 也会污染主进程。
+  const childEnv = { ...process.env, INP_DEBUG: '1', FORCE_SETUP: '0' }
+  delete childEnv.ELECTRON_RUN_AS_NODE
+  delete childEnv.NODE_OPTIONS
   const child = spawn(electronPath, ['.', '--no-sandbox', '--disable-gpu-sandbox', '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding', '--disable-features=CalculateNativeWinOcclusion'], {
     cwd: ROOT,
-    env: { ...process.env, INP_DEBUG: '1', FORCE_SETUP: '0' },
+    env: childEnv,
     stdio: 'inherit',
   })
   child.on('exit', (code) => console.log(`[mode] Electron 退出（code=${code}）`))

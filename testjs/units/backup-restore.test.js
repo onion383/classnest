@@ -110,7 +110,9 @@ test('接线：「先校验 → 再恢复库 → 最后换目录」的顺序不�
   const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
 
   const routeSrc = strip(fs.readFileSync(path.join(ROOT, 'student-backend/routes/account.js'), 'utf8'))
-  for (const name of ["router.post('/restore-zip'", "router.post('/restore-zip-offline'"]) {
+  // 登录态恢复入口 /restore-zip 已随 X2-02 下线（前端零调用），仅剩离线入口；
+  // 顺序不变量由仍在的 /restore-zip-offline 继续守住。
+  for (const name of ["router.post('/restore-zip-offline'"]) {
     const at = routeSrc.indexOf(name)
     assert.ok(at > -1, `缺少 ${name}`)
     const verifyAt = routeSrc.indexOf('receiveAndVerify(', at)

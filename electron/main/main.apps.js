@@ -16,6 +16,7 @@ const { CH, IPC } = require('./channels')
 const path = require('path')
 const fs = require('fs')
 const { getDialogDir, setDialogDir } = require('./main.dialogs')
+const contract = require('./main.ipc-contract')
 const { resolveSafeLaunchPath } = require('./main.path-guard')
 
 // 单次拖入最多解析的路径数：只是防呆上限，真正的「最多 8 个」由渲染层与后端共同限制
@@ -62,7 +63,8 @@ function registerAppsIpc(opts = {}) {
   if (typeof opts.getMainWindow === 'function') getMainWindow = opts.getMainWindow
 
   // 打开"选择软件程序/快捷方式"对话框，并提取其图标为 dataURL 返回
-  IPC.handle(CH.APPS_SELECT_FILE, async () => {
+  // 前端用 try/catch 兜底，走 safeReject：异常仍 reject，但 message 是可读原因。
+  IPC.handle(CH.APPS_SELECT_FILE, contract.safeReject(async () => {
     const mainWindow = getMainWindow()
     if (!mainWindow || mainWindow.isDestroyed()) return { canceled: true, error: '无主窗口' }
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -79,7 +81,7 @@ function registerAppsIpc(opts = {}) {
     setDialogDir(path.dirname(filePath))
     const entry = await resolveAppEntry(filePath)
     return { canceled: false, filePath, ...entry }
-  })
+  }))
 
   // 拖拽添加：渲染层把从桌面拖入的文件/文件夹/快捷方式路径一次性发来，
   // 这里统一校验存在性并提取名称/图标。拖入的快捷方式可能指向已删除的文件，
@@ -98,14 +100,14 @@ function registerAppsIpc(opts = {}) {
   })
 
   // 点击启动常用软件（.lnk/.exe/.bat/文件夹/普通文件均可走 shell.openPath）
-  IPC.handle(CH.APPS_LAUNCH, (event, filePath) => {
+  IPC.handle(CH.APPS_LAUNCH, contract.safeReject((event, filePath) => {
     // 列表由后端持久化，渲染层仍可能被篡改后传入任意路径；
     // 这里只拒绝「不存在」与「系统保护目录」，保留用户自装软件（多在 Program Files）。
     const safe = resolveSafeLaunchPath(filePath)
     if (safe.error) return { error: safe.error }
     shell.openPath(safe.path)
     return {}
-  })
+  }))
 }
 
 module.exports = { registerAppsIpc }

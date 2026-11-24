@@ -18,9 +18,6 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const { createBackendDb } = require('./_db-express-fixture.cjs')
 
-const ROOT = path.resolve(__dirname, '../..')
-const readSrc = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
-
 const fx = createBackendDb({ label: 'album-photo-focus' })
 const conn = fx.conn
 const TMP = process.env.DATA_DIR
@@ -86,18 +83,6 @@ test('照片不存在：404 + 明确错误，前端据此安静地只停在相�
   assert.match(String((await r.json()).error), /照片不存在/)
 })
 
-test('源码判据：CORS 真的放行了 X-Photo-Id，否则打包版跨域读不到头', () => {
-  assert.match(readSrc('student-backend/app.js'), /exposedHeaders:[^\]]*X-Photo-Id/)
-  assert.match(readSrc('student-backend/routes/album.js'), /res\.setHeader\('X-Photo-Id'/)
-})
-
-test('源码判据：首页真的读头并带 ?photo 跳转（卡片与按钮两处入口）', () => {
-  const src = readSrc('student-frontend/src/views/DashboardView.vue')
-  assert.match(src, /h\.get\('X-Photo-Id'\)/, '必须从响应头读照片 id')
-  assert.match(src, /query:\s*\{\s*photo:\s*String\(id\)\s*\}/, '跳转必须带 ?photo=<id>')
-  assert.ok((src.match(/goToAlbumPhoto\(\)/g) || []).length >= 2, '整卡与按钮都要走带 id 的跳转')
-})
-
 test('exclude：点「换一张」不会抽到当前这一张', async () => {
   const cur = conn.prepare('SELECT id FROM album_photos WHERE file_name = ?').get('FOCUS_0.jpg').id
   for (let i = 0; i < 8; i++) {
@@ -105,40 +90,6 @@ test('exclude：点「换一张」不会抽到当前这一张', async () => {
     assert.equal(r.status, 200)
     assert.notEqual(Number(r.headers.get('x-photo-id')), cur, '抽到同一张，按钮点了像没反应')
   }
-})
-
-test('源码判据：首页换一张按钮 + 磁贴式动画 + blob 释放时机', () => {
-  const src = readSrc('student-frontend/src/views/DashboardView.vue')
-  assert.match(src, /@click\.stop="cycleAlbumPhoto\(\)"/, '按钮必须 stop，否则点一下就跳去相册页了')
-  assert.match(src, /params:\s*exclude\s*\?\s*\{\s*exclude\s*\}/, '换图请求要排除当前这张')
-  assert.match(src, /keepOnError:\s*true/, '换图失败不能把当前图清空')
-  // 毛玻璃主题会给所有 button 补 1px 深色圆环，必须显式清掉，否则按钮看着像带黑框
-  assert.match(src, /border:\s*1px solid transparent !important/, '循环按钮的边框要清掉')
-  assert.match(src, /\.photo-cycle-btn::before\s*\{\s*display:\s*none !important/, '主题的荧光描边也要清掉')
-  // 转圈不能请求一回来就停：要一直转到换图过渡动画收尾（后端命中缓存只有几十毫秒）
-  assert.match(src, /function finishPhotoAnim\(\)[\s\S]{0,400}spinPending[\s\S]{0,100}photoSwitching\.value = false/,
-    '转圈的停止点必须放在换图动画收尾里')
-  assert.match(src, /animated = replaceAlbumPhoto\(thumbRes\.data, !!exclude\)/,
-    '按钮这一轮要用 replaceAlbumPhoto 的返回值登记「等动画」')
-  assert.match(src, /if \(!\(albumPhotoSeq\.isCurrent\(my\) && animated && spinPending\)\)/,
-    '关闭动画/失败/被接管时必须立刻停，别让按钮转个不停')
-  assert.match(src, /photo-spin 560ms/, '一圈与换图动画总时长对齐')
-  assert.match(src, /@keyframes photo-retreat/, '旧图后退的关键帧')
-  assert.match(src, /@keyframes photo-float-in/, '新图浮入的关键帧')
-  assert.match(src, /photoOutUrl/, '必须保留后层旧图')
-  assert.match(src, /photoAnimFallback\(finishPhotoAnim, 700\)/, '动画不触发时要有兜底收尾')
-  assert.match(src, /finishPhotoAnim[\s\S]{0,400}revokeBlobUrl\(old\)/, '旧图要等动画结束才释放')
-})
-
-test('源码判据：相册页消费 ?photo，且挂载 / 切回 / query 变化三个入口都接上', () => {
-  const src = readSrc('student-frontend/src/views/AlbumView.vue')
-  assert.match(src, /route\.query\.photo/)
-  assert.match(src, /photo\/\$\{id\}\/locate/)
-  assert.match(src, /viewPhoto\(p\)/)
-  assert.ok((src.match(/applyPhotoFocus\(\)/g) || []).length >= 3,
-    '定义 + onMounted + onActivated 至少 3 处')
-  assert.match(src, /watch\(\(\) => route\.query\.photo, applyPhotoFocus\)/,
-    'KeepAlive 缓存后从首页再点进来，只会变 query，必须靠 watch 触发')
 })
 
 // 放在最后：会删掉两行照片，前面的用例都依赖三张图

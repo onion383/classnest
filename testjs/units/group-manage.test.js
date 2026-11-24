@@ -20,6 +20,8 @@ const assert = require('node:assert/strict')
 const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
 
 const fx = createBackendDb({ label: 'group-manage' })
+// X2-02：POST /dimensions/move 已下线，排序行为改为直调服务函数
+const groupDim = require('../../student-backend/services/groupDim')
 
 test.before(() => fx.mount('/api/group-manage', 'student-backend/routes/groupManage.js'))
 test.after(() => fx.close())
@@ -107,7 +109,7 @@ test('内置宿舍组改宿舍数：保留组的 id 与成员，只改名/性别
   assert.deepEqual(gs.map((g) => g.name), ['男生宿舍1', '男生宿舍2', '女生宿舍1', '女生宿舍2'])
 })
 
-test('移动维度：成功换序，到边界回 400 且顺序不变', async () => {
+test('移动维度：成功换序，到边界拒绝且顺序不变', async () => {
   fx.reset()
   await get('/bootstrap') // 宿舍组排 1
   const a = await makeDim('A')
@@ -115,13 +117,11 @@ test('移动维度：成功换序，到边界回 400 且顺序不变', async () 
   const order = () => all('SELECT name, sort_order FROM group_dimensions ORDER BY sort_order, id').map((d) => d.name)
   assert.deepEqual(order(), ['宿舍组', 'A', 'B'])
 
-  let r = await post('/dimensions/move', { id: a.id, direction: 'up' })
-  assert.equal(r.status, 200, r.text.slice(0, 200))
+  assert.equal(groupDim.moveDimension(a.id, 'up'), true, '成功换序应返回 true')
   assert.deepEqual(order(), ['A', '宿舍组', 'B'])
 
-  r = await post('/dimensions/move', { id: a.id, direction: 'up' })
-  assert.equal(r.status, 400, '已到第一个不能再上移')
-  assert.deepEqual(order(), ['A', '宿舍组', 'B'], '边界失败不能改动顺序')
+  assert.equal(groupDim.moveDimension(a.id, 'up'), false, '已到第一个不能再上移')
+  assert.deepEqual(order(), ['A', '宿舍组', 'B'], '边界拒绝不能改动顺序')
 })
 
 test('新增组：排到末尾；超过 50 个直接拒', async () => {

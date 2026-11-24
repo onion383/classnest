@@ -66,6 +66,7 @@
                   <span @click.stop class="inline-flex items-center flex-shrink-0">
                     <AppSelect
                       v-model="m.model"
+                      :aria-label="`切换${providerName(m.provider)}模型`"
                       :options="modelOptions[m.id]"
                       @change="onCardModelChange(m.id)"
                       class="!w-44 !text-xs"
@@ -322,6 +323,8 @@ async function toggleReasoning(m, e) {
     emit('saved')
   } catch (err) {
     e.target.checked = !on
+    // 只回滚 DOM 不够：模板绑的是 m.reasoning，下次重渲染复选框会弹回已勾选（F02-04）
+    m.reasoning = !on
     reportError(err, { action: '切换推理开关' })
   }
 }

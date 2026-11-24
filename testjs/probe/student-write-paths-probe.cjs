@@ -6,13 +6,26 @@
 // 每个路由各自处理。这类错误不会在类型层面暴露，结果是「只有姓名没有 id」的孤儿行，
 // 或者改了名却仍指向旧人的历史记录。所以用真实 HTTP 请求跑一遍，人看结论。
 //
-// 跑法：node testjs/probe/student-write-paths-probe.cjs
+// 跑法：node testjs/probe/student-write-paths-probe.cjs            （门禁：结论不符即退出 1）
+//       node testjs/probe/student-write-paths-probe.cjs --report  （只打印报表，恒退出 0）
 // 判读：看每行的 verdict ——「建档」「已重认」是预期；「未建档」「id 未变（仍指向旧人）」是问题。
 // 依赖：testjs/units/_db-express-fixture.cjs（内存库，不需要真实班级数据）。
 // 来历：2026-11-21 从 testjs/tmp 转正，tmp 里的原文件已删除，以本文件为准。
 // =========================================================================
 const path = require('node:path')
 const { createBackendDb } = require('../units/_db-express-fixture.cjs')
+
+// 默认门禁模式：每行 verdict 与预期不符即失败（T02-07：过去只打印、退出码恒 0）
+const REPORT_ONLY = process.argv.includes('--report')
+const EXPECT = {
+  'scores POST 名册外姓名': '建档',
+  'scores import 名册外姓名': '建档',
+  'scores PUT 改姓名': '已重认',
+  'leaves import 名册外姓名': '建档',
+  'leaves PUT 改姓名': '已重认',
+  'cadres POST 成员名册外': '建档',
+  'group POST 成员名册外': '建档 + 回填 id',
+}
 
 const fx = createBackendDb({ label: 'audit-write-paths' })
 // reset() 会换连接，必须每次走 getter，不能缓存
@@ -132,7 +145,21 @@ async function main() {
   // ---------- 汇总 ----------
   console.log('\n=== 写入路径审计 ===')
   for (const o of out) console.log(JSON.stringify(o, null, 0))
+  const bad = out.filter((o) => EXPECT[o.label] && o.verdict !== EXPECT[o.label])
+  if (REPORT_ONLY) {
+    console.log('\n（--report：仅打印，不判定）')
+  } else if (bad.length) {
+    console.error(`\n✗ ${bad.length} 条写入路径结论不符：`)
+    for (const o of bad) console.error(`  · ${o.label}：期望「${EXPECT[o.label]}」，实际「${o.verdict}」`)
+  } else if (out.length !== Object.keys(EXPECT).length) {
+    console.error(`\n✗ 审计条数不符：期望 ${Object.keys(EXPECT).length} 条，实际 ${out.length} 条（有分支未执行）`)
+    fx.close()
+    process.exit(1)
+  } else {
+    console.log('\n✓ 全部写入路径结论符合预期')
+  }
   fx.close()
+  if (!REPORT_ONLY && bad.length) process.exit(1)
 }
 
 main().catch((e) => { console.error('FAIL', e && e.stack || e); fx.close(); process.exit(1) })

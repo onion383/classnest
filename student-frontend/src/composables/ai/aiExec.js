@@ -1,6 +1,4 @@
-import { reportError } from '../../utils/reportError.js'
 import axios from 'axios'
-import { undoById } from '../../api/undo.js'
 import { useNotification } from '../useNotification.js'
 import { recordUndo as recordUndoSpec } from '../../utils/undoRecorder.js'
 import { useThemeStore } from '../../stores/theme.js'
@@ -236,49 +234,6 @@ export function useAiExec(ctx) {
         `已执行：${executedLabel}`,
         m
       )
-    },
-    // 该回复的数据更改是否可撤回（提案已执行且尚未撤回）
-    canUndoChange(m) {
-      const p = m && m.proposal
-      if (!p || !p.executed || p.reverted || p.reverting) return false
-      // 前端设置提案：有 frontUndo 即可撤回；其余：需登记过撤销记录
-      if (p.kind === 'front') return !!p.frontUndo
-      return !!(p.undoIds && p.undoIds.length)
-    },
-    // 撤回这条回复已执行的数据更改：按登记的撤销记录逐条精确回退
-    async undoChange(m) {
-      if (!ctx.canUndoChange(m) || ctx.busy.value) return
-      const p = m.proposal
-      const { success: notify } = useNotification()
-      p.reverting = true
-      try {
-        if (p.kind === 'front' && p.frontUndo) {
-          // 前端设置：直接把设置写回执行前的值（不经过 /api/undo）
-          const store = useThemeStore()
-          ctx._setFrontSetting(store, p.frontUndo.key, p.frontUndo.before)
-          p.reverted = true
-          notify(`已还原：${p.frontUndo.label || '设置'}`)
-          if (m._id != null) ctx.updateMessage(m._id, m.content || '', ctx._buildProc(m))
-          return
-        }
-        let label = ''
-        // 逆序撤销，保证批量新增按相反顺序删除
-        for (const id of p.undoIds.slice().reverse()) {
-          const { data } = await undoById(id)
-          if (!data || !data.ok) throw new Error((data && data.error) || '撤回失败')
-          label = data.label || label
-          // 成功的立刻出队：部分失败后重试只撤剩下的，不会对已撤的再撤一次
-          p.undoIds = p.undoIds.filter((x) => x !== id)
-        }
-        p.reverted = true
-        notify(label ? `已撤回：${label}` : '已撤回更改')
-        // 回写「已撤回」状态：避免刷新后按钮又还原成可撤回，导致对同一笔更改二次撤回
-        if (m._id != null) ctx.updateMessage(m._id, m.content || '', ctx._buildProc(m))
-      } catch (err) {
-        reportError(err, { action: '撤回' })
-      } finally {
-        p.reverting = false
-      }
     },
     // 读取一项前端设置的当前值（与 _setFrontSetting 的 value 类型一致）
     // 读一项前端设置：统一从主题 store 取（与界面同源），不再裸读 localStorage ——

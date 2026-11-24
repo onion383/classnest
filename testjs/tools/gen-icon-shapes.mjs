@@ -5,9 +5,11 @@
 // 用法：node testjs/tools/gen-icon-shapes.mjs [--write]
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const root = path.resolve('student-frontend')
+// 路径按脚本自身位置推导，避免 cwd 不在仓库根时读不到文件（T03-06）
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const root = path.join(REPO_ROOT, 'student-frontend')
 const sfcFile = path.join(root, 'src/components/base/IconGlyph.vue')
 const outFile = path.join(root, 'src/components/base/IconGlyph.shapes.js')
 const write = process.argv.includes('--write')
@@ -115,3 +117,6 @@ if (write && !problems.length) {
 } else {
   console.log(write ? '\n有问题，未写入' : '\n（dry-run，加 --write 写入）')
 }
+
+// 发现即失败：有缺图标/一致性问题仍以 0 退出，会把「形状表与 lucide 漂移」静默放行（T03-06）
+process.exit(problems.length || missing.length ? 1 : 0)

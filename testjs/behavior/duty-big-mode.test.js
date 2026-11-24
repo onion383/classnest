@@ -11,6 +11,9 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const {
+  analyze, walk, keyName, memberPath, findFunction, scriptBlocks,
+} = require('../_source-scan.cjs')
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -139,14 +142,63 @@ test('前端：设置弹窗按模式切换两种列名来源', () => {
   assert.ok(!/group-manage/.test(s), '大扫除的组是内置的，不该再从分组管理读')
 })
 
+// 取对象字面量里的具名属性
+function objectProp(obj, name) {
+  return (obj.properties || []).find((p) => p.type === 'ObjectProperty' && keyName(p.key) === name) || null
+}
+const within = (node, container) => !!container && node.start >= container.start && node.end <= container.end
+
 test('前端：保存时按模式构造载荷（大扫除传配置，日常传星期）', () => {
-  const s = read(`${FE}/components/dialogs/DutySettingsDialog.vue`)
-  // 大扫除：列名由配置派生 → 只传 config，不传 days
-  assert.ok(/payload\.config = \{/.test(s), '大扫除应传模式配置')
-  assert.ok(/groupType: localConfig\.value\.groupType/.test(s), '配置应含任务分组')
-  assert.ok(/groupCount:/.test(s), '配置应含分组数量')
-  // 日常：传勾选的星期
-  assert.ok(/payload\.days = WEEK\.filter\(d => localDays\.value\.includes\(d\)\)/.test(s), '日常应传星期作为列名')
+  const src = read(`${FE}/components/dialogs/DutySettingsDialog.vue`)
+  const code = scriptBlocks(src)
+  // 为什么用 AST 而不是匹配 "payload.days = WEEK.filter(d => ...)" 原文：
+  // 那条字符串判据把空格、箭头参数名、换行都焊死了 —— 格式化或改名就假红，
+  // 而真正要守的是「日常分支才传 days」这个语义。
+  const { ast } = analyze(code)
+  const fn = findFunction(ast, 'buildPayload')
+  assert.ok(fn, '应能找到 buildPayload')
+
+  let configAssign = null
+  let bigIf = null
+  const daysAssigns = []
+  walk(fn.node, (node) => {
+    if (node.type === 'AssignmentExpression') {
+      const p = memberPath(node.left)
+      if (p === 'payload.config') configAssign = node
+      if (p === 'payload.days') daysAssigns.push(node)
+    }
+    if (node.type === 'IfStatement' && /isBigMode/.test(code.slice(node.test.start, node.test.end))) {
+      bigIf = node
+    }
+  })
+
+  // 大扫除：列名由后端派生 → 只传 config
+  assert.ok(configAssign && configAssign.right.type === 'ObjectExpression', '大扫除应传模式配置对象')
+  const config = configAssign.right
+  const groupType = objectProp(config, 'groupType')
+  assert.ok(groupType && memberPath(groupType.value) === 'localConfig.value.groupType', '配置应含任务分组')
+  assert.ok(objectProp(config, 'groupCount'), '配置应含分组数量')
+
+  // 日常：payload.days = WEEK.filter(d => localDays.value.includes(d))
+  assert.equal(daysAssigns.length, 1, `payload.days 应只赋值一次（实际 ${daysAssigns.length} 次）`)
+  assert.ok(bigIf && bigIf.alternate, '模式分支应是 if/else')
+  assert.ok(within(daysAssigns[0], bigIf.alternate), 'payload.days 的赋值应在 else 分支（大扫除不传 days）')
+  assert.ok(!within(daysAssigns[0], bigIf.consequent), '大扫除分支里不应给 payload.days 赋值')
+
+  const rhs = daysAssigns[0].right
+  assert.ok(rhs && rhs.type === 'CallExpression' && memberPath(rhs.callee) === 'WEEK.filter',
+    '日常应传星期：值来自 WEEK.filter(...)')
+  const cb = rhs.arguments[0]
+  assert.ok(cb && (cb.type === 'ArrowFunctionExpression' || cb.type === 'FunctionExpression'),
+    'WEEK.filter 应带回调')
+  const param = cb.params[0] && cb.params[0].type === 'Identifier' ? cb.params[0].name : null
+  let filteredByLocalDays = false
+  walk(cb.body, (node) => {
+    if (node.type !== 'CallExpression' || memberPath(node.callee) !== 'localDays.value.includes') return
+    const arg = node.arguments[0]
+    if (param && arg && arg.type === 'Identifier' && arg.name === param) filteredByLocalDays = true
+  })
+  assert.ok(filteredByLocalDays, '星期列表应按勾选状态 localDays 过滤')
 })
 
 test('前端：内置列「全部」不由用户维护（后端派生，前端不存）', () => {
@@ -156,19 +208,28 @@ test('前端：内置列「全部」不由用户维护（后端派生，前端�
   // 大扫除时不能传 days（列名由后端按配置派生）：
   // 传了会与配置打架 —— 后端按 mode 分键写，big 的 days 分键本来就不存列名。
   const dlg = read(`${FE}/components/dialogs/DutySettingsDialog.vue`)
-  const fn = /function buildPayload\(\)\s*\{([\s\S]*?)\n\}/.exec(dlg)
+  const code = scriptBlocks(dlg)
+  // 为什么不用 /function buildPayload\(\)\s*\{([\s\S]*?)\n\}/：
+  // 非贪婪截到第一个行首 `}` 就停，函数体里只要有嵌套块就会截断（假红/漏报）。
+  // AST 直接拿到整个函数节点范围，再按祖先关系判断赋值落在 if 还是 else。
+  const { ast } = analyze(code)
+  const fn = findFunction(ast, 'buildPayload')
   assert.ok(fn, '应能找到 buildPayload')
-  const body = fn[1]
-  // payload.days 只能赋值一次，且必须在「日常值日」分支里（大扫除不传 days）
-  const assigns = [...body.matchAll(/payload\.days\s*=/g)]
-  assert.equal(assigns.length, 1, `payload.days 应只赋值一次（实际 ${assigns.length} 次）`)
-  // 赋值点之前必须已经有 else（大扫除的 if 分支在前面，不经过这里）
-  const beforeDays = body.slice(0, assigns[0].index)
-  assert.ok(/\}\s*else\s*\{/.test(beforeDays), 'payload.days 的赋值应在 else 分支（大扫除分支不传 days）')
-  // 大扫除分支（if 到 else 之间）里不能出现 payload.days
-  const elseIdx = beforeDays.lastIndexOf('}')
-  const bigBranch = beforeDays.slice(0, elseIdx)
-  assert.ok(!/payload\.days\s*=/.test(bigBranch), '大扫除分支里不应给 payload.days 赋值')
+
+  let bigIf = null
+  const daysAssigns = []
+  walk(fn.node, (node) => {
+    if (node.type === 'AssignmentExpression' && memberPath(node.left) === 'payload.days') {
+      daysAssigns.push(node)
+    }
+    if (node.type === 'IfStatement' && /isBigMode/.test(code.slice(node.test.start, node.test.end))) {
+      bigIf = node
+    }
+  })
+  assert.equal(daysAssigns.length, 1, `payload.days 应只赋值一次（实际 ${daysAssigns.length} 次）`)
+  assert.ok(bigIf && bigIf.alternate, '模式分支应是 if/else')
+  assert.ok(within(daysAssigns[0], bigIf.alternate), 'payload.days 的赋值应在 else 分支（大扫除分支不传 days）')
+  assert.ok(!within(daysAssigns[0], bigIf.consequent), '大扫除分支里不应给 payload.days 赋值')
 })
 
 test('前端：值日页把模式与配置传给设置弹窗和排班弹窗', () => {
@@ -200,34 +261,50 @@ test('前端：排班弹窗收到「是否大扫除」标记', () => {
 test('前端：排班弹窗调用 dimension.js 的方法时必须在作用域里拿得到', () => {
   const vue = read(`${FE}/components/dialogs/DutyArrangementDialog/DutyArrangementDialog.vue`)
   const dim = read(`${FE}/components/dialogs/DutyArrangementDialog/DutyArrangementDialog.dimension.js`)
-  // dimension.js 导出的方法名（可能带 async 前缀）
-  const methods = [...dim.matchAll(/^\s{4}(?:async\s+)?([a-zA-Z_][\w]*)\s*\(/gm)].map((m) => m[1])
+  // 为什么用 AST：旧判据 /^\s{4}(?:async\s+)?(\w+)\s*\(/gm 只认「恰好 4 空格缩进」的方法，
+  // 换个缩进或把方法提成 const 箭头函数就解析不到（methods 为空直接失败/漏报）。
+  // 直接从 useDutyArrangementDimension 的 return 对象里取属性键，缩进无关。
+  const dimAst = analyze(dim).ast
+  const dimFn = findFunction(dimAst, 'useDutyArrangementDimension')
+  assert.ok(dimFn, '应能找到 useDutyArrangementDimension')
+  let returned = null
+  walk(dimFn.node, (node) => {
+    if (node.type === 'ReturnStatement' && node.argument && node.argument.type === 'ObjectExpression') {
+      returned = node.argument
+    }
+  })
+  assert.ok(returned, 'dimension.js 应返回方法对象')
+  const methods = returned.properties
+    .filter((p) => p.type !== 'SpreadElement')
+    .map((p) => keyName(p.key))
+    .filter(Boolean)
   assert.ok(methods.length, '应能从 dimension.js 解析出方法名')
   assert.ok(methods.includes('fetchDimensions'), '应能解析出 fetchDimensions（async 方法也要能识别）')
-  // .vue 里从 dimension / pipeline / options 解构出来的局部变量
+
+  // .vue 里从 dimension / pipeline / options 解构出来的局部变量（AST ObjectPattern）
+  const vueAst = analyze(scriptBlocks(vue)).ast
   const destructured = new Set()
-  const dRe = /const\s*\{([^}]+)\}\s*=\s*(dimension|pipeline|options)\b/g
-  let dm
-  while ((dm = dRe.exec(vue))) {
-    dm[1].split(',').forEach((x) => {
-      const name = x.split(':').pop().trim()
-      if (name) destructured.add(name)
-    })
-  }
-  for (const name of methods) {
-    // 找出所有调用点：前面不能是 . 或 标识符字符（即「裸调用」）
-    const re = new RegExp(`(?<![.\\w])${name}\\s*\\(`, 'g')
-    let hit
-    while ((hit = re.exec(vue))) {
-      // 调用行：注释里的不算
-      const line = vue.slice(vue.lastIndexOf('\n', hit.index) + 1, vue.indexOf('\n', hit.index))
-      if (/^\s*\/\//.test(line)) continue
-      assert.ok(
-        destructured.has(name),
-        `${name}() 裸调用但不在作用域里（dimension.js 的方法要先解构出来再用）`,
-      )
+  walk(vueAst.program, (node) => {
+    if (node.type !== 'VariableDeclarator') return
+    if (!node.id || node.id.type !== 'ObjectPattern') return
+    if (!node.init || node.init.type !== 'Identifier') return
+    if (!['dimension', 'pipeline', 'options'].includes(node.init.name)) return
+    for (const p of node.id.properties) {
+      if (p.type === 'ObjectProperty' && p.value && p.value.type === 'Identifier') destructured.add(p.value.name)
+      else if (p.type === 'RestElement' && p.argument && p.argument.type === 'Identifier') destructured.add(p.argument.name)
     }
-  }
+  })
+
+  const methodSet = new Set(methods)
+  walk(vueAst.program, (node) => {
+    // 只认裸调用（callee 是 Identifier）：ctx.foo() / pipeline.foo() 的 callee 是 MemberExpression，自动排除。
+    // AST 也不受注释影响 —— 注释掉的 foo() 不会被当成调用点。
+    if (node.type !== 'CallExpression') return
+    if (!node.callee || node.callee.type !== 'Identifier') return
+    const name = node.callee.name
+    if (!methodSet.has(name)) return
+    assert.ok(destructured.has(name), `${name}() 裸调用但不在作用域里（dimension.js 的方法要先解构出来再用）`)
+  })
 })
 
 // =========================================================================

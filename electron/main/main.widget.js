@@ -36,6 +36,7 @@ const ipcAuth = require('./main.ipc-auth')
 const desktopLayer = require('./main.desktop-layer')
 const { relayToWidgetWindows } = require('./widget-relay')
 const { appendWithRotation } = require('./main.logRotator')
+const { atomicWriteJsonSync } = require('./main.atomic-write')
 const ports = require('../../config/ports.cjs')
 
 const { isDev } = require('./main.env')
@@ -256,7 +257,8 @@ function readJsonFile(file) {
 }
 function writeJsonFile(file, obj) {
   try {
-    fs.writeFileSync(file, JSON.stringify(obj))
+    // 原子写：窗口位置这类状态文件写一半掉电会解析失败→回默认位置（E02-01）
+    atomicWriteJsonSync(file, obj)
   } catch (e) {
     console.warn('[widget] 写状态文件失败：', file, e && e.message)
   }
@@ -519,6 +521,12 @@ function registerWidgetIpc(opts = {}) {
   const fromWidgetWindow = (event) => {
     return !!widgetWindow && !widgetWindow.isDestroyed() && event.sender === widgetWindow.webContents
   }
+  // 主窗口发送方：to-widget 这类「主应用 → 小组件」的中继只能由主窗口发起，
+  // 不允许任何被注入的小组件渲染层反向扇出（E02-05）。
+  const fromMainWindow = (event) => {
+    const win = getMainWindow()
+    return !!win && !win.isDestroyed() && event.sender === win.webContents
+  }
 
   // 主窗口渲染层空闲回报：按启用状态创建/关闭「桌面小组件」窗口。
   // 工具箱**不在这里建**：它的开关存在后端库里，渲染层登录后读到才下发
@@ -565,6 +573,8 @@ function registerWidgetIpc(opts = {}) {
   IPC.on(CH.DESKTOP_WIDGET_DRAG_START, (event, pos) => {
     const win = desktopWidgetWindow
     if (!win || win.isDestroyed() || event.sender !== win.webContents || !pos) return
+    // 坐标必须是有限数：渲染层传来 undefined/字符串会让 dx/dy 变 NaN，setContentBounds 静默失效（E02-06）
+    if (!Number.isFinite(pos.screenX) || !Number.isFinite(pos.screenY)) return
     try {
       desktopDragBounds = win.getContentBounds()
     } catch (_) {
@@ -577,6 +587,7 @@ function registerWidgetIpc(opts = {}) {
   IPC.on(CH.DESKTOP_WIDGET_DRAG_MOVE, (event, pos) => {
     const win = desktopWidgetWindow
     if (!win || win.isDestroyed() || event.sender !== win.webContents || !pos) return
+    if (!Number.isFinite(pos.screenX) || !Number.isFinite(pos.screenY)) return
     if (!desktopDragBounds || !desktopDragMouse) return
     const { width, height } = desktopDragBounds
     const dx = pos.screenX - desktopDragMouse[0]
@@ -709,6 +720,7 @@ function registerWidgetIpc(opts = {}) {
   // 拖动开始：记录窗口初始位置、尺寸和鼠标初始位置
   IPC.on(CH.WIDGET_DRAG_START, (event, { screenX, screenY }) => {
     if (fromWidgetWindow(event)) {
+      if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return
       dragStartWindowPos = widgetWindow.getPosition()
       dragStartWindowSize = widgetWindow.getSize()
       dragStartMousePos = [screenX, screenY]
@@ -736,8 +748,10 @@ function registerWidgetIpc(opts = {}) {
     exitToolbox()
   })
 
-  // 会话级「本次启用工具箱」：仅影响本次运行浮窗显隐，不持久化
+  // 会话级「本次启用工具箱」：仅影响本次运行浮窗显隐，不持久化。
+  // 发送方限定主窗口或工具箱自身（策略表之外的第二道闸，E02-05）。
   IPC.on(CH.WIDGET_SET_SESSION_VISIBLE, (event, enabled) => {
+    if (!fromMainWindow(event) && !fromWidgetWindow(event)) return
     sessionWidgetEnabled = !!enabled
     // 开启即按需重建并显示；关闭即销毁窗口释放渲染进程，位置由 lastWidgetBounds 记忆
     if (sessionWidgetEnabled) showWidgetWindow()
@@ -753,6 +767,7 @@ function registerWidgetIpc(opts = {}) {
   // 拖动中：使用 setContentBounds 与 setContentSize 保持一致，避免 setBounds/setSize 边界计算差异
   IPC.on(CH.WIDGET_DRAG_MOVE, (event, { screenX, screenY }) => {
     if (fromWidgetWindow(event) && dragStartWindowPos && dragStartMousePos && dragStartWindowSize) {
+      if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return
       const dx = screenX - dragStartMousePos[0]
       const dy = screenY - dragStartMousePos[1]
       let newX = Math.round(dragStartWindowPos[0] + dx)
@@ -782,6 +797,8 @@ function registerWidgetIpc(opts = {}) {
   // 桌面挂件此前收不到这条中继，业务数据变更只能等 5 分钟轮询；settings-changed
   // 与新增的 data-changed 共用这一条路，不新增 IPC 通道名。
   IPC.on(CH.TO_WIDGET, (event, data) => {
+    // 只接受主窗口来源：否则任何小组件渲染层都能向所有窗口扇出任意消息（E02-05）
+    if (!fromMainWindow(event)) return
     relayToWidgetWindows(data, [widgetWindow, desktopWidgetWindow])
   })
 

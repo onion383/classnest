@@ -82,9 +82,11 @@ test('手动补录整周（daily）：仍然补满 7 天', async () => {
 })
 
 test('自动补存（big, includeToday）：今天不是命中日就不能写今天的快照', async () => {
-  // 今天（测试运行日）是周一，而命中日设成周三 → 今天必然不命中
-  seed({ start: shiftDateStr(localDateStr(new Date()), -30), cycle: 'week', weekday: '周三' })
+  // 命中日取「明天」：与运行当天的星期必然不同，周三跑也不会撞上（T05-01）
+  const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
   const today = localDateStr(new Date())
+  const weekday = names[(new Date().getDay() + 1) % 7]
+  seed({ start: shiftDateStr(today, -30), cycle: 'week', weekday })
   const r = await fx.call('POST', '/snapshot/backfill', { mode: 'big', includeToday: true })
   assert.ok(r.status < 400, r.text.slice(0, 200))
   assert.equal(snaps('big').includes(today), false,

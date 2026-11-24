@@ -17,6 +17,7 @@
           ref="settingsSearchInput"
           v-model="settingsSearch"
           type="text"
+          aria-label="搜索设置项"
           @focus="onSettingsSearchFocus"
           @blur="onSettingsSearchBlur"
           @keydown.down.prevent="moveSearchActive(1)"
@@ -90,6 +91,7 @@
             <label class="text-sm font-medium text-text w-40 flex-shrink-0">安全等级</label>
             <div class="w-80">
               <AppSelect
+                aria-label="安全等级"
                 :model-value="securityLevel"
                 :options="securityLevelOptions"
                 :disabled="securityLevelLoading || busySecurityLevel"
@@ -107,6 +109,7 @@
             <label class="text-sm font-medium text-text w-40 flex-shrink-0">登录保持</label>
             <div class="w-80">
               <AppSelect
+                aria-label="登录保持"
                 :model-value="loginPolicyDays"
                 :options="loginPolicyOptions"
                 :disabled="loginPolicyLoading || busyLoginPolicy"
@@ -142,17 +145,15 @@
     />
 
     <!-- 内嵌弹窗：切换安全等级 -->
-    <Teleport to="body">
-    <Transition name="dialog">
-      <div v-if="securityDialog.open" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="closeSecurityDialog">
+    <DialogShell :visible="securityDialog.open" :z-index="10001" @overlay="closeSecurityDialog">
         <div class="dialog-card bg-surface rounded-lg p-6 w-[26rem] border border-border shadow-lg">
           <h3 class="text-lg font-bold text-text mb-3">切换安全等级</h3>
           <p class="text-sm text-text-secondary mb-4">{{ securityDialogMessage }}</p>
-          <input v-if="securityNeedsCurrent" v-model="securityDialog.password" type="password" placeholder="当前登录密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" />
-          <input v-if="securityNeedsNew" v-model="securityDialog.newPassword" type="password" placeholder="新登录密码（至少 6 位）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" />
+          <input v-if="securityNeedsCurrent" v-model="securityDialog.password" type="password" placeholder="当前登录密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" aria-label="当前登录密码"/>
+          <input v-if="securityNeedsNew" v-model="securityDialog.newPassword" type="password" placeholder="新登录密码（至少 6 位）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" aria-label="新登录密码（至少 6 位）"/>
           <!-- 二次确认：首次设密码打错一个字就进不去自己刚设的墙。普通密码还能在原机走本机信息恢复，
                超级隐私只有恢复词，所以提示语按目标等级分开（见 securityNewPwdHint） -->
-          <input v-if="securityNeedsNew" v-model="securityDialog.confirmPassword" type="password" placeholder="再次输入新登录密码" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-1 rounded" />
+          <input v-if="securityNeedsNew" v-model="securityDialog.confirmPassword" type="password" placeholder="再次输入新登录密码" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-1 rounded" aria-label="再次输入新登录密码"/>
           <!-- 同样不在输入过程提示「一致 / 不一致」，只保留按目标等级区分的说明 -->
           <p v-if="securityNeedsNew" class="text-xs text-text-muted mb-3">{{ securityNewPwdHint }}</p>
           <p v-if="securityDialog.error" class="text-sm text-danger mb-3">{{ securityDialog.error }}</p>
@@ -161,9 +162,7 @@
             <button @click="confirmSecurityLevel" :disabled="busySecurityLevel" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50">{{ busySecurityLevel ? '切换中…' : '确认切换' }}</button>
           </div>
         </div>
-      </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- ========== 学期设置 ========== -->
     <div class="mb-6">
@@ -180,7 +179,7 @@
         <div class="flex items-center gap-4 mb-6">
           <label class="text-sm font-medium text-text w-40 flex-shrink-0">选择学期</label>
           <div class="w-64">
-            <AppSelect :model-value="semesterId" :options="semesterOptions" placeholder="选择学期" @change="onSelectSemester" />
+            <AppSelect aria-label="选择学期" :model-value="semesterId" :options="semesterOptions" placeholder="选择学期" @change="onSelectSemester" />
           </div>
           <button
             @click="openRenameSemester"
@@ -199,6 +198,7 @@
             type="date"
             v-model="semesterStart"
             @input="semesterDateErrorText = ''"
+            aria-label="学期开始时间"
             :class="{ 'border-danger': semesterDateError || semesterDateErrorText }"
             class="border border-border bg-bg text-text px-3 py-2 rounded-lg"
           />
@@ -209,6 +209,7 @@
             type="date"
             v-model="semesterEnd"
             @input="semesterDateErrorText = ''"
+            aria-label="学期结束时间"
             :class="{ 'border-danger': semesterDateError || semesterDateErrorText }"
             class="border border-border bg-bg text-text px-3 py-2 rounded-lg"
           />
@@ -236,46 +237,36 @@
     </div>
 
     <!-- 增加学期（小弹窗：输入学期名；起止日期由后端按当前月份推算，之后可在上面调整） -->
-    <Teleport to="body">
-      <Transition name="dialog">
-        <div v-if="showAddSemester" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[10003]" @click.self="showAddSemester = false">
+    <DialogShell :visible="showAddSemester" :z-index="10003" overlay-class="bg-black/40" @overlay="showAddSemester = false">
           <div class="bg-surface p-6 rounded-xl w-[26rem] shadow-card dialog-card border border-border">
             <h3 class="text-lg font-bold text-text mb-4">增加学期</h3>
             <input
               v-model="newSemesterName"
               placeholder="请输入学期名，如：2026秋季学期"
               class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4"
-              @keydown.enter="confirmAddSemester"
-            />
+              @keydown.enter="confirmAddSemester" aria-label="请输入学期名，如：2026秋季学期"/>
             <div class="flex justify-end gap-2">
               <button @click="showAddSemester = false" class="bg-surface-hover text-text border border-border px-4 py-2 rounded transition-theme cursor-pointer">取消</button>
               <button @click="confirmAddSemester" class="bg-primary text-text-inverse px-4 py-2 rounded transition-theme cursor-pointer">确定</button>
             </div>
           </div>
-        </div>
-      </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- 修改学期名（小弹窗：输入新名字，确定后即时保存） -->
-    <Teleport to="body">
-      <Transition name="dialog">
-        <div v-if="showRenameSemester" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[10003]" @click.self="showRenameSemester = false">
+    <DialogShell :visible="showRenameSemester" :z-index="10003" overlay-class="bg-black/40" @overlay="showRenameSemester = false">
           <div class="bg-surface p-6 rounded-xl w-[26rem] shadow-card dialog-card border border-border">
             <h3 class="text-lg font-bold text-text mb-4">修改学期名</h3>
             <input
               v-model="semesterNameDraft"
               placeholder="如：2026秋季学期"
               class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4"
-              @keydown.enter="saveSemesterName"
-            />
+              @keydown.enter="saveSemesterName" aria-label="如：2026秋季学期"/>
             <div class="flex justify-end gap-2">
               <button @click="showRenameSemester = false" class="bg-surface-hover text-text border border-border px-4 py-2 rounded transition-theme cursor-pointer">取消</button>
               <button @click="saveSemesterName" class="bg-primary text-text-inverse px-4 py-2 rounded transition-theme cursor-pointer">确定</button>
             </div>
           </div>
-        </div>
-      </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- 删除学期确认 -->
     <ConfirmDialog
@@ -301,7 +292,7 @@
                而且它是浏览器原生弹层，glass 主题压不到它） -->
           <div class="text-xs text-text-muted flex items-center gap-1.5">
             <span>来源</span>
-            <AppSelect v-model="undoSourceFilter" :options="undoSourceOptions" compact class="w-28" />
+            <AppSelect v-model="undoSourceFilter" aria-label="撤销来源筛选" :options="undoSourceOptions" compact class="w-28" />
           </div>
           <button
             v-if="hasUndoRecords"
@@ -423,6 +414,7 @@
             <label class="text-sm font-medium text-text w-16 flex-shrink-0">主题</label>
             <AppSelect
               v-model="selectedThemeId"
+              aria-label="主题"
               @change="onThemeSelect"
               :options="themeOptions"
               class="w-56"
@@ -434,6 +426,7 @@
             <label class="text-sm font-medium text-text w-16 flex-shrink-0">图标样式</label>
             <AppSelect
               v-model="iconStyle"
+              aria-label="图标样式"
               @change="onIconStyleChange"
               :options="iconStyleOptions"
               class="w-56"
@@ -446,6 +439,7 @@
             <label class="text-sm font-medium text-text w-16 flex-shrink-0">顶栏配色</label>
             <AppSelect
               v-model="topbarColor"
+              aria-label="顶栏配色"
               @change="onTopbarColorChange"
               :options="topbarColorOptions"
               class="w-56"
@@ -518,6 +512,7 @@
                   min="0"
                   max="1"
                   step="0.01"
+                  aria-label="背景遮罩层"
                   :value="bgMaskOpacity"
                   @input="onBgMaskOpacityChange"
                   class="w-full"
@@ -536,6 +531,7 @@
                   min="0"
                   max="1"
                   step="0.01"
+                  aria-label="组件透明玻璃层"
                   :value="glassOpacity"
                   @input="onGlassOpacityChange"
                   class="w-full"
@@ -771,11 +767,18 @@
                 :size="13"
               />
             </div>
-            <button
-              @click="loadDiskUsage(true)"
-              :disabled="busyDisk"
-              class="w-24 text-center bg-bg hover:bg-surface-hover text-text border border-border px-4 py-1.5 rounded text-sm transition-theme disabled:opacity-50"
-            >{{ busyDisk ? '统计中…' : '重新统计' }}</button>
+            <div class="flex items-center gap-2">
+              <button
+                @click="accountDataVisible = true"
+                class="bg-bg hover:bg-surface-hover text-text border border-border px-4 py-1.5 rounded text-sm transition-theme"
+                title="管理 AI 聊天记录与历史快照的保留与清除；默认永久保存，程序不会自动删除数据"
+              >管理</button>
+              <button
+                @click="loadDiskUsage(true)"
+                :disabled="busyDisk"
+                class="w-24 text-center bg-bg hover:bg-surface-hover text-text border border-border px-4 py-1.5 rounded text-sm transition-theme disabled:opacity-50"
+              >{{ busyDisk ? '统计中…' : '重新统计' }}</button>
+            </div>
           </div>
           <div v-if="diskSegments.length" class="space-y-3">
             <div class="flex items-center gap-3">
@@ -906,36 +909,40 @@
       </div>
     </div>
 
+    <!-- 账号数据管理：空间管理区「管理」入口打开（默认永久，删除全部需显式点击） -->
+    <AccountDataDialog v-model:visible="accountDataVisible" @view="openDataManageFromSettings" @view-snapshots="snapshotPickerOpen = true" @view-trash="openTrashPreview" @changed="loadDiskUsage(true)" />
+    <TrashPreviewDialog v-if="trashPreviewKind" :visible="true" :kind="trashPreviewKind" :z-index="10014" @close="trashPreviewKind = ''" @changed="loadDiskUsage(true)" />
+    <!-- 四层：管理 10012 → 选择/数据管理 10014 → 具体快照管理 10016 → 内部确认 10017 -->
+    <DataManageDialog v-if="dataManageOpened" v-model:visible="dataManageOpen" :z-index="10014" />
+    <SnapshotPickerDialog v-if="snapshotPickerOpened" :visible="snapshotPickerOpen" :z-index="10014" @close="snapshotPickerOpen = false" @pick="openSnapshotDialog" />
+    <SeatRecordSettingsDialog v-if="snapshotDialog === 'seat'" :visible="true" :z-index="10016" @close="snapshotDialog = ''" />
+    <DutyRecordSettingsDialog v-if="snapshotDialog === 'duty'" :visible="true" :z-index="10016" @close="snapshotDialog = ''" />
+    <ScheduleRecordDialog v-if="snapshotDialog === 'schedule'" :visible="true" :z-index="10016" @close="snapshotDialog = ''" />
+
     <!-- 内嵌弹窗：修改用户名 -->
-    <Teleport to="body">
-    <Transition name="dialog">
-      <div v-if="modalType === 'username'" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="closeModal">
+    <DialogShell :visible="modalType === 'username'" :z-index="10001" @overlay="closeModal">
         <div class="dialog-card bg-surface rounded-lg p-6 w-96 border border-border shadow-lg">
             <h3 class="text-lg font-bold text-text mb-4">修改用户名</h3>
-            <input v-model="newUsername" placeholder="新用户名" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changeUsername" />
+            <input v-model="newUsername" placeholder="新用户名" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changeUsername" aria-label="新用户名"/>
             <!-- 明文 / 无密码两档没有登录密码可校验，这两档下不出现密码框（后端对空 password 本就直接放行） -->
-            <input v-if="hasLoginPassword" v-model="usernamePassword" type="password" placeholder="当前密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changeUsername" />
+            <input v-if="hasLoginPassword" v-model="usernamePassword" type="password" placeholder="当前密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changeUsername" aria-label="当前密码"/>
             <p v-if="usernameError" class="text-sm text-danger mb-3">{{ usernameError }}</p>
             <div class="flex justify-end gap-2">
               <button @click="closeModal" :disabled="busyUsername" class="bg-surface-hover text-text px-4 py-2 rounded border border-border transition-theme disabled:opacity-50">取消</button>
               <button @click="changeUsername" :disabled="busyUsername" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme disabled:opacity-50">{{ busyUsername ? '提交中…' : '确认修改' }}</button>
             </div>
         </div>
-      </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- 内嵌弹窗：修改密码 -->
-    <Teleport to="body">
-    <Transition name="dialog">
-      <div v-if="modalType === 'password'" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="closeModal">
+    <DialogShell :visible="modalType === 'password'" :z-index="10001" @overlay="closeModal">
         <div class="dialog-card bg-surface rounded-lg p-6 w-96 border border-border shadow-lg">
             <h3 class="text-lg font-bold text-text mb-4">修改密码</h3>
-            <input v-model="oldPassword" type="password" placeholder="原密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changePassword" />
-            <input v-model="newPassword" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changePassword" />
+            <input v-model="oldPassword" type="password" placeholder="原密码" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changePassword" aria-label="原密码"/>
+            <input v-model="newPassword" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" @keydown.enter="changePassword" aria-label="新密码（至少 6 位）"/>
             <!-- 二次确认：打错一个字就要走找回流程，挡的是手误；提示语按当前等级分开
                  （普通密码可在原机本机信息恢复，超级隐私只有恢复词，见 changePwdHint） -->
-            <input v-model="confirmPassword" type="password" placeholder="再次输入新密码" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-1 rounded" @keydown.enter="changePassword" />
+            <input v-model="confirmPassword" type="password" placeholder="再次输入新密码" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-1 rounded" @keydown.enter="changePassword" aria-label="再次输入新密码"/>
             <!-- 输入过程不实时提示「一致 / 不一致」：边打字边跳色的提示太吵，只在提交时校验 -->
             <p class="text-xs text-text-muted mb-3">{{ changePwdHint }}</p>
             <!-- 服务端错误就地显示：用 alert 会把用户弹出的输入内容一起清掉，得从头再填一遍 -->
@@ -950,19 +957,15 @@
               </div>
             </div>
         </div>
-      </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- 内嵌弹窗：导出数据库 -->
-    <Teleport to="body">
-    <Transition name="dialog">
-      <div v-if="modalType === 'export'" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="closeModal">
+    <DialogShell :visible="modalType === 'export'" :z-index="10001" @overlay="closeModal">
         <div class="dialog-card bg-surface rounded-lg p-6 w-96 border border-border shadow-lg">
           <h3 class="text-lg font-bold text-text mb-4">导出数据库</h3>
           <p class="text-xs text-text-muted mb-3">导出当前账号的全部内容（业务数据 + 应用设置 + 账号 + 收据原件等文件）为 ZIP 备份包，换机后用对应的密码恢复。</p>
           <!-- 无密码账号（明文 / 免密）不设密码，摆一个密码框只会让人以为「必须填点什么」 -->
-          <input v-if="hasLoginPassword" v-model="exportPassword" type="password" placeholder="登录密码（只有本人能导出）" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" />
+          <input v-if="hasLoginPassword" v-model="exportPassword" type="password" placeholder="登录密码（只有本人能导出）" autocomplete="current-password" class="border border-border bg-surface text-text p-2 w-full mb-3 rounded" aria-label="登录密码（只有本人能导出）"/>
           <template v-if="dbEncrypted">
             <!-- 底部间距交给容器：勾选框 / 输入框 / 提示语的显隐组合有好几种，
                  逐个加 mb-4 必然出现「少显示一个就多一截空白」 -->
@@ -971,7 +974,7 @@
                 <input type="checkbox" v-model="exportEncrypt" class="w-4 h-4 accent-warning" />
                 数据库密码加密导出
               </label>
-              <input v-if="exportEncrypt" v-model="exportDbPwd" type="password" :placeholder="hasLoginPassword ? '数据库密码（留空则用登录密码）' : '请设置导出密码（换机恢复时要输）'" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full rounded" />
+              <input v-if="exportEncrypt" v-model="exportDbPwd" type="password" :placeholder="hasLoginPassword ? '数据库密码（留空则用登录密码）' : '请设置导出密码（换机恢复时要输）'" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full rounded" :aria-label="hasLoginPassword ? '数据库密码（留空则用登录密码）' : '请设置导出密码（换机恢复时要输）'"/>
               <!-- 没有登录密码时，这个导出密码就是换机恢复的**唯一凭证**；包里不存它，丢了就打不开 -->
               <p v-if="!hasLoginPassword && exportEncrypt" class="text-xs text-text-muted mt-2">该账号没有登录密码，导出密码不会存进备份包，换机恢复时要用它解开 —— 请记牢。</p>
             </div>
@@ -984,9 +987,7 @@
             </button>
           </div>
         </div>
-      </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <ConfirmDialog
       v-if="dialogMounted"
@@ -1041,6 +1042,7 @@ import { getCurrentUser } from '../../utils/authStorage.js'
 import { ref, reactive, computed, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHelp from '../../components/base/AppHelp.vue'
+import DialogShell from '../../components/base/DialogShell.vue'
 import CustomScrollbar from '../../components/base/CustomScrollbar.vue'
 import AppSelect from '../../components/base/AppSelect.vue'
 import ClassInfoDialog from '../../components/dialogs/ClassInfoDialog.vue'
@@ -1049,6 +1051,8 @@ import ViewSwitch from '../../components/base/ViewSwitch.vue'
 import DataExportPanel from '../../components/data-manage/DataExportPanel.vue'
 // 方向 B：MCP 服务端设置（令牌 / 外部写提案确认），独立面板，避免把逻辑塞进本文件
 import McpSettingsPanel from '../../components/data-manage/McpSettingsPanel.vue'
+// 账号数据管理（AI 聊天记录 / 历史快照）：默认永久保留，删除全部需用户显式点击
+import AccountDataDialog from '../../components/dialogs/AccountDataDialog.vue'
 import { useThemeStore } from '../../stores/theme'
 import { storeToRefs } from 'pinia'
 import { resourceUrl } from '../../utils/apiUrl'
@@ -1056,6 +1060,7 @@ import { resourceUrl } from '../../utils/apiUrl'
 import { settingsClassDialogOpen } from '../../utils/classScope.js'
 import { readFastStartup } from '../../utils/fastStartup.js'
 import { useDisposables } from '../../utils/disposables.js'
+import { pinyinHit } from '../../utils/pinyinSearch.js'
 import '../../styles/dialog-transition.css'
 import { useSettingsSearch } from './SettingsView.search.js'
 import { useSettingsData } from './SettingsView.data.js'
@@ -1069,6 +1074,16 @@ const ConfirmDialog = defineAsyncComponent(() => import('../../components/base/C
 const RecoveryKeyDialog = defineAsyncComponent(() => import('../../components/dialogs/RecoveryKeyDialog.vue'))
 // 忘记密码弹窗：只有点「修改密码 → 忘记密码？」时才需要，同样懒加载
 const LocalRecoverDialog = defineAsyncComponent(() => import('../../components/dialogs/LocalRecoverDialog.vue'))
+// 数据管理弹窗：账号数据管理里点「查看 AI 聊天记录」才加载
+const DataManageDialog = defineAsyncComponent(() => import('../../components/data-manage/DataManageDialog.vue'))
+// 三域快照管理弹窗：从账号数据管理按「管理（xx 快照）」直达，首次打开才加载
+const SeatRecordSettingsDialog = defineAsyncComponent(() => import('../../components/dialogs/SeatRecordSettingsDialog.vue'))
+const DutyRecordSettingsDialog = defineAsyncComponent(() => import('../../components/dialogs/DutyRecordSettingsDialog.vue'))
+const ScheduleRecordDialog = defineAsyncComponent(() => import('../../components/dialogs/ScheduleRecordDialog.vue'))
+// 快照选择弹窗：账号数据管理「查看」后单独一层，再进具体域
+const SnapshotPickerDialog = defineAsyncComponent(() => import('../../components/dialogs/SnapshotPickerDialog.vue'))
+// 回收站预览弹窗：相册/收据回收站「查看 / 恢复」直达
+const TrashPreviewDialog = defineAsyncComponent(() => import('../../components/dialogs/TrashPreviewDialog.vue'))
 
 const route = useRoute()
 const router = useRouter()
@@ -1222,6 +1237,30 @@ const currentClassName = computed(
 // 与首页那份分开记，两边互不覆盖（见 utils/classScope.js 的说明）。
 const classDialogVisible = ref(false)
 watch(classDialogVisible, (v) => { settingsClassDialogOpen.value = v })
+// 账号数据管理弹窗（空间管理区「管理」入口）
+const accountDataVisible = ref(false)
+// 「查看 AI 聊天记录」→ 已有的数据管理弹窗（首次打开才加载），与 AiAssistant 同款懒加载
+const dataManageOpened = ref(false)
+const dataManageOpen = ref(false)
+function openDataManageFromSettings() {
+  dataManageOpened.value = true
+  dataManageOpen.value = true
+}
+// 快照选择弹窗（账号数据管理「查看」→ 单独一层选择 → 再进具体域）
+const snapshotPickerOpened = ref(false)
+const snapshotPickerOpen = ref(false)
+// 按域打开快照管理；上层弹窗保持打开，关掉子弹窗后能回到它。
+const trashPreviewKind = ref('')
+function openTrashPreview(kind) {
+  if (!['albumTrash', 'receiptTrash'].includes(kind)) return
+  trashPreviewKind.value = kind
+}
+const snapshotDialog = ref('')
+function openSnapshotDialog(domain) {
+  if (!['seat', 'duty', 'schedule'].includes(domain)) return
+  snapshotPickerOpen.value = false
+  snapshotDialog.value = domain
+}
 const classInfo = ref({ name: '', motto: '', mottoStyle: '', xuefeng: '' })
 // 工具箱设置
 const toolboxEnabled = ref(true)
@@ -1447,7 +1486,8 @@ const isGlassTheme = computed(() => {
 // 这样整份结果是一条连续的错开序列；行的 key 带关键字，每次搜索整批重新挂载，不会重启个别行。
 const settingsSearchResults = computed(() => {
   const q = settingsSearch.value.trim().toLowerCase()
-  const hit = (label, py) => !q || label.toLowerCase().includes(q) || py.includes(q)
+  // 文本 / 手写首字母 / pinyin-match 三路同口径（Q1-07）
+  const hit = (label, py) => !q || label.toLowerCase().includes(q) || String(py || '').includes(q) || pinyinHit(label, q)
   const sections = settingsSections.value
     .filter(s => hit(s.label, s.py))
     .map(s => ({ id: 'section:' + s.key, label: s.label, key: s.key, section: '' }))
@@ -1654,6 +1694,34 @@ watch(settingsSearch, () => { searchActiveIndex.value = 0 })
 // 跨页定位：其他页面（如标题栏全局搜索）跳转到 /settings?focus=... 时定位到目标设置
 watch(() => route.query.focus, () => { ctx._applyRouteFocus() })
 
+// F07-10：首屏只发渲染立刻要用的请求；其余非首屏区块（U 盘自动打开、数据目录、
+// 安全级别、登录保持、启动耗时、磁盘用量）等首帧画完再逐条发，
+// 避免挂载同 tick 十几条请求一起排队，把首屏 INP 拖长。
+function runAfterFirstPaint(fn) {
+  if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(fn, { timeout: 1500 })
+  else setTimeout(fn, 50)
+}
+function runDeferredLoads(tasks) {
+  let i = 0
+  const next = () => {
+    if (i >= tasks.length) return
+    try { tasks[i++]() } catch (_) { /* 单项失败不阻断后续 */ }
+    if (i < tasks.length) runAfterFirstPaint(next)
+  }
+  runAfterFirstPaint(next)
+}
+
+// 非首屏区块的读取清单：首帧后逐条发（P3-15/F07-10）。
+const deferredSettingsLoads = [
+  ctx.loadUsbAutoOpen,
+  ctx.loadDataDirs,
+  ctx.loadSecurityLevel,
+  ctx.loadLoginPolicy,
+  ctx.loadStartup,
+  // 空间管理：磁盘占用不进轮询（目录遍历代价大），首帧后再扫，20s 内重复进入复用上次结果
+  () => ctx.loadDiskUsage(),
+]
+
 onMounted(() => {
   selectedThemeId.value = currentTheme.value
   bgImageUrl.value = themeStore.backgroundImage
@@ -1661,10 +1729,6 @@ onMounted(() => {
   ctx.loadUndo()
   ctx.loadSemesterSettings()
   ctx.loadWidgetSettings()
-  ctx.loadUsbAutoOpen()
-  ctx.loadDataDirs()
-  ctx.loadSecurityLevel()
-  ctx.loadLoginPolicy()
   // 班级列表：账号信息区的「当前班级」和危险区的删班入口都要用，进页面拉一次。
   // 如果是从切班 / 建班的重建中回来（弹窗原本开着），顺带把班级信息一起拉回来再重开。
   // 顺序与首页一致：先填后显 —— ClassInfoDialog 只在 visible 由 false→true 时初始化
@@ -1674,10 +1738,7 @@ onMounted(() => {
   } else {
     ctx.loadClasses()
   }
-  // 性能面板：先取一次启动耗时，轮询由 _startPerfPolling 负责
-  ctx.loadStartup()
-  // 空间管理：磁盘占用不进轮询（目录遍历代价大），进页面扫一次，20s 内重复进入复用上次结果
-  ctx.loadDiskUsage()
+  runDeferredLoads(deferredSettingsLoads)
   ctx._startPerfPolling()
   _fromMainHandler.value = window.electron?.on(RECEIVE.FROM_MAIN, (data) => {
     // 浮窗右键「关闭工具箱」会把持久化开关置 false，这里刷新一下开关状态

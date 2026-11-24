@@ -36,6 +36,7 @@
           v-for="(img, idx) in m.images"
           :key="idx"
           :src="img"
+          :alt="`消息附件图片 ${idx + 1}`"
           loading="lazy"
           class="max-w-48 max-h-36 rounded-lg border border-border object-cover"
         />
@@ -319,9 +320,8 @@ defineProps({
   // 父预计算的判定函数（保持与原渲染判定一致）
   isRetryable: { type: Function, required: true },
   isRollbackable: { type: Function, required: true },
-  canUndo: { type: Function, required: true },
 })
-defineEmits(['new', 'copy', 'retry', 'undo', 'rollback', 'open-changes', 'goto'])
+defineEmits(['copy', 'retry', 'rollback', 'open-changes', 'goto'])
 
 // 本轮数据/文件改动的汇总：仅在提案已执行且未撤回时返回非空（空则整条不渲染）。
 // 结果缓存到消息上，避免长列表滚动时每帧重算；撤回后由 reverted 判断直接返回 null。

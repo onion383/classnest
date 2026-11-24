@@ -51,3 +51,12 @@ test('生产依赖全部可解析', () => {
   const missing = deps.filter((d) => !d.ok).map((d) => d.name)
   assert.deepEqual(missing, [], `生产依赖无法解析：${missing.join(', ')}`)
 })
+
+test('生产依赖清单覆盖后端 manifest（T02-02）', () => {
+  const fs = require('node:fs')
+  const backend = JSON.parse(fs.readFileSync(path.join(ROOT, 'student-backend/package.json'), 'utf8'))
+  const names = checkProdDeps().map((d) => d.name)
+  for (const name of Object.keys(backend.dependencies || {})) {
+    assert.ok(names.includes(name), `checkProdDeps 漏掉了后端生产依赖：${name}（打包后启动即崩）`)
+  }
+})

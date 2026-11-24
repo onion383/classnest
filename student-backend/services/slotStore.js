@@ -169,12 +169,19 @@ function histUpsert(domain, rec = {}) {
   } else {
     row = db.prepare('SELECT id FROM domain_history WHERE domain = ? AND snap_date = ?').get(domain, snapDate);
   }
+  let id;
   if (row) {
-    db.prepare('UPDATE domain_history SET week_start = ?, mode = ?, payload = ? WHERE id = ?')
+    // created_at 随每次写入刷新：保留档位按「最后写入时间」算，正在用的快照不该因为
+    // 最初创建得早就被自动清掉（否则「保留最近 7 天」会把活跃快照误删）。
+    db.prepare('UPDATE domain_history SET week_start = ?, mode = ?, payload = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(weekStart, mode, packJson(payload, 'payload'), row.id);
-    return row.id;
+    id = row.id;
+  } else {
+    id = histInsert(domain, { weekStart, snapDate, mode, payload });
   }
-  return histInsert(domain, { weekStart, snapDate, mode, payload });
+  // 用户设了保留档位才清（默认永久时是空操作）；延迟 require 避免加载期成环。
+  require('./retentionStore').autoClean('history');
+  return id;
 }
 
 // 合并更新某天快照的 payload 字段（座位补存的「今天覆盖」用）

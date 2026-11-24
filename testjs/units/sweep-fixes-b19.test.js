@@ -187,8 +187,8 @@ test('[行为] B11-06 tableSearch 缓存命中且值变了会失效', async () =
   const { filterRowsByKeyword } = await importFrontend('student-frontend/src/utils/tableSearch.js')
   const rows = [{ 姓名: '张三' }, { 姓名: '李四' }]
   assert.deepStrictEqual(
-    filterRowsByKeyword(rows, '姓名', 'LI').map((r) => r.姓名), [],
-    '字面匹配不认拼音（"李四" 不含 "li"）—— 这条守住「不误当拼音搜索」'
+    filterRowsByKeyword(rows, '姓名', 'LI').map((r) => r.姓名), ['李四'],
+    'v8 Q1-01 起字面筛选也接拼音（li → 李四），与全局搜索同口径'
   )
   assert.deepStrictEqual(
     filterRowsByKeyword(rows, '姓名', '李').map((r) => r.姓名), ['李四'],

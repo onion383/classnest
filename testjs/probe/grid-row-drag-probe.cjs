@@ -37,7 +37,9 @@ app.whenReady().then(() => {
     if (args[0] && typeof args[0] === 'object' && 'message' in args[0]) message = args[0].message
     else message = String(args[2] != null ? args[2] : args[1] != null ? args[1] : '')
     console.log(message)
-    if (message.includes('__PROBE_DONE__')) finish(0)
+    // 页面内断言失败必须能回传：否则「发完 done 标记就算过」，失败仍是 exit 0（T01-12）
+    if (message.includes('__PROBE_FAIL__')) finish(1)
+    else if (message.includes('__PROBE_DONE__')) finish(0)
   })
 
   win.webContents.on('did-fail-load', (_e, code, desc) => {

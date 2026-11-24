@@ -15,7 +15,7 @@ const authPolicy = require('../services/authPolicy');
 const secureChannel = require('../services/secureChannel');
 const sessions = require('../services/sessions');
 // 恢复词重置密码 = 凭证变更，必须走统一动作层吊销该账号全部会话
-const { revokeAccountSessions } = require('../services/credentialChange');
+const { revokeAccountSessions, hashSource: credentialHashSource } = require('../services/credentialChange');
 const { pickPhrase, deriveRestoreHash, normalizePhrase, formatPhrase, verifyRestoreHash } = require('../services/recoveryKey');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
 // 待确认注册草稿：有密码账号先生成恢复密钥，用户「抄写前 3 词」通过后才真正建库。
@@ -28,6 +28,7 @@ const userStore = require('../services/userStore');
 const { resolveSecurityLevel } = require('../utils/securityLevel');
 const slugScopes = require('../utils/slugScopes');
 const albumThumbs = require('../albumThumbs');
+const loginThrottle = require('../services/loginThrottle');
 
 // 签发登录态：登录 token + 媒体凭据，并把 token 绑定到本次加密信道会话。
 // 绑定后前端后续请求只需发送不含 token 的信道凭据，登录 token 不再随每次请求上线；
@@ -56,6 +57,12 @@ function setAuthCookie(res, token) {
 // 账号列表：登录页「从数据库注册」加载已登记的班主任账号（无需登录）。
 // 仅返回数据库有效的账号——解不开/打不开/账号行缺失的无效库直接隐藏。
 router.get('/accounts', (req, res) => {
+    // 登录页需要它列出已保存账号，故不能要求登录；按 IP 限频，抬高批量枚举成本（N3-02）
+    const gate = loginThrottle.checkAccounts(req.ip);
+    if (!gate.ok) {
+      res.set('Retry-After', String(gate.retryAfter));
+      return res.status(429).json({ error: '请求过于频繁，请稍后再试', retry_after: gate.retryAfter });
+    }
     res.json({ accounts: dbManager.registryListValid() });
 });
 
@@ -81,7 +88,15 @@ router.get('/media-token', auth(), (req, res) => {
 router.post('/logout', auth(), (req, res) => {
   sessions.revoke(req.user && req.user.sid);
   // 解绑信道会话：换号登录后同一信道不会继续沿用上一个账号的 token
-  secureChannel.unbindAuth(req.sessionId);
+  const channelSid = req.sessionId;
+  secureChannel.unbindAuth(channelSid);
+  // 登出即销毁当前信道会话，不再等 15 分钟空闲清扫（X3-15）。
+  // 必须等响应写完再销毁：响应本身还要用该会话密钥加密。
+  if (channelSid) {
+    res.on('finish', () => {
+      try { secureChannel.destroySession(channelSid); } catch (_) { /* 已销毁 */ }
+    });
+  }
   // 超级隐私模式：登出即关闭库连接并丢弃内存里的库钥匙，下次使用必须重新输入密码/恢复词
   const slug = req.user && req.user.dbSlug;
   dbManager.lockDb(slug);
@@ -183,6 +198,15 @@ router.post('/login', async (req, res) => {
   const classSlug = req.body && typeof req.body.classSlug === 'string' ? req.body.classSlug : '';
   if (!username) return res.status(400).json({ error: '请输入账号' });
 
+  // 登录失败节流：同一「账号名 + IP」连续失败会进入软/硬锁定（A-2 · F06-01）。
+  // 放在任何开库/KDF/bcrypt 之前，避免暴力尝试把 CPU 打满。
+  const gate = loginThrottle.checkLogin(String(username), req.ip);
+  if (!gate.ok) {
+    res.set('Retry-After', String(gate.retryAfter));
+    return res.status(429).json({ error: gate.error, retry_after: gate.retryAfter });
+  }
+  const failOnce = () => loginThrottle.failLogin(String(username), req.ip);
+
   // 用 index.db 定位账号对应的班主任库，打开它并校验密码（账号存于各库内的 users）
   let resolved;
   try {
@@ -190,16 +214,20 @@ router.post('/login', async (req, res) => {
   } catch (err) {
     if (err.code === 'PRIVACY_UNLOCK') {
       // 超级隐私模式：库钥匙解不开就到此为止，不泄露账号是否存在
+      failOnce();
       return res.status(401).json({ error: err.message, code: 'PRIVACY_UNLOCK' });
     }
     if (err.code === 'CLASS_NOT_OWNED') {
+      // 参数错误（不是凭证错误），不计数
       return res.status(400).json({ error: err.message });
     }
     console.warn('[login] 打开账号库失败:', err.message);
+    failOnce();
     return res.status(401).json({ error: '账号或密码错误' });
   }
   if (!resolved) {
     console.warn('[login] 账号不在登记表:', username);
+    failOnce();
     return res.status(401).json({ error: '账号或密码错误' });
   }
 
@@ -212,6 +240,7 @@ router.post('/login', async (req, res) => {
   const user = pickUser();
   if (!user) {
     console.warn('[login] 库内查无此账号:', username, 'slug:', resolved.slug);
+    failOnce();
     return res.status(401).json({ error: '账号或密码错误' });
   }
   // 恢复词解锁本身就是所有者证明：不再校验登录密码（可用于忘记密码时登录后重设）
@@ -221,15 +250,19 @@ router.post('/login', async (req, res) => {
   // 登录成功后立刻回填 —— 迁移只发生在「真正用到的账号」上，不占启动时间，
   // 也不需要一次性把本机所有库打开一遍。
   const acc = dbManager.accountFindByUsername(String(username));
-  const hashSource = (acc && acc.password_hash) ? acc.password_hash : user.password;
+  // 权威哈希口径统一在 services/credentialChange.js（T07-03），登录与单测共用同一份
+  const hashSource = credentialHashSource(acc, user);
   // 保持原短路语义：不需要校验时完全不算 bcrypt
   if (!unlockedByMnemonic && hashSource) {
     const pwOk = await bcryptCompare(password, hashSource);
     if (!pwOk) {
       console.warn('[login] 密码校验失败:', username);
+      failOnce();
       return res.status(401).json({ error: '账号或密码错误' });
     }
   }
+  // 登录成功：清掉该账号 + IP 的失败计数
+  loginThrottle.resetLogin(String(username), req.ip);
   // 懒迁移：补 accounts 行 + 把同用户名的各库归属到该账号 + 回填密码哈希（三者都幂等）
   const accountId = dbManager.linkAccount(String(username), user.password || '');
   dbManager.backfillPasswordHash(accountId, user.password || '');

@@ -48,7 +48,13 @@ function decodeHead(buf, maxChars) {
   let out = s.length > maxChars ? s.slice(0, maxChars) : s
   if (out.length) {
     const code = out.charCodeAt(out.length - 1)
+    // 尾部是高代理：说明补充平面字符被切了一半，退掉
     if (code >= 0xD800 && code <= 0xDBFF) out = out.slice(0, -1)
+    // 尾部是**孤立低代理**（前面不是高代理）：同样会渲染成「�」，一并退掉（K05-07）
+    else if (code >= 0xDC00 && code <= 0xDFFF) {
+      const prev = out.length > 1 ? out.charCodeAt(out.length - 2) : -1
+      if (!(prev >= 0xD800 && prev <= 0xDBFF)) out = out.slice(0, -1)
+    }
   }
   return { text: out, full: s.length }
 }

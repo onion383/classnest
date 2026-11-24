@@ -46,21 +46,30 @@ function getHandler() {
         if (!slug) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: '未绑定班级库' }) }] };
         const actor = MCP_ACTOR_ALS.getStore() || '';
         const tool = meta.tool || '';
+        // 这两个状态在 catch 里也要用（异常时回退写额度），必须在 try 外声明
+        let gate = { ok: true };
+        let writeConsumed = false;
         try {
           // 频率闸门排在工具执行之前：超限的请求不该走到 SQL / 提案写入。
           // 闸门自己出错就放行——限流不该让老师的 AI 停摆；真有问题下面的业务调用会报真实错误。
-          // read/search 用 checkAndConsume 在检查处原子预占：原 check/consume 分离时，
-          // 两者之间隔着 await，并发请求会同时通过 check 再各自 consume，突破 perMin。
-          // write 仍需 await 查 DB 的 pending 数，且只在建出提案后计数，保持 check 路径。
-          let gate = { ok: true };
+          // 读/搜索/写全部改为「检查并原子预占」（同步无 await）：
+          //   read/search 无论成败都算一次；
+          //   write 先预占速率额度，再 await 查 pending 积压，参数错/积压满/建提案失败时回退
+          //   （K04-01：原 check → await 建提案 → consume 的窗口里，并发写能同时通过检查）。
           try {
             if (meta.rate && meta.rate !== 'write') {
               gate = mcpRateLimit.checkAndConsume(slug, meta.rate) || gate;
-            } else {
-              gate = (await dbManager.withDb(slug, () => mcpRateLimit.check(slug, meta.rate))) || gate;
+            } else if (meta.rate === 'write') {
+              gate = mcpRateLimit.checkAndConsume(slug, 'write') || gate;
+              if (gate.ok) {
+                writeConsumed = true;
+                const pendingGate = await dbManager.withDb(slug, () => mcpRateLimit.checkPending(slug, 'write'));
+                if (pendingGate && pendingGate.ok === false) gate = pendingGate;
+              }
             }
           } catch (_) { gate = { ok: true }; }
           if (!gate.ok) {
+            if (writeConsumed) { try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* 回退失败不影响拒绝 */ } }
             // 被挡住也要留痕：否则页面上只看到「AI 今天没干活」，看不到被挡了几百次。
             try {
               dbManager.withDb(slug, () => accessLog.record({
@@ -76,10 +85,11 @@ function getHandler() {
             };
           }
           const result = await dbManager.withDb(slug, () => fn(args || {}, { slug }));
-          // 计额度：读/搜索已在闸门处原子预占，这里不再重复计；
-          // 写只算真的建出提案的，参数错被拒的不占额度——否则 AI 改两遍字段名就把自己锁死了。
-          if (meta.rate === 'write' && result && result.ok && result.proposal_id) {
-            mcpRateLimit.consume(slug, 'write');
+          // write 的额度已在闸门处原子预占；只有真的建出提案才算数，
+          // 参数错 / 建提案失败要回退这次预占（否则 AI 改两遍字段名就把自己锁死了）。
+          if (writeConsumed && !(result && result.ok && result.proposal_id)) {
+            try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* 回退失败不影响业务结果 */ }
+            writeConsumed = false;
           }
           if (meta.logRead) {
             // 记录失败绝不影响这次工具调用（观测不能反过来打断业务）
@@ -92,14 +102,17 @@ function getHandler() {
           }
           return { content: [{ type: 'text', text: mcpTools.toContent(result) }] };
         } catch (e) {
-          // 抛异常同样是「这次读没成功」，照样留痕：否则权限配错 / 库锁住时
-          // 页面上一片空白，看起来像从来没人读过。
+          // 写操作抛异常同样不占额度：这次提案没建成，不该让客户端被自己坑住
+          if (writeConsumed) { try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* 忽略 */ } }
+          // 完整现场只进本地日志；返回给外部客户端的文案做脱敏（K02-05 / N3-09）：
+          // 业务错误（未找到该表、参数不合法）原样给出，SQL 语句 / 文件路径 / 堆栈一律换通用文案。
+          console.error('[mcp-tool-error]', tool, e);
           if (meta.logRead) {
             try {
               dbManager.withDb(slug, () => logMcpRead(actor, tool, args, { ok: false, error: e.message }));
             } catch (_) { /* 忽略 */ }
           }
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: publicToolError(e && e.message) }) }] };
         }
       };
       server.registerTool('list_tables', {
@@ -224,6 +237,13 @@ function logMcpRead(actor, tool, args, result) {
   });
 }
 
+// 外部客户端可见的错误文案（K02-05）：业务错误原样返回，内部细节（SQL / 路径 / 堆栈）脱敏。
+const INTERNAL_DETAIL_RE = /(SQLITE_|ENOENT|EACCES|EPERM|at\s+\S+\s+\(|[A-Za-z]:\\|\/[\w.-]+\/[\w.-]+\.(js|json|cjs|db))/;
+function publicToolError(message) {
+  const m = String(message == null || message === '' ? '工具执行失败' : message);
+  return INTERNAL_DETAIL_RE.test(m) ? '工具执行失败（内部错误，详情见应用日志）' : m;
+}
+
 // 自动执行的访问记录。只落元信息（哪个工具 / 几条 / 成败），不复制任何数据内容。
 // 老师开了「自动执行」之后，这里是他唯一能看到「AI 今天自己改了几次」的地方，
 // 所以必须每次成功失败都记，且 detail 里写明是自动执行（和人工确认区分开）。
@@ -311,5 +331,6 @@ module.exports = {
   getHandler,
   authMcp,
   MCP_SLUG_ALS,
+  publicToolError,
   _resetForTest: () => { _handlerPromise = null; },
 };

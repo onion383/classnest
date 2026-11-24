@@ -4,6 +4,7 @@ import { resourceUrl, ensureMediaToken } from '../utils/apiUrl'
 import { loadThemeStyles, warmNightMode, isNightWarmEnabled } from '../styles/themeLoader'
 import { performThemeSwap, isThemeSwapInFlight } from '../styles/themeTransition'
 import { createLatest } from '../utils/latestOnly'
+import { readNumSetting } from '../utils/numSetting.js'
 import { SEND } from '../electronChannels.js'
 
 const THEME_KEY = 'app-theme'
@@ -65,10 +66,7 @@ try {
 
 // 数值型设置的读取：**不能用 `parseFloat(x) || 默认值`**。
 // 不透明度滑块的 min 是 0，「完全透明」是合法取值，而 0 会被 `||` 当成"没读到"→ 重载后变回默认值。
-const readNum = (key, fallback) => {
-  const v = parseFloat(localStorage.getItem(key))
-  return Number.isFinite(v) ? v : fallback
-}
+// 规则统一在 utils/numSetting.js（入口 main.js 与回归探针引用同一份）。
 
 export const useThemeStore = defineStore('theme', () => {
   // 持久化设置的读取集中在这里：既用于初始状态，也用于「别的窗口改了设置」时重新同步
@@ -87,9 +85,9 @@ export const useThemeStore = defineStore('theme', () => {
     followSystem: localStorage.getItem(FOLLOW_KEY) === '1',
     backgroundImage: localStorage.getItem(BG_IMAGE_KEY) || '',
     // 背景遮罩层不透明度（0~1，有自定义背景图时生效）
-    bgMaskOpacity: readNum(BG_MASK_KEY, 0.6),
+    bgMaskOpacity: readNumSetting(BG_MASK_KEY, 0.6),
     // 组件透明玻璃层不透明度（0~1，卡片基准值）
-    glassOpacity: readNum(GLASS_KEY, 0.4),
+    glassOpacity: readNumSetting(GLASS_KEY, 0.4),
     // 图标样式：'color'（彩色图标）| 'emoji'（Emoji）
     iconStyle: localStorage.getItem(ICON_STYLE_KEY) || 'color',
     // 标题栏/侧边栏毛玻璃配色：'blue'（深蓝，旧款）| 'light'（白色调，新款默认）

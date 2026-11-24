@@ -124,7 +124,8 @@ test('useRowFocus：parse 返回空值 = 时机未到，内部重试直至就绪
   t.mock.timers.tick(1500)
 })
 
-test('useRowFocus：focusRowWhenReady 容器未就绪时按次数重试', async () => {
+test('useRowFocus：focusRowWhenReady 容器未就绪时按次数重试', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const { focusRowWhenReady } = await loadMod()
   let n = 0
   const container = {
@@ -133,15 +134,28 @@ test('useRowFocus：focusRowWhenReady 容器未就绪时按次数重试', async 
       return n >= 3 ? fakeEl() : null // 前两次未渲染
     },
   }
-  const done = new Promise((resolve) => {
-    focusRowWhenReady(() => container, 'row-x', { tries: 5, interval: 1, resolve })
-    // focusRowWhenReady 无完成回调：用轮询确认命中
-    const timer = setInterval(() => {
-      if (n >= 3) { clearInterval(timer); resolve() }
-    }, 5)
-  })
-  await done
-  assert.ok(n >= 3)
+  // focusRowWhenReady 没有完成回调（旧测试传了个被忽略的 resolve，实际上是靠轮询蒙对，T01-07）
+  // 这里用假时钟按真实重试节奏推进，命中后必须停链。
+  focusRowWhenReady(() => container, 'row-x', { tries: 5, interval: 1 })
+  assert.equal(n, 1, '首轮立即尝试一次')
+  t.mock.timers.tick(1)
+  assert.equal(n, 2, '未就绪时按 interval 重试')
+  t.mock.timers.tick(1)
+  assert.equal(n, 3, '第 3 次命中')
+  t.mock.timers.tick(20)
+  assert.equal(n, 3, '命中后重试链必须停止')
+})
+
+test('useRowFocus：focusRowWhenReady 返回的取消函数能停掉重试链', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { focusRowWhenReady } = await loadMod()
+  let n = 0
+  const container = { querySelector() { n++; return null } } // 永远不命中
+  const cancel = focusRowWhenReady(container, 'row-y', { tries: 5, interval: 1 })
+  assert.equal(n, 1)
+  cancel()
+  t.mock.timers.tick(20)
+  assert.equal(n, 1, '取消后不应再尝试')
 })
 
 test('useRowFocus：flashRowById 对缺失元素/容器返回 false', async () => {

@@ -9,7 +9,7 @@
         <div class="space-y-4">
           <div class="flex items-center gap-4">
             <label class="text-sm font-medium text-text w-20 flex-shrink-0">服务商</label>
-            <AppSelect v-model="form.provider" @change="onProviderChange" :options="providerOptions" class="flex-1" />
+            <AppSelect v-model="form.provider" aria-label="服务商" @change="onProviderChange" :options="providerOptions" class="flex-1" />
             <a
               v-if="form.provider !== 'custom'"
               :href="providerDocs[form.provider]"
@@ -21,12 +21,12 @@
           </div>
           <div class="flex items-center gap-4">
             <label class="text-sm font-medium text-text w-20 flex-shrink-0">模型名称</label>
-            <input v-model="form.name" placeholder="用于识别，如「主模型」" class="flex-1 border border-border bg-surface text-text px-3 py-2 rounded" />
+            <input v-model="form.name" placeholder="用于识别，如「主模型」" class="flex-1 border border-border bg-surface text-text px-3 py-2 rounded" aria-label="用于识别，如「主模型」"/>
           </div>
           <div class="flex items-center gap-4">
             <label class="text-sm font-medium text-text w-20 flex-shrink-0">模型名</label>
             <template v-if="mode === 'input'">
-              <input v-model="form.model" placeholder="如 deepseek-v4-flash" class="flex-1 border border-border bg-surface text-text px-3 py-2 rounded" />
+              <input v-model="form.model" placeholder="如 deepseek-v4-flash" class="flex-1 border border-border bg-surface text-text px-3 py-2 rounded" aria-label="如 deepseek-v4-flash"/>
               <button
                 @click="discover"
                 :disabled="discovering"
@@ -34,7 +34,7 @@
               >{{ discovering ? '识别中…' : '识别' }}</button>
             </template>
             <template v-else>
-              <AppSelect v-model="form.model" :options="selectOptions" class="flex-1" />
+              <AppSelect v-model="form.model" aria-label="模型名" :options="selectOptions" class="flex-1" />
               <button
                 @click="mode = 'input'"
                 class="flex-shrink-0 text-xs text-info hover:underline cursor-pointer"
@@ -44,11 +44,11 @@
           <p v-if="discoverError" class="text-xs text-danger">{{ discoverError }}</p>
           <div class="flex items-center gap-4">
             <label class="text-sm font-medium text-text w-20 flex-shrink-0">Base URL</label>
-            <input v-model="form.base_url" placeholder="默认已自动填充" class="flex-1 border border-border bg-surface text-text px-3 py-2 rounded" />
+            <input v-model="form.base_url" placeholder="默认已自动填充" class="flex-1 border border-border bg-surface text-text px-3 py-2 rounded" aria-label="默认已自动填充"/>
           </div>
           <div class="flex items-center gap-4">
             <label class="text-sm font-medium text-text w-20 flex-shrink-0">API Key</label>
-            <input v-model="form.api_key" type="password" :placeholder="isEdit ? '留空表示不修改密钥' : '同一服务商已配置过可留空自动复用'" class="flex-1 border border-border bg-surface text-text px-3 py-2 rounded" autocomplete="off" />
+            <input v-model="form.api_key" type="password" :placeholder="isEdit ? '留空表示不修改密钥' : '同一服务商已配置过可留空自动复用'" class="flex-1 border border-border bg-surface text-text px-3 py-2 rounded" autocomplete="off" :aria-label="isEdit ? '留空表示不修改密钥' : '同一服务商已配置过可留空自动复用'"/>
           </div>
 
           <p v-if="error" class="text-xs text-danger">{{ error }}</p>

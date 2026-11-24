@@ -201,4 +201,10 @@ async function main() {
   process.exit(failed ? 1 : 0)
 }
 
-main().catch((e) => { console.error('冒烟异常：', e); process.exit(1) })
+main().catch(async (e) => {
+  console.error('冒烟异常：', e)
+  // 失败路径也要回收隔离数据目录（T02-05）
+  try { dbManager.closeAll?.() } catch (_) { /* 已关闭 */ }
+  await removeDirWithRetry(DATA_DIR).catch(() => {})
+  process.exit(1)
+})

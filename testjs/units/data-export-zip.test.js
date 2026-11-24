@@ -142,3 +142,44 @@ test('密码交给流式写入器：本地头置加密位（ZipCrypto 仍可用�
   assert.equal(buf.readUInt16LE(6) & 0x0001, 0x0001, '传了密码就必须置加密位')
   assert.equal(buf.readUInt16LE(6) & 0x0008, 0, '加密条目不能用数据描述符（CRC 要在本地头）')
 })
+
+// ---------------------------------------------------------------------------
+// N2-07：业务 ZIP 磁盘中转 —— 后端把整包写到临时目录，主进程只搬文件，
+// 不再把整包塞进 SAVE_FILE 的 50MB IPC 通道。
+// ---------------------------------------------------------------------------
+test('/zip-to-file：整包落临时目录，返回可搬移的路径与文件名', async () => {
+  const res = await fetch(`${base}/api/data/zip-to-file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filename: '数据导出_2026-11-24.zip',
+      entries: [{ name: '学生名单.csv', data: Buffer.from('姓名\n张三').toString('base64') }],
+    }),
+  })
+  assert.equal(res.status, 200)
+  const body = await res.json()
+  const exportRoot = path.join(os.tmpdir(), 'classnest-export')
+  assert.ok(body.path.startsWith(exportRoot + path.sep), `路径必须在导出临时目录内: ${body.path}`)
+  assert.equal(body.filename, '数据导出_2026-11-24.zip', '已带 .zip 时不能重复追加')
+  assert.ok(body.bytes > 0)
+
+  const entries = await readZipEntries(body.path)
+  const row = entries.find((e) => e.name === '学生名单.csv')
+  assert.ok(row, 'ZIP 内必须有该条目')
+  assert.equal(row.data.toString('utf8'), '姓名\n张三')
+  fs.unlinkSync(body.path)
+})
+
+test('/zip-to-file：空条目 400，且不产生临时文件', async () => {
+  const before = fs.existsSync(path.join(os.tmpdir(), 'classnest-export'))
+    ? fs.readdirSync(path.join(os.tmpdir(), 'classnest-export')).length : 0
+  const res = await fetch(`${base}/api/data/zip-to-file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entries: [] }),
+  })
+  assert.equal(res.status, 400)
+  const after = fs.existsSync(path.join(os.tmpdir(), 'classnest-export'))
+    ? fs.readdirSync(path.join(os.tmpdir(), 'classnest-export')).length : 0
+  assert.equal(after, before, '入参不合法时不能落任何临时文件')
+})

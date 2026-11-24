@@ -4,7 +4,7 @@ const { db } = require('../db');
 const { now, cleanUp, buildInsert, buildUpdate } = require('../utils/sql');
 const { sanitizeField, normNumber } = require('../services/sanitize');
 const { readRowsByIds } = require('../services/createdRows');
-const { resolveOne } = require('../services/provisionalStudents');
+const { resolveOne, resolvePickedForImport } = require('../services/provisionalStudents');
 const scoreStore = require('../services/scoreStore');
 
 // 允许前端更新的字段白名单
@@ -141,18 +141,34 @@ router.put('/:id', (req, res) => {
     }
   }
 
-  buildUpdate('score_records', row, req.params.id);
+  const result = buildUpdate('score_records', row, req.params.id);
+  // id 不存在时 UPDATE 影响 0 行：不能回「修改成功」（K03-01）
+  if (!result || result.changes === 0) return res.status(404).json({ error: '记录不存在' });
     res.json({ message: '修改成功' });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
+// DELETE /api/scores/:id —— 删除单条成绩记录
+// 前端成绩管理页的删除入口一直调用这个路径，但后端此前没有对应路由（X2-01，恒 404）。
+router.delete('/:id', (req, res) => {
+  try {
+    const row = scoreStore.findRowById(req.params.id)
+    if (!row) return res.status(404).json({ error: '记录不存在' })
+    const result = scoreStore.deleteById(req.params.id)
+    if (!result || result.changes === 0) return res.status(404).json({ error: '记录不存在' })
+    res.json({ ok: true, deleted: row })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
 // POST /api/scores/import —— 从 Excel 导入加分/扣分记录
 // 入参沿用 ImportExcel 的 { fields, rows, mode }；mode 为 personal/group，避免导错对象类型。
 router.post('/import', (req, res) => {
   try {
-    const { fields, rows, mode } = req.body || {};
+    const { fields, rows, mode, studentIds } = req.body || {};
     if (!Array.isArray(fields) || !Array.isArray(rows)) {
       return res.status(400).json({ error: '缺少有效的字段或数据' });
     }
@@ -185,6 +201,18 @@ router.post('/import', (req, res) => {
     // 后面某行校验 throw 会让整批 400，但前面已建的临时学生残留、无法撤销。
     // 与请假导入、班干部导入同一口径。
     const run = db.transaction(() => {
+      // P3-05：批内先按学号 / 姓名各解析一次并缓存，避免每行 1~2 次点查（千行导入时是 2N 次）。
+      // 缓存必须在事务内构建：tryResolve 会 INSERT 临时学生，事务回滚时一起回滚。
+      const xuehaoCache = new Map();
+      const nameCache = new Map();
+      const resolveXuehao = (xh) => {
+        if (!xuehaoCache.has(xh)) xuehaoCache.set(xh, scoreStore.findStudentsByXuehao(xh));
+        return xuehaoCache.get(xh);
+      };
+      const resolveName = (n) => {
+        if (!nameCache.has(n)) nameCache.set(n, tryResolve(n));
+        return nameCache.get(n);
+      };
       const list = rows.map((row, idx) => {
         const rowNo = idx + 1;
         const groupName = cell(row, ['小组', '小组名', 'group_name']);
@@ -196,17 +224,23 @@ router.post('/import', (req, res) => {
 
         let student = null;
         if (!isGroup) {
+          // 导入前用户已为同名行选人：他的决定优先（选中的 id / 新同学），不再按姓名猜。
+          const picked = studentIds && studentIds[String(idx)];
+          if (picked !== undefined) {
+            const chosen = resolvePickedForImport(picked, name);
+            if (chosen) student = { ...chosen, 学号: (scoreStore.findStudentById(chosen.id) || {}).学号 };
+          }
           // 学号不唯一（可空、可重复）：只有「恰好 1 条」才能定人。
           // 撞到 2 条就退回按姓名认人，绝不静默取第一条。
           if (xuehao) {
-            const byXuehao = scoreStore.findStudentsByXuehao(xuehao);
+            const byXuehao = resolveXuehao(xuehao);
             if (byXuehao.length === 1) student = byXuehao[0];
           }
           if (!student && name) {
             // 重名（正式名单 ≥2 个同名）刻意不抛错：导入是整批一个事务，抛错会让整批失败，
             // 而原行为只是「这一行 student_id 留空」。需要用户决策的歧义交给选人那条路，
             // 不让批量导入替用户猜。
-            const r = tryResolve(name);
+            const r = resolveName(name);
             if (r && r.id) student = scoreStore.findStudentById(r.id) || { id: r.id, 姓名: r.name };
           }
         }

@@ -43,12 +43,21 @@ function makeEscEvent() {
   }
 }
 
-// 复刻 DialogShell.vue:54-61 的完整判据：不是栈顶 / 内层已消费 → 不关
-function dialogShellWouldClose(s, e, dialogId) {
-  if (!s.isTopDialog(dialogId)) return false
-  if (e.defaultPrevented) return false
-  return true
+// 不复刻 DialogShell 的关闭判据（T04-02）：副本会与源码漂移。改为对源码逐条对账 +
+// 行为断言只检验「协议状态」（栈顶、defaultPrevented），不冒充父弹窗实现。
+const DIALOG_SHELL = 'student-frontend/src/components/base/DialogShell.vue'
+
+function dialogShellSrc() {
+  return readSrc(DIALOG_SHELL)
 }
+
+test('[静态] DialogShell 的 Esc 关闭判据四条齐全（T04-02）', () => {
+  const src = dialogShellSrc()
+  assert.match(src, /if \(!props\.visible\) return/, '未打开时不得响应')
+  assert.match(src, /if \(e\.key !== 'Escape'\) return/, '只处理 Escape')
+  assert.match(src, /if \(!isTopDialog\(self\)\) return/, '不是栈顶不得关闭')
+  assert.match(src, /if \(e\.defaultPrevented\) return/, '内层已消费则不得关闭')
+})
 
 test('[静态] AppSelect 的 Esc 由弹层自己接管，不再裸绑触发器', () => {
   const src = readSrc(APP_SELECT)
@@ -97,7 +106,8 @@ test('[行为] 菜单展开：弹层是栈顶 → 消费 Esc，父弹窗不关',
   assert.strictEqual(handled, true, '弹层应消费本次 Esc')
   assert.strictEqual(e.defaultPrevented, true, '必须 preventDefault')
   assert.strictEqual(e.propagationStopped, true, '必须 stopPropagation')
-  assert.strictEqual(dialogShellWouldClose(s, e, dialog), false, '父弹窗必须保持打开')
+  // 协议语义：defaultPrevented 已置位 → DialogShell 的 `if (e.defaultPrevented) return` 会放行
+  assert.strictEqual(e.defaultPrevented, true, '父弹窗依据 defaultPrevented 判据应保持打开')
 })
 
 test('[行为] 菜单收起：不消费 Esc，父弹窗照常关闭', async () => {
@@ -112,7 +122,7 @@ test('[行为] 菜单收起：不消费 Esc，父弹窗照常关闭', async () =
   assert.strictEqual(handled, false, '收起态不能消费 Esc')
   assert.strictEqual(e.defaultPrevented, false, '不能吞掉默认行为')
   assert.strictEqual(e.propagationStopped, false, '不能阻止冒泡')
-  assert.strictEqual(dialogShellWouldClose(s, e, dialog), true, '父弹窗应能照常关闭')
+  assert.strictEqual(s.isTopDialog(dialog), true, '父弹窗仍是栈顶，可照常关闭')
 })
 
 test('[行为] 有更内层弹层时，外层不抢 Esc', async () => {

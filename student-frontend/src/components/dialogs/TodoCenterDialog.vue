@@ -1,9 +1,7 @@
 <template>
   <!-- 标题栏胶囊点开后的通知中心：常驻的只是一个胶囊，详情按需弹出。
        Teleport 挂在 body 上，避免被标题栏的 overflow / app-region 裁掉。 -->
-  <Teleport to="body">
-    <Transition name="dialog" appear>
-      <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="close">
+  <DialogShell :visible="visible" :z-index="10001" @overlay="close">
         <div class="bg-surface rounded-lg border border-border shadow-card dialog-card flex flex-col p-5 relative todo-card">
           <div class="flex items-center justify-between mb-3 flex-shrink-0">
             <h3 class="text-lg font-bold">通知事项</h3>
@@ -38,13 +36,12 @@
             <button class="btn-plain todo-action" @click="close">关闭</button>
           </div>
         </div>
-      </div>
-    </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
 import '../../styles/dialog-transition.css'
+import DialogShell from '../base/DialogShell.vue'
 defineProps({
   visible: { type: Boolean, default: false },
   items: { type: Array, default: () => [] },

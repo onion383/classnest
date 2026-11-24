@@ -9,6 +9,7 @@
 // 在哪里改都会立刻影响另一侧，所以弹窗里标了「AI 与 MCP 共用」。
 import { ref } from 'vue'
 import axios from 'axios'
+import { createLatest } from '../utils/latestOnly.js'
 
 const EMPTY_SUMMARY = { days: 7, total: 0, denied: 0, failed: 0, writes: 0, pending: 0 }
 const DEFAULT_CONFIG = { keep: 500, granularity: 'per_call' }
@@ -24,12 +25,17 @@ export function useAccessLog(source) {
   const loading = ref(false)
   const error = ref('')
   const loaded = ref(false)
+  // load / loadSummary / clear 共用一个代次：面板先拉摘要、弹窗再拉全量，
+  // 旧回包不能覆盖新结果，清空后也不允许在途 load 把已清记录写回（F04-06）。
+  const seq = createLatest()
 
   async function load(opts = {}) {
+    const my = seq.begin()
     loading.value = true
     error.value = ''
     try {
       const r = await axios.get('/api/access-log', { params: { source, ...opts } })
+      if (!seq.isCurrent(my)) return
       logs.value = Array.isArray(r.data.logs) ? r.data.logs : []
       total.value = r.data.total || 0
       retentionTotal.value = r.data.retentionTotal ?? total.value
@@ -37,16 +43,19 @@ export function useAccessLog(source) {
       if (r.data.config) config.value = { ...DEFAULT_CONFIG, ...r.data.config }
       loaded.value = true
     } catch (e) {
+      if (!seq.isCurrent(my)) return
       error.value = e.response?.data?.error || e.message
     } finally {
-      loading.value = false
+      if (seq.isCurrent(my)) loading.value = false
     }
   }
 
   // 只取摘要与配置：面板刚渲染时用，不必把 100 条记录拖回来
   async function loadSummary() {
+    const my = seq.begin()
     try {
       const r = await axios.get('/api/access-log', { params: { source, limit: 1 } })
+      if (!seq.isCurrent(my)) return
       summary.value = r.data.summary || { ...EMPTY_SUMMARY }
       if (r.data.config) config.value = { ...DEFAULT_CONFIG, ...r.data.config }
     } catch (_) {
@@ -69,6 +78,8 @@ export function useAccessLog(source) {
   }
 
   async function clear() {
+    // 先作废在途 load：清空后旧响应不能再把已清记录写回
+    seq.invalidate()
     try {
       const r = await axios.delete('/api/access-log', { params: { source } })
       logs.value = []

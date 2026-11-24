@@ -88,14 +88,6 @@ router.put('/prefs', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.get('/proposals/:id', (req, res) => {
-  try {
-    const p = inDb(req, () => proposals.get(req.params.id));
-    if (!p) return res.status(404).json({ error: '提案不存在' });
-    res.json(proposalView.describe(p));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 // 老师确认/拒绝：confirm 复用既有写入链路（单事务），状态抢占保证幂等
 router.post('/proposals/:id/decide', (req, res) => {
   try {

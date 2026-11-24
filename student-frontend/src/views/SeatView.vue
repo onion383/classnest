@@ -61,6 +61,7 @@
                 :enableCandidate="true"
                 :candidateItems="allStudents"
                 :candidateExcludeIds="currentEditExcludeIds"
+                :candidateOccupied="currentEditOccupied"
                 candidateLabelField="姓名"
                 candidateIdField="id"
                 candidatePlaceholder="输入姓名"
@@ -94,6 +95,7 @@
                 :enableCandidate="true"
                 :candidateItems="allStudents"
                 :candidateExcludeIds="currentMasterEditExcludeIds"
+                :candidateOccupied="currentMasterEditOccupied"
                 candidateLabelField="姓名"
                 candidateIdField="id"
                 candidatePlaceholder="输入姓名"
@@ -510,6 +512,7 @@ const activeTypes = activeGrid.types
 const activeMode = activeGrid.mode
 const activeSettingsVisible = activeGrid.settingsVisible
 const currentEditExcludeIds = activeGrid.currentEditExcludeIds
+const currentEditOccupied = activeGrid.currentEditOccupied
 const activeColHeaders = activeGrid.colHeaders
 const activeDisplayRows = activeGrid.displayRows
 const activeExportFields = activeGrid.exportFields
@@ -524,6 +527,7 @@ const masterTypes = masterGrid.types
 const masterMode = masterGrid.mode
 const masterSettingsVisible = masterGrid.settingsVisible
 const currentMasterEditExcludeIds = masterGrid.currentEditExcludeIds
+const currentMasterEditOccupied = masterGrid.currentEditOccupied
 const masterColHeaders = masterGrid.colHeaders
 const masterDisplayRows = masterGrid.displayRows
 const masterExportFields = masterGrid.exportFields
@@ -1167,7 +1171,9 @@ async function onImportData({ fields, rows }) {
     const label = obj['行号']
     if (!label) return
     const row = grid.displayRows.value.find(r => r.label === label)
-    if (!row || row._isPodium) {
+    // 走廊行整行不可坐人：与后端 assertSeatCellsOccupiable 同口径，
+    // 否则姓名会被写进走廊格，直到整表保存才由后端 400 拦回。
+    if (!row || row._isPodium || row._isAisleRow) {
       errors.push(`第 ${idx + 1} 行：找不到座位行「${label}」`)
       return
     }
@@ -1194,11 +1200,20 @@ async function onImportData({ fields, rows }) {
     return
   }
 
-  const before = (grid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
+  const before = gridSnapshotOf(grid)
   const ok = await grid.saveSeats(next)
   if (!ok) return
-  recordGridSnapshotUndo('座位表', importTarget.value === 'master' ? 'seat_template' : 'seat_layout', before, next, '从表格导入')
+  recordGridSnapshotUndo('座位表', importTarget.value === 'master' ? 'seat_template' : 'seat_layout', before, { seats: next, types: gridSnapshotOf(grid).types }, '从表格导入')
   notifySuccess(`已从表格导入${importTarget.value === 'master' ? '座位模板' : '当前座位表'}`)
+}
+
+// 整块快照统一形状 { seats, types }（Q2-07）：只传 seats 时后端无法从 types 推回几何，
+// 撤销「导入/智能排表」后 rows/cols/types 仍是新布局，矩阵与计数分叉。
+function gridSnapshotOf(grid) {
+  return {
+    seats: (grid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r),
+    types: (grid.types.value || []).map(r => Array.isArray(r) ? [...r] : r),
+  }
 }
 
 async function applySmartArrangement(result) {
@@ -1209,13 +1224,13 @@ async function applySmartArrangement(result) {
   try {
     // 弹窗产出的已是网格（走廊/空位格恒 null），与库里 seats 同构，直接落库
     const nextSeats = result.seats
-    // 记录整块快照，撤销可一键恢复智能排表前的布局
-    const before = (grid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
+    // 记录整块快照，撤销可一键恢复智能排表前的布局（含 types，Q2-07）
+    const before = gridSnapshotOf(grid)
     // saveSeats 失败时不 throw（内部已提示并回滚界面），必须看返回值：
     // 原来忽略返回值，写库失败也照样登记撤销 + 弹「已应用智能排表」，用户以为座位已生效。
     const ok = await grid.saveSeats(nextSeats)
     if (!ok) return
-    recordGridSnapshotUndo('座位表', undoTable, before, nextSeats, '智能排表')
+    recordGridSnapshotUndo('座位表', undoTable, before, { seats: nextSeats, types: gridSnapshotOf(grid).types }, '智能排表')
     notifySuccess('已应用智能排表')
   } catch (e) {
     // 原实现在 catch 里仍调 notifySuccess('应用失败')：明明是失败却弹绿色成功条，
@@ -1246,10 +1261,10 @@ function confirmImport() {
 
 async function doApplyMasterToActive() {
   try {
-    const before = (activeGrid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
+    const before = gridSnapshotOf(activeGrid)
     await axios.post(`${API_BASE}/seats/apply-master`)
     await loadActive()
-    const after = (activeGrid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
+    const after = gridSnapshotOf(activeGrid)
     recordGridSnapshotUndo('座位表', 'seat_layout', before, after, '从模板导入')
     notifySuccess('已应用模板')
   } catch (e) { notifyError('应用失败'); console.error(e) }
@@ -1258,7 +1273,7 @@ async function doApplyMasterToActive() {
 // 反向：把当前座位（临时表）整块导入到座位模板（纯前端复制，无后端接口）
 async function doApplyActiveToMaster() {
   try {
-    const before = (masterGrid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
+    const before = gridSnapshotOf(masterGrid)
     const src = (activeGrid.seats.value || []).map(r => Array.isArray(r) ? [...r] : r)
     // 同步尺寸、模式与格子类型，使模板与当前座位完全一致
     // （types 必须一起搬：只搬 seats 会让走廊列/空位对不上，写入直接被形状守卫拒掉）
@@ -1270,7 +1285,7 @@ async function doApplyActiveToMaster() {
     // saveSeats 内部已提示失败并重新 load 回滚界面：
     // 这里不能再报成功，也不该登记一条根本没生效的撤销
     if (!ok) return
-    recordGridSnapshotUndo('座位表', 'seat_template', before, src, '从实行导入')
+    recordGridSnapshotUndo('座位表', 'seat_template', before, { seats: src, types: masterGrid.types.value.map(r => [...r]) }, '从实行导入')
     notifySuccess('已从当前座位导入')
   } catch (e) { notifyError('导入失败'); console.error(e) }
 }
@@ -1413,9 +1428,10 @@ function onWeightSwapRows(fromIdx, toIdx) {
   if (fromIdx === toIdx) return
   const from = fromIdx - 1, to = toIdx - 1
   if (from < 0 || to < 0 || from >= weightWeights.value.length || to >= weightWeights.value.length) return
-  // 行走廊行不参与交换（与座位表同规则：只搬数据不搬走廊会错位）
-  const aisleRow = (r) => (weightTypes.value[r] || []).every(v => v === CELL.AISLE)
-  if (aisleRow(from) || aisleRow(to)) return
+  // 走廊行 / 含空位格的行都不参与交换（F07-03）：只挡走廊会让权重随格位搬到空位格，
+  // 空位格改回座位后残留权重按旧坐标冒回来。
+  const blockedRow = (r) => (weightTypes.value[r] || []).some(v => v === CELL.AISLE || v === CELL.BLANK)
+  if (blockedRow(from) || blockedRow(to)) return
   const prev = weightWeights.value.map(r => [...r])
   const next = weightWeights.value.map(r => [...r])
   // 移动语义：取出源行插入目标位置
@@ -1428,9 +1444,9 @@ function onWeightSwapRows(fromIdx, toIdx) {
 
 function onWeightSwapColumns(fromCol, toCol) {
   if (fromCol === toCol) return
-  // 走廊列与「含走廊格的列」都不参与（列下标即网格下标，无需换算）
-  const colHasAisle = (c) => (weightTypes.value || []).some(line => Array.isArray(line) && line[c] === CELL.AISLE)
-  if (colHasAisle(fromCol) || colHasAisle(toCol)) return
+  // 走廊列与「含走廊/空位格的列」都不参与（列下标即网格下标，无需换算；F07-03）
+  const colBlocked = (c) => (weightTypes.value || []).some(line => Array.isArray(line) && (line[c] === CELL.AISLE || line[c] === CELL.BLANK))
+  if (colBlocked(fromCol) || colBlocked(toCol)) return
   const prev = weightWeights.value.map(r => [...r])
   // 移动语义：取出源列插入目标位置（表头固定不动）
   const next = weightWeights.value.map(r => {
@@ -1842,8 +1858,34 @@ useUndoShortcut('座位表', {
   onAfterRedo: async (label) => { await Promise.all([loadActive(), loadMaster(), loadWeight()]); notifySuccess(label ? `已重做：${label}` : '已重做') }
 })
 
+// P3-15：座位页首屏改走 /seats/overview（active + master + weight + 名册一次回）。
+// 缺少任一必要项或请求失败时返回 false，由调用方回退到原来的三条并发加载。
+async function loadSeatOverview() {
+  try {
+    const res = await axios.get(`${API_BASE}/seats/overview`)
+    const d = res.data
+    if (!d || !d.active || !d.master) return false
+    activeGrid.hydrate(d.active)
+    masterGrid.hydrate(d.master)
+    if (d.weight && Array.isArray(d.weight.weights)) weightWeights.value = d.weight.weights
+    weightLoaded.value = true
+    weightError.value = false
+    if (Array.isArray(d.students)) {
+      allStudents.value = d.students
+      studentMap.value = {}
+      d.students.forEach((s) => { if (s && s.id != null) studentMap.value[s.id] = s })
+    }
+    return true
+  } catch (e) {
+    console.error(e)
+    return false
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([loadActive(), loadMaster(), loadWeight()])
+  const fromOverview = await loadSeatOverview()
+  // 概览不可用（老后端 / 请求失败）：回退到逐表加载，行为与改造前一致
+  if (!fromOverview) await Promise.all([loadActive(), loadMaster(), loadWeight()])
   // 统一三张表设置：以当前座位（临时表）为准。若座位模板存在超出该范围的座位数据，
   // 暂不同步，交由用户通过「设置」确认后再统一（避免静默丢弃模板数据）。
   // 注意口径：设置是「座位列数」，storage 里是网格列数，比较前先反算。
@@ -1855,7 +1897,8 @@ onMounted(async () => {
   const masterSeatCols = gridColsToSeat(masterCols.value, masterTypes.value)
   const differ = masterRows.value !== s.rows || masterSeatCols !== s.cols || masterMode.value !== s.mode
   if (differ && !hasTrimmedData(masterGrid, s)) await applySharedSettings(s)
-  fetchAllStudents()
+  // 概览已带名册时不再重复取；走回退路径才需要单独拉 /students
+  if (!fromOverview) fetchAllStudents()
   // 启动时静默补全历史快照（今天及之前），失败不打扰用户。
   // 补存成功后作废共用快照缓存 —— 否则账本/指数仍按补存前的序列结算。
   axios.post(`${API_BASE}/seats/snapshot/backfill`, { includeToday: true })

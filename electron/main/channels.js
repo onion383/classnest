@@ -56,6 +56,7 @@ const CH = Object.freeze({
   SELECT_FOLDER: 'select-folder',
   SAVE_BACKGROUND_IMAGE: 'save-background-image',
   SAVE_FILE: 'save-file',
+  SAVE_FILE_FROM_PATH: 'save-file-from-path',
   SCREENSHOT_CAPTURE: 'screenshot-capture',
   SCREENSHOT_REGION: 'screenshot-region',
   SCREENSHOT_REGION_SHOW: 'screenshot-region-show',

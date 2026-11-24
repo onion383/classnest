@@ -192,7 +192,7 @@ import { undoById } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
 // 导出格式库按需加载：收费页平时不需要 exporters（约 22KB），只有在
 // 「同时导出收据文件」真正开始导出时才拉——与 ExportExcel 组件同一个 chunk。
-import { saveBlobWithDialog } from '../utils/saveFile.js'
+import { saveZipWithDialog } from '../utils/saveFile.js'
 import { blobToBase64 } from '../utils/base64.js'
 import { localDateStr } from '../utils/dateTime.js'
 import '../styles/dialog-transition.css'
@@ -658,15 +658,13 @@ async function runExportWithReceipts({ format, filename, reportProgress }) {
     })
   }
 
-  const res = await axios.post(
-    '/api/data/zip',
-    { entries, receiptGroups: groups, filename },
-    { responseType: 'blob' }
-  )
   reportProgress(90)
   const base = String(filename || '班费记录').trim()
-  const saved = await saveBlobWithDialog(`${base}_${localDateStr()}.zip`, res.data)
-  // 空串 = 用户在保存对话框点了取消，不提示
+  // N2-07：走磁盘中转（后端落临时文件 → 主进程搬移），大包不再撞 50MB IPC 上限
+  const outName = `${base}_${localDateStr()}.zip`
+  const saved = await saveZipWithDialog(outName, { entries, receiptGroups: groups, filename: outName })
+  // 空串 = 用户在保存对话框点了取消，不提示；回传给弹窗决定是否关闭（F02-02）
   if (saved) notifySuccess(`已导出，含 ${groups.length} 条记录的收据文件`)
+  return saved
 }
 </script>

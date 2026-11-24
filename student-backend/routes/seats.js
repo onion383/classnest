@@ -3,13 +3,14 @@ const router = express.Router();
 const { db } = require('../db');
 const store = require('../services/slotStore');
 const { validateRow } = require('../services/businessRules');
-const { normalizeSeats, normalizeCellTypes, SEAT_MAX_ROWS, SEAT_MAX_GRID_COLS } = require('../services/sanitize');
+const { normalizeSeats, normalizeCellTypes } = require('../services/sanitize');
 // 单格写入的唯一入口（坐标 / 值形状 / 可坐性 / 引用关系都在它里面）
 // resolveNameCells：座位格子里的姓名字符串 → 学生 id（名册外姓名建档），见该模块说明
 const { writeSeatCell, resolveNameCells, SeatWriteError } = require('../services/seatWrite');
 const { readDocJson } = require('../utils/json');
+const { studentsBrief } = require('../services/dashboardAgg');
 // 历史快照 payload 的唯一构造点（补存 / 补录 / AI 写入前快照共用一套字段表）
-const { seatSnapshotPayload } = require('../services/seatSnapshot');
+const { seatSnapshotPayload, validateSeatSize, fitSeatsToGrid, parseTypesForWrite } = require('../services/seatSnapshot');
 const { isDateStr } = require('../utils/sql');
 // 日期口径统一走 utils/date（本地时区）。此前本文件自己复制了一份
 // localDateStr/parseDateStr/shiftDateStr/mondayOf，与 duty.js 逐字重复。
@@ -18,12 +19,6 @@ const { localDateStr, localDateTimeStr, shiftDateStr, mondayOf } = require('../u
 // 这里的 cols 是**网格列数**（含走廊列）：走廊变成真实列之后，前端 PUT 上来的
 // rows/cols 描述的是整个矩阵，不是「座位列数」。座位列数上限（SEAT_MAX_COLS=30）
 // 是设置界面上的另一件事，不能用同一个常量卡这里。
-function validateSeatSize(rows, cols) {
-  if (rows < 1 || rows > SEAT_MAX_ROWS) return `行数需在 1 ~ ${SEAT_MAX_ROWS} 之间`;
-  if (cols < 1 || cols > SEAT_MAX_GRID_COLS) return `列数需在 1 ~ ${SEAT_MAX_GRID_COLS} 之间`;
-  return null;
-}
-
 // 读取座位：库中若被历史/AI 写成了「扁平对象数组」，这里规范化为二维数组返回，
 // 保证前端（按 seats[行][列] 渲染）拿到的一直是可用形态；畸形数据不原样回传，按空座位处理。
 function readSeats(raw) {
@@ -59,32 +54,9 @@ function readTypes(raw, rows, cols) {
   }
 }
 
-// 写入前规范化 types：裁剪到 rows×cols、不足补 0、值域校验。
-// 返回 { skip } 表示调用方没传这个字段 —— 此时**不写库**，保留已有矩阵。
-// 这一点和 seats/aisleCols 的「全量覆盖」不同：types 是后加的列，老客户端不认识它，
-// 若把未传当空值写回，一次老版本保存就会把已经画好的走廊矩阵冲掉。
-function parseTypesForWrite(raw, rows, cols) {
-  if (raw === undefined) return { skip: true };
-  try {
-    return { value: normalizeCellTypes(raw, rows, cols) };
-  } catch (e) {
-    return { error: e.message };
-  }
-}
-
 // 把规范化后的 seats 裁剪/补齐到 rows×cols。
 // PUT / 与 POST /snapshot 共用：快照写进历史后会被座位指数与历史回看消费，
 // 尺寸与 rows/cols 写脱节就会错位，而且事后没有自动修正的机会。
-function fitSeatsToGrid(normSeats, rows, cols) {
-  const trimmed = normSeats.slice(0, rows).map((r) => {
-    const row = Array.isArray(r) ? r.slice(0, cols) : [];
-    while (row.length < cols) row.push(null);
-    return row;
-  });
-  while (trimmed.length < rows) trimmed.push(Array(cols).fill(null));
-  return trimmed;
-}
-
 // 桌型序列：每张桌坐几人（1 或 2），对应**座位列**而不是网格列。
 // 只做元素级校验，不校验长度：长度由前端按座位列数派生（deskPatternOf 会兜底），
 // 后端再算一遍座位列数就等于维护第二份几何口径 —— 改一处忘另一处就开始拒合法数据。
@@ -123,26 +95,56 @@ function gridShapeMismatch(view, rows, cols, typesSupplied) {
 }
 
 // ======================== 当前座位 ========================
-router.get('/', (req, res) => {
-    const row = store.getDoc('seat_layout');
-  if (!row) return res.json({ mode: 'single', rows: 6, cols: 7, seats: [], types: [], aisleCols: [], groupsConfig: [], settings: {} });
-  // seats 单独走 readSeats（还要规范化结构），其余三列统一走 readDocJson：
-  // 四条 JSON 列只要有一条畸形，裸解析就会让整个响应 500、页面白板。
+// 读取一张座位类表的完整响应（当前座位 / 模板共用）：seats 单独走 readSeats，
+// 其余三列统一走 readDocJson —— 四条 JSON 列只要有一条畸形，裸解析就会让整个响应 500、页面白板。
+function readLayoutDoc(table) {
+  const row = store.getDoc(table)
+  if (!row) return { mode: 'single', rows: 6, cols: 7, seats: [], types: [], aisleCols: [], groupsConfig: [], settings: {} }
   const extra = readDocJson(row, {
     aisleCols: ['aisle_cols', []],
     deskPattern: ['desk_pattern', []],
     groupsConfig: ['groups_config', []],
     settings: ['settings', {}],
-  });
-  res.json({
+  })
+  return {
     mode: row.mode,
     rows: row.rows,
     cols: row.cols,
     seats: readSeats(row.seats),
     types: readTypes(row.types, Number(row.rows), Number(row.cols)),
     ...extra,
-  });
-});
+  }
+}
+
+// 权重表读取：与 GET /weight 同口径（几何 types 只作为矩阵副本返回，界面不采信）。
+function readWeightDoc() {
+  const row = store.getDoc('seat_weight')
+  if (!row) return { mode: 'single', rows: 6, cols: 13, weights: [], types: [], settings: {} }
+  const extra = readDocJson(row, { weights: [], settings: {} })
+  return {
+    mode: row.mode,
+    rows: row.rows,
+    cols: row.cols,
+    ...extra,
+    types: readTypes(row.types, Number(row.rows), Number(row.cols)),
+  }
+}
+
+// GET /overview —— 座位页首屏一次拿齐（v8 · P3-15）：
+// 原先 mount 并发拉 /seats + /seats/master + /seats/weight + /students 四条，
+// 这里合成一条；名册只带 id/姓名/学号（页面只需要这三个字段）。
+router.get('/overview', (req, res) => {
+  res.json({
+    active: readLayoutDoc('seat_layout'),
+    master: readLayoutDoc('seat_template'),
+    weight: readWeightDoc(),
+    students: studentsBrief(),
+  })
+})
+
+router.get('/', (req, res) => {
+  res.json(readLayoutDoc('seat_layout'))
+})
 
 router.put('/', (req, res) => {
   try {
@@ -223,22 +225,7 @@ router.patch('/master/cell', cellPatchHandler('seat_template'));
 
 // ======================== 座位模板 ========================
 router.get('/master', (req, res) => {
-    const row = store.getDoc('seat_template');
-  if (!row) return res.json({ mode: 'single', rows: 6, cols: 7, seats: [], types: [], aisleCols: [], groupsConfig: [], settings: {} });
-  const extra = readDocJson(row, {
-    aisleCols: ['aisle_cols', []],
-    deskPattern: ['desk_pattern', []],
-    groupsConfig: ['groups_config', []],
-    settings: ['settings', {}],
-  });
-  res.json({
-    mode: row.mode,
-    rows: row.rows,
-    cols: row.cols,
-    seats: readSeats(row.seats),
-    types: readTypes(row.types, Number(row.rows), Number(row.cols)),
-    ...extra,
-  });
+  res.json(readLayoutDoc('seat_template'))
 });
 
 router.put('/master', (req, res) => {
@@ -332,16 +319,7 @@ router.post('/apply-master', (req, res) => {
 // 走廊格的权重恒为 null。types 也一并存取 —— 它是这份权重矩阵的几何依据，
 // 权重写入一旦与它脱节，座位指数就会按错的列取权重（界面上看不出来，只觉得排得不公平）。
 router.get('/weight', (req, res) => {
-    const row = store.getDoc('seat_weight');
-  if (!row) return res.json({ mode: 'single', rows: 6, cols: 13, weights: [], types: [], settings: {} });
-  const extra = readDocJson(row, { weights: [], settings: {} });
-  res.json({
-    mode: row.mode,
-    rows: row.rows,
-    cols: row.cols,
-    ...extra,
-    types: readTypes(row.types, Number(row.rows), Number(row.cols)),
-  });
+  res.json(readWeightDoc())
 });
 
 router.put('/weight', (req, res) => {
@@ -453,15 +431,6 @@ router.delete('/draft', (req, res) => {
   res.json({ message: '草稿已清除' });
 });
 
-// ======================== 全局设置（预留） ========================
-router.get('/settings', (req, res) => {
-  res.json({});
-});
-
-router.put('/settings', (req, res) => {
-  res.json({ message: 'ok' });
-});
-
 // ======================== 历史快照（按天） ========================
 // 快照按天保存：每行代表某一天（snap_date）的座位；week_start 为由该天推导的周一，
 // 历史下拉按 week_start 聚合，回看时取该周最后一天的快照。
@@ -510,48 +479,6 @@ router.get('/daily', (req, res) => {
       settings: p.settings || {},
     };
   }));
-});
-
-// 保存某一天的快照（手动保存 / 补存都会走到这里）：按 snap_date 幂等 upsert
-router.post('/snapshot', (req, res) => {
-    const { snap_date, mode, rows, cols, seats, types, settings } = req.body;
-  if (!snap_date) return res.status(400).json({ error: '缺少快照日期' });
-  // 快照日期直接落库并据此推导周一：非法串会生成 NaN 周键，历史列表出现幽灵周
-  if (!isDateStr(snap_date)) return res.status(400).json({ error: '快照日期格式不正确（应为 YYYY-MM-DD）' });
-
-  // 与 PUT / 同口径做形状校验（4-10）。快照不是「随手存档」：它会被座位指数逐日累加、
-  // 被历史回看渲染，行列数越界或 types 尺寸不符会直接把结算算错位，
-  // 而且写进历史后没有任何自动修正的机会（不像当前布局还能重存一次）。
-  if (!Number.isInteger(rows) || !Number.isInteger(cols) || !Array.isArray(seats)) {
-    return res.status(400).json({ error: '参数格式错误' });
-  }
-  const sizeError = validateSeatSize(rows, cols);
-  if (sizeError) return res.status(400).json({ error: sizeError });
-  let normSeats;
-  try { normSeats = normalizeSeats(seats, 'seats'); } catch (e) { return res.status(400).json({ error: e.message }); }
-  const trimmed = fitSeatsToGrid(normSeats, rows, cols);
-  // types 不传 = 老调用方没有这个字段（保持原行为存空数组）；传了就必须是 rows×cols 的合法格型矩阵
-  const parsedTypes = parseTypesForWrite(types, rows, cols);
-  if (parsedTypes.error) return res.status(400).json({ error: parsedTypes.error });
-
-  store.histUpsert('seat', {
-    weekStart: mondayOf(snap_date),
-    snapDate: snap_date,
-    mode: mode || 'single',
-    payload: {
-      mode: mode || 'single',
-      rows,
-      cols,
-      seats: trimmed,
-      // 走廊已是 seats 里的真实列，几何必须随 payload 一起存 ——
-      // 只存 seats 的话回看历史时走廊列会被当成空座位，座位指数也会跟着错位。
-      types: parsedTypes.skip ? [] : parsedTypes.value,
-      aisleCols: [],
-      groupsConfig: [],
-      settings,
-    },
-  });
-  res.json({ message: '快照已保存' });
 });
 
 // 补存历史快照：仅学期范围内。过去日期缺失才补（沿用最近一天座位），

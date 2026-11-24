@@ -24,9 +24,8 @@ classnest/
     │   │   │   ├── tools.schema.js  # 各工具的 JSON schema（入参 / 出参定义）与枚举（CHART_TYPES（图表类…
     │   │   │   └── tools.subagent.js  # 子代理（子模型）执行入口：复用只读白名单并在执行前校验
     │   │   ├── mcp/
-    │   │   │   ├── mcp.routes.js  # /api/mcp 教师侧管理接口（提案 / 令牌 / 启停 / 偏好）
-    │   │   │   └── mcp.server.js  # 外部客户端的 Streamable HTTP 端点（挂 /mcp）
-    │   │   ├── privacy.shared.js  # 数据保护配置的读写语义（字段白名单 / 表清单 / 单档权限）
+    │   │   │   ├── mcp.routes.js
+    │   │   │   └── mcp.server.js
     │   │   ├── ai.budget.js  # AI 调用预算闸门：主对话与子助手共用的用量记账与限额
     │   │   ├── ai.config.js  # GET/PUT /config（读取/保存配置）、GET /models（模型列表）、POS…
     │   │   ├── ai.constants.js  # 读写表白名单
@@ -38,14 +37,15 @@ classnest/
     │   │   ├── ai.memory.js  # GET/PUT /memory（读取/保存长期记忆）
     │   │   ├── ai.skills.js  # GET /skills（技能列表）、GET /skills/:name（技能详情）、POST…
     │   │   ├── ai.subagent-tools.js  # 子代理只读白名单
-    │   │   └── ai.upload.js  # POST /upload（文本/PDF/Word/PPT/Excel 解析，临时文件用完即删…
+    │   │   ├── ai.upload.js  # POST /upload（文本/PDF/Word/PPT/Excel 解析，临时文件用完即删…
+    │   │   └── privacy.shared.js
     │   ├── undo/
     │   │   ├── undo.executors.js
+    │   │   ├── undo.expected.js  # 撤销前的「期望状态」校验：整行快照比对、格子类比对当前值、复合回插检查显式 id 是否被占用…
     │   │   ├── undo.helpers.js  # 记录构造/方向切换辅助
     │   │   ├── undo.js
-    │   │   ├── undo.expected.js  # 撤销前的期望状态快照校验
     │   │   └── undo.records.js  # undo_history 读写、裁剪与 redo 侧失效
-    │   ├── accessLog.js  # /api/access-log（数据访问记录）
+    │   ├── accessLog.js
     │   ├── account.js  # 挂载 /api/account
     │   ├── activities.js
     │   ├── album.js
@@ -63,6 +63,7 @@ classnest/
     │   ├── scores.js  # /api/scores
     │   ├── search.js  # /api/search
     │   ├── seats.js  # /api/seats
+    │   ├── widgetOverview.js  # /api/widget-overview
     │   └── widgetSettings.js  # /api/widget-settings
     └── scanWorker.js
 ```
@@ -79,7 +80,7 @@ classnest/
 - **定位**：后端 HTTP 路由层（`student-backend/routes/`），负责挂载点、接口清单与每个接口的处理链。
 - **公共逻辑**：所有业务接口经 `auth(['teacher'])`（鉴权中间件，只允许教师角色）→ `JWT`（登录令牌）校验 → `dbManager.withDb`（按当前库执行回调的包装函数）绑定当前库；路由内做参数校验、`sanitize`（数据清洗）清洗、事务写库、撤销登记与统一 JSON 响应。
 - **局限**：不展开数据层加密/多库细节、安全通道握手、AI 提案与撤销执行器内部实现；这些见 [data-layer.md](./data-layer.md)、[topics/security.md](../topics/security.md)、[topics/ai.md](../topics/ai.md)。
-- **规模**：共 264 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
+- **规模**：共 257 条路由（`METHOD path`，含 `historyRoutes` 工厂），由 `docs-verify` 从路由源码现算。
 
 
 ### 处理标准的写法
@@ -143,24 +144,22 @@ flowchart TD
 
 | 方法 | 路径 | 处理要点 |
 | --- | --- | --- |
-| GET | `/recovery-key` | 重新生成并返回恢复密钥（需登录） |
 | POST | `/export` | 导出备份包（v2：加密库 + 登记信息，整包 base64 一次返回） |
 | POST | `/export-zip` | 导出备份包 v3（流式 ZIP：库三件套 + `memory.md` + `uploads` / `ai-skills` / `album-trash` / `receipt-trash` / `snapshots` + 清单）。**无 `Content-Length`**，收据原件不读进内存；`bundle.json` 是第一个条目（前端只读 64KB 判断要不要口令）。写响应体阶段出错只能 `res.destroy()`，让客户端看到「下载不完整」 |
 | POST | `/restore` | 从备份包恢复（v2） |
-| POST | `/restore-zip` | 登录中从 v3 包恢复。顺序即全部重点：① 解到临时目录并逐项校验（此时一个现有文件都没动）→ ② 换库（复用 v2 的 `restoreBundle`）→ ③ 替换各目录，旧目录改名 `.bak-<时间戳>` 不删。超级隐私模式直接拒；落盘公共部分在 `services/bundleRestore.js` |
 | POST | `/restore-zip-offline` | 登录页离线恢复 v3 包（无鉴权，slug 直接从包内 `bundle.json` 取） |
-| GET / POST | `/db-encryption` | 查询/切换加密状态；POST 用 NDJSON 流逐步上报进度 |
+| POST | `/db-encryption` | 切换加密状态，用 NDJSON 流逐步上报进度（GET 查询入口已下线，前端不读；查询走 `/security-level`） |
 | POST | `/restore-offline` | 离线恢复（v2，登录页使用） |
 | PUT | `/username` / `/password` | 改名（同步学生档案引用）/ 改密。`plain` / `nopass` 档 `users.password` 为空：改名**不校验密码**，改密即「设首个密码」；前端在这两档隐藏密码框与「修改密码」按钮，设密码只能走 `/security-level` |
 | GET / POST | `/security-level` | 读取/切换账号安全等级（`plain` / `nopass` / `password` / `privacy`） |
 | GET / POST | `/login-policy` | 读取/设置登录保持天数（按账号，1~365 天，默认 30）。POST 会按新策略**重签当前 token** 并随响应返回（`token` / `mediaToken`），使「改成 1 天」当场生效；不发吊销，其它窗口的旧 token 仍按原 `exp` 走完。存储与派生规则见 [`services/authPolicy.js`](./services.md) |
-| GET | `/privacy` | 查询超级隐私状态 |
-| POST | `/privacy/enable` / `/privacy/disable` | 开启（需密码 + 恢复词）/ 关闭超级隐私 |
 | GET | `/classes` | 当前账号可切换的班级列表（含库标识与班级名） |
 | POST | `/class` | 新建班级：一班一库，独立加密库并在 `registry` 登记 |
 | POST | `/switch-class` | 切换当前班级并换发新 token（`dbSlug` 写在 JWT 里） |
 | DELETE | `/class` | 删除班级库（不可撤销，需前端二次确认） |
 | DELETE | `/` | 删除账号（不清理共享目录） |
+
+> 超级隐私的开关入口：`/security-level` 切换（注册时也可直接选 privacy 档）；旧的 `/privacy` 系列 HTTP 入口已下线，前端零调用。
 
 ### 3. 表格类（动态列）
 
@@ -185,7 +184,7 @@ flowchart TD
 | POST | `/move-column` | 列顺序调整（`sort_order`） |
 | POST | `/reorder` | 行顺序整体重排 |
 | POST | `/import` | 批量导入（自动补建缺失列、事务插入） |
-| POST | `/upload-receipt` | 班费收据上传（仅 fee-records）：10MB、图片扩展名 + MIME + 魔数校验 |
+| POST | `/upload-receipt` | 班费收据上传（仅 fee-records）：按类型分档（图片 20MB、PDF / Office 30MB、视频 200MB、md 5MB）、扩展名 + MIME + 文件头魔数校验 |
 
 列名白名单正则 `^[a-zA-Z0-9_\u4e00-\u9fa5]+$`，保留字段 `id/position/atPosition` 禁止直接操作。
 
@@ -195,25 +194,28 @@ flowchart TD
 `GET /`、`PUT /`（实行课表）、`GET/PUT /master`（模板）、`POST /apply-master`、`GET/PUT /settings`；学期：`GET /semesters`、`GET /semesters/prefill`（推荐/当前学期，供首次引导预填）、`POST /semesters`、`PUT /semesters/current`、`PUT /semesters/:id`、`DELETE /semesters/:id`；历史四组由 [`historyRoutes.js`](../../../student-backend/routes/historyRoutes.js) 注册（`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`DELETE /history/:weekStart`）。
 
 #### [`routes/seats.js`](../../../student-backend/routes/seats.js)（`/api/seats`） · 座位路由
-`GET /`、`PUT /`、`PATCH /cell`、`PATCH /master/cell`、`GET/PUT /master`、`POST /apply-master`、`GET/PUT /settings`、`GET/PUT /weight`（权重表）、`GET/PUT/DELETE /draft`（排表草稿）、`GET /daily`（当日视图）、历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。**不复用** `historyRoutes`：`seat_history` 多出 mode/rows/cols/seats/aisle_cols/groups_config 等列。
+`GET /`、`GET /overview`（首屏概览：`active` / `master` / `weight` + 名册 `id/姓名/学号`，一次回）、`PUT /`、`PATCH /cell`、`PATCH /master/cell`、`GET/PUT /master`、`POST /apply-master`、`GET/PUT /settings`、`GET/PUT /weight`（权重表）、`GET/PUT/DELETE /draft`（排表草稿）、`GET /daily`（当日视图）、历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。**不复用** `historyRoutes`：`seat_history` 多出 mode/rows/cols/seats/aisle_cols/groups_config 等列。
 
 #### [`routes/duty.js`](../../../student-backend/routes/duty.js)（`/api/duty`） · 值日路由
-`GET/PUT /settings`、`GET/PUT /`、`PUT /save`、`GET/PUT /template`、`POST /apply-master`、`GET/PUT /weight`、`GET/PUT/DELETE /draft`、`GET /daily`、`GET /big-dates`（大扫除命中日：按 `cycle` + `weekday` 在学期内算出日期列表与「下一次」，非 `big` 模式返回空）；历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。模式 `daily` / `big` 由 `services/dutyMode.js` 解包，命中日算法在 `services/dutyCycle.js`。
+`GET /overview`（首屏概览：`settings` / `active` / `template` / `weight` + 名册一次回）、`GET/PUT /settings`、`GET/PUT /`、`PUT /save`、`GET/PUT /template`、`POST /apply-master`、`GET/PUT /weight`、`GET/PUT/DELETE /draft`、`GET /daily`、`GET /big-dates`（大扫除命中日：按 `cycle` + `weekday` 在学期内算出日期列表与「下一次」，非 `big` 模式返回空）；历史：`GET /history`、`GET /history/:weekStart`、`POST /snapshot`、`POST /snapshot/backfill`、`DELETE /history/:weekStart`、`POST /history/week`。模式 `daily` / `big` 由 `services/dutyMode.js` 解包，命中日算法在 `services/dutyCycle.js`。
 
 #### [`routes/leaves.js`](../../../student-backend/routes/leaves.js)（`/api/leaves`） · 请假路由
-`GET /`、`POST /`、`PUT /:id`、`POST /reorder`（记录排序）、`GET/POST /today-columns`（今日列配置）、`POST /import`（Excel 导入，按 `学号`/唯一 `姓名` 匹配学生）、`DELETE /:id`、`POST /:id/return`（销假）、`POST /:id/unreturn`（撤销销假）、`POST /:id/cancel`（取消请假）。
+`GET /`、`POST /`、`PUT /:id`、`POST /reorder`（记录排序）、`GET/POST /today-columns`（今日列配置）、`POST /import`（Excel 导入，按 `学号`/唯一 `姓名` 匹配学生）、`DELETE /:id`、`POST /return-batch`（批量销假：单事务写完全部 id，回 `updatedIds` / `missingIds`）、`POST /:id/return`（销假）、`POST /:id/unreturn`（撤销销假）、`POST /:id/cancel`（取消请假）。
 
 #### [`routes/scores.js`](../../../student-backend/routes/scores.js)（`/api/scores`） · 加减分路由
 `GET /`、`POST /`、`PUT /:id`、`POST /import`（Excel 导入，`mode` 为 `personal` / `group`，避免个人与小组加错类型）、`DELETE /:id`；个人/小组目标由 `source`（`personal` / `group`）区分。
 
 #### [`routes/groupManage.js`](../../../student-backend/routes/groupManage.js)（`/api/group-manage`） · 分组管理路由
-`GET /bootstrap`（维度+小组+成员一次取回）、`GET /:dimId`、维度 CRUD（`POST /dimensions`、`PUT/DELETE /dimensions/:id`、`POST /dimensions/move`）、小组 CRUD（`POST /dimensions/:dimId/groups`、`PUT/DELETE /groups/:id`）、成员（`POST /groups/:groupId/members`、`PUT/DELETE /group-members/:id`、`POST /group-members/move`）、智能分组写回 `POST /dimensions/:dimId/apply-grouping`、Excel 导入 `POST /dimensions/:dimId/import`（`小组` + `姓名` + `备注`，同名小组复用、重复姓名跳过）。
+`GET /bootstrap`（维度+小组+成员一次取回）、`GET /:dimId`、维度 CRUD（`POST /dimensions`、`PUT/DELETE /dimensions/:id`、`POST /dimensions/move`）、小组 CRUD（`POST /dimensions/:dimId/groups`、`PUT /groups/rename-batch`（批量改名，整批一个事务、任一 id 不存在整体回滚）、`PUT/DELETE /groups/:id`）、成员（`POST /groups/:groupId/members`、`PUT/DELETE /group-members/:id`、`POST /group-members/move`）、智能分组写回 `POST /dimensions/:dimId/apply-grouping`、Excel 导入 `POST /dimensions/:dimId/import`（`小组` + `姓名` + `备注`，同名小组复用、重复姓名跳过）。
 
 #### [`routes/activities.js`](../../../student-backend/routes/activities.js) / [`routes/countdowns.js`](../../../student-backend/routes/countdowns.js) · 活动路由
 各五条：`GET /`、`POST /`、`PUT /:id`、`DELETE /:id`、`POST /import`（Excel 导入；活动必填 `主题`，倒计时必填 `名称` + `截止日`）。
 
 #### [`routes/cadres.js`](../../../student-backend/routes/cadres.js)（`/api/cadres`） · 班干部路由
 班干部职务与成员：`GET /`（查询）、`POST /`（新增）、`PUT /:id`（更新）、`DELETE /:id`（删除）、`POST /:id/members`（新增成员）、`DELETE /members/:id`（删除成员）、`POST /:id/move`（移动职务）、`POST /members/:id/move`（移动成员）、`POST /import`（Excel 导入；`职务` 必填，`上级职务` 按名称匹配，`担任学生` 支持多人分隔）。
+
+#### [`routes/widgetOverview.js`](../../../student-backend/routes/widgetOverview.js)（`/api/widget-overview`） · 挂件概览路由
+`GET /`：桌面挂件每轮只发这一个请求，回 `{ schedule, duty, countdowns, leaves, students }`；名册只含 `id`/`姓名`（`dashboardAgg.studentsLite`），单项读取失败只回该项兜底值，不影响其余卡片。
 
 #### [`routes/widgetSettings.js`](../../../student-backend/routes/widgetSettings.js)（`/api/widget-settings`） · 小组件设置路由
 `GET/PUT /`（整体覆盖写，前端必须整包 PUT）、`GET/PUT /apps`、`GET/PUT /class-info`。
@@ -293,7 +295,7 @@ flowchart TD
 
 批次（`origin`）：一次用户动作登记多条记录时共用一个批次标识。`/table/:key/{undo,redo}` 按「最近一条的 origin」整批回退/重做（快捷键路径），`/origin/:origin/{undo,redo}` 按指定批次整批操作（设置页路径）；文案折叠成「一次改动（N 项）」，前端收到 `full_reload` 后整表重拉。无 `origin` 的记录仍是单条语义。批次可能跨表，因此 `pushRecord` 清的是全部 redo 侧，而不是本 key —— 否则在另一张表重做会只回一半。
 
-配套模块：[`undo.helpers.js`](../../../student-backend/routes/undo/undo.helpers.js)（记录构造/方向切换辅助）、[`undo.records.js`](../../../student-backend/routes/undo/undo.records.js)（`undo_history` 读写、裁剪与 redo 侧失效）。
+配套模块：[`undo.helpers.js`](../../../student-backend/routes/undo/undo.helpers.js)（记录构造/方向切换辅助）、[`undo.records.js`](../../../student-backend/routes/undo/undo.records.js)（`undo_history` 读写、裁剪与 redo 侧失效）、[`undo.expected.js`](../../../student-backend/routes/undo/undo.expected.js)（撤销前的「期望状态」校验：整行快照比对、格子类比对当前值、复合回插检查显式 id 是否被占用；跳过中间记录撤旧记录时业务化拒绝，而不是盲目回写吞掉后续改动）。
 
 ### 8. AI（[`routes/ai/ai.js`](../../../student-backend/routes/ai/ai.js)（AI 接口聚合），`/api/ai`（AI 接口前缀））
 
@@ -336,8 +338,11 @@ flowchart TD
   - **没有空闲页直接 noop 返回**，不做全库重写（耗时与库体积成正比：实测 50MB/75ms、150MB/387ms、400MB/1.1s，约 3ms/MB）。前端此时提示「没有可回收的空间」。
   - **只由用户显式触发**：better-sqlite3 是同步 API，VACUUM 期间独占连接并阻塞后端事件循环（百 MB 级在百毫秒~秒级），所以不做定时/自动整理；前端在此期间用全屏遮罩挡住交互，避免点击产生排队请求。
   - 相册扫描或导入持有读事务时 SQLite 返回 `SQLITE_BUSY`，这里如实回 500 并提示「稍后再试」，不自动重试、不排队。
-- `POST /sources { keys }` —— 取指定表的数据，返回 `{ fields, rows }`，形状与 `ExportExcel` 组件完全一致（前端因此能直接复用那套导出实现，不必重写格式逻辑）。
-- `POST /zip { entries: [{ name, data(base64) }], password, filename, receiptGroups?, includeReceipts? }` —— 把若干文件打成一个 zip 返回字节流（可选 ZipCrypto 加密）。前端用现有 `save-file` 通道落盘，所以**不需要新增 IPC 通道**。
+- `POST /sources { keys }` —— 取指定表的数据，返回 `{ tables: [{ key, label, fields, rows }] }`（`rows` 的形状与 `ExportExcel` 组件完全一致，前端因此能直接复用那套导出实现）。**逐表序列化写响应**：每写完一张表就释放，峰值只驻留最大的那一张表 + 它的 JSON 片段；未知 key 直接跳过。
+- `POST /zip-to-file { entries, password, filename, receiptGroups?, includeReceipts? }` —— 业务 ZIP 的磁盘中转出口（N2-07）：把整包写到系统临时目录 `classnest-export/`，返回 `{ path, filename, bytes }`，由前端再经主进程 `save-file-from-path` 选定保存位置并搬移。**大包不再受 `save-file` 的 50MB IPC 上限**。入参和打包规则与 `/zip` 共用同一份 `collectZipItems`。
+  - 临时文件保留 2 小时，之后下次导出时顺带清理；用户取消保存时主进程立即删除。
+  - 主进程只接受「该临时目录内、扩展名 `.zip`」的源路径，防止渲染层被注入后把任意本地文件复制出去。
+- `POST /zip { entries: [{ name, data(base64) }], password, filename, receiptGroups?, includeReceipts? }` —— 把若干文件打成一个 zip 返回字节流（可选 ZipCrypto 加密）。小包/浏览器直连场景仍可用；桌面端业务导出已改走 `/zip-to-file`。
   - **流式**：条目边读边写进响应，任何时刻只持有一个 256KB 块；收据只登记磁盘路径（写入器里读盘），不在这里 `readFileSync` 进内存。响应**不设 `Content-Length`**（长度要等整包写完才知道，预置就等于把流式又变回「先拼完」）。
   - 收据文件有两条来源，二选一：`receiptGroups: [{ code, items: [{ path, name }] }]` 由**调用方分好组**（班费页用，导的是「我现在看到的数据」，含未保存行）；`includeReceipts: true` 由**后端按库里的 `fee_records` 自己分**（数据管理用，它手里只有表格化文本，没有收据原始路径）。
   - 两者最终都落成 `收据文件/{收支编码}/{原文件名}`，编码为空落「未编号」；文件只在 uploads 根目录取（`basename` 压平），不存在的文件跳过。
@@ -361,7 +366,7 @@ flowchart TD
 | GET | `/enabled` | 查询 MCP 服务是否启用 |
 | PUT | `/enabled` | 启停 MCP 服务；启用时才对外提供 `/mcp` |
 | GET / PUT | `/prefs` | 读取 / 保存 MCP 侧偏好 |
-| PUT | `/privacy` | 保存 MCP 数据权限（与 AI 助手那份独立） |
+| PUT | `/privacy` | 保存 MCP 数据权限（与 AI 助手那份独立）；读写语义与落库归一化统一在 [`privacy.shared.js`](../../../student-backend/routes/ai/privacy.shared.js)，避免两个面板各长出一点差别 |
 | POST | `/tokens` | 生成访问令牌，明文只在创建时返回一次 |
 | GET | `/tokens` | 令牌列表（不含明文） |
 | GET | `/tokens/:id/plain` | 取回令牌明文（仅本机教师可用） |
@@ -370,6 +375,18 @@ flowchart TD
 | GET | `/proposals` | 待处理 / 已处理写提案列表 |
 | GET | `/proposals/:id` | 单条提案的人读视图（改哪一行、改成哪个值） |
 | POST | `/proposals/:id/decide` | 确认或拒绝提案；确认后走既有写入链路 |
+
+数据访问记录（[`routes/accessLog.js`](../../../student-backend/routes/accessLog.js)，`/api/access-log`）：「AI 数据保护」面板（`?source=ai`）与「MCP 服务管理」（`?source=mcp`）各自只看自己的来源；SQL 全部在 `services/accessLogStore` 与 `services/accessTimeline`，路由只做校验与 HTTP。「全部来源 + 写入回退」在 `/api/undo`，不在这里重复。
+
+账号数据管理（[`routes/retention.js`](../../../student-backend/routes/retention.js)，`/api/retention`，需教师登录）：设置页「空间管理 → 管理」弹窗用。默认永久保留，程序不自动删任何数据。
+
+| 方法 | 路径 | 处理要点 |
+| --- | --- | --- |
+| GET | `/` | 四类占用（条数 + 字节）与当前保留档位 |
+| POST | `/preview` | 按拟选档位预览会删多少条/文件，纯读不写；设置页点「确定」前提示用 |
+| PUT | `/` | 改保留档位（`7d`/`30d`/`180d`/`forever`）；`applyNow=true` 时按新档位立即清一次超期数据 |
+| GET | `/list` | `?kind=messages\|history\|albumTrash\|receiptTrash&limit=50`，最近明细给「查看」 |
+| POST | `/clear` | `{ kind }`：手动清除，前端必须二次确认；`kind` 走 `KINDS` 白名单，不接受任意字符串 |
 
 ---
 

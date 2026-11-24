@@ -26,7 +26,10 @@ function migrateAi(conn) {
       mcp_prefs_json TEXT DEFAULT '{}',
       -- 数据访问记录的设置：{ keep: 500, granularity: 'per_call' | 'per_day' }。
       -- 与 AI 数据保护分开存：那一份是「允许读什么」，这一份是「记多少、怎么看」。
-      log_json TEXT DEFAULT '{}'
+      log_json TEXT DEFAULT '{}',
+      -- 账号数据保留策略：{ messages: 'forever' | '7d' | '30d' | '180d', history: ... }。
+      -- 默认 forever：系统任何情况下都不自动删数据；只有用户在设置页点「清除」才删。
+      retention_json TEXT DEFAULT '{}'
     );
     INSERT OR IGNORE INTO ai_settings (id) VALUES (1);
 

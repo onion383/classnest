@@ -19,6 +19,8 @@ const {
 } = require('./undo.helpers')
 const { UNDO_WRITE_TABLES, UNDO_DOC_TABLES } = require('../../schema/tableRegistry')
 const { unpackMode, packMode, normalizeMode } = require('../../services/dutyMode')
+const store = require('../../services/slotStore')
+const dutyConfig = require('../../services/dutyConfig')
 
 // 允许记录的动态表名（防注入）。含 cadre_members：跨表批量写入（propose_batch）可能写入职务成员，需可撤销。
 // 名单在 schema/tableRegistry.js —— 白名单散在多处时，新增可撤销表必然漏一处。
@@ -53,10 +55,29 @@ const GRID_SOURCES = {
   seat_layout: 'seats',
   seat_template: 'seats',
   seat_weight: 'weights',
+  // 值日权重与座位权重同构（weights 列，按模式分键），过去漏登记 →
+  // 「编辑权重 / 生成中心权重」登记的 grid_snapshot 永远回放失败（Q2-03）。
+  duty_weight: 'weights',
   schedule: 'cells',
   master_schedule: 'cells',
   duty_layout: 'cells',
   duty_template: 'cells'
+}
+
+// 值日格撤销的目标键是否仍然「活着」：项目从设置里删掉、星期列改掉之后，
+// 按路径重建出来的 cells[item][day] 不会被渲染 —— 撤销显示成功，数据却成了
+// 不可见的脏键（Q2-12）。设置里确实配过这两项才允许重建。
+// 设置整份为空时不做判断（可能是老库/测试夹具没配 items，不能因此误拒）。
+function dutyCellKeysAlive(mode, item, day) {
+  const m = normalizeMode(mode)
+  const days = dutyConfig.readDays(m)
+  if (Array.isArray(days) && days.length && !days.includes(day)) return false
+  const doc = store.getDoc('duty_settings')
+  const items = doc ? unpackMode(doc.items, m, []) : []
+  const names = (Array.isArray(items) ? items : [])
+    .map((x) => (typeof x === 'string' ? x : x && x.name))
+    .filter(Boolean)
+  return !(names.length && !names.includes(item))
 }
 
 // ===================== 命令执行器 =====================
@@ -306,6 +327,8 @@ const executors = {
       if (typeof item !== 'string' || !item) return '参数不完整'
       if (typeof day !== 'string' || !day) return '参数不完整'
       if (!Number.isInteger(index) || index < 0 || index > 60) return '参数不完整'
+      // 项目/星期已从设置里删除时拒绝重建（否则写进去的键不渲染，用户看不见）
+      if (!dutyCellKeysAlive(mode, item, day)) return '该值日项目或星期已被删除，无法撤销这一格'
       return null
     },
     apply({ table, mode, item, day, index, value }) {

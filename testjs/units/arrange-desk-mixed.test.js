@@ -347,6 +347,30 @@ test('deskActionsOfCol：走廊列 / 越界列不给任何桌型动作', async (
 })
 
 // =========================================================================
+// 原座位表的非数字入座值：字符串姓名 / 对象也要计入同桌对与单座（F03-06）
+// =========================================================================
+test('extractOriginalPairs：字符串姓名与对象入座值不被丢弃', async () => {
+  const g = await loadGeom()
+  const rows = 2, gridCols = 8
+  const types = g.formulaTypes(rows, gridCols, 'double')
+  const denseCols = g.seatColumnIndices(gridCols, types).length
+  // dense 6 列 → 桌号 [0,0,1,1,2,2]：(0,1)(2,3) 是同桌，(4) 是单座
+  const baseSeats = [
+    ['张三', '李四', { 姓名: '王五' }, { id: 9, 姓名: '赵六' }, '孙七', null],
+    [null, null, null, null, null, null],
+  ]
+  const people = [{ id: 9, 姓名: '赵六' }]
+  const ctx = await makeCtx({ mode: 'double', types, cols: gridCols, rows, people, baseSeats })
+  const got = ctx.extractOriginalPairs()
+
+  const pairNames = got.pairs.map(([a, b]) => [a.姓名, b.姓名])
+  assert.deepEqual(pairNames, [['张三', '李四'], ['王五', '赵六']], '字符串与对象都应配成同桌对')
+  assert.deepEqual(got.singles.map(s => s.姓名), ['孙七'], '单人座也要计入')
+  // 赵六在名册里（id=9），不能被算成孤儿；字符串临时学生不参与 orphans
+  assert.deepEqual(got.orphans.map(s => s.id), [])
+})
+
+// =========================================================================
 // 5. 接线判据：算法模块是经 ctx 闭包互调的，漏挂 deskIndex 会运行时 TypeError
 // =========================================================================
 test('SmartArrangementDialog.vue 把桌号表与非均匀判据挂进 ctx', () => {

@@ -192,6 +192,28 @@ test('studentRename：值日表与座位表的姓名匹配口径必须一致（�
   assert.deepEqual(seat[0], ['李四'], '座位表里应是新名（实际 ' + JSON.stringify(seat) + '）')
 })
 
+test('K05-02 studentRename：座位模板与值日模板也随改名同步（否则应用模板回流旧名）', () => {
+  const conn = fx.reset()
+
+  conn.prepare("UPDATE duty_slots SET cells = ? WHERE kind = 'template'")
+    .run(JSON.stringify({ daily: { 扫地: { 1: ['张三'] } } }))
+  conn.prepare("UPDATE seat_slots SET seats = ? WHERE kind = 'template'")
+    .run(JSON.stringify([['张三']]))
+
+  const r = renameStudentRefs('张三', '李四')
+  assert.equal(r.counts.duty, 1, '值日模板应改名（实际 ' + r.counts.duty + '）')
+  assert.equal(r.counts.seat, 1, '座位模板应改名（实际 ' + r.counts.seat + '）')
+
+  const duty = JSON.parse(
+    conn.prepare("SELECT cells FROM duty_slots WHERE kind = 'template'").get().cells
+  )
+  assert.deepEqual(duty.daily.扫地['1'], ['李四'], '值日模板里应是新名（实际 ' + JSON.stringify(duty) + '）')
+  const seat = JSON.parse(
+    conn.prepare("SELECT seats FROM seat_slots WHERE kind = 'template'").get().seats
+  )
+  assert.deepEqual(seat[0], ['李四'], '座位模板里应是新名（实际 ' + JSON.stringify(seat) + '）')
+})
+
 // ---------------------------------------------------------------------------
 // B02-04 同族漏网：删除学生路径（studentRelations）的姓名匹配口径
 // ---------------------------------------------------------------------------

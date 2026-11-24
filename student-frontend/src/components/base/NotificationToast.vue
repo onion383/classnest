@@ -6,11 +6,13 @@
           v-for="item in notifications"
           :key="item.id"
           :class="['nt-toast', `nt-${item.type}`]"
+          :role="item.type === 'error' ? 'alert' : 'status'"
+          aria-live="polite"
           @mouseenter="onHover(item)"
           @mouseleave="onLeave(item)"
         >
-          <!-- 图标 -->
-          <span class="nt-icon">{{ icons[item.type] }}</span>
+          <!-- 图标：纯装饰，读屏由标题 + 内容表达 -->
+          <span class="nt-icon" aria-hidden="true">{{ icons[item.type] }}</span>
 
           <!-- 消息内容 -->
           <div class="nt-body">
@@ -30,7 +32,7 @@
           </button>
 
           <!-- 关闭按钮：方形毛玻璃外观统一走全局 .dlg-close -->
-          <button class="dlg-close" @click="remove(item.id)">&times;</button>
+          <button class="dlg-close" aria-label="关闭提示" @click="remove(item.id)">&times;</button>
 
           <!-- 进度条（从左往右消失）；合并后通过 _barKey 重播 -->
           <span

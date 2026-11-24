@@ -68,9 +68,6 @@ function markReturned(id, time) {
 function markUnreturned(id) {
   return db.prepare("UPDATE leave_records SET 状态='请假中', 返校时间=NULL WHERE id = ?").run(id)
 }
-function markCanceled(id) {
-  return db.prepare("UPDATE leave_records SET 状态='已取消' WHERE id = ?").run(id)
-}
 
 // 批量导入：整批一个事务，返回新建 id（供路由回传 created 完整行）
 function insertMany(items) {
@@ -119,7 +116,6 @@ module.exports = {
   removeById,
   markReturned,
   markUnreturned,
-  markCanceled,
   insertMany,
   listTodayColumns,
   replaceTodayColumns,

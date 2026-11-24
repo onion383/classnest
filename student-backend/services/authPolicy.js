@@ -106,6 +106,11 @@ function renameKey(oldName, newName) {
   if (!from || !to || from === to) return false;
   const list = load();
   if (!Object.prototype.hasOwnProperty.call(list, from)) return false;
+  // 目标键残留（旧账号删除后策略未清理 / 跨库不同步）时不能静默覆盖：
+  // 记一条日志，并按「正在改名的这个账号」的策略覆盖过去（用户刚点的是这次改名）。
+  if (Object.prototype.hasOwnProperty.call(list, to)) {
+    console.warn(`[authPolicy] 改名目标键已有残留策略，按旧名策略覆盖：${to}`);
+  }
   list[to] = list[from];
   delete list[from];
   save();

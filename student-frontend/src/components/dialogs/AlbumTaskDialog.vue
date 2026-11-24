@@ -212,16 +212,19 @@ function stopPolling() {
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 // 队列执行器：一次只提交一个相册，等它扫完（任务从后端消失）再提交下一个
+let disposed = false
 async function pump() {
   if (pumping) return
   pumping = true
   try {
-    while (queue.value.length) {
+    while (queue.value.length && !disposed) {
       // 整体暂停时连「提交下一个」也停住，恢复后自动继续
-      while (queuePaused.value) await sleep(200)
+      while (queuePaused.value && !disposed) await sleep(200)
+      if (disposed) break
       const item = queue.value[0]
       try {
         await axios.post(`/api/album/${item.albumId}/rescan`, { mode: item.mode }, { headers: authHeaders() })
+        if (disposed) break
         await fetchTasks()
         await waitScan(item.albumId)
       } catch (err) {
@@ -231,12 +234,14 @@ async function pump() {
       // 按「对象」而不是按下标移除：等待期间用户可能把这行停了、或又排了别的相册
       const idx = queue.value.indexOf(item)
       if (idx !== -1) queue.value.splice(idx, 1)
+      if (disposed) break
       emit('changed')
     }
   } finally {
     pumping = false
     queuePaused.value = false
-    fetchTasks()
+    // 卸载后不再回写任务列表（实例已销毁；F02-12）
+    if (!disposed) fetchTasks()
   }
 }
 
@@ -338,7 +343,10 @@ watch(() => props.visible, async (v) => {
 }, { immediate: true })
 
 // 卸载时连 waitScan 的轮询定时器一起停掉，避免关掉弹窗后还在发 /status 请求
-onBeforeUnmount(() => { tasksSeq.invalidate(); albumsSeq.invalidate(); stopPolling(); stopScanPolling() })
+onBeforeUnmount(() => {
+  disposed = true
+  tasksSeq.invalidate(); albumsSeq.invalidate(); stopPolling(); stopScanPolling()
+})
 </script>
 
 <style scoped>

@@ -714,7 +714,7 @@ function buildProd() {
 }
 
 // 静态服务：只做「把 dist 目录喂给渲染进程」这一件事，不模拟任何生产协议栈。
-// 生产真身是 app:// 协议（electron/main/protocol.js），这里用 http 是近似 ——
+// 生产真身是 app:// 协议（electron/main/main.protocol.js），这里用 http 是近似 ——
 // 两者都是标准安全协议，后端 CORS 白名单也接受回环 origin（student-backend/app.js:50），
 // 对 INP 而言差的只是协议换页开销，量级可忽略。
 // 监听前端端口（与 dev 同端口），登录态才有得复用，理由见文件头。

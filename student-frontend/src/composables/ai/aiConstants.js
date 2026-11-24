@@ -19,12 +19,14 @@ export const LABELS = {
   schedule: '当前课表', master_schedule: '主课表模板',
   seat_layout: '当前座位表', seat_template: '座位模板', seat_weight: '座位权重表',
   duty_settings: '值日设置', duty_layout: '当前值日表', duty_template: '值日模板', duty_weight: '值日权重表',
+  widget_settings: '系统设置',
 }
 // 整块写入（非行式表）对应的撤销分组 key，与各业务页 Ctrl+Z 的分组保持一致
 export const DOC_UNDO_KEY = {
   schedule: '课程表', master_schedule: '课程表',
   seat_layout: '座位表', seat_template: '座位表', seat_weight: '座位表',
   duty_settings: '值日表', duty_layout: '值日表', duty_template: '值日表', duty_weight: '值日表',
+  widget_settings: '系统设置',
 }
 // 前端设置项的展示名（AI 的 propose_frontend_setting 提案用，供预览与提示文案）
 export const FRONT_LABELS = {

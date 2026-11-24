@@ -16,6 +16,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const Module = require('node:module')
 
 // aiWriteScope → aiConfigStore → dbManager，加载时需主密钥；隔离目录避免写真实数据
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'banji-write-scope-'))
@@ -81,10 +82,30 @@ test('写闸门单例：MCP 与 AI 两侧都接了 closed 来源', () => {
 
 // ————————————————————————— ③ 变异反证 —————————————————————————
 
+// 把源码变异后重新编译成模块：require 走原目录，变异体真的执行原逻辑（T08-02）。
+function loadMutated(rel, transform) {
+  const abs = path.join(ROOT, rel)
+  const src = read(rel)
+  const out = transform(src)
+  assert.notEqual(out, src, '变异未匹配到目标代码')
+  const m = new Module(abs, null)
+  m.filename = abs
+  m.paths = Module._nodeModulePaths(path.dirname(abs))
+  m._compile(out, abs)
+  return m.exports
+}
+
 test('变异反证：抹掉写闸门的 closed 合并后，判据必须失败', () => {
-  const { makeWriteScope } = require(path.join(ROOT, WS))
-  // 模拟「写闸门只看 readonly」的旧实现
-  const oldStyle = makeWriteScope({ readReadonly: () => [], supportsWrite: canWrite })
-  assert.equal(oldStyle.isTableWritable('students'), true,
-    '旧实现下 closed 表仍可写 —— 这正是原 bug；若这里为 false，说明反证本身失效')
+  // 原 bug 形态：readonlyTables() 不再合并 closed_tables → 完全禁止的表仍可写
+  const mutated = loadMutated(WS, (s) => s.replace(
+    'return [...new Set([...listOf(readReadonly), ...closedTables()])]',
+    'return [...new Set(listOf(readReadonly))]',
+  ))
+  const ws = mutated.makeWriteScope({
+    readReadonly: () => [],
+    readClosed: () => ['students'],
+    supportsWrite: canWrite,
+  })
+  assert.equal(ws.isTableWritable('students'), true,
+    '变异后完全禁止的表仍可写 —— 这正是原 bug；正例判据「不可写」必然失败')
 })

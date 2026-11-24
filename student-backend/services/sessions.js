@@ -53,9 +53,17 @@ function load() {
 }
 
 function save() {
+  // 原子写（N3-13 / K04-02）：名单直接截断写会让崩溃窗口留下半截 JSON，
+  // 重启后所有会话被判无效（用户被迫重新登录）。tmp + rename 保证要么旧名单要么新名单。
+  const file = FILE();
+  const tmp = `${file}.tmp-${process.pid}`;
   try {
-    fs.writeFileSync(FILE(), JSON.stringify(cache), { encoding: 'utf8', mode: 0o600 });
-  } catch (_) { /* 写入失败则退化为进程内名单，重启后需重新登录 */ }
+    fs.writeFileSync(tmp, JSON.stringify(cache), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (_) {
+    try { fs.rmSync(tmp, { force: true }) } catch (_) { /* 清理失败不掩盖原始错误 */ }
+    /* 写入失败则退化为进程内名单，重启后需重新登录 */
+  }
 }
 
 // 清理名单：删掉超过各自 TTL 的会话；再按「最久没见到」淘汰超出容量上限的。

@@ -22,6 +22,12 @@ const yauzl = require('yauzl')
 
 const UNIX_MADE_BY = 3 // versionMadeBy 高字节：3 = Unix
 
+// 资源边界（N3-10 / K05-03）：压缩炸弹的核心是「小包解出巨量字节」。
+// ffmpeg 包单条目约 100MB，所以单条目闸放到 512MB；总量 2GB 足够覆盖正常发布包。
+const MAX_ENTRIES = 5000
+const MAX_ENTRY_BYTES = 512 * 1024 * 1024
+const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+
 /** 符号链接等特殊文件返回 true；普通文件 / 目录返回 false */
 function isSpecialEntry(entry) {
   if ((entry.versionMadeBy >> 8) !== UNIX_MADE_BY) return false
@@ -53,6 +59,8 @@ function unzipSafe(zipPath, destDir) {
       if (!zipfile) return reject(new Error('压缩包无法读取'))
 
       let settled = false
+      let entryCount = 0
+      let totalBytes = 0
       const fail = (e) => {
         if (settled) return
         settled = true
@@ -76,6 +84,18 @@ function unzipSafe(zipPath, destDir) {
         if (isUnsafeName(entry.fileName)) {
           return fail(new Error(`压缩包内含可疑路径，已中止：${entry.fileName}`))
         }
+        // 条目数 / 声明体积闸：海量空条目与压缩炸弹都在这里拦下
+        if (++entryCount > MAX_ENTRIES) {
+          return fail(new Error(`压缩包条目数超过上限 ${MAX_ENTRIES}，已中止`))
+        }
+        const declared = Number(entry.uncompressedSize) || 0
+        if (declared > MAX_ENTRY_BYTES) {
+          return fail(new Error(`压缩包单条目解压后超过 ${MAX_ENTRY_BYTES} 字节，已中止：${entry.fileName}`))
+        }
+        totalBytes += declared
+        if (totalBytes > MAX_TOTAL_BYTES) {
+          return fail(new Error(`压缩包解压总量超过 ${MAX_TOTAL_BYTES} 字节，已中止`))
+        }
 
         const target = path.join(destDir, entry.fileName)
         // 双保险：拼出来的路径必须仍在目标目录内
@@ -98,6 +118,16 @@ function unzipSafe(zipPath, destDir) {
           zipfile.openReadStream(entry, (e2, stream) => {
             if (e2) return fail(e2)
             const ws = fs.createWriteStream(target)
+            // 声明体积可能被伪造：按实际流出的字节再兜一层
+            let actual = 0
+            stream.on('data', (chunk) => {
+              actual += chunk.length
+              if (actual > MAX_ENTRY_BYTES) {
+                stream.destroy()
+                ws.destroy()
+                fail(new Error(`压缩包单条目实际解压超过 ${MAX_ENTRY_BYTES} 字节，已中止：${entry.fileName}`))
+              }
+            })
             stream.on('error', fail)
             ws.on('error', fail)
             ws.on('finish', () => zipfile.readEntry())

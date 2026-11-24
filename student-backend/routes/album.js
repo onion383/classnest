@@ -13,7 +13,6 @@ const { purgeThumbFiles } = require('../services/thumbPurge');
 const { sweepThumbOrphans } = require('../services/thumbSweep');
 const { readExifDetail } = require('../albumExif');
 const { now } = require('../utils/sql');
-const { cleanText } = require('../services/sanitize');
 // 扫描子进程管理器：主进程**不跑扫描**，只负责派活/收报活/转发补图需求。
 // 详见本文件末尾「后台扫描：委派给扫描子进程」段与 scanWorker.js 顶部注释。
 const scanWorker = require('../scanWorker');
@@ -601,34 +600,14 @@ router.post('/tasks/resume', (req, res) => {
   }
 });
 
-// PATCH /api/album/:id 修改相册名称/路径
-router.patch('/:id', async (req, res) => {
-  try {
-    const albumId = Number(req.params.id);
-    const album = albumStore.albumById(albumId);
-    if (!album) return res.status(404).json({ error: '相册不存在' });
-    const name = (req.body && req.body.name) || album.name;
-    const folder = (req.body && req.body.folder_path) || album.folder_path;
-    // 名称与路径都过一遍文本清洗：零宽字符/控制字符/超长串原样落库后，
-    // 前端按名字展示会出乱码，按路径展示会指向一个不存在的目录。
-    // （相册表不在 dynamicTable 的 sanitizeField 覆盖范围内，得自己洗。）
-    const cleanName = cleanText(name);
-    const cleanFolder = cleanText(folder);
-    if (!cleanName) return res.status(400).json({ error: '相册名称不能为空' });
-    // 只有文件夹相册才要求路径非空：虚拟相册的 folder_path 按设计就是空串
-    // （创建时写 ''，见下方 createVirtualAlbum / merge），无条件校验会让它的重命名 100% 400。
-    if (album.kind === 'folder' && !cleanFolder) return res.status(400).json({ error: '文件夹路径不能为空' });
-    albumStore.updateAlbumFields(albumId, cleanName, cleanFolder, now());
-    res.json({ message: '相册已更新' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // PUT /api/album/reorder 批量更新相册排序
+// 入参逐个 Number 归一：前端可能传字符串 id，直接落库会把 sort_order 写成 NaN 对应行匹配不上（K02-07）。
+const MAX_ALBUM_BATCH = 2000;
 router.put('/reorder', (req, res) => {
-    const ids = req.body && req.body.ids;
-  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids 必须为数组' });
+    const raw = req.body && req.body.ids;
+  if (!Array.isArray(raw)) return res.status(400).json({ error: 'ids 必须为数组' });
+  if (raw.length > MAX_ALBUM_BATCH) return res.status(400).json({ error: `一次最多排序 ${MAX_ALBUM_BATCH} 个相册` });
+  const ids = raw.map((v) => Number(v)).filter((v) => Number.isInteger(v) && v > 0);
   ids.forEach((id, i) => albumStore.setAlbumSort(id, i));
   res.json({ message: '排序已更新' });
 });
@@ -804,6 +783,8 @@ router.get('/:id/photos', (req, res) => {
 router.post('/photos/move', (req, res) => {
   try {
     const rawIds = Array.isArray(req.body && req.body.photo_ids) ? req.body.photo_ids : []
+    // 数量上限（K02-07）：一次移动几千张既会长时间占用单线程，也会生成巨大的撤销 payload
+    if (rawIds.length > MAX_ALBUM_BATCH) return res.status(400).json({ error: `一次最多移动 ${MAX_ALBUM_BATCH} 张照片` })
     const ids = [...new Set(rawIds.map(v => Number(v)).filter(v => Number.isInteger(v) && v > 0))];
     if (!ids.length) return res.status(400).json({ error: '请先选择要移动的照片' });
     const targetId = Number(req.body && req.body.target_album_id);

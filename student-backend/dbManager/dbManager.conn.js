@@ -10,7 +10,7 @@ const { probeForeignKeys, describeForeignKeys } = require('../schema/foreignKeyP
 const {
   dbFilePath, lastDbPath, als, connCache, touchConn, setCachedConn, ensureIndex,
   openFile, registryFindBySlug, unwrapKey, getUnlockedKey, clearUnlockedKey,
-  beginConnUse, endConnUse, isConnInUse,
+  beginConnUse, endConnUse, isConnInUse, getDatabase, sqlKey,
 } = require('./dbManager.base');
 
 // 打开（或打开后初始化）某个 slug 对应的库并缓存
@@ -81,6 +81,38 @@ function evictConn(slug, opts = {}) {
   try { conn.close(); } catch (_) { /* 关闭失败可忽略 */ }
   connCache.delete(slug);
   return true;
+}
+
+// 备份前的快照一致性收口：把 WAL 里的尾页合并回主库，让「直接拷 .db」成为一致快照。
+//
+// 为什么必须在这一层做：导出路由拿到的是文件路径，它无法判断哪些页还只在 -wal 里。
+// 常驻连接（connCache）优先复用 —— 另开句柄做 checkpoint 会与它在 WAL 锁上互斥；
+// 没有缓存连接时（刚重启 / 已被驱逐）才临时打开一次，用完即关。
+// 返回 true 表示主库已自包含；false 表示 checkpoint 没做成，调用方必须连同
+// -wal/-shm 一起打包，由恢复侧按同一 basename 落位后重放（见 dbManager.backup.js）。
+function checkpointForBackup(slug, key, encrypted) {
+  try {
+    const cached = connCache.get(slug);
+    if (cached && cached.open !== false) {
+      const mode = String(cached.pragma('journal_mode', { simple: true }) || '').toLowerCase();
+      if (mode === 'wal') cached.pragma('wal_checkpoint(TRUNCATE)');
+      return true;
+    }
+    const file = dbFilePath(slug);
+    if (!fs.existsSync(file)) return false;
+    const Database = getDatabase();
+    const conn = new Database(file);
+    try {
+      if (encrypted && key) conn.pragma(`key = '${sqlKey(key)}'`);
+      const mode = String(conn.pragma('journal_mode', { simple: true }) || '').toLowerCase();
+      if (mode === 'wal') conn.pragma('wal_checkpoint(TRUNCATE)');
+      return true;
+    } finally {
+      try { conn.close(); } catch (_) { /* 已关闭 */ }
+    }
+  } catch (_) {
+    return false;
+  }
 }
 
 // ---------- 请求内取当前库 ----------
@@ -243,4 +275,4 @@ function warmupMostRecent() {
   } catch (_) { /* 预热失败：首屏请求照旧在自己那次 withDb 里冷开 */ }
 }
 
-module.exports = { getConn, evictConn, current, currentSlug, withDb, holdConnUntilResponse, lockDb, warmup, warmupMostRecent, rememberedDb };
+module.exports = { getConn, evictConn, checkpointForBackup, current, currentSlug, withDb, holdConnUntilResponse, lockDb, warmup, warmupMostRecent, rememberedDb };

@@ -18,32 +18,40 @@ classnest/
                 ├── SmartGroupDialog/
                 │   └── SmartGroupDialog.vue  # 智能分组
                 ├── AddActivityDialog.vue  # 新增/编辑活动
+                ├── AddClassDialog.vue  # 新增班级
                 ├── AddCountdownDialog.vue  # 新增/编辑倒计时
                 ├── AddLeaveDialog.vue  # 新增/编辑请假
                 ├── AddModelDialog.vue  # 添加 AI 模型
                 ├── AddScoreDialog.vue  # 新增/编辑加减分
                 ├── AddStudentDialog.vue  # 添加学生/记录
+                ├── AiPrivacyDialog.vue  # AI 数据保护弹窗
                 ├── AiSettingsDialog.vue  # AI 设置
                 ├── AlbumManageDialog.vue  # 相册管理
                 ├── AlbumPhotoPickerDialog.vue  # 选照片
                 ├── AlbumTaskDialog.vue  # 扫描任务管理
                 ├── ClassInfoDialog.vue  # 班级信息
+                ├── CreateTokenDialog.vue  # 令牌选项
                 ├── DeduplicateDialog.vue  # 去重
+                ├── DuplicateNameDialog.vue  # 导入时同名学生逐行选人
                 ├── DutyBackfillDialog.vue  # 值日回填
                 ├── DutyRecordSettingsDialog.vue  # 值日记录设置
                 ├── DutySettingsDialog.vue  # 值日设置
                 ├── DutyWeightAlgorithmDialog.vue  # 值日权重算法
+                ├── ScheduleRecordDialog.vue  # 课表记录管理（周列表 + 删除）
+                ├── SnapshotPickerDialog.vue  # 查看快照的选择弹窗（座位/值日/课表）
                 ├── LocalRecoverDialog.vue  # 已登录时忘记密码（本机恢复）
                 ├── MoveAlbumDialog.vue  # 移动照片到相册
                 ├── NewAlbumDialog.vue  # 新建相册
                 ├── NewComerConfirm.vue  # 新成员参与确认
                 ├── OverdueLeaveDialog.vue  # 逾期未销假
+                ├── ProvisionalStudentsDialog.vue  # 临时学生
                 ├── ReceiptDialog.vue  # 管理收据
                 ├── RecoveryKeyDialog.vue  # 恢复词展示与抄写确认
                 ├── SeatBackfillDialog.vue  # 座位回填
                 ├── SeatRecordSettingsDialog.vue  # 座位记录设置
                 ├── SeatSettingsDialog.vue  # 座位设置
                 ├── SettingsDialog.vue  # 课程表设置
+                ├── TodoCenterDialog.vue  # 待处理中心
                 └── WeightAlgorithmDialog.vue  # 座位权重算法
 ```
 <!-- doc-tree:end -->
@@ -115,9 +123,20 @@ classnest/
 - **使用方**：`SeatView`。
 
 #### [SeatRecordSettingsDialog.vue](../../../../student-frontend/src/components/dialogs/SeatRecordSettingsDialog.vue) · 座位记录设置
-- **对外接口**：`props`（组件属性）：`visible`（显隐）；`emits`（组件事件）：`close`（关闭）。
+- **对外接口**：`props`（组件属性）：`visible`（显隐）、`zIndex`（层级，默认 10004；从账号数据管理打开时传更高值）；`emits`（组件事件）：`close`（关闭）。
 - **内部实现**：座位历史记录的保留/展示设置（写 `seat_settings`）。
 - **使用方**：`SeatView`（记录/历史入口）。
+
+#### [SnapshotPickerDialog.vue](../../../../student-frontend/src/components/dialogs/SnapshotPickerDialog.vue) · 查看快照选择
+- **定位**：账号数据管理点「查看」后单独一层，列座位/值日/课表三项，点选进入对应管理界面。
+- **对外接口**：`props`：`visible`、`zIndex`（默认 10014，介于管理弹窗与快照管理弹窗之间）；`emits`：`close`、`pick`（带回域 key）。
+- **使用方**：`SettingsView`。
+
+#### [ScheduleRecordDialog.vue](../../../../student-frontend/src/components/dialogs/ScheduleRecordDialog.vue) · 课表记录管理
+- **定位**：课表历史快照的列周 + 删除。课表历史入口原本内联在 `ScheduleView`，这里补一个独立弹窗供「账号数据管理 → 查看（课表快照）」直达。
+- **对外接口**：`props`：`visible`、`zIndex`（默认 10014，兼容嵌套层级）；`emits`：`close`、`changed`。
+- **内部实现**：`GET /api/schedule/history` 拉周列表，`DELETE /api/schedule/history/:week` 删除（二次确认）。
+- **使用方**：`SettingsView`。
 
 #### [SeatBackfillDialog.vue](../../../../student-frontend/src/components/dialogs/SeatBackfillDialog.vue) · 座位回填
 - **对外接口**：`props`（组件属性）：`visible`（显隐）；`emits`（组件事件）：`close`（关闭）/ `changed`（数据已变更）。
@@ -135,7 +154,7 @@ classnest/
 - **使用方**：`DutyView`。
 
 #### [DutyRecordSettingsDialog.vue](../../../../student-frontend/src/components/dialogs/DutyRecordSettingsDialog.vue) · 值日记录设置
-- **对外接口**：`props`（组件属性）：`visible`（显隐）/ `mode`（值日模式，默认 `daily`（日常））；`emits`（组件事件）：`close`（关闭）。
+- **对外接口**：`props`（组件属性）：`visible`（显隐）/ `mode`（值日模式，默认 `daily`（日常））/ `zIndex`（层级，默认 10004；从账号数据管理打开时传更高值）；`emits`（组件事件）：`close`（关闭）。
 - **使用方**：`DutyView`（记录/历史入口）。
 
 #### [DutyBackfillDialog.vue](../../../../student-frontend/src/components/dialogs/DutyBackfillDialog.vue) · 值日回填
@@ -216,6 +235,22 @@ classnest/
 - **内部实现**：支持多选与拖入（虚线框与「从文件导入数据」同款 `.dropzone`）；上传按 `ACCEPT`（与后端 `services/uploadSignatures.js` 的 `KINDS` 一致）校验，逐项上报进度；图片 / 视频走 [`MediaViewer`](./base.md)，PDF / Markdown 走文档灯箱；下载走安全通道换 Blob。
 - **注意点**：`kind` 必须是归一后的 `office`（后端按魔数分出 `ooxml` / `ole`，见 4-1）；`viewMode` 同时兼容旧值，否则历史 Office 收据点开没反应。
 - **使用方**：`FeeManagement`（懒加载）。
+
+#### [AccountDataDialog.vue](../../../../student-frontend/src/components/dialogs/AccountDataDialog.vue) · 账号数据管理
+- **定位**：从系统设置「空间管理 → 管理」打开，管理 AI 聊天记录、历史快照、相册回收站、收据回收站的占用、保留偏好与清除。
+- **对外接口**：`props`：`visible`；`emits`：`update:visible`、`view`（打开聊天记录）、`viewSnapshots`（打开快照选择层）、`changed`（清除后通知父级重新统计）。
+- **铁律**：默认「永久保存」，程序不自动删数据；档位先进 `draft`，点「确定」才提交，若有数据超期先提示再确认；`删除全部` 立即清空且必须二次确认。回收站清空后，对应删除记录不能再撤销还原。
+- **使用方**：`SettingsView`。
+
+#### [SnapshotPickerDialog.vue](../../../../student-frontend/src/components/dialogs/SnapshotPickerDialog.vue) · 查看快照
+- **定位**：账号数据管理「历史快照 → 查看」打开的选择层，列出座位 / 值日 / 课表三个入口。
+- **对外接口**：`props`：`visible`、`zIndex`；`emits`：`close`、`pick`（域 key，交给宿主打开对应快照管理弹窗）。
+- **使用方**：`SettingsView`。
+
+#### [DuplicateNameDialog.vue](../../../../student-frontend/src/components/dialogs/DuplicateNameDialog.vue) · 导入同名选人
+- **定位**：Excel 导入前发现某姓名在名册里有 ≥2 位正式学生时弹出；每组同名一行一个下拉，默认选中第一位，另有「这是一位新同学」。
+- **对外接口**：`props`：`visible`、`name`、`rows`（`[{ key, label, options: [{ value, label }] }]`，value 为 `id:<学生id>` 或 `new`）；`emits`：`confirm`（`{ 行号: 'id:n'|'new' }`）、`cancel`。
+- **使用方**：`ImportExcel`（仅传了 `students` 的学生类导入；成绩、请假）。
 
 ### [AddClassDialog.vue](../../../../student-frontend/src/components/dialogs/AddClassDialog.vue) · 新增班级
 - **定位**：从「班级信息设置」再开一层的二级弹窗，层级比 `ClassInfoDialog` 高一级。

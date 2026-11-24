@@ -9,8 +9,9 @@ const { sanitizeField } = require('../../../../services/sanitize');
 const { previewSeatNames } = require('../../../../services/seatWrite');
 const { readScope } = require('../../../../services/aiReadScope');
 
-// 提案生成前会读库核对 id / 现有值（existingIds/findRow/listIds），这些派生读
-// 同样受 closed_tables 约束：完全禁止的表连提案都不该生成，否则会泄露 id 与存在性（1-6）。
+// 提案生成前会做派生读（existingIds / findRow / listIds）核对 id 与旧值。
+// 这些读同样受 closed_tables 约束：完全禁止的表连提案都不该生成，否则会泄露
+// id 与「这行是否存在」（1-6）。dispatch 层的统一闸门只挡首跳，派生读必须自查。
 function blockedRead(table) {
   const key = String(table || '').trim();
   return key && !readScope.isTableReadable(key) ? readScope.closedError(key).error : '';
@@ -72,7 +73,9 @@ function normalizeBatchProposal({ table, rows }) {
 // 最多一次 50 条；自动剔除库里不存在的 id（并把被忽略的 id 回报给模型），避免混入无效 id。
 const MAX_DELETE_BATCH = 50;
 function normalizeBatchDelete({ table, ids, label }) {
-  if (!WRITE_TABLES[table]) return { error: '该表暂不支持 AI 删除' };
+  if (!WRITE_TABLES[table]) return { error: '该表暂不支持 AI 删除' }
+  const blocked = blockedRead(table);
+  if (blocked) return { error: blocked };
   const list = (Array.isArray(ids) ? ids : [])
     .map((v) => Number(v))
     .filter((n) => Number.isInteger(n) && n > 0);
@@ -94,6 +97,8 @@ function normalizeBatchDelete({ table, ids, label }) {
 function normalizeJsonProposal({ table, id, values, label }) {
   const tname = JSON_WRITE_TABLES[table];
   if (!tname) return { error: '该表暂不支持整块写入' };
+  const blocked = blockedRead(table);
+  if (blocked) return { error: blocked };
   if (!values || typeof values !== 'object' || Array.isArray(values)) {
     return { error: '缺少要写入的列值（values 须为「列名→该列完整新值」的对象）' };
   }
@@ -169,6 +174,8 @@ const MAX_UPDATE_BATCH = 50;
 
 // 单行改动 → 校验 + 生成 diff（与 propose_write 的 diff 口径一致）
 function buildUpdateDiff(table, id, changes) {
+  const blocked = blockedRead(table);
+  if (blocked) return { error: blocked };
   const cols = tableColumns(table);
   const unknown = Object.keys(changes).filter((k) => k !== 'id' && !cols.includes(k));
   if (unknown.length) {

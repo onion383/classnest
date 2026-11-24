@@ -21,6 +21,7 @@ const { db } = require('../db');
 const store = require('./slotStore');
 const { safeJson } = require('../utils/json');
 const { renameDutyName } = require('./dutyCells');
+const { DUTY_TABLES, SEAT_CURRENT_SLOTS } = require('../schema/tableRegistry');
 
 function nameStillUsedByOthers(oldName) {
   const row = db.prepare('SELECT COUNT(*) AS c FROM students WHERE 姓名 = ?').get(oldName);
@@ -83,19 +84,25 @@ function renameStudentRefs(oldName, newName, studentId = null) {
   db.transaction(() => {
     // 值日只有姓名（没有 id），同名时无从区分 → 不改。
     // 代价是同名学生改名后历史值日挂旧名（值日指数不断裂的前提本来就依赖「能定人」）。
+    // 当前表 + 模板都要改：模板会在「当前表为空回退 / 应用模板」时被复制回当前表（K05-02）。
     if (mayFallbackByName) {
-      const duty = store.getDoc('duty_layout');
-      if (duty) {
+      for (const table of DUTY_TABLES) {
+        const duty = store.getDoc(table);
+        if (!duty) continue;
         const cells = safeJson(duty.cells, {});
-        counts.duty = renameDutyName(cells, from, to);
-        if (counts.duty) store.setDoc('duty_layout', { cells: JSON.stringify(cells) });
+        const n = renameDutyName(cells, from, to);
+        counts.duty += n;
+        if (n) store.setDoc(table, { cells: JSON.stringify(cells) });
       }
 
-      const seat = store.getDoc('seat_layout');
-      if (seat) {
+      // 座位与值日同构：当前表 + 模板都改，否则模板里的旧名会在应用模板后回流。
+      for (const table of SEAT_CURRENT_SLOTS) {
+        const seat = store.getDoc(table);
+        if (!seat) continue;
         const seats = safeJson(seat.seats, []);
-        counts.seat = renameSeatCells(seats, from, to);
-        if (counts.seat) store.setDoc('seat_layout', { seats: JSON.stringify(seats) });
+        const n = renameSeatCells(seats, from, to);
+        counts.seat += n;
+        if (n) store.setDoc(table, { seats: JSON.stringify(seats) });
       }
     }
 

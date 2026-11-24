@@ -28,16 +28,20 @@ function blockOf(startMarker, endMarker) {
   return src.slice(s, e)
 }
 
+// 判据抽成函数（T07-02）：正例与变异反证共用；变异体直接回喂同一入口。
+function saveGuard(body) {
+  const call = body.indexOf('const ok = await grid.saveSeats(nextSeats)')
+  const guard = body.indexOf('if (!ok) return')
+  const rec = body.indexOf('recordGridSnapshotUndo(')
+  const tip = body.indexOf("notifySuccess('已应用智能排表')")
+  const checks = { received: call >= 0, shortCircuit: guard > call, undoAfter: rec > guard, tipAfter: tip > guard }
+  return { ok: Object.values(checks).every(Boolean), checks }
+}
+
 test('智能排表：接收 saveSeats 返回值，失败时不登记撤销、不提示成功', () => {
   const body = blockOf('async function applySmartArrangement', '// 导入确认弹窗')
-  const call = body.indexOf('const ok = await grid.saveSeats(nextSeats)')
-  assert.ok(call >= 0, 'saveSeats 的返回值必须被接收（否则失败无从判断）')
-  const guard = body.indexOf('if (!ok) return')
-  assert.ok(guard > call, 'saveSeats 之后必须有 if (!ok) return')
-  const rec = body.indexOf('recordGridSnapshotUndo(')
-  const ok = body.indexOf("notifySuccess('已应用智能排表')")
-  assert.ok(rec > guard, '登记撤销必须在失败分支之后')
-  assert.ok(ok > guard, '成功提示必须在失败分支之后')
+  const r = saveGuard(body)
+  assert.ok(r.ok, `失败分支接线不完整：${JSON.stringify(r.checks)}`)
 })
 
 test('同族：Excel 导入同样按返回值短路（不能只修智能排表）', () => {
@@ -48,9 +52,10 @@ test('同族：Excel 导入同样按返回值短路（不能只修智能排表�
 
 test('变异反证：去掉失败分支后，判据必须失败', () => {
   const body = blockOf('async function applySmartArrangement', '// 导入确认弹窗')
+  assert.equal(saveGuard(body).ok, true, '基线必须通过，否则反证无意义')
   const mutated = body.replace(/if \(!ok\) return\r?\n/, '')
   assert.ok(mutated !== body, '变异没匹配到失败分支')
-  assert.doesNotMatch(mutated, /if \(!ok\) return/, '变异后判据应失败')
+  assert.equal(saveGuard(mutated).ok, false, '判据假绿：去掉失败短路仍判 PASS')
   // 变异后 saveSeats 的返回值仍被接收，但没有任何地方使用它 —— 正是原来的 bug 形态
   assert.match(mutated, /const ok = await grid\.saveSeats\(nextSeats\)/)
 })

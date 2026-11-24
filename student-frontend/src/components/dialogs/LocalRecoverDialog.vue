@@ -23,9 +23,9 @@
       <!-- 阶段 3：验证通过，设置新密码（与登录页「忘记密码 → 设置新密码」同一套口径） -->
       <template v-else>
         <p class="text-xs text-text-muted mb-3">已通过本机数据库验证身份。设置新密码后即生效，原密码不再需要。</p>
-        <input :value="username" readonly placeholder="账号" class="border border-border bg-surface text-text p-2 w-full mb-2 rounded" />
-        <input v-model="password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-2 rounded" @keydown.enter="submit" />
-        <input v-model="confirm" type="password" placeholder="确认新密码" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-2 rounded" @keydown.enter="submit" />
+        <input :value="username" readonly placeholder="账号" class="border border-border bg-surface text-text p-2 w-full mb-2 rounded" aria-label="账号"/>
+        <input v-model="password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-2 rounded" @keydown.enter="submit" aria-label="新密码（至少 6 位）"/>
+        <input v-model="confirm" type="password" placeholder="确认新密码" autocomplete="new-password" class="border border-border bg-surface text-text p-2 w-full mb-2 rounded" @keydown.enter="submit" aria-label="确认新密码"/>
         <p v-if="errorText" class="text-xs text-danger mb-2">{{ errorText }}</p>
         <div class="flex justify-end gap-2 mt-2">
           <button type="button" @click="$emit('close')" :disabled="busy" class="bg-surface-hover text-text px-4 py-2 rounded border border-border transition-theme disabled:opacity-50">取消</button>

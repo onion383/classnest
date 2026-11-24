@@ -7,18 +7,18 @@
 //   诊断口径 = max(后端就绪, 占位页移除（界面可见）)，谁更晚谁就是瓶颈。
 //
 // 用法：
-//   node testjs/measure-startup.mjs                  # 正式版整体启动（默认 3 次）
-//   node testjs/measure-startup.mjs --runs=5         # 次数
-//   node testjs/measure-startup.mjs --exe=<path>     # 指定打包 exe
-//   node testjs/measure-startup.mjs --cwd=<dir>      # 指定工作目录（默认 exe 所在目录）
-//   node testjs/measure-startup.mjs --dev            # 未打包 electron + Vite（开发口径）
-//   node testjs/measure-startup.mjs --real           # 用真实用户数据（不隔离；先关闭正在运行的应用）
-//   node testjs/measure-startup.mjs --backend-only   # 只测后端冷启动（快，无 GUI）
-//   node testjs/measure-startup.mjs --backend-only --cold   # 先清编译缓存 = 模拟首启
-//   node testjs/measure-startup.mjs --json           # 机器可读输出
-//   node testjs/measure-startup.mjs --duration=20000 # 单次最长运行时长（默认 15000ms）
-//   node testjs/measure-startup.mjs --grace=8000     # 出现「启动完成」后再等多久（默认 6000ms，等日志落盘）
-//   node testjs/measure-startup.mjs --exe-args="--no-sandbox"  # 给被启动的 exe/electron 追加参数
+//   node testjs/probe/measure-startup.mjs                  # 正式版整体启动（默认 3 次）
+//   node testjs/probe/measure-startup.mjs --runs=5         # 次数
+//   node testjs/probe/measure-startup.mjs --exe=<path>     # 指定打包 exe
+//   node testjs/probe/measure-startup.mjs --cwd=<dir>      # 指定工作目录（默认 exe 所在目录）
+//   node testjs/probe/measure-startup.mjs --dev            # 未打包 electron + Vite（开发口径）
+//   node testjs/probe/measure-startup.mjs --real           # 用真实用户数据（不隔离；先关闭正在运行的应用）
+//   node testjs/probe/measure-startup.mjs --backend-only   # 只测后端冷启动（快，无 GUI）
+//   node testjs/probe/measure-startup.mjs --backend-only --cold   # 先清编译缓存 = 模拟首启
+//   node testjs/probe/measure-startup.mjs --json           # 机器可读输出
+//   node testjs/probe/measure-startup.mjs --duration=20000 # 单次最长运行时长（默认 15000ms）
+//   node testjs/probe/measure-startup.mjs --grace=8000     # 出现「启动完成」后再等多久（默认 6000ms，等日志落盘）
+//   node testjs/probe/measure-startup.mjs --exe-args="--no-sandbox"  # 给被启动的 exe/electron 追加参数
 //
 // 日志保存（重要）：
 //   - 每次运行的原始终端输出 → <隔离目录>/logs/runN.log
@@ -37,7 +37,7 @@
 //  - Windows PowerShell 下中文可能显示为乱码，可先执行 `chcp 65001`。
 // =========================================================================
 
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -138,8 +138,15 @@ function prepareIso() {
   )
 }
 
-function killTree(pid) {
-  try { spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }) } catch (_) {}
+// 进程树回收复用跨平台工具（T01-11）：Windows taskkill /T /F，POSIX 先杀进程组再退回单杀。
+// 本地保留 pid 入参形状，调用点不必改。
+const { killTree: killTreeChild } = createRequire(import.meta.url)('../tools/killTree.cjs')
+function killTree(pidOrChild) {
+  if (typeof pidOrChild === 'number') {
+    killTreeChild({ pid: pidOrChild, exitCode: null, signalCode: null })
+    return
+  }
+  killTreeChild(pidOrChild)
 }
 
 function appLogPath() {
@@ -309,9 +316,11 @@ async function measureBackendOnce(cold, runIndex) {
     })
     let out = ''
     let settled = false
+    let timeoutTimer = null
     const done = (reason) => {
       if (settled) return
       settled = true
+      if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
       const ms = Math.round(performance.now() - t0)
       killTree(child.pid)
       try { writeFileSync(path.join(LOG_DIR, `backend-run${runIndex}.log`), out, 'utf8') } catch (_) {}
@@ -324,7 +333,7 @@ async function measureBackendOnce(cold, runIndex) {
     child.stdout.on('data', onChunk)
     child.stderr.on('data', onChunk)
     child.on('exit', (c) => done('exit:' + c))
-    setTimeout(() => done('timeout'), opt.timeout)
+    timeoutTimer = setTimeout(() => done('timeout'), opt.timeout)
   })
 }
 

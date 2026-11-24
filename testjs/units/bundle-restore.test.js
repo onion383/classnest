@@ -272,20 +272,23 @@ test('dropTmp 同时清临时目录与上传文件，且对 null 不抛', () => 
 })
 
 // ---------------------------------------------------------------------------
-// ⑤ 接线：两个恢复入口共用同一份落盘逻辑（这是本文件存在的理由）
+// ⑤ 接线：恢复入口都走 bundleRestore，路由里没有任何自己写库的实现
 // ---------------------------------------------------------------------------
-test('接线：两个恢复入口都走 bundleRestore，路由里没有任何自己写库的实现', () => {
+test('接线：恢复入口走 bundleRestore，路由里没有任何自己写库的实现', () => {
   const src = fs.readFileSync(path.join(ROOT, 'student-backend/routes/account.js'), 'utf8')
   assert.match(src, /require\('\.\.\/services\/bundleRestore'\)/, '必须引用共享 service')
-  assert.equal((src.match(/applyVerifiedBundle\(/g) || []).length, 2, '两个入口各调一次，不能有一处自己实现')
-  assert.equal((src.match(/receiveAndVerify\(/g) || []).length, 2, '解包校验也必须是同一个入口')
+  // X2-02：登录态 /restore-zip 已下线（前端零调用），仅剩离线入口；
+  // 判据从「两个入口各一次」收紧为「唯一入口各一次」，仍不许任何一处自己实现。
+  assert.equal((src.match(/applyVerifiedBundle\(/g) || []).length, 1, '唯一入口调一次，不能有一处自己实现')
+  assert.equal((src.match(/receiveAndVerify\(/g) || []).length, 1, '解包校验也必须是同一个入口')
 
-  // v2 的 /restore 与 /restore-offline 已下线（v6 性能专题 · 2-11：整库 base64 读进内存）。
-  // 判据相应收紧：路由层不许再出现任何直接写库的调用，且两个旧入口不能回潮。
+  // v2 的 /restore 与 /restore-offline、登录态 /restore-zip 均已下线。
+  // 判据相应收紧：路由层不许再出现任何直接写库的调用，且旧入口不能回潮。
   assert.equal((src.match(/dbManager\.restoreBundle\(/g) || []).length, 0,
     '路由里不许自己写库，必须走 bundleRestore service')
   assert.equal(src.indexOf("router.post('/restore',"), -1, 'v2 /restore 已下线，不应回潮')
   assert.equal(src.indexOf("router.post('/restore-offline'"), -1, 'v2 /restore-offline 已下线，不应回潮')
+  assert.equal(src.indexOf("router.post('/restore-zip',"), -1, '登录态 /restore-zip 已下线，不应回潮')
 })
 
 test('接线：离线入口在动数据之前卡住 slug 格式与覆盖确认', () => {

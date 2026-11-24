@@ -1,6 +1,6 @@
 # 前端组件（`student-frontend/src/components/`）
 
-共 96 个 `.vue`，按目录分节。所有组件都是 `SFC`（单文件组件）+ `<script setup>`（组合式 API 简洁脚本），多数带 `vapor`（Vue 3.6 Vapor 渲染模式）标记，见第 5 节。
+共 101 个 `.vue`，按目录分节。所有组件都是 `SFC`（单文件组件）+ `<script setup>`（组合式 API 简洁脚本），多数带 `vapor`（Vue 3.6 Vapor 渲染模式）标记，见第 5 节。
 
 
 ## 1. 通用标准

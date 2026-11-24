@@ -56,7 +56,7 @@
         @swapColumns="(from, to) => ctx.saveColumnOrder('active', from, to)"
       >
         <template #cell-type="{ row, field, editing }">
-          <AppSelect v-if="editing" v-model="row.类型" :options="ctx.leaveTypeOptions" @change="ctx.saveCell(row, field)" class="w-full" />
+          <AppSelect v-if="editing" v-model="row.类型" :aria-label="`${row.姓名 || '学生'}的类型`" :options="ctx.leaveTypeOptions" @change="ctx.saveCell(row, field)" class="w-full" />
           <span v-else @dblclick="ctx.startEdit(row, field)" class="px-2 py-0.5 rounded text-xs bg-danger/10 text-danger cursor-text">{{ row.类型 }}</span>
         </template>
         <template #cell-range="{ row }">
@@ -66,6 +66,7 @@
           <input
             v-if="editing"
             v-model="row[field.name]"
+            :aria-label="field.name"
             @blur="ctx.saveCell(row, field)"
             @keyup.enter="ctx.saveCell(row, field)"
             class="w-full h-6 leading-6 px-1 py-0 border border-transparent bg-warning/10 focus:outline-none focus:border-primary box-border"
@@ -105,13 +106,14 @@
           <span class="whitespace-nowrap">{{ row._range }}</span>
         </template>
         <template #cell-type-info="{ row, field, editing }">
-          <AppSelect v-if="editing" v-model="row.类型" :options="ctx.leaveTypeOptions" @change="ctx.saveCell(row, field)" class="w-full" />
+          <AppSelect v-if="editing" v-model="row.类型" :aria-label="`${row.姓名 || '学生'}的类型`" :options="ctx.leaveTypeOptions" @change="ctx.saveCell(row, field)" class="w-full" />
           <span v-else @dblclick="ctx.startEdit(row, field)" class="px-2 py-0.5 rounded text-xs bg-info/10 text-info cursor-text">{{ row.类型 }}</span>
         </template>
         <template #cell-dash="{ row, field, value, editing }">
           <input
             v-if="editing"
             v-model="row[field.name]"
+            :aria-label="field.name"
             @blur="ctx.saveCell(row, field)"
             @keyup.enter="ctx.saveCell(row, field)"
             class="w-full h-6 leading-6 px-1 py-0 border border-transparent bg-warning/10 focus:outline-none focus:border-primary box-border"

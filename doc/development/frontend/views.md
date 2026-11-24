@@ -26,6 +26,7 @@ classnest/
         │   └── index.js
         └── views/
             ├── ScheduleView/
+            │   ├── ScheduleHistoryTab.vue  # ScheduleView
             │   ├── ScheduleView.active.js
             │   ├── ScheduleView.common.js
             │   ├── ScheduleView.history.js
@@ -35,8 +36,11 @@ classnest/
             │   ├── SettingsView.appearance.js
             │   ├── SettingsView.data.js
             │   ├── SettingsView.search.js
+            │   ├── undoNotices.js  # 更改审查四个入口的结果文案（纯函数）
             │   └── SettingsView.vue  # /settings
             ├── AboutView.vue  # /about
+            ├── ActivitiesCountdownTab.vue  # ActivitiesView
+            ├── ActivitiesDailyTab.vue  # ActivitiesView
             ├── ActivitiesView.vue  # /activities
             ├── AiAssistant.vue  # /ai-assistant
             ├── AlbumView.vue  # /album
@@ -46,8 +50,12 @@ classnest/
             ├── FeeManagement.vue  # /fee
             ├── GroupManageView.vue  # /group-manage
             ├── LeaveManagement.vue  # /leaves
+            ├── LeaveRecordsTab.vue  # LeaveManagement
+            ├── LeaveTodayTab.vue  # LeaveManagement
             ├── Login.vue  # /login
             ├── ScoreManagement.vue  # /scores
+            ├── ScoreStatsTab.vue  # ScoreManagement
+            ├── ScoreTodayTab.vue  # ScoreManagement
             └── SeatView.vue  # /seats
 ```
 <!-- doc-tree:end -->
@@ -86,6 +94,20 @@ classnest/
 | [`AiAssistant.vue`](../../../student-frontend/src/views/AiAssistant.vue) | `/ai-assistant` | AI 对话、流式、提案确认、设置 | `/api/ai/*`（详见 [topics/ai.md](../topics/ai.md)） |
 | [`AboutView.vue`](../../../student-frontend/src/views/AboutView.vue) | `/about` | 关于软件 | 无（静态） |
 
+### tab 分块子页
+
+以下页面把大块 tab 内容拆成异步组件（`defineAsyncComponent` + hover 预取），父组件用 `reactive` 的 `tabCtx` 透传状态；它们不是路由页，单独列出以便定位。
+
+| 子页 | 所属页面 | 职责 |
+| --- | --- | --- |
+| [`ActivitiesDailyTab.vue`](../../../student-frontend/src/views/ActivitiesDailyTab.vue) | `ActivitiesView` | 活动列表（日常） |
+| [`ActivitiesCountdownTab.vue`](../../../student-frontend/src/views/ActivitiesCountdownTab.vue) | `ActivitiesView` | 倒计时 |
+| [`LeaveTodayTab.vue`](../../../student-frontend/src/views/LeaveTodayTab.vue) | `LeaveManagement` | 今日请假 |
+| [`LeaveRecordsTab.vue`](../../../student-frontend/src/views/LeaveRecordsTab.vue) | `LeaveManagement` | 请假记录 / 时间轴 |
+| [`ScoreTodayTab.vue`](../../../student-frontend/src/views/ScoreTodayTab.vue) | `ScoreManagement` | 今日加减分 |
+| [`ScoreStatsTab.vue`](../../../student-frontend/src/views/ScoreStatsTab.vue) | `ScoreManagement` | 分数统计 |
+| [`ScheduleHistoryTab.vue`](../../../student-frontend/src/views/ScheduleView/ScheduleHistoryTab.vue) | `ScheduleView` | 周历史与快照回填 |
+
 ### 页面细节
 
 ### DashboardView
@@ -101,7 +123,7 @@ classnest/
 
 ### FeeManagement
 - 结构：同 `useTableCRUD` + `DynamicTable` + `SearchBar`；收据上传后以 `resourceUrl` 鉴权显示。
-- **接口**：`/api/fee-records`（同一动态表工厂，`minCount` 等参数不同）+ `POST /upload-receipt`（单图 10MB、扩展名 + MIME + 魔数三重校验）。
+- **接口**：`/api/fee-records`（同一动态表工厂，`minCount` 等参数不同）+ `POST /upload-receipt`（按类型分档：图片 20MB、PDF / Office 30MB、视频 200MB、md 5MB；扩展名 + MIME + 魔数三重校验）。
 
 ### Login
 - 覆盖安装后首次进入、常规登录、离线恢复、找回密码；唯一不显示侧边栏的全屏页面。

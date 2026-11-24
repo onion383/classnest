@@ -49,6 +49,16 @@ test('上限是「每 key」，不是整表上限：多个 key 各到 50 条也�
   assert.ok(total >= 150, '整表不是被一刀切到 50')
 })
 
+test('超龄记录在下次 push 时被清掉（K05-04：长期不再编辑的 key 不留永久快照）', () => {
+  const oldTs = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000) - 60_000).toISOString()
+  conn.prepare("INSERT INTO undo_history (key, type, label, payload, dir, origin, source, ts) VALUES ('旧表', 'row_update', 'old', '', 1, '', 'manual', ?)").run(oldTs)
+  assert.equal(count('旧表'), 1)
+
+  pushRecord('新表', 'row_update', 'x', {}, '')
+  assert.equal(count('旧表'), 0, '超过 30 天的记录必须在写入新记录时被清掉')
+  assert.equal(count('新表'), 1, '本次新记录照常写入')
+})
+
 // 结论的前提：key 必须是固定字面量。万一以后有人把 key 做成「每天一个」，
 // 每 key 上限就形同虚设（每天 50 条、永远不清旧天）。这里扫源码把动态 key 挡住。
 test('前提：撤销记录的 key 不能是动态拼接的（否则每 key 上限失效）', () => {

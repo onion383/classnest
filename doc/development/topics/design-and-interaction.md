@@ -49,14 +49,13 @@ classnest/
 │   │   │   ├── dialog-transition.css
 │   │   │   ├── index.css
 │   │   │   ├── theme-base-accent.css
+│   │   │   ├── theme-base-night.css  # 全部规则以 :root[data-theme="base"][data-mode="nigh…
 │   │   │   ├── theme-base.css
+│   │   │   ├── theme-glass-night.css  # 共用块 + glass 专属块。重映射 --color-*，覆盖页面底色与弥散光斑、标题栏、…
 │   │   │   ├── theme-glass.css
-│   │   │   ├── theme-glass2.css
-│   │   │   ├── theme-base-night.css
-│   │   │   ├── theme-glass-night.css
-│   │   │   ├── theme-glass2-night.css
+│   │   │   ├── theme-glass2-night.css  # 共用块 + glass2 专属块。重映射 --g2-glass / strong / sof…
 │   │   │   ├── themeLoader.js
-│   │   │   ├── themetransition.js
+│   │   │   ├── themeTransition.js
 │   │   │   └── utilities.css
 │   │   ├── subwindows/
 │   │   │   └── setup/
@@ -81,7 +80,7 @@ classnest/
 ```
 <!-- doc-tree:end -->
 
-> 数据来源：`student-frontend/src/styles/*`、[`stores/theme.js`](../../../student-frontend/src/stores/theme.js)、[`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js)、[`themetransition.js`](../../../student-frontend/src/styles/themetransition.js)、[`IconGlyph.vue`](../../../student-frontend/src/components/base/IconGlyph.vue)、[`DialogShell.vue`](../../../student-frontend/src/components/base/DialogShell.vue)、[`Sidebar.vue`](../../../student-frontend/src/components/layout/Sidebar.vue)、[`App.vue`](../../../student-frontend/src/App.vue) 与各组件内的 scoped CSS。本文归纳源码里的设计规则与时序，不做逐像素截图比对；动效时长直接取自 CSS，改样式后以源码为准。
+> 数据来源：`student-frontend/src/styles/*`、[`stores/theme.js`](../../../student-frontend/src/stores/theme.js)、[`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js)、[`themeTransition.js`](../../../student-frontend/src/styles/themeTransition.js)、[`IconGlyph.vue`](../../../student-frontend/src/components/base/IconGlyph.vue)、[`DialogShell.vue`](../../../student-frontend/src/components/base/DialogShell.vue)、[`Sidebar.vue`](../../../student-frontend/src/components/layout/Sidebar.vue)、[`App.vue`](../../../student-frontend/src/App.vue) 与各组件内的 scoped CSS。本文归纳源码里的设计规则与时序，不做逐像素截图比对；动效时长直接取自 CSS，改样式后以源码为准。
 
 ---
 
@@ -141,7 +140,7 @@ App
 | `has-bg-image`（有背景图标记） | `applyTheme()`（应用主题函数） | 是否有背景图，决定遮罩层与玻璃配方是否启用 |
 | `bg-night-default`（夜间默认底图标记） | `applyTheme()`（应用主题函数） | `glass + 夜间 + 未自选图`：使用更轻的夜间遮罩 |
 | `no-animations`（关闭动画类） | `syncNoAnimations()`（同步动画开关函数） | 关闭全部过渡/动画 |
-| `theme-switching`（切换事务类） | [`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) | 日夜切换事务窗口内瞬时化元素过渡 |
+| `theme-switching`（切换事务类） | [`themeTransition.js`](../../../student-frontend/src/styles/themeTransition.js) | 日夜切换事务窗口内瞬时化元素过渡 |
 | `system-acrylic`（系统亚克力标记） | 桌面小组件入口使用 | 让子窗口只借主题配色、背景交给系统亚克力 |
 
 #### 2.2 三组令牌
@@ -183,7 +182,7 @@ index.css（入口，始终加载）
 - 启动时 [`main.js`](../../../student-frontend/src/main.js) 在 Vue 初始化前就写 `data-theme` / `data-mode`、`--glass-opacity`（玻璃层透明度）、`--bg-mask-opacity`（背景遮罩不透明度）、`--bg-image`（背景图 URL），并开始 `loadThemeStyles()`（加载主题样式函数）；splash（启动占位页）会等它完成，避免「入口样式已应用、主题样式还没到」时闪一下基础配色。
 - 空闲期 `prefetchThemeStyles()`（空闲预取主题样式函数）逐条预热未加载的主题 CSS，避免首次切换时出现基础主题的一瞬。
 
-**实现位置**：`src/main.js`（启动前写主题变量）、`stores/theme.js`（主题状态）、`themeLoader.js`（主题样式按需加载）、`themetransition.js`（主题切换过渡）。
+**实现位置**：`src/main.js`（启动前写主题变量）、`stores/theme.js`（主题状态）、`themeLoader.js`（主题样式按需加载）、`themeTransition.js`（主题切换过渡）。
 
 ### 3. 三套预设主题的设计
 
@@ -274,7 +273,7 @@ index.css（入口，始终加载）
 
 三份夜间文件都只在「本主题 + mode=night」时按需加载（`loadThemeStyles()` 判断），各取所需、互不重叠；base 的夜间层原先合并在 `theme-base-accent.css` 里随入口常驻，现已独立成 `theme-base-night.css`。
 
-#### 4.4 切换时序（`stores/theme.js` + `themetransition.js`）
+#### 4.4 切换时序（`stores/theme.js` + `themeTransition.js`）
 
 ```mermaid
 sequenceDiagram
@@ -282,7 +281,7 @@ sequenceDiagram
   participant B as 日夜切换按钮
   participant S as stores/theme.js
   participant L as themeLoader.js
-  participant T as themetransition.js
+  participant T as themeTransition.js
 
   U->>B: 点击切换
   B->>S: pendingMode（待落地模式）立即翻转，按钮当帧变太阳/月亮
@@ -342,7 +341,7 @@ sequenceDiagram
 | --- | --- | --- | --- |
 | 弹窗打开 | 遮罩淡入 + 卡片 0.96 → 1.015 → 1 | 遮罩 240ms ease；卡片 340ms | [`dialog-transition.css`](../../../student-frontend/src/styles/dialog-transition.css) |
 | 弹窗关闭 | 遮罩淡出 + 卡片 1 → 0.97 | 遮罩/卡片 250ms | 同上 |
-| 日夜切换 | 整屏快照交叉叠加，新画面首帧 0.62 → 1 | 100ms ease-out；连点反向按已走比例缩短 | [`index.css`](../../../student-frontend/src/styles/index.css)、[`themetransition.js`](../../../student-frontend/src/styles/themetransition.js) |
+| 日夜切换 | 整屏快照交叉叠加，新画面首帧 0.62 → 1 | 100ms ease-out；连点反向按已走比例缩短 | [`index.css`](../../../student-frontend/src/styles/index.css)、[`themeTransition.js`](../../../student-frontend/src/styles/themeTransition.js) |
 | 通知吐司 | 从右 60px + 0.92 缩放滑入；离开同向滑出 | 进 350ms 标准曲线，出 250ms ease-in；进度条线性，hover 暂停 | [`NotificationToast.vue`](../../../student-frontend/src/components/base/NotificationToast.vue) |
 | Tabs 选中 | 标签 hover 放大 1.05；选中态加阴影 | 300ms ease-in-out | [`Tabs.vue`](../../../student-frontend/src/components/base/Tabs.vue) |
 | 视图切换 | 内嵌滑块宽度/位移跟随目标段 | 260ms `cubic-bezier(0.34,1.35,0.64,1)` | [`ViewSwitch.vue`](../../../student-frontend/src/components/base/ViewSwitch.vue) |
@@ -527,7 +526,7 @@ sequenceDiagram
 - `backface-visibility: hidden`（隐藏元素背面）避免缩放时的边缘闪烁；
 - 刻意**不**过渡 `backdrop-filter`，毛玻璃保持静态；卡片自身需要模糊时自己带静态 `backdrop-filter`。
 
-**实现位置**：`DialogShell.vue`（弹窗外壳）、`themetransition.js`（弹窗进出过渡）。
+**实现位置**：`DialogShell.vue`（弹窗外壳）、`themeTransition.js`（弹窗进出过渡）。
 
 ### 9. 交互规范
 

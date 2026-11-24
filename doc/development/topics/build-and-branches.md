@@ -12,9 +12,14 @@ classnest/
 │   │   ├── compile.mjs  # 按「INNO_SETUP_ISCC 环境变量 → PATH 中 iscc → 常见安装目录（…
 │   │   └── setup.iss  # 固定 AppId GUID（升级/卸载识别）、PrivilegesRequired=admi…
 │   ├── main/
+│   │   ├── main.update-integrity.js
 │   │   └── main.updater.js
 │   └── afterPack.js
 └── student-frontend/
+    ├── src/
+    │   └── subwindows/
+    │       └── setup/
+    │           └── Setup.vue
     ├── dev-vite.js  # 直连 vite（跳过两层 npm，实测省约 1.1s）；build 子命令原样透传
     └── vite.config.js  # 5 个 HTML（网页）入口、base:'./'（相对路径基址）、build.target:…
 ```

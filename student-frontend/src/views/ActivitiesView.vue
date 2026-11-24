@@ -95,6 +95,7 @@ import { useNotification } from '../composables/useNotification.js'
 import { reportError } from '../utils/reportError.js'
 import { recordRowInsert, recordRowUpdate, recordRowDelete, recordRowsBatchInsert, useUndoShortcut } from '../composables/useUndo.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
+import { createLatest } from '../utils/latestOnly.js'
 
 defineOptions({ name: 'ActivitiesView' })
 
@@ -160,6 +161,8 @@ const rowFocusHost = createRowFocusHost(route, router)
 const activeTab = ref('daily')
 // 活动
 const activities = ref([])
+// 加载代次守卫：多次并发 loadAll 时只让最后一次写状态（F06-06）
+const loadAllGuard = createLatest()
 const editingActivity = ref(null)
 const actDialogVisible = ref(false)
 const actDialogMounted = ref(false)
@@ -347,12 +350,15 @@ function _applyRowFocus() {
   })
 }
 async function loadAll() {
+  // 首屏 / 刷新按钮 / CRUD 后重载都会并发调它：只认最后一次，旧响应不得覆盖新数据（F06-06）
+  const token = loadAllGuard.begin()
   // 两个接口互不依赖：用 allSettled，避免「倒计时失败」把已经拿到的
   // 「活动列表」一起丢掉（原来 Promise.all 一处 reject 整批作废）。
   const [actRes, cntRes] = await Promise.allSettled([
     axios.get(`${API}/activities`),
     axios.get(`${API}/countdowns`)
   ])
+  if (!loadAllGuard.isCurrent(token)) return false
   if (actRes.status === 'fulfilled') activities.value = actRes.value.data.data || []
   if (cntRes.status === 'fulfilled') countdowns.value = cntRes.value.data.data || []
 

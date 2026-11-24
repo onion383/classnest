@@ -16,6 +16,7 @@
           type="color"
           :value="customColor"
           @input="onCustomInput"
+          aria-label="自定义颜色"
           class="color-input"
         />
         <button

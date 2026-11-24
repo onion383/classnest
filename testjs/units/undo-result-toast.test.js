@@ -6,36 +6,45 @@
 // Ctrl+Z 那条路径早就是 useNotification().warning，面板按钮应当同一口径。
 //
 // 注意不能一刀切禁掉 ctx.showAlert：删除班级、导出失败这些仍该用弹窗——
-// 那是必须让人停下来看的错误。所以只截「撤销四个入口」这一段来断言。
+// 那是必须让人停下来看的错误。所以只盯「撤销四个入口」的文案映射。
+// 文案映射是纯函数：直接执行断言，不再统计源码里的调用次数（T08-04）。
 // =========================================================================
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 
 const FILE = path.join(__dirname, '../../student-frontend/src/views/SettingsView/SettingsView.data.js')
 const SRC = fs.readFileSync(FILE, 'utf8')
+const MODULE = path.join(__dirname, '../../student-frontend/src/views/SettingsView/undoNotices.js')
 
-// 从 undoEntry 到 clearUndo：正好包住 undoEntry / undoOriginStep / undoMember / redoEntry
-function undoBlock() {
-  const start = SRC.indexOf('async undoEntry')
-  const end = SRC.indexOf('clearUndo()')
-  assert.ok(start > 0 && end > start, '找不到撤销相关方法段（方法名或顺序变了就更新这里）')
-  return SRC.slice(start, end)
-}
+test('更改审查：四个入口的结果文案可执行且分支正确', async () => {
+  const {
+    rewindNotice, replayNotice, undoStepNotice, undoMemberNotice, apiErrorNotice,
+  } = await import(pathToFileURL(MODULE).href)
 
-test('更改审查：撤销/重做结果用提示条，不弹窗', () => {
-  const block = undoBlock()
-  assert.ok(!/ctx\.showAlert/.test(block), '回退/撤销/重做的结果不许再弹窗（要点掉才能继续）')
+  assert.equal(rewindNotice({ ok: true }), '已成功回退')
+  assert.equal(rewindNotice({ ok: true, label: '删除学生', batch: 3 }), '已回退：删除学生（连带回退 3 项）')
+  assert.equal(replayNotice({ ok: true }), '已成功重做')
+  assert.equal(replayNotice({ ok: true, label: '新增成绩', batch: 2 }), '已重做：新增成绩（连带重做 2 项）')
+  assert.equal(undoStepNotice({ ok: true }), '已撤销这一步')
+  assert.equal(undoStepNotice({ ok: true, label: '改座位' }), '已撤销：改座位')
+  assert.equal(undoMemberNotice({ ok: true }), '已撤销这一条')
+  assert.equal(undoMemberNotice({ ok: true, label: '改姓名' }), '已撤销：改姓名')
+  assert.equal(apiErrorNotice({ response: { data: { error: '后端原因' } } }, '兜底'), '后端原因')
+  assert.equal(apiErrorNotice(new Error('network'), '兜底'), '兜底')
+})
 
-  for (const fn of ['undoEntry', 'undoOriginStep', 'undoMember', 'redoEntry']) {
-    assert.ok(block.includes(fn), `缺少入口 ${fn}`)
+test('更改审查：四个入口都接同一套文案映射，且不再弹窗', () => {
+  const start = SRC.indexOf('async undoEntry(')
+  const end = SRC.indexOf('clearUndo() {', start)
+  assert.ok(start > 0 && end > start, '找不到撤销四个入口的方法区间')
+  const block = SRC.slice(start, end)
+  for (const fn of ['rewindNotice', 'replayNotice', 'undoStepNotice', 'undoMemberNotice', 'apiErrorNotice']) {
+    assert.ok(block.includes(fn), `缺少文案映射 ${fn}，入口可能又手写了分支`)
   }
-  const okCount = (block.match(/useNotification\(\)\.success/g) || []).length
-  const errCount = (block.match(/useNotification\(\)\.error/g) || []).length
-  // 四个入口各有成功 + 失败两条；少一条就是某个分支又悄悄吞了结果
-  assert.equal(okCount, 4, `成功提示应覆盖四个入口，实际 ${okCount} 处`)
-  assert.equal(errCount, 4, `失败提示应覆盖四个入口，实际 ${errCount} 处`)
+  assert.ok(!/ctx\.showAlert/.test(block), '撤销入口的结果不许再弹窗（要点掉才能继续）')
 })
 
 test('更改审查：清空记录是确认框 + 5 秒倒计时（不可逆动作不能一点就生效）', () => {

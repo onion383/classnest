@@ -11,10 +11,9 @@
         v-model.trim="keyword"
         type="text"
         placeholder="按学生姓名筛选"
-        class="px-3 py-1.5 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary w-48"
-      />
-      <div class="w-32"><AppSelect v-model="filterType" :options="filterTypeOptions" /></div>
-      <div class="w-32"><AppSelect v-model="filterNode" :options="filterNodeOptions" /></div>
+        class="px-3 py-1.5 text-sm rounded-lg bg-surface-hover border border-border focus:outline-none focus:border-primary w-48" aria-label="按学生姓名筛选"/>
+      <div class="w-32"><AppSelect v-model="filterType" aria-label="请假类型筛选" :options="filterTypeOptions" /></div>
+      <div class="w-32"><AppSelect v-model="filterNode" aria-label="事件类型筛选" :options="filterNodeOptions" /></div>
     </div>
 
     <!-- 时间轴 -->

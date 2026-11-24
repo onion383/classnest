@@ -18,8 +18,8 @@ const { createBackendDb } = require('./_db-express-fixture.cjs')
 // 公共夹具同时把 db.js（Proxy）和 dbManager.current 指到内存库 ——
 // tableService 经由 provisionalStudents 建档走的正是 Proxy，少改一处就会打到真实库。
 const fx = createBackendDb({ label: 'score-provisional' })
-const conn = fx.conn
 
+// 连接一律现取：夹具文档明确 reset() 会换连接，模块级缓存旧引用会打到已关闭的库（T07-08）。
 let base
 test.before(async () => {
   base = await fx.mount('/api/scores', 'student-backend/routes/scores.js')
@@ -35,8 +35,8 @@ const post = async (body) => {
   return { status: res.status, json: await res.json() }
 }
 
-const scoreOf = (id) => conn.prepare('SELECT * FROM score_records WHERE id = ?').get(id)
-const studentsNamed = (name) => conn.prepare('SELECT * FROM students WHERE 姓名 = ?').all(name)
+const scoreOf = (id) => fx.conn.prepare('SELECT * FROM score_records WHERE id = ?').get(id)
+const studentsNamed = (name) => fx.conn.prepare('SELECT * FROM students WHERE 姓名 = ?').all(name)
 
 test('名册外姓名：建临时学生并把 student_id 指过去', async () => {
   const r = await post({ 姓名: '转学生甲', 类型: '加分', 项目: '课堂表现', 分值: 3 })
@@ -60,8 +60,8 @@ test('再写同名：复用同一条临时学生，不重复建', async () => {
 })
 
 test('名册里已有唯一同名正式学生：直接用正式学生，不建临时', async () => {
-  conn.prepare('INSERT INTO students (姓名, 学号, is_provisional) VALUES (?,?,0)').run('正式生丙', '2026001')
-  const formal = conn.prepare("SELECT id FROM students WHERE 姓名 = '正式生丙'").get()
+  fx.conn.prepare('INSERT INTO students (姓名, 学号, is_provisional) VALUES (?,?,0)').run('正式生丙', '2026001')
+  const formal = fx.conn.prepare("SELECT id FROM students WHERE 姓名 = '正式生丙'").get()
 
   const r = await post({ 姓名: '正式生丙', 类型: '加分', 项目: '课堂表现', 分值: 5 })
   assert.equal(r.status, 200, JSON.stringify(r.json))
@@ -70,8 +70,8 @@ test('名册里已有唯一同名正式学生：直接用正式学生，不建�
 })
 
 test('名册里有多个同名正式学生：409 + 候选，不替用户挑也不建临时', async () => {
-  conn.prepare('INSERT INTO students (姓名, 学号, is_provisional) VALUES (?,?,0)').run('重名丁', '2026002')
-  conn.prepare('INSERT INTO students (姓名, 学号, is_provisional) VALUES (?,?,0)').run('重名丁', '2026003')
+  fx.conn.prepare('INSERT INTO students (姓名, 学号, is_provisional) VALUES (?,?,0)').run('重名丁', '2026002')
+  fx.conn.prepare('INSERT INTO students (姓名, 学号, is_provisional) VALUES (?,?,0)').run('重名丁', '2026003')
 
   const r = await post({ 姓名: '重名丁', 类型: '加分', 项目: '课堂表现', 分值: 5 })
   assert.equal(r.status, 409, '重名必须交回前端，不能猜')

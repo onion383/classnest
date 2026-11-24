@@ -130,3 +130,5 @@ for (const r of report) {
   truthLost += r.reallyLost.length;
 }
 console.log(`\n===== 真丢失合计：${truthLost} 条 =====`);
+// 发现即失败：退出码 0 会让「注释在拆分时被真丢掉」在批跑里被静默放行（T03-04）
+process.exit(truthLost ? 1 : 0);

@@ -66,14 +66,15 @@
       :existingFields="importFields"
       :requiredFields="['职务']"
       :templateName="'班干部标准导入表'"
+      :students="allStudents"
+      :student-name-fields="['担任学生', '姓名', '学生']"
+      :multi-name-per-row="true"
       @import-data="onImportData"
       @cancel="importVisible = false"
     />
 
     <!-- ============ 新增/编辑职务弹窗 ============ -->
-    <Teleport to="body">
-    <Transition name="dialog">
-    <div v-if="nodeDialogVisible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10003]" @click.self="nodeDialogVisible = false">
+    <DialogShell :visible="nodeDialogVisible" :z-index="10003" @overlay="nodeDialogVisible = false">
       <div class="bg-surface p-6 rounded-xl w-96 shadow-card dialog-card border border-border">
         <div class="flex items-center justify-between gap-3 mb-4">
           <h3 class="text-lg font-bold text-text">{{ editTarget ? '编辑职务' : (parentTarget ? '添加下级职务' : '添加职务') }}</h3>
@@ -88,22 +89,18 @@
           </button>
         </div>
         <label class="block text-sm text-text-secondary mb-1">职务名称</label>
-        <input v-model="nodeForm.name" placeholder="如：学习委员、组长" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" autofocus />
+        <input v-model="nodeForm.name" placeholder="如：学习委员、组长" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" autofocus aria-label="如：学习委员、组长"/>
         <label class="block text-sm text-text-secondary mb-1">可担任人数</label>
-        <input v-model.number="nodeForm.max_count" type="number" min="1" max="99" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" />
+        <input v-model.number="nodeForm.max_count" type="number" min="1" max="99" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" aria-label="可担任人数" />
         <div class="flex justify-end gap-2">
           <button @click="nodeDialogVisible = false" class="bg-surface-hover text-text border border-border px-4 py-2 rounded transition-theme cursor-pointer">取消</button>
           <button @click="submitNode" class="bg-primary text-text-inverse px-4 py-2 rounded transition-theme cursor-pointer">确定</button>
         </div>
       </div>
-    </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- ============ 二次确认弹窗 ============ -->
-    <Teleport to="body">
-    <Transition name="dialog">
-    <div v-if="confirmMsg" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10004]" @click.self="confirmMsg = null">
+    <DialogShell :visible="!!confirmMsg" :z-index="10004" @overlay="confirmMsg = null">
       <div class="bg-surface p-6 rounded-xl w-96 shadow-card dialog-card border border-border">
         <h3 class="text-lg font-bold text-text mb-3">确认操作</h3>
         <p class="text-text-secondary mb-4">{{ confirmMsg }}</p>
@@ -112,9 +109,7 @@
           <button @click="doConfirmDelete" class="bg-danger text-white px-4 py-2 rounded transition-theme cursor-pointer">删除</button>
         </div>
       </div>
-    </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
   </div>
 </template>
 
@@ -126,6 +121,7 @@ import { prefetch } from '../utils/dialogPrefetch.js'
 import axios from 'axios'
 import CadreTreeList from './CadreTreeList.vue'
 import CustomScrollbar from './base/CustomScrollbar.vue'
+import DialogShell from './base/DialogShell.vue'
 
 // KeepAlive 缓存 key：ClassroomView 用 v-if + KeepAlive 包住本组件，
 // 切到「学生信息」时缓存而非卸载，避免切回来重新挂载导致「空态→树」闪跳 + 重复拉接口。
@@ -133,6 +129,7 @@ defineOptions({ name: 'CadreManage' })
 import { useNotification } from '../composables/useNotification'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
 import { recordUndo as recordUndoSpec } from '../utils/undoRecorder.js'
+import { createLatest } from '../utils/latestOnly.js'
 
 // 导出弹窗懒加载：首次点开时才加载 ExportExcel 的代码块
 const loadExportExcel = () => import('./import-export/ExportExcel/ExportExcel.vue')
@@ -146,6 +143,9 @@ const API_BASE = '/api'
 const tree = ref([])
 const loading = ref(false)
 const allStudents = ref([])
+// 组件由父级 v-if 懒加载，切页签即卸载：回包前判代次，卸载/重挂后旧响应不再写（F01-08）
+const treeSeq = createLatest()
+const studentsSeq = createLatest()
 
 // 职务树滚动容器（自定义滚动条的目标）
 const treeScrollRef = ref(null)
@@ -255,19 +255,22 @@ function recordMoveUndo(before, res, label) {
 }
 
 async function loadTree() {
+  const my = treeSeq.begin()
   loading.value = true
   try {
     const res = await api({ url: '/cadres' })
+    if (!treeSeq.isCurrent(my)) return false
     const next = res.data.tree || []
     // 刷新时数据没变就别替换 tree.value：整体换引用会让递归树整棵重画，
     // 表现为「下面的列表闪跳」。内容一致直接沿用旧数组，折叠/选中状态也不受影响。
     if (JSON.stringify(next) !== JSON.stringify(tree.value)) tree.value = next
     return true
   } catch (e) {
+    if (!treeSeq.isCurrent(my)) return false
     error('加载职务树失败')
     return false
   } finally {
-    loading.value = false
+    if (treeSeq.isCurrent(my)) loading.value = false
   }
 }
 // 工具栏「刷新」：重新拉取职务树并给出提示条反馈（失败时 loadTree 已弹错误提示，不再叠加成功提示）
@@ -328,10 +331,10 @@ const importFields = [
   { name: '担任学生' },
   { name: '可担任人数' }
 ]
-async function onImportData({ fields, rows }) {
+async function onImportData({ fields, rows, studentIds }) {
   importVisible.value = false
   try {
-    const res = await api({ url: '/cadres/import', method: 'post', data: { fields, rows } })
+    const res = await api({ url: '/cadres/import', method: 'post', data: { fields, rows, studentIds } })
     tree.value = (res.data && res.data.tree) || []
     // 只回滚本次真正新建的职务/成员；导入前已有的数据不受影响
     const created = res.data && res.data.created
@@ -348,15 +351,22 @@ async function onImportData({ fields, rows }) {
 }
 
 async function fetchStudents() {
+  const my = studentsSeq.begin()
   try {
     const res = await api({ url: '/students' })
+    if (!studentsSeq.isCurrent(my)) return
     // 只接受数组或 {data:数组}：异常形状（如旧缓存解不开的 {d}）不覆盖现有名册，
     // 否则 CadreTreeList 里的 .filter/.find 会直接崩
     const body = res && res.data
     const list = Array.isArray(body) ? body : (body && Array.isArray(body.data) ? body.data : null)
     if (!list) { console.error('[students] 响应形状异常', body); return }
     allStudents.value = list
-  } catch (e) { /* 学生列表不可用时不阻塞 */ }
+  } catch (e) {
+    if (!studentsSeq.isCurrent(my)) return
+    // 与「名册确实为空」区分开：失败不能静默显示空态（F01-08）
+    console.error('[students] 学生列表加载失败', e)
+    error('学生列表加载失败，班干部姓名可能不完整')
+  }
 }
 
 onMounted(() => { loadTree(); fetchStudents(); applyFocus() })

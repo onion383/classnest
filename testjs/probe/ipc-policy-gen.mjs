@@ -9,8 +9,12 @@
 // 输出 electron/ipc-policy.json（主进程与 preload 共用的唯一授权来源）。
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 
-const ROOT = path.resolve(process.argv[2] || '.')
+const ARGS = process.argv.slice(2)
+const CHECK_ONLY = ARGS.includes('--check')
+const SCRIPT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const ROOT = path.resolve(ARGS.find((a) => !a.startsWith('--')) || SCRIPT_ROOT)
 // 入口路径相对 ROOT 解析（不能相对进程 cwd，否则从仓库根跑时全部解析失败）
 const ENTRIES = {
   main: 'src/main.js',
@@ -113,6 +117,9 @@ const CONST_FILE = 'src/electronChannels.js'
 //     策略文件是**生成物**，人工改会被下次重跑覆盖。）
 const OVERRIDE = {
   'set-db-encryption': ['main'],
+  // dev 加载页是 main 窗口里的内联脚本（main.dev-loader.js），不在前端 import 图内，
+  // 生成器扫不到该调用点 —— 显式补登 main（X1-05）。
+  'boot-status': ['main'],
 }
 
 const policy = {}
@@ -142,5 +149,18 @@ for (const list of ['send', 'invoke']) {
   }
 }
 const out = { _comment: '通道 → 允许的窗口角色（由静态 import 图推导，见 testjs/probe/ipc-policy-probe.cjs）', ...policy }
-fs.writeFileSync(path.resolve(ROOT, '../electron/ipc-policy.json'), JSON.stringify(out, null, 2) + '\n')
-console.log(JSON.stringify({ policy, evidence }, null, 1))
+const target = path.resolve(ROOT, '../electron/ipc-policy.json')
+const text = JSON.stringify(out, null, 2) + '\n'
+// --check：只对账不落盘。CI / npm test 用它锁住「生成物 ↔ 生成器」同源（Q4-03）。
+if (CHECK_ONLY) {
+  let cur = ''
+  try { cur = fs.readFileSync(target, 'utf8') } catch (_) { /* 缺文件按漂移处理 */ }
+  if (cur !== text) {
+    console.error('electron/ipc-policy.json 与生成器不一致，请运行 node testjs/probe/ipc-policy-gen.mjs 重新生成')
+    process.exit(1)
+  }
+  console.log('ipc-policy.json 与生成器同源')
+} else {
+  fs.writeFileSync(target, text)
+  console.log(JSON.stringify({ policy, evidence }, null, 1))
+}

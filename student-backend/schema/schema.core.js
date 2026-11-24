@@ -1,4 +1,5 @@
-// schema 拆分子文件：核心表（学生 / 用户 / 待办 / 表元数据）+ 默认列与索引。
+// schema 拆分子文件：核心表（学生 / 用户 / 表元数据）+ 默认列与索引。
+// 「待处理请求」曾在这里建 pending_requests，已被 mcp_proposals 取代（见 schema.mcp.js）。
 function migrateCore(conn) {
   conn.exec(`
     CREATE TABLE IF NOT EXISTS students (

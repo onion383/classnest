@@ -657,7 +657,7 @@ useUndoShortcut('课程表', {
 onMounted(() => {
   loadMaster();
   loadActive();
-  ctx.fetchHistoryWeeks();
+  // F07-10：历史周快照不是首屏内容，等用户切到「历史」页签再拉（见 activeTab 的 watch）。
   _applyRowFocus();
 })
 onActivated(() => {

@@ -13,13 +13,36 @@
 // DOC_TABLES / GRID_SOURCES），本文件只拼语句与绑定，不再重复校验。
 const { db } = require('../db')
 const store = require('./slotStore')
-const { packJson } = require('../utils/json')
-const { SEAT_CURRENT_SLOTS } = require('../schema/tableRegistry')
+const { packJson, safeJson } = require('../utils/json')
+const { COLUMN_RULES, sanitizeField } = require('./sanitize')
+const { SEAT_CURRENT_SLOTS, MATRIX_GEOMETRY_TABLES: MATRIX_GEOMETRY_TABLE_LIST } = require('../schema/tableRegistry')
+
+// X3-06：回放快照写回前按当前列级规则清洗脏值（数字/日期/枚举/布尔/电话）。
+// 三条约束保证「撤销 = 精确还原」不被破坏：
+//   1. 只对声明了列级规则的标量列清洗——无规则的列原样写回，避免 cleanByType('文字')
+//      把合法数字/日期 String() 成字符串；
+//   2. JSON / 结构化列（json / seatgrid / dutycells / dutymap / apps / classinfo）跳过——
+//      sanitizeField 返回对象，直接绑值会被 better-sqlite3 存成 "[object Object]"，
+//      而快照里的 JSON 值本来就是合法字符串；
+//   3. 清洗抛错（快照带脏值）时保留原值——恢复语义优先，宁可放过脏值也不能让撤销失败，
+//      让用户的「撤销」按钮永远可用。
+const STRUCTURED_RULES = new Set(['json', 'seatgrid', 'dutycells', 'dutymap', 'apps', 'classinfo'])
+function sanitizeReplayValue(table, column, value) {
+  const rule = COLUMN_RULES[table] && COLUMN_RULES[table][column]
+  if (!rule || STRUCTURED_RULES.has(rule.kind)) return value
+  try { return sanitizeField(value, table, column) } catch (_) { return value }
+}
 
 const GEOMETRY_COUNT_TABLES = new Set(SEAT_CURRENT_SLOTS)
+// 非座位网格里几何可由当前 cells 矩阵推出的表（课表）。值日表的 cells 是
+// {项目:{星期:[]}} 的对象，没有行列几何，不在此列。清单从注册表引用，禁止手抄。
+const MATRIX_GEOMETRY_TABLES = new Set(MATRIX_GEOMETRY_TABLE_LIST)
 
 // 每 key 保留条数：撤销面板不分页，完全建立在这个上限上（见 undo-retention 判据）。
 const MAX_KEYS = 50
+// 时间保留期：某个 key 之后不再编辑时，它的 50 条快照会永久留存（K05-04）。
+// 30 天足够覆盖「放假回来还想撤回」的场景，又不会让 undo_history 无限增长。
+const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
 // 批量回退的 savepoint 序号：名字每次不同，避免重入时撞名（SQLite 同名 savepoint 会嵌套，
 // RELEASE 只释放最近一层，撞名会让外层提交落空）。
@@ -48,6 +71,15 @@ function findById(id) {
   return db.prepare('SELECT * FROM undo_history WHERE id = ?').get(id)
 }
 
+// 访问时间线只需要的列（K04-07）：按来源/时间下推，避免把 undo_history 整表读进内存。
+function listForAccess(source, { since = '', limit = 1000 } = {}) {
+  const cap = Math.max(1, Math.min(5000, Number(limit) || 1000))
+  return db.prepare(
+    `SELECT id, key, label, ts, dir, source, origin FROM undo_history
+     WHERE source = ? AND (? = '' OR ts >= ?) ORDER BY id DESC LIMIT ${cap}`
+  ).all(source, since, since)
+}
+
 // 某 key 在某方向的最近一条（'undo' 侧 dir=1 / 'redo' 侧 dir=0）。
 // full=true 取整行（撤销要 origin），false 只取 label（按钮态文案）。
 function latestByKey(key, dir, full = false) {
@@ -62,6 +94,8 @@ function push({ key, type, label, payload, origin, source }) {
   const src = source || sourceOfOrigin(origin)
   return db.transaction(() => {
     db.prepare('DELETE FROM undo_history WHERE dir = 0').run()
+    // 顺带清超龄记录：只按 key 条数淘汰时，长期不再编辑的 key 会永久保留（K05-04）
+    db.prepare('DELETE FROM undo_history WHERE ts < ?').run(new Date(Date.now() - MAX_AGE_MS).toISOString())
     const info = db.prepare(
       'INSERT INTO undo_history (key, type, label, payload, dir, origin, source, ts) VALUES (?, ?, ?, ?, 1, ?, ?, ?)'
     ).run(key, type, label, packJson(payload, 'undo_payload'), origin || '', src, ts)
@@ -147,10 +181,6 @@ function findRowById(table, id) {
   return db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id)
 }
 
-function deleteById(id) {
-  return db.prepare('DELETE FROM undo_history WHERE id = ?').run(id)
-}
-
 // key 为空表示清空全部（路由层已把 'all' 转成 undefined）
 function clear(key) {
   if (key == null) return db.prepare('DELETE FROM undo_history').run()
@@ -164,10 +194,17 @@ function readDocColumn(table, column) {
   return store.isDoc(table) ? store.getDoc(table) : db.prepare(`SELECT "${column}" FROM "${table}" WHERE id = 1`).get()
 }
 
-// 座位表的当前几何（非座位表返回 null）。撤销单格前用它判「布局是否已经变小」。
+// 网格表的当前几何（行数/列数），撤销单格前用它判「布局是否已经变小」。
+// 座位表的几何是独立列；课表这类矩阵的几何就是当前 cells 的形状（Q2-06）。
 function readSeatGeometry(table) {
-  if (!GEOMETRY_COUNT_TABLES.has(table)) return null
-  return store.isDoc(table) ? store.getDoc(table) : db.prepare(`SELECT rows, cols FROM "${table}" WHERE id = 1`).get()
+  if (GEOMETRY_COUNT_TABLES.has(table)) {
+    return store.isDoc(table) ? store.getDoc(table) : db.prepare(`SELECT rows, cols FROM "${table}" WHERE id = 1`).get()
+  }
+  if (!MATRIX_GEOMETRY_TABLES.has(table)) return null
+  const row = readDocColumn(table, 'cells')
+  const cells = safeJson(row && row.cells, [], 'cells')
+  if (!Array.isArray(cells) || !cells.length || !Array.isArray(cells[0]) || !cells[0].length) return null
+  return { rows: cells.length, cols: cells[0].length }
 }
 
 // 整体覆盖网格列。座位整块快照可带几何 { seats, types }，两列同笔写。
@@ -214,7 +251,7 @@ function insertRow(table, row) {
   if (!keys.length) return
   const cols = keys.map((k) => `"${k}"`).join(',')
   const ph = keys.map(() => '?').join(',')
-  db.prepare(`INSERT INTO ${table} (${cols}) VALUES (${ph})`).run(...keys.map((k) => row[k]))
+  db.prepare(`INSERT INTO ${table} (${cols}) VALUES (${ph})`).run(...keys.map((k) => sanitizeReplayValue(table, k, row[k])))
 }
 
 function deleteRowById(table, id) {
@@ -225,12 +262,12 @@ function updateRowById(table, id, row) {
   const keys = rowKeys(table, row).filter((k) => k !== 'id')
   if (!keys.length) return
   const set = keys.map((k) => `"${k}" = ?`).join(', ')
-  db.prepare(`UPDATE ${table} SET ${set} WHERE id = ?`).run(...keys.map((k) => row[k]), id)
+  db.prepare(`UPDATE ${table} SET ${set} WHERE id = ?`).run(...keys.map((k) => sanitizeReplayValue(table, k, row[k])), id)
 }
 
 // 单格写回（cell_update）：字段名已在 validate 里按真实列校验
 function setCellValue(table, field, value, rowId) {
-  db.prepare(`UPDATE "${table}" SET "${field}" = ? WHERE id = ?`).run(value, rowId)
+  db.prepare(`UPDATE "${table}" SET "${field}" = ? WHERE id = ?`).run(sanitizeReplayValue(table, field, value), rowId)
 }
 
 // 成员姓名（快照）被单独回写后，把权威引用拉回一致。
@@ -303,10 +340,12 @@ function applyGroupSnapshot(dimId, groups) {
     db.prepare('DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE dimension_id = ?)').run(dimId)
     db.prepare('DELETE FROM groups WHERE dimension_id = ?').run(dimId)
     const insG = db.prepare('INSERT INTO groups (id, dimension_id, name, gender, sort_order) VALUES (?, ?, ?, ?, ?)')
-    const insM = db.prepare('INSERT INTO group_members (id, group_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?, ?)')
+    // student_id 是权威引用（同名两人靠它区分）；快照行带着它，回填时必须一起写回，
+    // 否则撤销/重做后成员行只剩姓名，引用退化为姓名匹配（K05-06）。
+    const insM = db.prepare('INSERT INTO group_members (id, group_id, student_id, member_name, remark, sort_order) VALUES (?, ?, ?, ?, ?, ?)')
     for (const g of groups || []) {
       insG.run(g.id, dimId, g.name ?? '', g.gender ?? null, g.sort_order)
-      for (const m of g.members || []) insM.run(m.id, g.id, m.member_name ?? '', m.remark ?? '', m.sort_order)
+      for (const m of g.members || []) insM.run(m.id, g.id, m.student_id ?? null, m.member_name ?? '', m.remark ?? '', m.sort_order)
     }
   })()
 }
@@ -552,8 +591,11 @@ function reapplyAlbumPhotoMove(targetId, records) {
 }
 
 module.exports = {
+  MAX_AGE_MS,
   // 记录表
   listAll,
+  // 访问时间线用：按来源/时间下推，只取折叠所需列
+  listForAccess,
   findById,
   latestByKey,
   push,
@@ -570,7 +612,6 @@ module.exports = {
   listAiRows,
   sourceOfOrigin,
   findRowById,
-  deleteById,
   clear,
   // 网格 / 文档列
   readDocColumn,

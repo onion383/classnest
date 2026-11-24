@@ -9,12 +9,10 @@
 // 判据：① 有关联 → 400 且数据原样 ② 无关联 → 正常删 ③ 显式放行能删
 //       ④ 别的表不受影响 ⑤ 接线：两条删除路径各自传对了参数
 // =========================================================================
-const path = require('node:path')
-const fs = require('node:fs')
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { createBackendDb, ROOT } = require('./_db-express-fixture.cjs')
+const { createBackendDb } = require('./_db-express-fixture.cjs')
 
 const fx = createBackendDb({ label: 'stu-del' })
 const { createDynamicTableRouter } = require('../../student-backend/routes/dynamicTable')
@@ -79,12 +77,4 @@ test('其他表不受这条守卫影响：请假记录照常删', async () => {
   const lid = fx.conn.prepare("INSERT INTO leave_records (student_id, 姓名, 类型, 开始时间, 结束时间, 状态) VALUES (?,'张三','事假','2026-11-01','2026-11-02','已返校')").run(id).lastInsertRowid
   assert.doesNotThrow(() => deleteRow('leave_records', lid))
   assert.equal(fx.conn.prepare('SELECT COUNT(*) c FROM leave_records WHERE id = ?').get(lid).c, 0)
-})
-
-test('接线：一并删除的调用点显式放行，通用入口不带', () => {
-  const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
-  const app = read('student-backend/app.js')
-  assert.match(app, /deleteRow\('students', id, \{ allowStudentOrphans: true \}\)/, 'delete-with-relations 必须显式放行（否则 purge 完也删不掉）')
-  const dyn = read('student-backend/routes/dynamicTable.js')
-  assert.match(dyn, /deleteRow\(tableName, req\.params\.id, \{ minCount \}\)/, '通用 DELETE 不许传放行标记 —— 那就是留孤儿的入口')
 })

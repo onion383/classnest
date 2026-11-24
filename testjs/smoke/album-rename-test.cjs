@@ -28,6 +28,8 @@ process.env.ALBUM_THUMBS_DIR = path.join(DATA_DIR, 'album-thumbs')
 const express = require(path.join(BACKEND_MODULES, 'express'))
 const dbManager = require(path.join(BACKEND, 'dbManager', 'dbManager'))
 const albumRouter = require(path.join(BACKEND, 'routes', 'album'))
+// X2-02：PATCH /api/album/:id 已下线，改名边界测试直接调服务函数（仍走真库）
+const albumStore = require(path.join(BACKEND, 'services', 'albumStore'))
 
 const USERNAME = 'album-rename-smoke'
 const { slug } = dbManager.createTeacher(USERNAME, 'not-a-real-hash', 'teacher')
@@ -102,39 +104,41 @@ function request(port, { method = 'GET', path: reqPath = '/', body = null } = {}
   const port = server.address().port
   const rowOf = (id) => dbManager.withDb(slug, () =>
     dbManager.current().prepare('SELECT name, folder_path, kind FROM albums WHERE id = ?').get(id))
+  const rename = (id, patch) => dbManager.withDb(slug, () =>
+    albumStore.updateAlbumFieldsChecked(id, patch, ''))
 
   try {
     // ---------- 正常：虚拟相册只改名 ----------
-    const r1 = await request(port, { method: 'PATCH', path: '/api/album/1', body: { name: '虚拟相册-新名' } })
-    check('虚拟相册只改名 → 200', r1.status === 200, `status=${r1.status} body=${r1.raw}`)
+    const r1 = rename(1, { name: '虚拟相册-新名' })
+    check('虚拟相册只改名 → 成功', r1.ok === true, JSON.stringify(r1))
     check('虚拟相册名称已更新', rowOf(1).name === '虚拟相册-新名')
     check('虚拟相册 folder_path 仍为空串（未被误写成 undefined/null）', rowOf(1).folder_path === '', rowOf(1).folder_path)
 
     // ---------- 正常：虚拟相册显式传空路径 ----------
-    const r2 = await request(port, { method: 'PATCH', path: '/api/album/1', body: { name: '虚拟相册-再改', folder_path: '' } })
-    check('虚拟相册显式传空路径 → 200（不再误判 400）', r2.status === 200, `status=${r2.status} body=${r2.raw}`)
+    const r2 = rename(1, { name: '虚拟相册-再改', folder_path: '' })
+    check('虚拟相册显式传空路径 → 成功（不再误判拒绝）', r2.ok === true, JSON.stringify(r2))
 
     // ---------- 正常：文件夹相册只改名，路径必须保留 ----------
-    const r3 = await request(port, { method: 'PATCH', path: '/api/album/2', body: { name: '文件夹相册-新名' } })
-    check('文件夹相册只改名 → 200', r3.status === 200, `status=${r3.status} body=${r3.raw}`)
+    const r3 = rename(2, { name: '文件夹相册-新名' })
+    check('文件夹相册只改名 → 成功', r3.ok === true, JSON.stringify(r3))
     check('文件夹相册路径不被清空', rowOf(2).folder_path === DATA_DIR, rowOf(2).folder_path)
 
     // ---------- 正常：文件夹相册显式给合法路径 ----------
-    const r4 = await request(port, { method: 'PATCH', path: '/api/album/2', body: { folder_path: DATA_DIR } })
-    check('文件夹相册显式给合法路径 → 200', r4.status === 200, `status=${r4.status} body=${r4.raw}`)
+    const r4 = rename(2, { folder_path: DATA_DIR })
+    check('文件夹相册显式给合法路径 → 成功', r4.ok === true, JSON.stringify(r4))
 
     // ---------- 异常：文件夹相册路径清洗后为空 ----------
-    const r5 = await request(port, { method: 'PATCH', path: '/api/album/2', body: { folder_path: '   ' } })
-    check('文件夹相册路径为空白 → 400', r5.status === 400, `status=${r5.status}`)
+    const r5 = rename(2, { folder_path: '   ' })
+    check('文件夹相册路径为空白 → 拒绝', r5.ok === false, JSON.stringify(r5))
     check('400 后路径保持不变', rowOf(2).folder_path === DATA_DIR, rowOf(2).folder_path)
 
     // ---------- 异常：名称为空 ----------
-    const r6 = await request(port, { method: 'PATCH', path: '/api/album/1', body: { name: '   ' } })
-    check('虚拟相册名称空白 → 400（名称校验没被削弱）', r6.status === 400, `status=${r6.status}`)
+    const r6 = rename(1, { name: '   ' })
+    check('虚拟相册名称空白 → 拒绝（名称校验没被削弱）', r6.ok === false, JSON.stringify(r6))
 
     // ---------- 异常：不存在的 id ----------
-    const r7 = await request(port, { method: 'PATCH', path: '/api/album/99', body: { name: 'x' } })
-    check('不存在的相册 → 404', r7.status === 404, `status=${r7.status}`)
+    const r7 = rename(99, { name: 'x' })
+    check('不存在的相册 → 拒绝', r7.ok === false && /不存在/.test(r7.error), JSON.stringify(r7))
   } finally {
     await cleanup()
   }

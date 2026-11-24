@@ -53,33 +53,23 @@ export function useSettingsAppearance(ctx) {
 
       // 检查是否在 Electron 环境中，且文件大于 2MB，使用后端存储
       if (window.electron && window.electron.invoke && file.size > 2 * 1024 * 1024) {
-        // 读取文件为 base64 后传给主进程保存
-        const reader = new FileReader()
-        reader.onload = async (ev) => {
-          try {
-            const base64Data = ev.target.result.split(',')[1] // 去掉 data:image/...;base64, 前缀
-            const result = await window.electron.invoke(INVOKE.SAVE_BACKGROUND_IMAGE, {
-              name: file.name,
-              base64: base64Data
-            })
-            if (result.success && result.url) {
-              ctx.bgImageUrl.value = result.url
-              ctx.themeStore.setBackgroundImage(result.url)
-            } else {
-              ctx.showAlert(result.error || '保存图片失败')
-            }
-          } catch (err) {
-            console.error('保存图片失败:', err)
-            ctx.showAlert('保存图片失败: ' + (err?.message || '未知错误'))
+        // P3-07：大图直接传 ArrayBuffer（二进制），不再转 base64 字符串过 IPC ——
+        // base64 凭空放大 4/3，且主进程还要再解码出一份等量 Buffer。
+        try {
+          const result = await window.electron.invoke(INVOKE.SAVE_BACKGROUND_IMAGE, {
+            name: file.name,
+            buffer: await file.arrayBuffer()
+          })
+          if (result.success && result.url) {
+            ctx.bgImageUrl.value = result.url
+            ctx.themeStore.setBackgroundImage(result.url)
+          } else {
+            ctx.showAlert(result.error || '保存图片失败')
           }
+        } catch (err) {
+          console.error('保存图片失败:', err)
+          ctx.showAlert('保存图片失败: ' + (err?.message || '未知错误'))
         }
-        // 读盘失败/取消时补上反馈，否则界面停在「已选择文件」却什么都没发生
-        reader.onerror = () => {
-          console.error('读取背景图片失败:', reader.error)
-          ctx.showAlert('读取图片失败，请重试')
-        }
-        reader.onabort = () => ctx.showAlert('已取消读取图片')
-        reader.readAsDataURL(file)
       } else {
         // 小图片或非 Electron 环境，使用 base64
         if (file.size > 2 * 1024 * 1024) {

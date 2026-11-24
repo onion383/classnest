@@ -574,7 +574,8 @@ async function main() {
   const usrAfter = f.GetGuiResources(f.GetCurrentProcess(), 1)
   log(`GDI 对象: ${gdiBefore} → ${gdiAfter}（净增 ${Number(gdiAfter) - Number(gdiBefore)}）`)
   log(`USER 对象: ${usrBefore} → ${usrAfter}（净增 ${Number(usrAfter) - Number(usrBefore)}）`)
-  log(`结论: ${Number(gdiAfter) - Number(gdiBefore) <= 5 ? '无泄漏 ✓' : '疑似泄漏 ✗'}`)
+  const leaked = Number(gdiAfter) - Number(gdiBefore) > 5
+  log(`结论: ${leaked ? '疑似泄漏 ✗' : '无泄漏 ✓'}`)
 
   // ---- 7) 汇总 ----
   log('')
@@ -588,7 +589,8 @@ async function main() {
 
   await fsp.writeFile(LOG, lines.join('\n') + '\n', 'utf8')
   win.destroy()
-  app.quit()
+  // 泄漏是可判定结论，必须回传退出码（T01-12）
+  app.exit(leaked ? 1 : 0)
 }
 
 app.whenReady().then(() =>
@@ -600,6 +602,6 @@ app.whenReady().then(() =>
       /* 忽略 */
     }
     await fsp.writeFile(LOG, lines.join('\n') + '\n', 'utf8')
-    app.quit()
+    app.exit(1)
   })
 )

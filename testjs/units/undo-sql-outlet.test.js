@@ -11,6 +11,9 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
 const { ROOT } = require('./_db-express-fixture.cjs')
+const {
+  analyze, walk, memberPath, findFunction,
+} = require('../_source-scan.cjs')
 
 const FILES = [
   'student-backend/routes/undo/undo.js',
@@ -24,33 +27,47 @@ function read(file) {
   return fs.readFileSync(path.join(ROOT, file), 'utf8')
 }
 function codeOnly(file) {
-  return read(file)
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^[ \t]*\/\/.*$/gm, '')
+  // AST 的 codeNoStrings：注释和字符串内容都已抹成空格 —— 字符串里写一句 '.prepare('
+  // 不会被当成裸 SQL（旧的正则剔除注释会留下字符串），真代码里的调用仍然可见。
+  return analyze(read(file)).codeNoStrings
+}
+// SQL 规范化空白：源码换行/缩进变化不再影响判据（旧正则绑定单空格）
+function sqlOf(file) {
+  return read(file).replace(/\s+/g, ' ')
 }
 
 test('SQL 出口：undo 的 5 个文件不留裸 SQL', () => {
   for (const f of FILES) {
     const code = codeOnly(f)
-    assert.ok(!/\.prepare\(/.test(code), `${f} 不许再有裸 SQL（应走 services/undoStore；显式 conn 也不行）`)
-    assert.ok(!/const \{ db \} = require/.test(code), `${f} 不许再持有 db`)
+    assert.ok(!/\.prepare\s*\(/.test(code), `${f} 不许再有裸 SQL（应走 services/undoStore；显式 conn 也不行）`)
+    assert.ok(!/const\s*\{\s*db\s*\}\s*=\s*require/.test(code), `${f} 不许再持有 db`)
   }
 })
 
 test('undoStore 承担记录表与执行器动作的语句', () => {
-  const st = read('student-backend/services/undoStore.js')
+  const st = sqlOf('student-backend/services/undoStore.js')
   // 记录表：插入（含清 redo 与淘汰）与方向 CAS
   // source 是统一来源分类（manual/ai_assistant/mcp），列顺序固定，改列清单这里是第一道闸。
   assert.match(st, /INSERT INTO undo_history \(key, type, label, payload, dir, origin, source, ts\)/)
   assert.match(st, /UPDATE undo_history SET dir = \? WHERE id = \? AND dir = \?/)
   // expected 校验读当前行也必须走 store（不许在 records/expected 里写裸 SQL）
-  assert.match(st, /function findRowById\(table, id\)/)
+  assert.ok(findFunction(analyze(read('student-backend/services/undoStore.js')).ast, 'findRowById'),
+    'undoStore 应提供 findRowById(table, id)')
   // 每 key 上限：面板不分页完全建立在这条上
   assert.match(st, /LIMIT -1 OFFSET \?/)
 })
 
 test('执行器的复合动作必须真的经 store', () => {
-  const ex = codeOnly('student-backend/routes/undo/undo.executors.js')
+  const { ast } = analyze(read('student-backend/routes/undo/undo.executors.js'))
+  // 为什么用 AST 收集调用而不是 /undoStore\.name\(/ 正则：
+  // 正则会命中注释/字符串里的同名字样；而且空格一变（undoStore.name (）就假红。
+  // 这里只认真实的 CallExpression 且 callee 静态路径是 undoStore.<name>。
+  const called = new Set()
+  walk(ast.program, (node) => {
+    if (node.type !== 'CallExpression') return
+    const p = memberPath(node.callee)
+    if (p && p.startsWith('undoStore.')) called.add(p.slice('undoStore.'.length))
+  })
   for (const name of [
     'restoreDimension',
     'restoreMergedAlbum',
@@ -61,8 +78,8 @@ test('执行器的复合动作必须真的经 store', () => {
     'restoreAlbumPhotoMove',
     'writeGridSnapshot',
   ]) {
-    assert.match(ex, new RegExp(`undoStore\\.${name}\\(`), `执行器必须调用 undoStore.${name}`)
+    assert.ok(called.has(name), `执行器必须调用 undoStore.${name}`)
   }
   // 学生级联删除要同时写行与座位/值日 JSON，事务必须由 undoStore 提供
-  assert.match(ex, /undoStore\.runInTransaction\(/)
+  assert.ok(called.has('runInTransaction'), '执行器必须用 undoStore.runInTransaction 包事务')
 })

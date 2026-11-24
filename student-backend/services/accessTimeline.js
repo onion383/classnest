@@ -24,11 +24,12 @@ const proposals = require('./mcpProposalStore');
 const UNDO_SOURCE = { ai: 'ai_assistant', mcp: 'mcp' };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// 已执行的写入：按 origin 折叠成「一步」
-function writeSteps(source) {
+// 已执行的写入：按 origin 折叠成「一步」。
+// 过滤（来源 / 时间窗 / 条数）全部下推到 SQL，不再每次展开弹窗都整表读 undo_history。
+function writeSteps(source, { since = '', limit = 1000 } = {}) {
   const want = UNDO_SOURCE[source];
   if (!want) return [];
-  const rows = undoStore.listAll().filter((r) => (r.source || '') === want);
+  const rows = undoStore.listForAccess(want, { since, limit });
   const map = new Map();
   for (const r of rows) {
     const k = r.origin ? `o:${r.origin}` : `i:${r.id}`;
@@ -110,7 +111,7 @@ function summary({ source, days = 7 } = {}) {
   const d = Math.max(1, Math.min(365, Number(days) || 7));
   const since = new Date(Date.now() - d * DAY_MS).toISOString();
   const base = accessLog.summary({ source, days: d });
-  const writes = writeSteps(source).filter((w) => String(w.at || '') >= since).length;
+  const writes = writeSteps(source, { since }).length;
   const pending = pendingProposals(source).length;
   return { ...base, writes, pending };
 }

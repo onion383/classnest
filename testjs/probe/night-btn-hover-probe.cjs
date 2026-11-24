@@ -13,11 +13,13 @@
 
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
+const os = require('os')
 const fs = require('fs')
 const { pathToFileURL } = require('url')
 
 const DIST = path.join(__dirname, '../../student-frontend/dist')
-const TMP = path.join(__dirname, '../tmp/night-btn-probe')
+// 产物放系统临时目录：多次运行不再往仓库里堆（T02-09）
+const TMP = path.join(os.tmpdir(), 'classnest-probe', 'night-btn-probe')
 
 let failed = 0
 const check = (name, ok, detail = '') => {

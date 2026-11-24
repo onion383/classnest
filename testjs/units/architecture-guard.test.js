@@ -204,3 +204,85 @@ test('channels.js 与 ipc-channels.json 同源（生成器幂等，禁止手改�
   const expected = renderChannels(JSON.parse(read('electron/ipc-channels.json')));
   assert.strictEqual(read('electron/main/channels.js'), expected, 'channels.js 已漂移，请运行 npm run channels:gen');
 });
+
+// ---------- Q4-01：AI 白名单 / 工具名 / 视图 / 列规则的集合对账 ----------
+// 过去只有「物理表 ↔ DDL」「IPC 通道」两条线有集合相等断言，AI 这条后加的链路
+// （读写白名单、工具 schema↔dispatch、列规则、逻辑视图）全靠人工审查，漂移可静默存活。
+
+const aiConstants = require('../../student-backend/routes/ai/ai.constants');
+const aiSchema = require('../../student-backend/routes/ai/ai.tools/tools.schema');
+const { COLUMN_RULES } = require('../../student-backend/services/sanitize');
+
+function keysOf(obj) { return Object.keys(obj || {}); }
+
+// schema/*.js 里 CREATE VIEW 建出来的只读视图（history 三件套等）。
+// 它们不是物理表、也不在 LOGICAL（slotStore 只认可写的逻辑表），但同样是合法的读目标；
+// 「是否已知表名」要把这部分算进来，否则体检清单引用 seat_history 会被误判成漂移。
+function collectSchemaViews() {
+  const dir = path.join(ROOT, 'student-backend/schema');
+  const views = new Set();
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith('.js')) continue;
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    for (const m of src.matchAll(/CREATE VIEW\s+(?:IF NOT EXISTS\s+)?([a-z_]+)/g)) views.add(m[1]);
+  }
+  return views;
+}
+const SCHEMA_VIEWS = collectSchemaViews();
+function isSchemaName(n) { return registry.isKnownName(n) || SCHEMA_VIEWS.has(n); }
+function namesInRegistry(list) {
+  return (list || []).filter((n) => !isSchemaName(n));
+}
+
+test('Q4-01 写白名单：WRITE / JSON_WRITE / BATCH / DOC_UNDO_KEY 全部来自注册表且键集同源', () => {
+  const unknownWrite = namesInRegistry(keysOf(aiConstants.WRITE_TABLES));
+  assert.deepStrictEqual(unknownWrite, [], `WRITE_TABLES 出现注册表外的表：${unknownWrite.join(', ')}`);
+  const unknownJson = namesInRegistry(keysOf(aiConstants.JSON_WRITE_TABLES));
+  assert.deepStrictEqual(unknownJson, [], `JSON_WRITE_TABLES 出现注册表外的表：${unknownJson.join(', ')}`);
+  // BATCH_ROW_TABLES = WRITE_TABLES + 两张成员表；集合必须严格包含，不能少也不能乱加
+  const batch = keysOf(aiSchema.BATCH_ROW_TABLES);
+  assert.deepStrictEqual(
+    [...new Set([...keysOf(aiConstants.WRITE_TABLES), 'group_members', 'cadre_members'])].sort(),
+    [...batch].sort(),
+    'BATCH_ROW_TABLES 必须恰好等于 WRITE_TABLES + group_members/cadre_members'
+  );
+  assert.deepStrictEqual(keysOf(aiConstants.DOC_UNDO_KEY).sort(), keysOf(aiConstants.JSON_WRITE_TABLES).sort(),
+    'DOC_UNDO_KEY 与 JSON_WRITE_TABLES 必须一一对应（新增整块写表时两处一起补）');
+});
+
+test('Q4-01 注册表白名单：AI 检索/体检/撤销/座位/值日清单只许出现已知表名', () => {
+  const groups = [
+    ['AI_SEARCH_TABLES', registry.AI_SEARCH_TABLES],
+    ['UNDO_WRITE_TABLES', registry.UNDO_WRITE_TABLES],
+    ['UNDO_DOC_TABLES', registry.UNDO_DOC_TABLES],
+    ['SEAT_CURRENT_SLOTS', registry.SEAT_CURRENT_SLOTS],
+    ['DUTY_TABLES', registry.DUTY_TABLES],
+  ];
+  for (const [name, list] of groups) {
+    const bad = namesInRegistry(list);
+    assert.deepStrictEqual(bad, [], `${name} 出现注册表外的表名：${bad.join(', ')}`);
+  }
+  for (const [name, map] of [['AI_CHECK_RULE_TABLES', registry.AI_CHECK_RULE_TABLES], ['AI_SCORE_TABLES', registry.AI_SCORE_TABLES]]) {
+    const bad = Object.values(map).flat().filter((n) => !isSchemaName(n));
+    assert.deepStrictEqual(bad, [], `${name} 出现注册表外的表名：${bad.join(', ')}`);
+  }
+});
+
+test('Q4-01 工具名：schema 里定义的每个工具都必须在 tools.js 有派发 case', () => {
+  // 工具对象形如 { type:'function', function:{ name, ... } }
+  const schemaNames = Object.values(aiSchema)
+    .map((v) => v && v.function && v.function.name)
+    .filter((n) => typeof n === 'string');
+  assert.ok(schemaNames.length >= 20, `工具 schema 数量异常：${schemaNames.length}`);
+  const dispatchSrc = read('student-backend/routes/ai/ai.tools/tools.js');
+  const cases = new Set([...dispatchSrc.matchAll(/case\s+'([a-z_]+)'\s*:/g)].map((m) => m[1]));
+  const missing = schemaNames.filter((n) => !cases.has(n));
+  assert.deepStrictEqual(missing, [], `schema 有、dispatch 缺（模型调到会落空）：${missing.join(', ')}`);
+});
+
+test('Q4-01 列规则与逻辑视图：COLUMN_RULES 表名已知，LOGICAL 每项都有对应 CREATE VIEW', () => {
+  const badTables = Object.keys(COLUMN_RULES).filter((t) => !isSchemaName(t));
+  assert.deepStrictEqual(badTables, [], `COLUMN_RULES 出现未知表：${badTables.join(', ')}`);
+  const missing = registry.ALL_LOGICAL.filter((n) => !SCHEMA_VIEWS.has(n));
+  assert.deepStrictEqual(missing, [], `LOGICAL 里的表缺少只读视图：${missing.join(', ')}`);
+});

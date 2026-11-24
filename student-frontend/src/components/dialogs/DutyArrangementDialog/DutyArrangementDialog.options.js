@@ -4,6 +4,21 @@
 
 import { nextTick } from 'vue'
 
+// 语义句里的下拉位没有可见标签，用「选项类别」生成可访问名（见 segmentsOf · label）
+const SEGMENT_LABELS = {
+  scopes: '范围',
+  units: '单元',
+  groups: '分组',
+  axes: '轴',
+  directions: '方向',
+  innerArranges: '组内排布',
+  relationTypes: '关系类型',
+  laborActions: '劳动方式',
+  innerOrder: '组内顺序',
+  students: '学生',
+  items: '项目',
+}
+
 export function useDutyArrangementOptions(ctx, REGISTRY) {
   return {
     // ==================== 拖拽交互 ====================
@@ -64,7 +79,12 @@ export function useDutyArrangementOptions(ctx, REGISTRY) {
       })
       return segs.map((s, idx) => s.t === 'text'
         ? { ...s, idx }
-        : { ...s, idx, options: ctx.resolveOptions(s.options) })
+        : {
+            ...s,
+            idx,
+            options: ctx.resolveOptions(s.options),
+            label: s.placeholder || SEGMENT_LABELS[s.options] || '选项',
+          })
     },
     resolveOptions(kind) {
       switch (kind) {

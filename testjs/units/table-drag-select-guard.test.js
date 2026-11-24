@@ -14,33 +14,41 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { analyze, findFunction, scriptBlocks } = require('../_source-scan.cjs')
 
 const SRC = path.join(__dirname, '../../student-frontend/src')
 const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8')
 const loadReorder = () => import(pathToFileURL(path.join(SRC, 'utils/rowReorder.js')).href)
 
+// 取具名函数/对象方法的函数体。
+// 为什么不用 src.slice(indexOf('function toggleAllSelect()'), +900)：
+// 固定 900 字符窗口在函数变长/前面加注释后就切不全（假红），而短函数又会把后面的
+// 同名代码带进来（漏报）。AST 直接给出函数节点范围，与缩进、空格、代码长度无关。
+function bodyOf(src, name) {
+  const { ast } = analyze(src)
+  const fn = findFunction(ast, name)
+  assert.ok(fn, `找不到 ${name}`)
+  return src.slice(fn.bodyStart, fn.bodyEnd)
+}
+
 // ———————————————— ① 全选只增删可见行 ————————————————
 
 test('§5-6：筛选态全选不再整体替换已选集合（隐藏行的选择保住）', () => {
   const src = read('components/tables/DynamicTable/DynamicTable.vue')
-  const at = src.indexOf('function toggleAllSelect()')
-  assert.ok(at > 0, '找不到 toggleAllSelect')
-  const body = src.slice(at, at + 900)
-  assert.doesNotMatch(body, /selectedRowKeys\.value = ctx\.isAllSelected\.value \? \[\] :/,
+  const body = bodyOf(scriptBlocks(src), 'toggleAllSelect')
+  assert.doesNotMatch(body, /selectedRowKeys\.value\s*=\s*ctx\.isAllSelected\.value\s*\?\s*\[\s*\]\s*:/,
     '旧的「全选=替换 / 取消=清空」写法必须消失')
-  assert.match(body, /filter\(k => !drop\.has\(k\)\)/, '取消全选要只摘掉可见行')
-  assert.match(body, /next\.add\(k\)/, '全选要并上可见行而不是替换')
+  assert.match(body, /filter\s*\(\s*k\s*=>\s*!drop\.has\(\s*k\s*\)\s*\)/, '取消全选要只摘掉可见行')
+  assert.match(body, /next\.add\(\s*k\s*\)/, '全选要并上可见行而不是替换')
 })
 
 // ———————————————— ② 全局 Enter 不抢按钮 ————————————————
 
 test('§5-6：全局 Enter 遇到任意按钮都让位给原生 click（不再按文案判断）', () => {
   const src = read('components/tables/DynamicTable/DynamicTable.vue')
-  const at = src.indexOf('function handleGlobalEnter')
-  assert.ok(at > 0, '找不到 handleGlobalEnter')
-  const body = src.slice(at, at + 900)
-  assert.match(body, /t\.tagName === 'BUTTON'\) return/, '任何按钮聚焦时都要 return')
-  assert.doesNotMatch(body, /tagName === 'BUTTON' && \/取消\//,
+  const body = bodyOf(scriptBlocks(src), 'handleGlobalEnter')
+  assert.match(body, /t\s*&&\s*t\.tagName\s*===\s*'BUTTON'\s*\)\s*return/, '任何按钮聚焦时都要 return')
+  assert.doesNotMatch(body, /tagName\s*===\s*'BUTTON'\s*&&\s*\/取消\//,
     '不应再靠按钮文案判断 —— 保存/筛选/删除按钮同样会双发（只看了注释不算通过）')
 })
 
@@ -131,29 +139,27 @@ test('§5-6 接线：useTableCRUD 走 rowReorder 的纯函数（不再用可见�
 // 窗口外松开 / 切窗口失焦时没有 mouseup，旧实现把 mousemove/mouseup 与虚影留在 window 上：
 // 再拖就叠在旧位移上，组件卸载也拿不到这些监听（v7 §5-6 / #22a）。
 
-function handleDownBody(src, header) {
-  const at = src.indexOf(header)
-  assert.ok(at > 0, `找不到 ${header}`)
-  return src.slice(at, at + 700)
+function handleDownBody(src, name) {
+  return bodyOf(src, name)
 }
 
 test('§5-6：GridView 的列拖动入口与行拖动同样有「先中止上一次」的兜底', () => {
   const src = read('components/tables/GridView/GridView.drag.js')
-  assert.match(handleDownBody(src, 'onColHandleDown(event, colIndex)'), /_abortColDrag\(\)/,
+  assert.match(handleDownBody(src, 'onColHandleDown'), /_abortColDrag\s*\(\s*\)/,
     '列拖动入口必须兜底清理（原来只有行拖动有）')
-  assert.match(src, /_abortColDrag\(\) \{[\s\S]{0,900}?ctx\._colMove\) window\.removeEventListener\('mousemove'/, '_abortColDrag 必须真的移除 window 监听')
-  assert.match(src, /_abortColDrag\(\) \{[\s\S]{0,900}?colDragIdx\.value = null/, '中止后要复位拖动状态')
+  // 中止函数的「移除监听」与「复位状态」必须在同一个函数体里，不能再靠 900 字符窗口
+  const abortCol = bodyOf(src, '_abortColDrag')
+  assert.match(abortCol, /window\s*\.\s*removeEventListener\s*\(\s*'mousemove'/, '_abortColDrag 必须真的移除 window 监听')
+  assert.match(abortCol, /colDragIdx\s*\.\s*value\s*=\s*null/, '中止后要复位拖动状态')
 })
 
 test('§5-6：DynamicTable 的行/列拖动入口都兜底，且中止函数不提交换位', () => {
   const src = read('components/tables/DynamicTable/DynamicTable.drag.js')
-  assert.match(handleDownBody(src, 'onRowHandleDown(event, index)'), /_abortRowDrag\(\)/, '行拖动入口要兜底')
-  assert.match(handleDownBody(src, 'onColHandleDown(event, colIndex)'), /_abortColDrag\(\)/, '列拖动入口要兜底')
+  assert.match(handleDownBody(src, 'onRowHandleDown'), /_abortRowDrag\s*\(\s*\)/, '行拖动入口要兜底')
+  assert.match(handleDownBody(src, 'onColHandleDown'), /_abortColDrag\s*\(\s*\)/, '列拖动入口要兜底')
   // 中止函数体内不能 emit swapRows / swapColumns —— 那会把一次中断变成一次真实换位
-  const abortRow = src.slice(src.indexOf('_abortRowDrag() {'), src.indexOf('finishRowDrag() {'))
-  assert.ok(abortRow.length > 0, '找不到 _abortRowDrag 实现')
+  const abortRow = bodyOf(src, '_abortRowDrag')
   assert.doesNotMatch(abortRow, /swapRows/, '_abortRowDrag 只清理，不提交')
-  const abortCol = src.slice(src.indexOf('_abortColDrag() {'), src.indexOf('finishColDrag() {'))
-  assert.ok(abortCol.length > 0, '找不到 _abortColDrag 实现')
+  const abortCol = bodyOf(src, '_abortColDrag')
   assert.doesNotMatch(abortCol, /swapColumns/, '_abortColDrag 只清理，不提交')
 })

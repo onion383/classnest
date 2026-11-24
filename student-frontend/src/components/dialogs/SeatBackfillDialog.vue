@@ -28,6 +28,7 @@
                 max="60"
                 v-model.number="weekCount"
                 @change="onWeekCountChange"
+                aria-label="周数"
                 class="border border-border bg-bg text-text px-3 py-2 rounded w-28"
               />
             </div>
@@ -37,6 +38,7 @@
                 type="date"
                 v-model="startDate"
                 @change="onDateChange"
+                aria-label="开始日期"
                 class="border border-border bg-bg text-text px-3 py-2 rounded"
               />
               <span class="text-text-muted">-</span>
@@ -44,12 +46,13 @@
                 type="date"
                 v-model="endDate"
                 @change="onDateChange"
+                aria-label="结束日期"
                 class="border border-border bg-bg text-text px-3 py-2 rounded"
               />
             </div>
             <div class="flex justify-end gap-2">
               <button @click="formOpen = false" class="bg-surface px-4 py-2 rounded text-text border border-border">取消</button>
-              <button @click="submitWeek" class="bg-primary text-text-inverse px-4 py-2 rounded">确定</button>
+              <button @click="submitWeek" :disabled="submitting" class="bg-primary text-text-inverse px-4 py-2 rounded disabled:opacity-50 disabled:cursor-not-allowed">{{ submitting ? '提交中…' : '确定' }}</button>
             </div>
           </div>
 
@@ -110,6 +113,8 @@ const startDate = ref('');
 const endDate = ref('');
 // 增加周记录表单是否展开
 const formOpen = ref(false);
+// 提交在途：连点「确定」不能重复写同一条周记录（F02-07）
+const submitting = ref(false);
 // 当前周每天的记录（后端返回，元素含 snap_date）
 const dailyRows = ref([]);
 // 「只认最后一次」的守卫：快速切周时，旧响应后到会把每日记录覆盖成上一周的
@@ -155,6 +160,7 @@ async function onOpen() {
 async function loadWeeks() {
   let list = []
   let semMonday = ''
+  let loadFailed = false
   try {
     const res = await axios.get('/api/schedule/semesters')
     const cur = res.data && res.data.current
@@ -172,7 +178,7 @@ async function loadWeeks() {
         guard++
       }
     }
-  } catch (e) { console.error(e) }
+  } catch (e) { console.error(e); loadFailed = true }
 
   if (!list.length) {
     // 学期未填日期：用历史快照的 week_start 列表（倒序返回，这里重排为升序）
@@ -182,8 +188,10 @@ async function loadWeeks() {
       const arr = (h.data || []).map(w => w.week_start).filter(Boolean)
       arr.sort()
       list = Array.from(new Set(arr)).map(ws => ({ week_start: ws }))
-    } catch (e) { console.error(e) }
+    } catch (e) { console.error(e); loadFailed = true }
   }
+  // 两处都失败且没有任何周可显示：明确告知故障，而不是留一个空下拉（F02-10）
+  if (!list.length && loadFailed) useNotification().error('读取周列表失败，请检查网络后重试')
 
   semesterMonday.value = semMonday
   weeks.value = list
@@ -234,6 +242,7 @@ async function loadDaily() {
     if (!dailyGuard.isCurrent(token)) return;
     console.error(e)
     dailyRows.value = []
+    useNotification().error('读取本周记录失败，请重试')
   }
 }
 function toggleForm() { formOpen.value = !formOpen.value }
@@ -278,19 +287,21 @@ function onDateChange() {
 }
 // 提交：把该周写入历史记录
 async function submitWeek() {
+  if (submitting.value) return
   const weekStart = currentWeek.value || mondayOf(startDate.value)
   if (!weekStart) {
     useNotification().error('请先选择有效的周')
     return
   }
+  submitting.value = true
   try {
     const res = await axios.post('/api/seats/history/week', { week_start: weekStart })
-    useNotification().success(res.data && res.data.message)
+    useNotification().success((res.data && res.data.message) || '已写入该周记录')
     formOpen.value = false
     await loadDaily()
     emit('changed')
   } catch (err) {
     useNotification().error((err && err.response && err.response.data && err.response.data.error) || '增加周记录失败')
-  }
+  } finally { submitting.value = false }
 }
 </script>

@@ -103,7 +103,7 @@ Electron 主进程层是整个桌面应用的「外壳与调度中心」，负�
 
 - `preload.js` 定义三张白名单：
   - `validSendChannels`：单向发送（`ipcRenderer.send`），如 `to-widget`、`widget-*`、`win-minimize/maximize-toggle/close`、`shutdown-action`、`quit-app`、`show-native-context-menu`、`theme-chrome`、`desktop-widget-enabled`、`widgets-ready`、`migration-*`、`setup-*`、`update-install` 等；
-  - `validInvokeChannels`：请求-响应（对应 `ipcMain.handle`），如 `select-folder`/`save-file`/`open-file`/`open-folder`/`screenshot-capture`/`note-save`、`get-master-key`/`secure-handshake`、`apps-select-file`/`apps-resolve-paths`/`apps-launch`、`get-data-directories`/`set-data-dir`/`set-thumbs-dir`/`set-skills-dir`/`set-db-encryption`/`set-initial-data-dir`、`backend-status`/`boot-status`/`restart-backend`/`backend-failure`/`probe-backend`、`perf-*`、`get-app-version`/`update-check` 等；
+  - `validInvokeChannels`：请求-响应（对应 `ipcMain.handle`），如 `select-folder`/`save-file`/`save-file-from-path`/`open-file`/`open-folder`/`screenshot-capture`/`note-save`、`get-master-key`/`secure-handshake`、`apps-select-file`/`apps-resolve-paths`/`apps-launch`、`get-data-directories`/`set-data-dir`/`set-thumbs-dir`/`set-skills-dir`/`set-db-encryption`/`set-initial-data-dir`、`backend-status`/`boot-status`/`restart-backend`/`backend-failure`/`probe-backend`、`perf-*`、`get-app-version`/`update-check` 等；
   - `validReceiveChannels`：仅 `from-main`（主进程 → 渲染进程）。`from-widget` 已删除 —— 配套的 `to-main` 通道整条链路无生产者也无消费者。
 - 其余通道（按用途归类，均来自 `electron/ipc-channels.json`）：
   - 工具箱/桌面组件拖拽与交互：`widget-drag-move`、`widget-drag-end`、`widget-exit`、`desktop-widget-content-ready`、`desktop-widget-drag-start`、`desktop-widget-drag-move`、`desktop-widget-drag-end`、`desktop-widget-open-page`
@@ -172,7 +172,7 @@ preload 层区分不了「谁在调」；主进程只能逐 handler 手写 `even
 
 ### 1. 主进程目录树
 
-`electron/main/` 下共 **31 个 `main.*.js`** 模块 + `main.js` 入口：
+`electron/main/` 下共 **32 个 `main.*.js`** 模块 + `main.js` 入口：
 
 ```
 electron/
@@ -215,7 +215,7 @@ electron/
 | 覆盖范围 | 文档 | 主要内容 |
 | --- | --- | --- |
 | `electron/main/main.js` | [entry.md](./entry.md) | 入口编排：加载期顺序、主窗口、`whenReady`、引导/低版本提示、迁移与加密、入口 IPC、退出收尾 |
-| 24 个 `main.*.js` | [modules.md](./modules.md) | 逐模块职责、关键导出 / IPC 通道、依赖与被依赖 |
+| 32 个 `main.*.js` | [modules.md](./modules.md) | 逐模块职责、关键导出 / IPC 通道、依赖与被依赖 |
 | `electron/` 根文件与安装器资源 | [root-files.md](./root-files.md) | `preload.js`、`ipc-channels.json`、`ipc-policy.json`、`startup.html`、图标、`afterPack.js`、`inno/`、`installer-assets/` |
 
 ---

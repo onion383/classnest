@@ -87,7 +87,7 @@
             class="bg-surface rounded-xl border border-border overflow-hidden w-full flex flex-col relative"
           >
             <div class="flex items-center justify-between px-3 py-2 bg-primary/5 border-b border-border">
-              <input v-model="g.name" @focus="captureGroupOld(g)" @change="renameGroup(g)" class="bg-transparent text-text font-semibold text-sm w-full mr-2 outline-none focus:bg-bg px-1 py-0.5 rounded" />
+              <input v-model="g.name" @focus="captureGroupOld(g)" @change="renameGroup(g)" class="bg-transparent text-text font-semibold text-sm w-full mr-2 outline-none focus:bg-bg px-1 py-0.5 rounded" :aria-label="`组名：${g.name}`" />
               <div class="flex items-center gap-1 flex-shrink-0">
                 <button @click="addMember(g)" title="添加成员" class="btn-plain grp-btn">＋</button>
                 <button @click="confirmDeleteGroup(g)" title="删除小组" class="btn-plain grp-btn grp-btn-del">✕</button>
@@ -118,10 +118,10 @@
                       <span v-else class="text-text-muted tabular-nums">{{ i + 1 }}</span>
                     </td>
                     <td class="px-3 py-1.5">
-                      <input v-model="m.member_name" @input="onMemberInput(m, $event)" @focus="captureMemberOld(m)" @keydown="onMemberKeydown(m, $event)" @change="commitMember(m)" @blur="onMemberBlur(m)" :placeholder="i === 0 ? '' : '成员'" :ref="el => setMemberInput(m, el)" :class="'bg-transparent w-full outline-none focus:bg-bg px-1 py-0.5 rounded ' + (i === 0 ? 'text-text font-medium' : 'text-text')" />
+                      <input v-model="m.member_name" @input="onMemberInput(m, $event)" @focus="captureMemberOld(m)" @keydown="onMemberKeydown(m, $event)" @change="commitMember(m)" @blur="onMemberBlur(m)" :placeholder="i === 0 ? '' : '成员'" aria-label="成员姓名" :ref="(el) => setMemberInput(m, el)" :class="'bg-transparent w-full outline-none focus:bg-bg px-1 py-0.5 rounded ' + (i === 0 ? 'text-text font-medium' : 'text-text')" />
                     </td>
                     <td class="px-3 py-1.5">
-                      <input v-model="m.remark" @focus="captureMemberOld(m)" @change="commitMember(m)" placeholder="备注" class="bg-transparent text-text-muted w-full outline-none focus:bg-bg px-1 py-0.5 rounded" />
+                      <input v-model="m.remark" @focus="captureMemberOld(m)" @change="commitMember(m)" placeholder="备注" class="bg-transparent text-text-muted w-full outline-none focus:bg-bg px-1 py-0.5 rounded" aria-label="备注"/>
                     </td>
                     <td class="px-1 text-right">
                       <button @click="removeMember(g, m)" title="移除" class="btn-plain grp-btn-sm grp-btn-del">✕</button>
@@ -177,7 +177,7 @@
         class="bg-surface rounded-xl border border-border overflow-hidden w-full min-w-0 flex flex-col relative"
       >
         <div class="flex items-center justify-between px-3 py-2 bg-primary/5 border-b border-border">
-          <input v-model="g.name" @focus="captureGroupOld(g)" @change="renameGroup(g)" class="bg-transparent text-text font-semibold text-sm w-full mr-2 outline-none focus:bg-bg px-1 py-0.5 rounded" />
+          <input v-model="g.name" @focus="captureGroupOld(g)" @change="renameGroup(g)" class="bg-transparent text-text font-semibold text-sm w-full mr-2 outline-none focus:bg-bg px-1 py-0.5 rounded" :aria-label="`组名：${g.name}`" />
           <div class="flex items-center gap-1 flex-shrink-0">
             <button @click="addMember(g)" title="添加成员" class="btn-plain grp-btn">＋</button>
             <button @click="confirmDeleteGroup(g)" title="删除小组" class="btn-plain grp-btn grp-btn-del">✕</button>
@@ -208,10 +208,10 @@
                   <span v-else class="text-text-muted tabular-nums">{{ i + 1 }}</span>
                 </td>
                 <td class="px-3 py-1.5">
-                  <input v-model="m.member_name" @input="onMemberInput(m, $event)" @focus="captureMemberOld(m)" @keydown="onMemberKeydown(m, $event)" @change="commitMember(m)" @blur="onMemberBlur(m)" :placeholder="i === 0 ? '' : '成员'" :ref="el => setMemberInput(m, el)" :class="'bg-transparent w-full outline-none focus:bg-bg px-1 py-0.5 rounded ' + (i === 0 ? 'text-text font-medium' : 'text-text')" />
+                  <input v-model="m.member_name" @input="onMemberInput(m, $event)" @focus="captureMemberOld(m)" @keydown="onMemberKeydown(m, $event)" @change="commitMember(m)" @blur="onMemberBlur(m)" :placeholder="i === 0 ? '' : '成员'" aria-label="成员姓名" :ref="(el) => setMemberInput(m, el)" :class="'bg-transparent w-full outline-none focus:bg-bg px-1 py-0.5 rounded ' + (i === 0 ? 'text-text font-medium' : 'text-text')" />
                 </td>
                 <td class="px-3 py-1.5">
-                  <input v-model="m.remark" @focus="captureMemberOld(m)" @change="commitMember(m)" placeholder="备注" class="bg-transparent text-text-muted w-full outline-none focus:bg-bg px-1 py-0.5 rounded" />
+                  <input v-model="m.remark" @focus="captureMemberOld(m)" @change="commitMember(m)" placeholder="备注" class="bg-transparent text-text-muted w-full outline-none focus:bg-bg px-1 py-0.5 rounded" aria-label="备注"/>
                 </td>
                 <td class="px-1 text-right">
                   <button @click="removeMember(g, m)" title="移除" class="btn-plain grp-btn-sm grp-btn-del">✕</button>
@@ -242,55 +242,49 @@
     </div><!-- 内容区结束 -->
 
     <!-- ============ 添加组（新增分组）弹窗 ============ -->
-    <Teleport to="body">
-    <Transition name="dialog">
-    <div v-if="showAddDim" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10003]" @click.self="showAddDim = false">
+    <DialogShell :visible="showAddDim" :z-index="10003" @overlay="showAddDim = false">
       <div class="bg-surface p-6 rounded-xl w-[26rem] shadow-card dialog-card border border-border">
         <h3 class="text-lg font-bold text-text mb-4">添加组</h3>
         <p class="text-xs text-text-muted mb-4">添加新的分组（如：宿舍管理、学习小组）</p>
         <label class="block text-sm text-text-secondary mb-1">组名</label>
-        <input v-model="addDimForm.name" placeholder="如：宿舍管理" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" />
+        <input v-model="addDimForm.name" placeholder="如：宿舍管理" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" aria-label="如：宿舍管理"/>
         <label class="block text-sm text-text-secondary mb-1">组名排序</label>
-        <AppSelect v-model="addDimForm.name_rule" class="w-full" :options="[{value:'custom',label:'自定义'},{value:'cn',label:'第一组，第二组，第三组…'},{value:'num',label:'第1组，第2组，第3组…'},{value:'prefix_cn',label:'{组名} 第一组，{组名} 第二组，{组名} 第三组'},{value:'prefix_num',label:'{组名} 第1组，{组名} 第2组，{组名} 第3组'}]" />
+        <AppSelect v-model="addDimForm.name_rule" aria-label="组名排序" class="w-full" :options="[{value:'custom',label:'自定义'},{value:'cn',label:'第一组，第二组，第三组…'},{value:'num',label:'第1组，第2组，第3组…'},{value:'prefix_cn',label:'{组名} 第一组，{组名} 第二组，{组名} 第三组'},{value:'prefix_num',label:'{组名} 第1组，{组名} 第2组，{组名} 第3组'}]" />
         <p v-if="addDimForm.name_rule !== 'custom'" class="text-xs text-text-muted mb-4 mt-1">初始化小组时将按此规则自动生成组名</p>
         <div v-else class="mb-4"></div>
         <div class="grid grid-cols-2 gap-3 mb-4">
           <div>
             <label class="block text-sm text-text-secondary mb-1">每组人数</label>
-            <input v-model.number="addDimForm.members_per_group" type="number" min="0" max="99" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" />
+            <input v-model.number="addDimForm.members_per_group" type="number" min="0" max="99" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" aria-label="每组人数" />
           </div>
           <div>
             <label class="block text-sm text-text-secondary mb-1">组数</label>
-            <input v-model.number="addDimForm.group_count" type="number" min="0" max="50" placeholder="自动初始化小组数" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" />
+            <input v-model.number="addDimForm.group_count" type="number" min="0" max="50" placeholder="自动初始化小组数" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" aria-label="自动初始化小组数"/>
           </div>
         </div>
         <label class="block text-sm text-text-secondary mb-1">组长称呼</label>
-        <input v-model="addDimForm.leader_title" placeholder="如：宿舍长 / 学习组长" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" />
+        <input v-model="addDimForm.leader_title" placeholder="如：宿舍长 / 学习组长" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" aria-label="如：宿舍长 / 学习组长"/>
         <div class="flex justify-end gap-2">
           <button @click="showAddDim = false" class="bg-surface-hover text-text border border-border px-4 py-2 rounded transition-theme cursor-pointer">取消</button>
           <button @click="submitAddDim" class="bg-primary text-text-inverse px-4 py-2 rounded transition-theme cursor-pointer">确定</button>
         </div>
       </div>
-    </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- ============ 分组设置弹窗（只对当前分组维度生效） ============ -->
-    <Teleport to="body">
-    <Transition name="dialog">
-    <div v-if="showSettings && activeDim" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10003]" @click.self="showSettings = false">
+    <DialogShell :visible="showSettings && !!activeDim" :z-index="10003" @overlay="showSettings = false">
       <div class="bg-surface p-6 rounded-xl w-[26rem] shadow-card dialog-card border border-border">
         <h3 class="text-lg font-bold text-text mb-4">分组设置</h3>
         <p class="text-xs text-text-muted mb-4" v-if="activeDim.is_default">内置宿舍组设置：组名不可修改，按 男/女生宿舍分组</p>
         <p class="text-xs text-text-muted mb-4" v-else>设置仅对当前分组生效；「组数」增减会自动补充或删除小组。</p>
 
         <label class="block text-sm text-text-secondary mb-1">组名</label>
-        <input v-model="settingsForm.name" :disabled="activeDim.is_default" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4 disabled:opacity-50 disabled:cursor-not-allowed" />
+        <input v-model="settingsForm.name" :disabled="activeDim.is_default" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4 disabled:opacity-50 disabled:cursor-not-allowed" aria-label="组名" />
 
         <!-- 普通维度：组名排序（快速生成/重命名组名） -->
         <template v-if="!activeDim.is_default">
           <label class="block text-sm text-text-secondary mb-1">组名排序</label>
-          <AppSelect v-model="settingsForm.name_rule" class="w-full" :options="[{value:'custom',label:'自定义'},{value:'cn',label:'第一组，第二组，第三组…'},{value:'num',label:'第1组，第2组，第3组…'},{value:'prefix_cn',label:'{组名} 第一组，{组名} 第二组，{组名} 第三组'},{value:'prefix_num',label:'{组名} 第1组，{组名} 第2组，{组名} 第3组'}]" />
+          <AppSelect v-model="settingsForm.name_rule" aria-label="组名排序" class="w-full" :options="[{value:'custom',label:'自定义'},{value:'cn',label:'第一组，第二组，第三组…'},{value:'num',label:'第1组，第2组，第3组…'},{value:'prefix_cn',label:'{组名} 第一组，{组名} 第二组，{组名} 第三组'},{value:'prefix_num',label:'{组名} 第1组，{组名} 第2组，{组名} 第3组'}]" />
           <p v-if="settingsForm.name_rule !== 'custom'" class="text-xs text-text-muted mb-4 mt-1">保存后按此规则自动生成/重命名现有小组组名</p>
           <div v-else class="mb-4"></div>
         </template>
@@ -300,18 +294,18 @@
           <div class="grid grid-cols-2 gap-3 mb-4">
             <div>
               <label class="block text-sm text-text-secondary mb-1">每组人数</label>
-              <input v-model.number="settingsForm.members_per_group" type="number" min="0" max="99" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" />
+              <input v-model.number="settingsForm.members_per_group" type="number" min="0" max="99" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" aria-label="每组人数" />
             </div>
             <div></div>
           </div>
           <div class="grid grid-cols-2 gap-3 mb-4">
             <div>
               <label class="block text-sm text-text-secondary mb-1">男生宿舍数</label>
-              <input v-model.number="settingsForm.male_group_count" type="number" min="0" max="50" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" />
+              <input v-model.number="settingsForm.male_group_count" type="number" min="0" max="50" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" aria-label="男生宿舍数" />
             </div>
             <div>
               <label class="block text-sm text-text-secondary mb-1">女生宿舍数</label>
-              <input v-model.number="settingsForm.female_group_count" type="number" min="0" max="50" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" />
+              <input v-model.number="settingsForm.female_group_count" type="number" min="0" max="50" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" aria-label="女生宿舍数" />
             </div>
           </div>
         </template>
@@ -320,16 +314,16 @@
         <div v-else class="grid grid-cols-2 gap-3 mb-4">
           <div>
             <label class="block text-sm text-text-secondary mb-1">每组人数</label>
-            <input v-model.number="settingsForm.members_per_group" type="number" min="0" max="99" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" />
+            <input v-model.number="settingsForm.members_per_group" type="number" min="0" max="99" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" aria-label="每组人数" />
           </div>
           <div>
             <label class="block text-sm text-text-secondary mb-1">组数</label>
-            <input v-model.number="settingsForm.group_count" type="number" min="0" max="50" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" />
+            <input v-model.number="settingsForm.group_count" type="number" min="0" max="50" class="border border-border bg-surface text-text px-3 py-2 rounded w-full" aria-label="组数" />
           </div>
         </div>
 
         <label class="block text-sm text-text-secondary mb-1">组长称呼</label>
-        <input v-model="settingsForm.leader_title" placeholder="如：宿舍长 / 学习组长" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" />
+        <input v-model="settingsForm.leader_title" placeholder="如：宿舍长 / 学习组长" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" aria-label="如：宿舍长 / 学习组长"/>
         <div class="flex items-center justify-between gap-2">
           <button
             @click="confirmDeleteDim"
@@ -343,14 +337,10 @@
           </div>
         </div>
       </div>
-    </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- ============ 添加小组弹窗 ============ -->
-    <Teleport to="body">
-    <Transition name="dialog">
-    <div v-if="showAddGroup" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10003]" @click.self="showAddGroup = false">
+    <DialogShell :visible="showAddGroup" :z-index="10003" @overlay="showAddGroup = false">
       <div class="bg-surface p-6 rounded-xl w-96 shadow-card dialog-card border border-border">
         <div class="flex items-center justify-between gap-3 mb-4">
           <h3 class="text-lg font-bold text-text">添加小组</h3>
@@ -365,20 +355,16 @@
         </div>
         <p class="text-xs text-text-muted mb-4">在「{{ activeDim?.name }}」分组类型下新增一个小组。</p>
         <label class="block text-sm text-text-secondary mb-1">小组名字</label>
-        <input v-model="addGroupName" placeholder="如：302" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" />
+        <input v-model="addGroupName" placeholder="如：302" class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" aria-label="如：302"/>
         <div class="flex justify-end gap-2">
           <button @click="showAddGroup = false" class="bg-surface-hover text-text border border-border px-4 py-2 rounded transition-theme cursor-pointer">取消</button>
           <button @click="submitAddGroup" class="bg-primary text-text-inverse px-4 py-2 rounded transition-theme cursor-pointer">确定</button>
         </div>
       </div>
-    </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- ============ 二次确认弹窗 ============ -->
-    <Teleport to="body">
-    <Transition name="dialog">
-    <div v-if="confirmMsg" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10004]" @click.self="confirmMsg = null">
+    <DialogShell :visible="!!confirmMsg" :z-index="10004" @overlay="confirmMsg = null">
       <div class="bg-surface p-6 rounded-xl w-96 shadow-card dialog-card border border-border">
         <h3 class="text-lg font-bold text-text mb-3">确认删除</h3>
         <p class="text-text-secondary mb-4">{{ confirmMsg }}</p>
@@ -387,9 +373,7 @@
           <button @click="doDelete" class="bg-danger text-white px-4 py-2 rounded transition-theme cursor-pointer">删除</button>
         </div>
       </div>
-    </div>
-    </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- ============ 组名覆盖确认（复用组件 + 统一动画） ============ -->
     <ConfirmDialog
@@ -456,6 +440,7 @@
       :existingFields="importFields"
       :requiredFields="['小组', '姓名']"
       :templateName="'分组标准导入表'"
+      :students="allStudents"
       @import-data="onImportData"
       @cancel="importVisible = false"
     />
@@ -464,11 +449,12 @@
 
 <script setup vapor>
 import { prefetch } from '../utils/dialogPrefetch.js'
-import { ref, reactive, shallowReactive, computed, onMounted, onActivated, nextTick, watch, defineAsyncComponent } from 'vue';
+import { ref, reactive, shallowReactive, computed, onMounted, onActivated, onBeforeUnmount, nextTick, watch, defineAsyncComponent } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { applyRowShift, clearShift } from '../composables/tableDragFx.js';
 import Tabs from '../components/base/Tabs.vue';
 import CustomScrollbar from '../components/base/CustomScrollbar.vue';
+import DialogShell from '../components/base/DialogShell.vue';
 import AppSelect from '../components/base/AppSelect.vue';
 import EmptySnapshot from '../components/base/EmptySnapshot.vue';
 import { useNotification } from '../composables/useNotification';
@@ -477,6 +463,7 @@ import { recordUndo as recordUndoSpec } from '../utils/undoRecorder.js';
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js';
 import { useDisposables } from '../utils/disposables.js';
 import { apiFetch } from '../utils/apiUrl.js';
+import { normSearchText } from '../utils/tableSearch.js';
 
 // 弹窗类组件懒加载：打开时才加载对应 chunk
 const ConfirmDialog = defineAsyncComponent(() => import('../components/base/ConfirmDialog.vue'));
@@ -593,12 +580,16 @@ function buildGroupNames(rule, prefix, count) {
 }
 async function applyGroupNames(groups, names) {
   if (!names || !groups) return;
-  // 并行批量改名（无变化的跳过），比逐个 await 更高效
-  await Promise.all(groups.map((g, i) => {
+  // 一次批量端点写完（P3-12）：只发改过名的，保持「无变化跳过」；
+  // 后端整批一个事务，不会留下改了一半的组名。
+  const items = [];
+  groups.forEach((g, i) => {
     if (i >= names.length) return;
     if (String(g.name || '') === names[i]) return;
-    return api(`/groups/${g.id}`, { method: 'PUT', body: JSON.stringify({ name: names[i] }) });
-  }));
+    items.push({ id: g.id, name: names[i] });
+  });
+  if (!items.length) return;
+  await api('/groups/rename-batch', { method: 'PUT', body: JSON.stringify({ items }) });
 }
 
 // ============ 组名覆盖确认 ============
@@ -641,11 +632,11 @@ const suggestedStudents = computed(() => {
   const raw = (suggestState.keyword || '').trim();
   const list = allStudents.value;
   if (!raw) return list.slice(0, MAX_SUGGEST);
-  const kw = raw.toLowerCase();
+  const kw = normSearchText(raw);
   const matched = [];
   for (let i = 0; i < list.length && matched.length < MAX_SUGGEST; i++) {
     const s = list[i];
-    if (String(s.姓名 || '').toLowerCase().includes(kw)) matched.push(s);
+    if (normSearchText(s.姓名).includes(kw)) matched.push(s);
   }
   // 名册里没有这个人：把输入的名字本身变成一条「临时」候选（id 用固定哨兵，不与真实学生冲突）。
   // 这样它就和普通候选一样可点选、可回车选中，落库时后端 ensureProvisionalStudent 会建临时学生 ——
@@ -848,7 +839,8 @@ async function submitAddDim() {
   try {
     const data = await api('/dimensions', {
       method: 'POST',
-      body: JSON.stringify(addDimForm),
+      // name_rule 是纯前端命名规则（用来生成组名），后端没有这一列，别随请求体上送（X3-02）
+      body: JSON.stringify({ name: addDimForm.name, leader_title: addDimForm.leader_title, members_per_group: addDimForm.members_per_group, group_count: addDimForm.group_count }),
     });
     showAddDim.value = false;
     success('添加成功');
@@ -884,7 +876,8 @@ async function doSaveSettings(form, names) {
     const oldLeaderTitle = dim ? dim.leader_title : null;
     await api(`/dimensions/${activeDimId.value}`, {
       method: 'PUT',
-      body: JSON.stringify(form),
+      // name_rule 只用于前端生成组名，后端无此列（X3-02）
+      body: JSON.stringify({ name: form.name, leader_title: form.leader_title, members_per_group: form.members_per_group, group_count: form.group_count, male_group_count: form.male_group_count, female_group_count: form.female_group_count }),
     });
     if (dim) {
       if (String(oldName ?? '') !== String(form.name ?? '')) recordGroupUndo('group_dimensions', dim.id, 'name', oldName ?? '', form.name ?? '');
@@ -1393,6 +1386,22 @@ function ghostFlyTarget(d) {
   return { left: Math.round(r.left), top: Math.round(g ? g.top : r.top) };
 }
 
+// 组件卸载（路由切换/切班重建）时若拖拽仍在进行：finishMemberDrag 不会再被调用，
+// 监听器、虚影节点与 rAF 都会残留（F06-04）。这里只回收资源，不提交移动。
+function disposeMemberDrag() {
+  const d = _memDrag;
+  if (!d) return;
+  window.removeEventListener('mousemove', d.move);
+  window.removeEventListener('mouseup', d.up);
+  if (d.scroller && d.onScrollSync) d.scroller.removeEventListener('scroll', d.onScrollSync);
+  if (d.raf) { cancelAnimationFrame(d.raf); d.raf = 0 }
+  if (d.ghost) d.ghost.remove();
+  if (d.fromEl) { try { d.fromEl.classList.remove('mem-dragging') } catch (_) { /* 已脱离文档 */ } }
+  if (d.list) { try { clearShift(d.list) } catch (_) { /* 已脱离文档 */ } }
+  _memDrag = null;
+}
+onBeforeUnmount(disposeMemberDrag);
+
 function finishMemberDrag() {
   const d = _memDrag;
   if (!d) return;
@@ -1637,11 +1646,12 @@ function onSmartGroup() {
 async function handleSmartGroupResult(result) {
   const groups = result && result.groups;
   if (!Array.isArray(groups)) return;
+  const studentIds = result && result.studentIds;
   const before = buildGroupSnapshot();
   try {
     const data = await api(`/dimensions/${activeDimId.value}/apply-grouping`, {
       method: 'POST',
-      body: JSON.stringify({ groups }),
+      body: JSON.stringify({ groups, studentIds }),
     });
     showSmartGroup.value = false;
     dimensions.value = data.dimensions || [];
@@ -1689,14 +1699,14 @@ function openImportDialog() {
   prefetch(loadImportExcel);
   importVisible.value = true;
 }
-async function onImportData({ fields, rows }) {
+async function onImportData({ fields, rows, studentIds }) {
   importVisible.value = false;
   if (activeDimId.value == null) return;
   const before = buildGroupSnapshot();
   try {
     const data = await api(`/dimensions/${activeDimId.value}/import`, {
       method: 'POST',
-      body: JSON.stringify({ fields, rows }),
+      body: JSON.stringify({ fields, rows, studentIds }),
     });
     dimensions.value = data.dimensions || [];
     if (data.dimension) active.value = { dimension: data.dimension, groups: data.groups };

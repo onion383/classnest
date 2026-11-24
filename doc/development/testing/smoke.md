@@ -10,36 +10,36 @@ classnest/
 └── testjs/
     └── smoke/
         ├── _isolated-backend.cjs  # 共用脚手架
+        ├── _thumb-frames.cjs  # 共用脚手架
         ├── _tmpdir.cjs  # 共用脚手架
         ├── album-file-etag-test.cjs  # 无
         ├── album-photo-info-test.cjs  # 无
         ├── album-rename-test.cjs  # 临时 DATA_DIR + 真实路由，不需要完整后端
         ├── album-ruler-mapping-test.cjs  # 无
+        ├── album-scan-incremental-thumb-test.cjs  # 临时 DATA_DIR + 真实扫描引擎
+        ├── album-scan-two-phase-test.cjs  # 临时 DATA_DIR + 真实扫描引擎
+        ├── album-thumbs-abort-queue-test.cjs  # 临时 DATA_DIR + 真实路由
+        ├── album-thumbs-abort-test.cjs  # 临时 DATA_DIR + 真实路由
+        ├── album-thumbs-preview-quota-test.cjs  # 临时 DATA_DIR + 真实路由
+        ├── album-thumbs-purge-test.cjs  # 临时 DATA_DIR + 真实路由
+        ├── album-thumbs-rebuild-batch-test.cjs  # 临时 DATA_DIR + 真实路由
+        ├── album-thumbs-sweep-test.cjs  # 临时 DATA_DIR + 真实路由
         ├── api-routes-test.cjs  # 临时 DATA_DIR + 真实路由挂最小 Express，不需要完整后端
         ├── api-smoke.cjs  # 内置最小 Express，不需要真实后端
-        ├── auth-smoke.js  # 默认自起隔离后端；AUTH_SMOKE_EXTERNAL=1 时连接 PORT / 38120…
-        ├── login-policy-test.cjs  # 自起隔离后端（真 HTTP）：登录保持天数按账号存、切班不丢、当场重签、非法值 400
+        ├── auth-smoke.js  # 默认自起隔离后端；AUTH_SMOKE_EXTERNAL=1 时连接 PORT / 3812…
         ├── cadre-undo-test.cjs  # 临时 DATA_DIR + 测试主密钥建真实加密库 + 真实路由挂最小 Express
         ├── collator-equiv-probe.js  # 无
         ├── font-subset-verify.mjs  # 需 pdf-subset-verify 产物
+        ├── late-route-flush-test.cjs  # 隔离后端 + 真实 HTTP
+        ├── login-policy-test.cjs  # 自起隔离后端（真 HTTP，无安全通道）
+        ├── multi-class-test.cjs  # 隔离后端 + 真实 HTTP
         ├── pdf-subset-verify.mjs  # 先生成子集
         ├── pptx-guard-test.cjs  # 无
         ├── secure-channel-retry.js  # 需 Vite 开发服务器（testjs/probe/pages/ 断言页，经 tools/e…
         ├── theme-setting-probe.mjs  # 无
         ├── thumbs-cache-test.cjs  # 无
         ├── undo-batch-test.cjs  # 临时 DATA_DIR + 真实撤销路由，不需要完整后端
-        ├── album-scan-incremental-thumb-test.cjs  # 增量跳过已有、全量无条件重建（真实扫描比对文件集合）
-        ├── album-scan-two-phase-test.cjs  # 全量扫描两阶段：索引全部完成才出现缩略图
-        ├── album-thumbs-abort-queue-test.cjs  # 滑走后「还没开工」的排队项要退队
-        ├── album-thumbs-abort-test.cjs  # 滑走即中断：后端自己要检查连接断开
-        ├── album-thumbs-preview-quota-test.cjs  # 预览额度与生成额度分离、中断即释放
-        ├── album-thumbs-purge-test.cjs  # 清理微缩图接口：三种承诺
-        ├── album-thumbs-rebuild-batch-test.cjs  # 清理后一屏 12~40 张要能立刻长回来
-        ├── album-thumbs-sweep-test.cjs  # 孤儿微缩图回收的精准性
-        ├── _thumb-frames.cjs  # 批量缩略图流式响应的帧解析（共用脚手架）
-        ├── unzip-safe-test.cjs  # 无
-        ├── late-route-flush-test.cjs  # 启动期延后路由按需注册：就绪后立刻访问不返回 404、环境变量生效
-        └── multi-class-test.cjs  # 一个账号多班：班级列表完整、各自独立库、切班数据隔离与新 token
+        └── unzip-safe-test.cjs  # 无
 ```
 <!-- doc-tree:end -->
 
@@ -107,6 +107,8 @@ classnest/
 | [`album-thumbs-rebuild-batch-test.cjs`](../../../testjs/smoke/album-thumbs-rebuild-batch-test.cjs) | 临时 DATA_DIR + 真实路由 | 清理后「一屏图立刻长回来」：只造 2 张测不出真实坑，这里造一屏 12~40 张 —— 全部无缓存时会同时撞上现场生成配额闸，判据锁「整批都能出图」而不是部分成功 |
 | [`album-thumbs-sweep-test.cjs`](../../../testjs/smoke/album-thumbs-sweep-test.cjs) | 临时 DATA_DIR + 真实路由 | 孤儿回收的**精准**：默认只读只报数、一个文件不删；`apply=true` 只删没有索引引用的 jpg（含删账号残留目录与旧扁平结构），正在用的图不动 |
 | [`_thumb-frames.cjs`](../../../testjs/smoke/_thumb-frames.cjs) | 共用脚手架 | 批量缩略图**流式**响应的帧解析：`[id: uint32 LE][len: uint32 LE][JPEG]` 逐帧拼接。帧自带 id 是流式的前提 —— 服务端写第一帧时还不知道最终会发出哪些 id，没法再用响应头与段序对位 |
+| [`late-route-flush-test.cjs`](../../../testjs/smoke/late-route-flush-test.cjs) | 隔离后端 + 真实 HTTP | 启动期「延后路由按需注册」：就绪后 0ms 打 `/api/ai/config` 也不 404、环境变量确实生效（否则假绿）、请求处理期间追加的 layer 同次命中、前缀边界不误放 `/api/datax`、定时到点复用入口幂等 |
+| [`multi-class-test.cjs`](../../../testjs/smoke/multi-class-test.cjs) | 隔离后端 + 真实 HTTP | 「一个账号多个班级」：登录返回的 `classes` 完整、新增班级真的多一个独立库、**切班后读到的是另一个班的数据**（隔离）、拿别人 slug 必须 404、切班换发新 token |
 
 ### 示范：`auth-smoke.js` 的原理与局限
 

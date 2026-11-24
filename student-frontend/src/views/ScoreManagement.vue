@@ -5,7 +5,7 @@
       <h1 class="text-2xl font-bold text-text flex items-center gap-2"><IconGlyph name="score" /> 加分管理</h1>
       <div class="flex items-center gap-2">
         <span class="text-sm text-text-secondary">加分对象</span>
-        <AppSelect v-model="scoreMode" :options="scoreModeOptions" class="w-32" />
+        <AppSelect v-model="scoreMode" aria-label="加分对象" :options="scoreModeOptions" class="w-32" />
       </div>
     </div>
 
@@ -27,7 +27,7 @@
       :editing-record="editingRecord"
       @confirm="submitAdd"
       @update="updateScore"
-      @delete="rec => deleteScore(rec?.id)"
+      @delete="rec => rec && askDelete(rec)"
       @import="openBatchImportFromAdd"
       @cancel="addDialogVisible = false"
     />
@@ -62,6 +62,7 @@
       :existingFields="importFields"
       :requiredFields="importRequiredFields"
       :templateName="'加分记录标准导入表'"
+      :students="students"
       @import-data="onImportData"
       @cancel="importDialogVisible = false"
     />
@@ -483,10 +484,10 @@ watch(todayStart, () => { void loadToday() })
 async function refreshStats() {
   if (await loadAll()) useNotification().success('已刷新 加分统计 数据')
 }
-async function onImportData({ fields, rows }) {
+async function onImportData({ fields, rows, studentIds }) {
   importDialogVisible.value = false
   try {
-    const res = await axios.post(`${API}/scores/import`, { fields, rows, mode: scoreMode.value })
+    const res = await axios.post(`${API}/scores/import`, { fields, rows, studentIds, mode: scoreMode.value })
     useNotification().success(res.data.message || '导入成功')
     await loadAll()
     // 后端回传本次真正新建的行：一次导入只记一条撤销
@@ -537,8 +538,8 @@ function buildScoreRows() {
   // 列顺序只在切换个人/小组时重置，保留用户拖拽后的顺序
   if (_colsMode !== scoreMode.value || scoreCols.value.length === 0) {
     scoreCols.value = group
-      ? ['小组', '成员数', '类型', '项目', '分值', '加分时间', '加分原因']
-      : ['姓名', '学号', '类型', '项目', '分值', '加分时间', '加分原因']
+      ? ['小组', '成员数', '类型', '项目', '分值', '加分时间', '原因']
+      : ['姓名', '学号', '类型', '项目', '分值', '加分时间', '原因']
     _colsMode = scoreMode.value
   }
   scoreRows.value = allRecords.value.map(r => ({
@@ -549,7 +550,7 @@ function buildScoreRows() {
     项目: r.项目 || '',
     分值: r.分值,
     加分时间: r.加分时间 || '',
-    加分原因: r.原因 || ''
+    原因: r.原因 || ''
   }))
 }
 // 双击单元格开始编辑
@@ -565,7 +566,7 @@ async function saveCell(row) {
     项目: row.项目,
     分值: row.分值,
     加分时间: row.加分时间,
-    原因: row.加分原因,
+    原因: row.原因,
     ...(group ? { group_name: row.小组, 成员数: Number(row.成员数) || 0 } : { 姓名: row.姓名, 学号: row.学号 })
   }
   // 撤销记录等 PUT 成功后再登记（见下方 try 内）：

@@ -14,6 +14,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const Module = require('node:module')
 
 const ROOT = path.join(__dirname, '../..')
 const BACKEND = path.join(ROOT, 'student-backend')
@@ -71,12 +72,31 @@ test('兼容：升级前无 slug 分桶的旧归档仍可还原', async () => {
   assert.equal(fs.readFileSync(photo.file_path, 'utf8'), 'old-content')
 })
 
-test('变异反证：去掉 slug 分桶后，两班路径相同（碰撞复现）', () => {
+// 把源码变异后重新编译成模块：require 走原目录（拿到同一个 dbManager 单例），
+// 这样变异体真的执行原函数逻辑，而不是对字符串做正则（T08-02）。
+function loadMutated(rel, transform) {
+  const abs = path.join(ROOT, rel)
+  const src = fs.readFileSync(abs, 'utf8')
+  const out = transform(src)
+  assert.notEqual(out, src, '变异未匹配到目标代码')
+  const m = new Module(abs, null)
+  m.filename = abs
+  m.paths = Module._nodeModulePaths(path.dirname(abs))
+  m._compile(out, abs)
+  return m.exports
+}
+
+test('变异反证：去掉 slug 分桶后，两班同 id 同名归档到同一路径（碰撞复现）', () => {
+  // 原 bug 形态：trashPathFor 不再取当前库 slug → 路径与班无关
+  const mutated = loadMutated('student-backend/albumOps.js', (s) =>
+    s.replace("const slug = String(dbManager.currentSlug() || '')", "const slug = String('')"))
   const photo = { id: 1, file_name: 'pic.jpg', file_path: '/x/pic.jpg' }
+
   dbManager.currentSlug = () => '@aaaaaaaaaaaa'
-  const withSlug = trashPathFor(photo)
-  // 模拟旧逻辑：不带 slug 参数
-  const withoutSlug = legacyTrashPathFor(photo)
-  assert.notEqual(withSlug, withoutSlug, '分桶前后路径必须不同，否则判据恒真')
-  assert.equal(legacyTrashPathFor({ ...photo }), legacyTrashPathFor(photo), '旧逻辑两班同 id 同名 → 同路径（碰撞）')
+  const pathA = mutated.trashPathFor(photo)
+  dbManager.currentSlug = () => '@bbbbbbbbbbbb'
+  const pathB = mutated.trashPathFor(photo)
+
+  assert.equal(pathA, pathB, '无分桶时两班同 id 同名照片归档到同一路径 → 后删覆盖先删')
+  assert.equal(pathA, legacyTrashPathFor(photo), '变异后应与无分桶的旧路径一致')
 })

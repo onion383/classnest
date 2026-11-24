@@ -177,7 +177,7 @@ sequenceDiagram
 - **JWT 密钥**：优先 `JWT_SECRET`（≥16 字符），否则读 `DATA_DIR/.jwt-secret`（不存在则生成并以 `0o600` 写入），杜绝硬编码兜底。
 - **清洗**：所有写接口先过 [`services/sanitize.js`](../../../student-backend/services/sanitize.js)（裁剪/类型归一/结构校验）；业务规则在 [`services/businessRules.js`](../../../student-backend/services/businessRules.js)。
 - **SQL 注入**：动态列走 `tableService` 正则白名单（`^[a-zA-Z0-9_\u4e00-\u9fa5]+$`）与保留字段保护；撤销/网格路由用固定表集合或 `PRAGMA table_info` 校验。
-- **上传**：班费收据 10MB、扩展名 + MIME + **图片魔数**三重校验；AI 附件落 `os.tmpdir()/ai-uploads`，解析完即删；`express.json` 限 200MB（备份包需要）。
+- **上传**：班费收据按类型分档（图片 20MB、PDF / Office 30MB、视频 200MB、md 5MB），扩展名 + MIME + **文件头魔数**三重校验；AI 附件落 `os.tmpdir()/ai-uploads`，解析完即删；`express.json` 限 200MB（备份包需要）。
 - **解压**：备份/资源解压走自研 [`services/unzipSafe.js`](../../../student-backend/services/unzipSafe.js)（拦符号链接、路径穿越、绝对路径、反斜杠）。
 - **错误回包**：统一错误中间件只回 `{ error }`，不回栈。
 - **密码**：bcrypt 统一走 [`services/bcryptAsync.js`](../../../student-backend/services/bcryptAsync.js)，避免同步版阻塞事件循环。

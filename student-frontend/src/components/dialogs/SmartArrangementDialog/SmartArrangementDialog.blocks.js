@@ -129,22 +129,26 @@ export function useSmartArrangementBlocks(ctx) {
     applyLockDeskmate(grid, regions, node) {
       const lockMode = node.lockMode || 'no-swap'
       const orig = ctx.extractOriginalPairs()
+      // 临时学生（原座位表里的字符串姓名）没有稳定 id，pairs 与 grid 各自编号会对不上；
+      // 统一按 keyOf 比对（真实学生用 id，临时学生用姓名），否则字符串格的同桌对仍会被丢掉。
+      const keyOf = orig.keyOf || ((s) => `id:${s && s.id}`)
       let placedTotal = 0, pairsTotal = 0
       for (const region of regions) {
         const students = region.map(p => grid[p.r][p.c]).filter(s => s)
-        const regionIds = new Set(students.map(s => s.id))
+        const regionKeys = new Set(students.map(keyOf))
         let localPairs = 0
         const units = []
         const used = new Set()
         for (const [a, b] of orig.pairs) {
-          if (regionIds.has(a.id) && regionIds.has(b.id)) {
+          if (regionKeys.has(keyOf(a)) && regionKeys.has(keyOf(b))) {
             localPairs++
             units.push({ cells: [a, b], indivisible: true })
-            used.add(a.id); used.add(b.id)
+            used.add(keyOf(a)); used.add(keyOf(b))
           }
         }
         for (const s of students) {
-          if (!used.has(s.id)) { units.push({ cells: [s], indivisible: false }); used.add(s.id) }
+          const k = keyOf(s)
+          if (!used.has(k)) { units.push({ cells: [s], indivisible: false }); used.add(k) }
         }
         pairsTotal += localPairs
         if (lockMode === 'none') {

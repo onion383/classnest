@@ -74,11 +74,8 @@
               :floating="floating"
               :is-retryable="isRetryable"
               :is-rollbackable="isRollbackable"
-              :can-undo="canUndoChange"
-              @new="newConversation"
               @copy="copyMessage"
               @retry="retryMessage"
-              @undo="undoChange"
               @rollback="askRollback"
               @open-changes="openChangeDrawer"
               @goto="gotoTable"
@@ -516,12 +513,20 @@ function lazyDialog(loader) {
     const attempt = () => {
       loader().then(resolve).catch((err) => {
         if (++tries >= 3) return reject(err)
-        setTimeout(attempt, 300)
+        // 重试定时器要能随组件卸载取消：否则回调仍会去 resolve/reject 已销毁实例（F06-09）
+        const timer = setTimeout(() => {
+          _lazyTimers.delete(timer)
+          if (_unmounted.value) return
+          attempt()
+        }, 300)
+        _lazyTimers.add(timer)
       })
     }
     attempt()
   }))
 }
+// 懒加载重试定时器（卸载时统一取消）
+const _lazyTimers = new Set()
 
 // AI 设置弹窗异步化：只在点设置时渲染，无已渲染路径（P2）
 const AiSettingsDialog = lazyDialog(() => import('../components/dialogs/AiSettingsDialog.vue'))
@@ -1002,7 +1007,7 @@ const {
   pickAsk, skipAsk, setAskOther, askNext, submitAsk, dismissAsk, copyMessage, retryMessage,
   askRollback, onRollbackConfirm, undoRollback, redoRollback, dismissRollback, removeQueued, send, interrupt,
   // 方法（aiExec）
-  confirmProposal, dismissProposal, canUndoChange, undoChange,
+  confirmProposal, dismissProposal,
 } = ctx
 
 // 冒出新的待回答提问时，分页回到第一题
@@ -1028,6 +1033,10 @@ onMounted(() => {
 })
 onUnmounted(() => {
   _unmounted.value = true
+  // 懒加载重试与置底 rAF 都要随卸载取消（F06-09）
+  for (const t of _lazyTimers) clearTimeout(t)
+  _lazyTimers.clear()
+  if (_scrollRaf) { cancelAnimationFrame(_scrollRaf); _scrollRaf = null }
   // 切班会销毁本组件；若流还在跑，必须 abort —— 否则旧流在 finally 里用换发的新 token
   // 执行旧班的提案，把数据写进新班（#39）。abort 后 aiChat 会标 interrupted，提案不执行。
   // 代次校验（classScopeKey）是第二道防线，防 abort 与提案执行之间的窗口。

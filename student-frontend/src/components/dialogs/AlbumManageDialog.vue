@@ -8,9 +8,9 @@
 
       <!-- 添加文件夹 -->
       <div class="flex items-end gap-2 mb-4 flex-shrink-0">
-        <input v-model="newName" placeholder="相册名称，如：文艺晚会" class="border border-border bg-surface text-text px-3 py-2 rounded w-36 flex-shrink-0" />
+        <input v-model="newName" placeholder="相册名称，如：文艺晚会" class="border border-border bg-surface text-text px-3 py-2 rounded w-36 flex-shrink-0" aria-label="相册名称，如：文艺晚会"/>
         <div class="flex gap-1 flex-1 min-w-0">
-          <input v-model="newPath" placeholder="点击右侧选择文件夹" readonly @click="pickFolder" class="border border-border bg-surface text-text px-3 py-2 rounded flex-1 min-w-0" />
+          <input v-model="newPath" placeholder="点击右侧选择文件夹" readonly @click="pickFolder" class="border border-border bg-surface text-text px-3 py-2 rounded flex-1 min-w-0" aria-label="点击右侧选择文件夹"/>
           <button @click="pickFolder" class="bg-surface-hover hover:bg-surface-hover text-text px-3 py-2 rounded whitespace-nowrap transition-theme">选择文件夹</button>
         </div>
         <button @click="addAlbum" :disabled="busyAdd" class="bg-primary hover:bg-primary-hover text-text-inverse px-4 py-2 rounded transition-theme whitespace-nowrap disabled:opacity-50">

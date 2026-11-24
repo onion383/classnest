@@ -387,12 +387,16 @@ export default defineConfig({
     host: '127.0.0.1',
     port: ports.frontendPort,
     proxy: {
+      // 后端运行期可能顺延端口（见 config/ports.cjs）。target 在配置求值时会被固定，
+      // 用 router 每请求现取才是当前真值（F07-08）。
       '/api': {
         target: ports.backendOrigin,
+        router: () => ports.backendOrigin,
         changeOrigin: true
       },
       '/uploads': {
         target: ports.backendOrigin,
+        router: () => ports.backendOrigin,
         changeOrigin: true
       }
     }

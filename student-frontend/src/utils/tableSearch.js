@@ -2,11 +2,21 @@
 // 抽成独立纯函数的原因：useTableCRUD 依赖 Vue 生命周期 + 后端接口，Node 下无法直接 import；
 // 而「搜不到东西时该显示什么」是分支最多的判定（本来就空 vs 被筛空），必须有单测兜住。
 
-// 按行对象缓存「字段值的小写形式」。
+// 搜索文本归一：NFKC 折叠全半角、去掉所有空白、转小写。
+// 与后端 services/searchQuery.js 的 normSearchText 同口径（Q1-03）：
+// 「张 三」能搜到「张三」，「S１００１」能搜到「S1001」。
+import { pinyinHit } from './pinyinSearch.js'
+
+export function normSearchText(v) {
+  if (v == null) return ''
+  return String(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+}
+
+// 按行对象缓存「字段值的归一化形式」。
 //
-// 为什么需要：过滤要对**每一行**做一次 toLowerCase + substring。
-//   substring 本身不要钱，toLowerCase 要 —— 大表（几千行）每次过滤都重新分配一遍
-//   小写字符串，纯浪费。
+// 为什么需要：过滤要对**每一行**做一次归一 + substring。
+//   substring 本身不要钱，归一化要 —— 大表（几千行）每次过滤都重新分配一遍
+//   字符串，纯浪费。
 //   而表格的行对象是**引用复用**的（见 useTableCRUD 的 displayList：不再逐行 {...} 拷贝），
 //   所以同一行在多次过滤之间是**同一个对象** → 缓存能命中。
 //
@@ -15,7 +25,7 @@
 //     搜索结果会停留在旧值上 —— 那比不做缓存更糟。）
 const lowerCache = new WeakMap()
 
-/** 取某行某字段的小写形式（带缓存；值变了自动失效） */
+/** 取某行某字段的归一化形式（带缓存；值变了自动失效） */
 function lowerOf(row, field) {
   const raw = row[field]
   if (raw == null) return ''
@@ -23,7 +33,7 @@ function lowerOf(row, field) {
   if (!byField) { byField = new Map(); lowerCache.set(row, byField) }
   const hit = byField.get(field)
   if (hit && hit.raw === raw) return hit.lower
-  const lower = String(raw).toLowerCase()
+  const lower = normSearchText(raw)
   byField.set(field, { raw, lower })
   return lower
 }
@@ -32,12 +42,14 @@ function lowerOf(row, field) {
 // 没选搜索列或关键字为空 → 原样返回（不过滤）。
 export function filterRowsByKeyword(rows, field, keyword) {
   if (!field || !keyword) return rows
-  const kw = String(keyword).toLowerCase()
+  const kw = normSearchText(keyword)
+  if (!kw) return rows
   return rows.filter(s => {
     if (!s) return false
     const val = s[field]
     if (val == null) return false
-    return lowerOf(s, field).includes(kw)
+    // 与全局搜索同口径：文字子串 + 拼音（全拼/首字母）都算命中（Q1-01）
+    return lowerOf(s, field).includes(kw) || pinyinHit(val, kw)
   })
 }
 

@@ -239,4 +239,5 @@ async function main() {
   console.log('__PROBE_DONE__')
 }
 
-nextTick(() => { main().catch((e) => { console.log('[probe] ERROR ' + (e && e.stack || e)); console.log('__PROBE_DONE__') }) })
+// 失败必须发独立标记：发 __PROBE_DONE__ 会被主进程当成功（T01-12）
+nextTick(() => { main().catch((e) => { console.log('[probe] ERROR ' + (e && e.stack || e)); console.log('__PROBE_FAIL__') }) })

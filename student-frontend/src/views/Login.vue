@@ -26,8 +26,8 @@
         <template v-if="cardMode === 'login'">
           <h2 class="text-xl font-bold mb-4">班集登录</h2>
           <p v-if="loginError" class="text-danger text-[15px] font-medium mb-2">{{ loginError }}</p>
-          <input v-model="username" placeholder="账号" autocomplete="off" class="border border-border p-2 w-full mb-2 rounded-xl" />
-          <input v-model="password" type="password" placeholder="密码（留空则无密码登录）" autocomplete="new-password" class="border border-border p-2 w-full mb-4 rounded-xl" />
+          <input v-model="username" placeholder="账号" aria-label="账号" autocomplete="off" class="border border-border p-2 w-full mb-2 rounded-xl" />
+          <input v-model="password" type="password" placeholder="密码（留空则无密码登录）" aria-label="密码（留空则无密码登录）" autocomplete="new-password" class="border border-border p-2 w-full mb-4 rounded-xl" />
           <div class="flex gap-2">
             <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 flex-1 rounded-xl disabled:opacity-50">
               {{ busy ? '登录中…' : '登录' }}
@@ -40,7 +40,7 @@
             从数据库登录
           </button>
           <p class="text-center mt-3">
-            <a class="cursor-pointer underline text-xs text-text-muted" @click="switchMode('recover')">忘记密码？</a>
+            <a class="cursor-pointer underline text-xs text-text-muted" role="button" tabindex="0" @click="switchMode('recover')" @keydown.enter.prevent="switchMode('recover')" @keydown.space.prevent="switchMode('recover')">忘记密码？</a>
           </p>
         </template>
 
@@ -48,7 +48,7 @@
         <template v-else-if="cardMode === 'restore'">
           <h2 class="text-xl font-bold mb-1">从备份恢复</h2>
           <p class="text-xs text-text-muted mb-4">
-            <a class="cursor-pointer underline" @click="switchMode('login')">返回登录</a>
+            <a class="cursor-pointer underline" role="button" tabindex="0" @click="switchMode('login')" @keydown.enter.prevent="switchMode('login')" @keydown.space.prevent="switchMode('login')">返回登录</a>
           </p>
           <button type="button" :disabled="busy" class="bg-surface-hover px-4 py-2 rounded-xl w-full mb-2 disabled:opacity-50" @click="fileInputRef && fileInputRef.click()">
             {{ restoreZipName || (restoreZip ? '换一个备份包' : '选择备份包') }}
@@ -57,9 +57,9 @@
                摆一个输入框只会让人以为「必须填点什么」。
                用 gap 容器而不是逐个 mb-2：框的可见数量会变，少一个就多一条空白。 -->
           <div class="flex flex-col gap-2 mb-2">
-            <input v-if="restoreAccountName" :value="restoreAccountName" readonly placeholder="账号" autocomplete="off" class="border p-2 w-full rounded-xl" />
-            <input v-if="restoreFields.password" v-model="password" type="password" :placeholder="restoreFields.mnemonic ? '密码（与导出时一致）' : '密码（导出时设置的数据库密码）'" autocomplete="new-password" class="border p-2 w-full rounded-xl" />
-            <input v-if="restoreFields.mnemonic" v-model="recoverPhrase" :placeholder="restoreFields.password ? '或助记词（12字）' : '助记词（12字）'" autocomplete="off" class="border p-2 w-full rounded-xl" />
+            <input v-if="restoreAccountName" :value="restoreAccountName" readonly placeholder="账号" aria-label="账号" autocomplete="off" class="border p-2 w-full rounded-xl" />
+            <input v-if="restoreFields.password" v-model="password" type="password" :placeholder="restoreFields.mnemonic ? '密码（与导出时一致）' : '密码（导出时设置的数据库密码）'" aria-label="备份包密码" autocomplete="new-password" class="border p-2 w-full rounded-xl" />
+            <input v-if="restoreFields.mnemonic" v-model="recoverPhrase" :placeholder="restoreFields.password ? '或助记词（12字）' : '助记词（12字）'" aria-label="助记词（12字）" autocomplete="off" class="border p-2 w-full rounded-xl" />
           </div>
           <button type="submit" :disabled="busy" @mouseenter="prefetch(loadConfirmDialog)" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
             {{ busy ? '恢复中…' : '解包并恢复' }}
@@ -70,13 +70,13 @@
         <template v-else-if="cardMode === 'register'">
           <h2 class="text-xl font-bold mb-1">注册账号</h2>
           <p class="text-xs text-text-muted mb-4">
-            <a class="cursor-pointer underline" @click="switchMode('login')">已有账号，去登录</a>
+            <a class="cursor-pointer underline" role="button" tabindex="0" @click="switchMode('login')" @keydown.enter.prevent="switchMode('login')" @keydown.space.prevent="switchMode('login')">已有账号，去登录</a>
           </p>
-          <AppSelect v-model="securityLevel" :options="securityLevelOptions" placeholder="请选择模式" class="w-full mb-2" />
-          <input v-model="username" placeholder="账号" class="border border-border p-2 w-full mb-2 rounded-xl" autocomplete="off" />
+          <AppSelect v-model="securityLevel" aria-label="安全等级" :options="securityLevelOptions" placeholder="请选择模式" class="w-full mb-2" />
+          <input v-model="username" placeholder="账号" aria-label="账号" class="border border-border p-2 w-full mb-2 rounded-xl" autocomplete="off" />
           <template v-if="registerNeedsPassword">
-            <input v-model="password" type="password" placeholder="密码（至少 6 位）" autocomplete="new-password" class="border border-border p-2 w-full mb-2 rounded-xl" />
-            <input v-model="confirm" type="password" placeholder="确认密码" autocomplete="new-password" class="border border-border p-2 w-full mb-4 rounded-xl" />
+            <input v-model="password" type="password" placeholder="密码（至少 6 位）" aria-label="密码（至少 6 位）" autocomplete="new-password" class="border border-border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="confirm" type="password" placeholder="确认密码" aria-label="确认密码" autocomplete="new-password" class="border border-border p-2 w-full mb-4 rounded-xl" />
           </template>
           <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
             {{ busy ? '创建中…' : '注册' }}
@@ -89,7 +89,7 @@
         <template v-else-if="cardMode === 'recover'">
           <h2 class="text-xl font-bold mb-1">找回密码</h2>
           <p v-if="recoverStep !== 'setpass'" class="text-xs text-text-muted mb-4">
-            <a class="cursor-pointer underline" @click="recoverBack">{{ recoverStep === 'menu' ? '返回登录' : '上一步' }}</a>
+            <a class="cursor-pointer underline" role="button" tabindex="0" @click="recoverBack" @keydown.enter.prevent="recoverBack" @keydown.space.prevent="recoverBack">{{ recoverStep === 'menu' ? '返回登录' : '上一步' }}</a>
           </p>
           <p v-else class="mb-4"></p>
 
@@ -107,9 +107,9 @@
           <!-- 步骤 2a：恢复词恢复 -->
           <template v-else-if="recoverStep === 'phrase'">
             <p class="text-xs text-text-muted mb-2">不用记账号，系统会按恢复词在本机定位对应的账号。</p>
-            <input v-model="recoverPhrase" placeholder="12 个恢复词" autocomplete="off" class="border p-2 w-full mb-2 rounded-xl" />
-            <input v-model="password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
-            <input v-model="confirm" type="password" placeholder="确认新密码" autocomplete="new-password" class="border p-2 w-full mb-4 rounded-xl" />
+            <input v-model="recoverPhrase" placeholder="12 个恢复词" aria-label="12 个恢复词" autocomplete="off" class="border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="password" type="password" placeholder="新密码（至少 6 位）" aria-label="新密码（至少 6 位）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="confirm" type="password" placeholder="确认新密码" aria-label="确认新密码" autocomplete="new-password" class="border p-2 w-full mb-4 rounded-xl" />
             <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
               {{ busy ? '重置中…' : '重置密码' }}
             </button>
@@ -143,9 +143,9 @@
           <!-- 步骤 3：本机恢复成功后强制设置新密码 -->
           <template v-else-if="recoverStep === 'setpass'">
             <p class="text-xs text-text-muted mb-2">已通过本机数据库验证身份，请设置新密码后进入系统。</p>
-            <input :value="recoveredAccount" readonly placeholder="账号" class="border p-2 w-full mb-2 rounded-xl" />
-            <input v-model="password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
-            <input v-model="confirm" type="password" placeholder="确认新密码" autocomplete="new-password" class="border p-2 w-full mb-4 rounded-xl" />
+            <input :value="recoveredAccount" readonly placeholder="账号" aria-label="账号" class="border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="password" type="password" placeholder="新密码（至少 6 位）" aria-label="新密码（至少 6 位）" autocomplete="new-password" class="border p-2 w-full mb-2 rounded-xl" />
+            <input v-model="confirm" type="password" placeholder="确认新密码" aria-label="确认新密码" autocomplete="new-password" class="border p-2 w-full mb-4 rounded-xl" />
             <button type="submit" :disabled="busy" class="bg-info text-text-inverse px-4 py-2 rounded-xl w-full disabled:opacity-50">
               {{ busy ? '保存中…' : '设置新密码' }}
             </button>
@@ -443,10 +443,15 @@ function login() {
     setToken(res.data.token);
     storeMediaToken(res.data.mediaToken);
     setCurrentUser(res.data.user);
+    // 跳转前清掉明文口令（F06-08）
+    password.value = '';
+    confirm.value = '';
     router.push('/');
   }).catch(err => {
     // 账号/密码错误：内联显示在表单上方，不再弹提示条
     loginError.value = err.response?.data?.error || '登录失败';
+    // 失败后清空密码：共享设备上不在内存/输入框里留明文（F06-08）
+    password.value = '';
   }).finally(() => { busy.value = false; });
 }
 function register() {

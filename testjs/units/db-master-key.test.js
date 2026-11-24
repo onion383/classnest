@@ -22,7 +22,23 @@ const CONFIG = path.join(ROOT, 'electron/main/main.config.js')
 const BACKEND = path.join(ROOT, 'electron/main/main.backend.js')
 const ENTRY = path.join(ROOT, 'electron/main/main.js')
 const PREFIX = 'enc:'
-const electronId = require.resolve('electron')
+// 纯 Node 单测环境可能没装 electron：解析失败时把 'electron' 请求映射到哨兵路径，
+// 否则整文件在收集用例前就抛 Cannot find module（T05-03）。
+let electronId = 'electron'
+try {
+  electronId = require.resolve('electron')
+} catch (_) {
+  electronId = path.join(os.tmpdir(), 'classnest-electron-stub.js')
+  const Module = require('node:module')
+  const orig = Module._resolveFilename
+  if (!Module.__classnestElectronStub) {
+    Module.__classnestElectronStub = true
+    Module._resolveFilename = function (request, ...rest) {
+      if (request === 'electron') return electronId
+      return orig.call(this, request, ...rest)
+    }
+  }
+}
 const configId = require.resolve(CONFIG)
 const HEX64 = /^[0-9a-f]{64}$/i
 const tempDirs = []

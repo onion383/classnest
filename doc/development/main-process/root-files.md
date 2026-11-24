@@ -21,7 +21,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：`electron/` 根目录下不参与运行时模块拆分的文件（预加载、占位页、打包钩子、IPC 通道清单、图标），以及 `inno/`、`installer-assets/` 里的安装器与素材；入口 `main.js` 与 24 个模块分别见 [entry.md](./entry.md)、[modules.md](./modules.md)。
+- **定位**：`electron/` 根目录下不参与运行时模块拆分的文件（预加载、占位页、打包钩子、IPC 通道清单、图标），以及 `inno/`、`installer-assets/` 里的安装器与素材；入口 `main.js` 与 32 个模块分别见 [entry.md](./entry.md)、[modules.md](./modules.md)。
 - **公共逻辑**：`preload.js`（预加载脚本）是所有窗口的安全边界；`ipc-channels.json`（通道清单）是「有哪些通道」的单一来源，`ipc-policy.json`（授权表）是「谁能调」的单一来源；`afterPack.js`（打包后钩子）与 `inno/compile.mjs`（安装器编译脚本）只在打包期执行，运行时不参与。
 - **局限**：本页只列文件职责、导出与依赖；打包流程、剔除清单、Vue 3.6 / 3.5 双分支见 [build-and-branches.md](../topics/build-and-branches.md)，安装包参数细节见该专题第 5 节。
 

@@ -6,13 +6,27 @@ const dbManager = require('../dbManager/dbManager')
 
 // ---------- 表结构（PRAGMA 一次后复用，键带数据库 slug，不能跨库复用） ----------
 const colCache = {}
+// 条数硬顶：跨账号/跨表长期使用会缓慢累积，缓存的是可重建的 PRAGMA 结果，
+// 超出后按插入序淘汰最旧键即可（P2-06）。表结构变更仍走 clearTableColumnsCache。
+const COL_CACHE_MAX = 500
+// schema_version 兜底：外部改库（迁移脚本、手工 ALTER、恢复旧包）不走 clearTableColumnsCache，
+// 只看缓存会读到陈旧列清单（X3-17）。任何 DDL 都会让 PRAGMA schema_version 递增，逐次比对即可。
+function schemaVersion() {
+  try { return Number(db.prepare('PRAGMA schema_version').get().schema_version) || 0 } catch (_) { return -1 }
+}
 function tableColumns(table) {
   let slug = 'default'
   try { slug = dbManager.currentSlug() || 'default' } catch (_) { /* 非请求上下文时退回 default */ }
   const key = `${slug}:${table}`
-  if (colCache[key]) return colCache[key]
+  const ver = schemaVersion()
+  const hit = colCache[key]
+  if (hit && hit.ver === ver) return hit.cols
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name)
-  colCache[key] = cols
+  colCache[key] = { ver, cols }
+  const keys = Object.keys(colCache)
+  if (keys.length > COL_CACHE_MAX) {
+    for (const k of keys.slice(0, keys.length - COL_CACHE_MAX)) delete colCache[k]
+  }
   return cols
 }
 
@@ -195,6 +209,8 @@ function listIds(table, limit = 2) {
 module.exports = {
   tableColumns,
   clearTableColumnsCache,
+  // 仅供单测：观察缓存键（条数硬顶与淘汰顺序）
+  _colCacheKeysForTest: () => Object.keys(colCache),
   privacyRevision,
   studentIdNameMap,
   listPrivacyStudents,

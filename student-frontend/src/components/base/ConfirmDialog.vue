@@ -14,6 +14,7 @@
         </label>
         <label class="block mb-2">数据类型：
           <AppSelect
+            aria-label="数据类型"
             :model-value="columnType"
             @change="$emit('update:columnType', $event)"
             class="w-4/5 mt-1"

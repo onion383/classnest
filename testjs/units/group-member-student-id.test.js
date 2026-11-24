@@ -109,7 +109,8 @@ test('同名两人分到不同组：靠 student_id 区分，各自独立', async
   assert.equal(member(r2.json.id).member_name, '张子涵', '另一个同名成员不能被连带改掉')
   assert.equal(member(r2.json.id).student_id, b, '改名的那个换了人，另一个的绑定必须原样')
   assert.equal(all('SELECT id FROM students WHERE 姓名 = ?', '张子涵甲').length, 1, '改名后要为新名字建档')
-  assert.equal(dimId > 0, true)
+  // 不写 `dimId > 0`（lastInsertRowid 恒为正，属恒真断言）；按 id 回查维度确实落库（T06-03）
+  assert.equal(all('SELECT 1 FROM group_dimensions WHERE id = ?', dimId).length, 1, '维度必须真的落库')
 })
 
 test('同名歧义且没给 id → student_id 留空，姓名照存（不猜）', async () => {

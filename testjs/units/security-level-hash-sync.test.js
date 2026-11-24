@@ -49,9 +49,13 @@ test('accountSetPassword 读写权威哈希：设新哈希→登录权威生效�
   dbManager.accountSetPassword(accountId, '')
   const acc2 = dbManager.accountFindByUsername(name)
   assert.equal(acc2.password_hash, '', '权威哈希必须能清空，否则免密登录仍被要旧密码')
-  // 登录 hashSource 的口径：(acc && acc.password_hash) ? acc.password_hash : user.password
-  const hashSource = (acc2 && acc2.password_hash) ? acc2.password_hash : 'lib-password'
-  assert.equal(hashSource, 'lib-password', '权威哈希清空后应退回库内口令，不会拿旧哈希校验')
+  // 登录 hashSource 的口径由 services/credentialChange.js 唯一导出（T07-03），
+  // 不在这里再手抄一行当 oracle —— 口径改了（例如改成先看 user.password），本用例会跟着变。
+  const { hashSource } = require(path.join(BACKEND, 'services', 'credentialChange'))
+  assert.equal(hashSource(acc2, { password: 'lib-password' }), 'lib-password',
+    '权威哈希清空后应退回库内口令，不会拿旧哈希校验')
+  assert.equal(hashSource({ password_hash: 'account-hash' }, { password: 'lib-password' }), 'account-hash',
+    '账号级哈希存在时必须优先，库内口令不得覆盖权威')
 })
 
 function securityLevelHandler() {
@@ -87,19 +91,18 @@ test('清空密码分支：写空串后同步 accounts.password_hash 为空', ()
   assert.match(b, /dbManager\.accountSetPassword\(acc\.id, ''\)/, '权威哈希也要清空，否则免密/明文仍要旧密码')
 })
 
-test('两个写密码分支各同步一次，不漏不重', () => {
+test('两个写密码分支各同步一次，另有一次失败回滚（不漏不重）', () => {
   const h = securityLevelHandler()
   const updates = (h.match(/userStore\.updatePassword\(/g) || []).length
   const syncs = (h.match(/dbManager\.accountSetPassword\(/g) || []).length
-  assert.equal(updates, 2, '写密码点数量变了，判据需复核')
-  assert.equal(syncs, updates, '每个写密码点都要有一次权威哈希同步')
+  assert.equal(updates, 3, '两个写密码点 + 一次失败回滚点，数量变了判据需复核')
+  assert.equal(syncs, updates, '每个 updatePassword 都要有对应的 accountSetPassword（含回滚）')
 })
 
-test('变异反证：去掉两个同步块后，接线判据必须失败', () => {
+test('变异反证：去掉全部权威哈希同步后，接线判据必须失败', () => {
   const h = securityLevelHandler()
   const mutated = h
-    .replace(/dbManager\.accountSetPassword\(acc\.id, newHash\)/g, '')
-    .replace(/dbManager\.accountSetPassword\(acc\.id, ''\)/g, '')
+    .replace(/dbManager\.accountSetPassword\([^)]*\)/g, '')
   assert.ok(mutated !== h, '变异没匹配到同步语句')
   assert.equal((mutated.match(/dbManager\.accountSetPassword\(/g) || []).length, 0,
     '变异后应无权威哈希同步，接线判据须判失败')

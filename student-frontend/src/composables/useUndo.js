@@ -3,6 +3,7 @@ import { useDisposables } from '../utils/disposables.js'
 import { pushUndo, undoStatus, applyUndo } from '../api/undo'
 import { reportError } from '../utils/reportError.js'
 import { useNotification } from './useNotification.js'
+import { registerUserScopedReset } from '../utils/userScopedCache.js'
 import {
   recordUndo, configureUndoRecorder, warnUndoFailed,
 } from '../utils/undoRecorder.js'
@@ -244,6 +245,22 @@ let pageCounter = 0
 // 状态查询节流：同 key 在 400ms 内不重复请求（force=true 时忽略），并将过期结果丢弃
 let _lastProbe = { key: '', at: 0 }
 let _probeSeq = 0
+
+// 登出/换号：跳过名单、激活页上下文与可用态都跟着用户走，必须一并作废（F04-01 / Q2-13）。
+// 不清的话，旧账号的行 id / origin 会带进新账号的撤销判断 —— 新库自增 id 从 1 起，
+// 同表 key 时不会触发换表重置，一条本可撤销的记录会被静默跳过。
+registerUserScopedReset(() => {
+  resetUndoSkips()
+  activeCtx = null
+  pageCounter = 0
+  _lastProbe = { key: '', at: 0 }
+  undoState.key = null
+  undoState.canUndo = false
+  undoState.canRedo = false
+  undoState.undoLabel = ''
+  undoState.redoLabel = ''
+  undoState.busy = false
+})
 
 // 拉取当前激活页的撤销可用态。force=true 用于「执行后/写入后/切换页」等必须即时更新的场景。
 export function refreshUndoStatus(force = false) {

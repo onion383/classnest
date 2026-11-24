@@ -58,8 +58,7 @@
                 @focus="$emit('pick', askPage, OTHER_KEY)"
                 @keydown.enter.prevent="onOtherEnter"
                 placeholder="请输入"
-                class="flex-1 min-w-0 bg-transparent outline-none text-text placeholder:text-text-muted"
-              />
+                class="flex-1 min-w-0 bg-transparent outline-none text-text placeholder:text-text-muted" aria-label="请输入"/>
             </label>
           </div>
           <div v-else class="text-sm text-text-muted">请直接在下方输入你的回答</div>
@@ -131,8 +130,7 @@
                   @focus="$emit('pick', qi, OTHER_KEY)"
                   @keydown.enter.prevent="$emit('submit')"
                   placeholder="请输入"
-                  class="flex-1 min-w-0 bg-transparent outline-none text-text placeholder:text-text-muted"
-                />
+                  class="flex-1 min-w-0 bg-transparent outline-none text-text placeholder:text-text-muted" aria-label="请输入"/>
               </label>
             </div>
             <div v-else class="text-sm text-text-muted">请直接在下方输入你的回答</div>
@@ -275,8 +273,7 @@
           @input="onComposerInput"
           @keydown="onComposerKeydown"
           @blur="skillMenuOpen = false"
-          @paste="onPaste"
-        />
+          @paste="onPaste" :aria-label="busy ? 'AI 正在回复，可继续输入下一句并排队发送…' : '输入问题，回车发送（Shift+Enter 换行）；打「/」选择技能'"/>
       </div>
       <div class="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1">
         <button
@@ -319,6 +316,7 @@
 
         <div class="ml-auto flex items-center gap-1.5">
           <AppSelect
+            aria-label="选择模型"
             v-if="modelOptions.length"
             :model-value="modelId"
             :options="modelOptions"

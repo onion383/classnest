@@ -1,11 +1,10 @@
 <template>
-  <Teleport to="body">
-    <Transition name="dialog">
-      <div
-        v-if="visible"
-        class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001] pointer-events-auto no-dialog-pulse"
-        @click.self="$emit('close')"
-      >
+  <DialogShell
+    :visible="visible"
+    :z-index="10001"
+    overlay-class="bg-black/50 pointer-events-auto no-dialog-pulse"
+    @overlay="$emit('close')"
+  >
         <div class="bg-surface p-5 rounded-xl w-[600px] max-w-full shadow-lg dialog-card relative">
           <!-- 搜索框：沿用弹窗表单输入框规格（与添加学生等弹窗一致），左侧放大镜 -->
           <div class="relative mb-6">
@@ -21,8 +20,7 @@
               @keydown.down.prevent="moveActive(1)"
               @keydown.up.prevent="moveActive(-1)"
               @keydown.enter.prevent="confirmActive"
-              @keydown.esc="$emit('close')"
-            />
+              @keydown.esc="$emit('close')" aria-label="搜索页面或设置…"/>
           </div>
 
           <!-- 固定高度的结果区：「最近搜索」与「分组 chips」都放在这个容器里，出现与否都只是
@@ -107,6 +105,13 @@
                 </button>
               </template>
             </div>
+            <!-- 关键词超过后端上限时明确告知：静默截断会让「且」条件变松 -->
+            <div v-if="remoteTruncated.terms" class="shrink-0 pt-2 text-center text-xs text-text-tertiary">
+              关键词过多，仅按前 {{ remoteTruncated.used }} 个词搜索（共 {{ remoteTruncated.total }} 个）
+            </div>
+            <div v-if="remoteTruncated.pinyin" class="shrink-0 pt-2 text-center text-xs text-text-tertiary">
+              候选姓名较多，拼音匹配已简化；可用汉字或更精确的首字母缩小范围
+            </div>
             <!-- 后端多取一条判出「还有下一页」时给出口：翻页只追加，不放大上限重查 -->
             <div v-if="remoteHasMore && visibleResults.length && !remoteSearching" class="shrink-0 pt-2 text-center">
               <button
@@ -118,9 +123,7 @@
           </div>
           <CustomScrollbar :target="listEl" />
         </div>
-      </div>
-    </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
@@ -136,6 +139,7 @@ import { useDisposables } from '../../utils/disposables.js'
 import { useThemeStore } from '../../stores/theme'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import CustomScrollbar from './CustomScrollbar.vue'
+import DialogShell from './DialogShell.vue'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])
@@ -166,6 +170,8 @@ const remoteSearching = ref(false)
 // 「加载更多」只取下一页并追加，前面几页不重查。
 const remotePage = ref(0)
 const remoteHasMore = ref(false)
+// 后端因词数上限截断时的提示状态（terms=是否截断，used/total=实际/总词数）
+const remoteTruncated = ref({ terms: false, used: 0, total: 0, pinyin: false })
 let lastRemoteQ = ''
 // pinyin-match 的 match 函数（懒加载，首次打开搜索时动态 import，加载完成后本地结果自动重算）
 const pinyinMatch = ref(null)
@@ -315,6 +321,7 @@ function scheduleRemoteSearch() {
     lastRemoteQ = ''
     remotePage.value = 0
     remoteHasMore.value = false
+    remoteTruncated.value = { terms: false, used: 0, total: 0, pinyin: false }
     // 清空时作废在途请求，否则它回来后会把结果又填回空列表
     remoteSeq.invalidate()
     abortRemote()
@@ -355,14 +362,26 @@ async function fetchRemoteSearch(q, page = remotePage.value, append = false) {
     remoteResults.value = append ? remoteResults.value.concat(incoming) : incoming
     const meta = data && data.meta
     remoteHasMore.value = !!(meta && meta.hasMore)
+    remoteTruncated.value = {
+      terms: !!(meta && meta.truncatedTerms),
+      used: (meta && meta.termsUsed) || 0,
+      total: (meta && meta.termsTotal) || 0,
+      pinyin: !!(meta && meta.pinyinDegraded),
+    }
   } catch (e) {
     // 主动取消：不是错误，保持现有结果不动
     if (e && (e.code === 'ERR_CANCELED' || e.name === 'CanceledError')) return
     // 后端未就绪/未登录：静默。翻页失败时保留已显示的结果，只收起按钮；
     // 首屏失败才清空远程结果（本地搜索照常可用）。
     if (!remoteSeq.isCurrent(my)) return
-    if (!append) remoteResults.value = []
-    remoteHasMore.value = false
+    if (append) {
+      // 翻页失败：页码回退并恢复「加载更多」，用户点重试即可，不必重输关键字（SUPP-03）
+      remotePage.value = Math.max(0, remotePage.value - 1)
+      remoteHasMore.value = true
+    } else {
+      remoteResults.value = []
+      remoteHasMore.value = false
+    }
   } finally {
     if (remoteSeq.isCurrent(my)) remoteSearching.value = false
   }

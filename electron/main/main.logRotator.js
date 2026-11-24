@@ -17,12 +17,21 @@
 
 const fsp = require('node:fs/promises')
 const path = require('node:path')
+const { atomicWriteFile } = require('./main.atomic-write')
 
 const NOTICE = '（历史日志已截断，仅保留最近部分）\n'
 
 // 默认口径：单文件 1MB 封顶、截断后留最近 512KB。
 const DEFAULT_MAX = 1024 * 1024
 const DEFAULT_KEEP = 512 * 1024
+
+// 按字节截取的尾部可能从某个多字节字符（中文/emoji）的中间开始。
+// 丢掉开头的续字节（10xxxxxx），否则解码后首字符变成替换符 �（E02-04）。
+function dropPartialUtf8Head(buf) {
+  let i = 0
+  while (i < buf.length && (buf[i] & 0xc0) === 0x80) i += 1
+  return i === 0 ? buf : buf.subarray(i)
+}
 
 // 只读文件尾部，用句柄定点读 —— 不把整份日志读进内存（旧实现是 readFileSync 全文再 slice）。
 async function readTail(filePath, keepBytes, size) {
@@ -31,8 +40,8 @@ async function readTail(filePath, keepBytes, size) {
     fh = await fsp.open(filePath, 'r')
     const start = Math.max(0, size - keepBytes)
     const buf = Buffer.alloc(size - start)
-    await fh.read(buf, 0, buf.length, start)
-    return buf.toString('utf8')
+    const { bytesRead } = await fh.read(buf, 0, buf.length, start)
+    return dropPartialUtf8Head(buf.subarray(0, bytesRead)).toString('utf8')
   } finally {
     if (fh) await fh.close().catch(() => { /* 关不掉也不影响结果 */ })
   }
@@ -47,7 +56,8 @@ async function rotateIfNeeded(filePath, { maxBytes = DEFAULT_MAX, keepBytes = DE
     // keepBytes 必须严格小于 maxBytes，否则截断完仍然超限、下次又截，白做功。
     const keep = Math.max(0, Math.min(keepBytes, maxBytes - 1))
     const tail = await readTail(filePath, keep, st.size)
-    await fsp.writeFile(filePath, NOTICE + tail)
+    // 轮转重写走 tmp+rename：中途崩溃最多留下旧日志，不会只剩半截文件（E02-04）
+    await atomicWriteFile(filePath, NOTICE + tail, { fs: fsp })
     return true
   } catch (_) {
     return false
@@ -87,5 +97,6 @@ function clearLogFile(filePath) {
 }
 
 module.exports = {
-  rotateIfNeeded, appendWithRotation, clearLogFile, DEFAULT_MAX, DEFAULT_KEEP, NOTICE,
+  rotateIfNeeded, appendWithRotation, clearLogFile, dropPartialUtf8Head,
+  DEFAULT_MAX, DEFAULT_KEEP, NOTICE,
 }

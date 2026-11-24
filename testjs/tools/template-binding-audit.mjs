@@ -68,3 +68,5 @@ if (!findings.length) {
 console.log(`发现 ${findings.length} 个文件存在「模板引用但 setup 未绑定」的标识符：\n`)
 for (const f of findings) console.log(`  ${f.file}\n    ↳ ${f.missing.join(', ')}`)
 console.log(`\n合计 ${findings.reduce((n, f) => n + f.missing.length, 0)} 处`)
+// 发现即失败：退出码 0 会让「模板引用了未绑定的标识符」在批跑里被静默放行（T03-01）
+process.exit(1)

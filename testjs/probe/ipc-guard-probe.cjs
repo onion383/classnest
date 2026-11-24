@@ -22,6 +22,8 @@ const ROOT = path.resolve(__dirname, '..', '..')
 const registered = { on: {}, handle: {} }
 const fakeIpcMain = {
   on(channel, listener) { registered.on[channel] = listener },
+  // installIpcGuard 也会包 once 注册（主进程有一次性通道），假 ipcMain 必须同样提供
+  once(channel, listener) { registered.on[channel] = listener },
   handle(channel, listener) { registered.handle[channel] = listener },
 }
 const origResolve = Module._resolveFilename
@@ -81,12 +83,16 @@ ipcMain.on('绝对不存在的通道-zzz', () => { unknownCalls++ })
 registered.on['绝对不存在的通道-zzz'](fakeEvent(auth.ROLE.MAIN))
 assert(unknownCalls === 0, '表外通道即使来自主窗口也不应触发 handler')
 
-// 5) handle 型同样被拦
+// 5) handle 型同样被拦，且必须是 reject 而不是 resolve(undefined)（X1-03）
 let handleCalls = 0
 ipcMain.handle('set-data-dir', () => { handleCalls++; return 'h' })
-const hRes = registered.handle['set-data-dir'](fakeEvent(auth.ROLE.WIDGET))
+let hErr = null
+try {
+  registered.handle['set-data-dir'](fakeEvent(auth.ROLE.WIDGET))
+} catch (e) { hErr = e }
+assert(!!hErr && /未授权/.test(String(hErr && hErr.message)),
+  'invoke 型越权调用应 reject（resolve(undefined) 会让渲染层把「拒绝」当成「成功空值」）')
 assert(handleCalls === 0, 'invoke 型通道的越权调用不应触发 handler')
-assert(hRes === undefined, 'invoke 型越权调用应返回 undefined')
 registered.handle['set-data-dir'](fakeEvent(auth.ROLE.MAIN))
 assert(handleCalls === 1, 'invoke 型通道的主窗口调用应触发 handler')
 

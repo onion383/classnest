@@ -101,33 +101,31 @@ test('不再下发全量 scores / fees，students 只剩 id+姓名', async () =>
 test('summary 口径与改造前 DashboardView 的 computed 逐项一致', async () => {
   const body = await getPayload()
 
-  // 改造前的前端算法原样复刻（作为对照基准）
-  const scoreRows = conn.prepare('SELECT * FROM score_records').all()
-  const oldTopScores = scoreRows
-    .filter((s) => s['加分时间'] && s['加分时间'].startsWith(TODAY))
-    .sort((a, b) => Number(b['分值'] || 0) - Number(a['分值'] || 0))
-    .slice(0, 4)
-    .map((s) => {
-      const name = s['姓名'] || s.group_name || '未知'
-      const score = Number(s['分值'] || 0)
-      return { name, score: s['类型'] === '扣分' ? -score : score }
-    })
+  // 基准值用独立 SQL 聚合现算，不再抄一遍前端 computed 的累加逻辑——
+  // 否则旧算法口径错了、后端复刻同一错误，deepEqual 仍绿（T05-05）。
+  const oldTopScores = conn.prepare(`
+    SELECT COALESCE(姓名, group_name, '未知') AS name,
+           CASE WHEN 类型 = '扣分' THEN -ABS(CAST(分值 AS REAL)) ELSE ABS(CAST(分值 AS REAL)) END AS score
+    FROM score_records
+    WHERE 加分时间 LIKE ? AND 加分时间 IS NOT NULL
+    ORDER BY CAST(分值 AS REAL) DESC
+    LIMIT 4
+  `).all(TODAY + '%')
 
-  const feeRows = conn.prepare('SELECT * FROM fee_records').all()
-  const oldBalance = feeRows.reduce((sum, r) => {
-    const amount = Number(r['收支金额'] || 0)
-    const type = String(r['收支类型'] || '').trim()
-    return type === '支出' ? sum - Math.abs(amount) : sum + Math.abs(amount)
-  }, 0)
-  const inMonth = (r) => String(r['收支时间'] || '').startsWith(MONTH)
-  const oldIncome = feeRows.reduce((sum, r) => {
-    if (!inMonth(r)) return sum
-    return String(r['收支类型'] || '').trim() !== '支出' ? sum + Math.abs(Number(r['收支金额'] || 0)) : sum
-  }, 0)
-  const oldExpense = feeRows.reduce((sum, r) => {
-    if (!inMonth(r)) return sum
-    return String(r['收支类型'] || '').trim() === '支出' ? sum + Math.abs(Number(r['收支金额'] || 0)) : sum
-  }, 0)
+  const sumOf = (sql, ...args) => Number(conn.prepare(sql).get(...args).v || 0)
+  const oldBalance = sumOf(`
+    SELECT SUM(CASE WHEN TRIM(收支类型) = '支出' THEN -ABS(CAST(收支金额 AS REAL))
+                    ELSE ABS(CAST(收支金额 AS REAL)) END) AS v
+    FROM fee_records
+  `)
+  const oldIncome = sumOf(`
+    SELECT SUM(ABS(CAST(收支金额 AS REAL))) AS v FROM fee_records
+    WHERE 收支时间 LIKE ? AND TRIM(收支类型) <> '支出'
+  `, MONTH + '%')
+  const oldExpense = sumOf(`
+    SELECT SUM(ABS(CAST(收支金额 AS REAL))) AS v FROM fee_records
+    WHERE 收支时间 LIKE ? AND TRIM(收支类型) = '支出'
+  `, MONTH + '%')
 
   assert.equal(body.summary.studentCount, 45)
   assert.equal(body.summary.scoreCount, 1000)

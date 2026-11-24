@@ -77,7 +77,7 @@ MIT开源授权，你几乎可以使用这个仓库里面的代码做任何事�
 classnest/
 ├── electron/                    # Electron 主进程
 │   ├── main/main.js             # 主进程入口（package.json 的 main）
-│   ├── main/main.*.js           # 21 个拆分模块（backend/perf/tray/widget/protocol/updater/...）
+│   ├── main/main.*.js           # 32 个拆分模块（backend/perf/tray/widget/protocol/updater/...）
 │   ├── preload.js               # 预加载脚本（IPC 白名单注入）
 │   ├── ipc-channels.json        # IPC 通道白名单单一来源
 │   ├── startup.html             # 引导窗口静态占位页
@@ -90,8 +90,8 @@ classnest/
 │   ├── vue36/                   # Vue 3.6 预览依赖（与主线隔离）
 │   └── src/
 │       ├── views/               # 15 个页面（SettingsView、ScheduleView 为目录）
-│       ├── components/          # 76 个组件（base/tables/dialogs/ai/album/data-manage/...）
-│       ├── composables/         # 19 个组合式函数（表格 CRUD、网格、撤销、相册时间轴等）
+│       ├── components/          # 96 个组件（base/tables/dialogs/ai/album/data-manage/...）
+│       ├── composables/         # 36 个组合式函数（表格 CRUD、网格、撤销、相册时间轴等）
 │       ├── subwindows/          # setup / migration / widget / desktop-widget 入口
 │       ├── stores/ router/ styles/ utils/ api/ config/ wasm/
 ├── student-backend/             # Express 后端（fork 为子进程）
@@ -141,19 +141,22 @@ npm run dev:new            # 3.6 通道只起 Vite
 | `npm run electron:dev`                                 | Vite + Electron（3.5 主线）                             |
 | `npm run electron:dev36`                               | Vite + Electron（3.6 预览）                             |
 | `npm run dev` / `dev:new`                              | 仅 Vite（3.5 / 3.6）                                   |
+| `npm run dev:update-mock`                              | 本地 mock Release，触发一次完整更新流程（不执行假包）              |
 | `npm run build` / `build:new`                          | 仅构建前端（3.5 / 3.6）                                    |
 | `npm run build:backend`                                | 把后端合成单文件 `student-backend/app.bundle.js`（启动优化）        |
 | `npm run channels:gen`                                 | 由 `electron/ipc-channels.json` 生成 `electron/main/channels.js`（`--check` 只校验同源） |
 | `npm run electron:build`                               | 前端 → electron-builder（`--dir`）→ Inno，产物在 `release/` |
 | `npm run electron:buildnew`                            | 同上，走 3.6 通道，产物在 `release36/`                        |
 | `npm run build:win:inno`                               | 只编译安装包（需先有 unpacked 产物）；跟 `-- release36 --vue36` 出 3.6 预览包 |
-| `npm test`                                             | units + behavior（约 2.4s）                            |
-| `npm run test:units` / `test:behavior`                 | 单独跑某一层                                              |
+| `npm test`                                             | units + behavior + probe（约 2.4s）                    |
+| `npm run test:units` / `test:behavior` / `test:probe`  | 单独跑某一层                                              |
 | `npm run smoke`                                        | 链路冒烟（约 1min，发版前）                                    |
 | `npm run test:all`                                     | 快测 + 冒烟                                             |
 | `npm run seed`                                         | 灌测试数据（需后端在跑）                                        |
 | `npm run lint`                                         | ESLint 检查三块代码                                       |
 | `npm run check:boundaries` / `check:boundaries:strict` | 错误边界检查（strict 更严格）                                  |
+| `npm run check:ipc-policy` / `check:schema`            | IPC 策略与数据库结构清单同源对账（CI 会跑）                          |
+| `npm run policy:gen`                                   | 由 `electron/ipc-policy.json` 生成 IPC 策略产物（`check:ipc-policy` 的写入侧） |
 | `npm run docs:verify`                                  | 文档一致性校验（死链 / 覆盖 / 路由 / 依赖 / 计数）                     |
 | `npm run docs:sync`                                    | 按源码现算值同步文档里的数量类计数（只改数字，改完仍需 `docs:verify`）        |
 | `npm run check:coverage` | 生成「入口 × 不变量」覆盖矩阵并校验：PASS / GAP / UNKNOWN 明细，缺口返回非零 |

@@ -18,10 +18,16 @@ function createDynamicTableRouter(tableName, options = {}) {
     listWhere = null
   } = options;
 
-  // GET /
+  // GET / —— 传 ?limit=&offset= 时走分页（多回 total），不传则整表返回（行为不变）
   router.get('/', (req, res) => {
     const where = typeof listWhere === 'function' ? listWhere(req) || '' : '';
-    const result = queryAll(tableName, where);
+    const paging = req.query.limit != null ? { limit: req.query.limit, offset: req.query.offset } : null;
+    let result;
+    try {
+      result = queryAll(tableName, where, paging);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
     if (fieldTypeOverrides && result.fields) {
       result.fields.forEach(f => {
         if (fieldTypeOverrides[f.name]) {
@@ -82,16 +88,6 @@ function createDynamicTableRouter(tableName, options = {}) {
 
   // POST /move-row
   router.post('/move-row', (req, res) => {
-    try {
-      moveRow(tableName, req.body.id, req.body.direction);
-      res.json({ message: '移动成功' });
-    } catch (err) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // POST /move（兼容 feeRecords 原有的路径）
-  router.post('/move', (req, res) => {
     try {
       moveRow(tableName, req.body.id, req.body.direction);
       res.json({ message: '移动成功' });

@@ -7,15 +7,17 @@
  * 表现为「我明明关掉了遮罩，重启又回来了」。
  *
  * 本脚本用等价函数把「旧写法 vs 新写法」在各类输入下的结果列出来，
- * 作为回归依据（store 依赖 DOM，无法在 Node 里直接 import）。
+ * 作为回归依据。
  *
- * 跑法：node testjs/theme-setting-probe.mjs
+ * 新写法直接引用真实规则 utils/numSetting.js（T03-03）：
+ * 早期版本在脚本里内联了一份副本，store 改判据时副本不跟着变，探针就会假绿。
+ * 该模块是纯函数、无 DOM 依赖，可以在 Node 里直接 import。
+ *
+ * 跑法：node testjs/smoke/theme-setting-probe.mjs
  */
+import { parseNumSetting as NEW } from '../../student-frontend/src/utils/numSetting.js'
+
 const OLD = (raw, dft) => parseFloat(raw) || dft
-const NEW = (raw, dft) => {
-  const v = parseFloat(raw)
-  return Number.isFinite(v) ? v : dft
-}
 
 const cases = [
   ['0（滑到底，合法）', '0', 0],

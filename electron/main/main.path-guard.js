@@ -198,8 +198,9 @@ function resolveSafeOpenFile(input) {
 const ILLEGAL_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]/g
 function sanitizeSuggestedName(input, fallback = '导出文件') {
   const raw = typeof input === 'string' ? input : ''
-  // 先取 basename 丢掉目录部分（含 ../ 与盘符路径），再替换残留的非法字符
-  const base = path.basename(raw).replace(ILLEGAL_NAME_CHARS, '_').replace(/[. ]+$/, '').trim()
+  // 先按「两种分隔符」压平再取 basename：Linux/macOS 的 path.basename 不认反斜杠，
+  // 直接取会让 `..\evil` 原样留在名字里（E02-10）。
+  const base = path.basename(raw.replace(/\\/g, '/')).replace(ILLEGAL_NAME_CHARS, '_').replace(/[. ]+$/, '').trim()
   return base || fallback
 }
 

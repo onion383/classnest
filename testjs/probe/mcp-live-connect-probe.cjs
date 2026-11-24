@@ -35,11 +35,13 @@ async function main() {
 
   const { tools } = await client.listTools();
   console.log(`[OK] 工具清单 ${tools.length} 个: ${tools.map((t) => t.name).join(', ')}`);
+  // 握手成功不等于工具注册成功：清单为空 / 关键工具缺席必须判失败（T01-08）
+  if (!tools.length) throw new Error('工具清单为空（MCP 工具注册全部失败）');
+  if (!tools.some((t) => t.name === 'list_tables')) throw new Error('缺少关键工具 list_tables');
 
-  if (tools.some((t) => t.name === 'list_tables')) {
-    const res = await client.callTool({ name: 'list_tables', arguments: {} });
-    console.log('[OK] list_tables 返回:', JSON.stringify(res).slice(0, 600));
-  }
+  const res = await client.callTool({ name: 'list_tables', arguments: {} });
+  console.log('[OK] list_tables 返回:', JSON.stringify(res).slice(0, 600));
+  if (!res || res.isError) throw new Error('list_tables 调用失败');
   await client.close();
 }
 

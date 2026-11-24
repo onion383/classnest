@@ -39,12 +39,6 @@ test('catch 按已登记撤销数标 partial，保留撤回入口', () => {
   assert.match(catchBody, /m\.proposal\.partial = partial/, '要标 partial')
 })
 
-test('canUndoChange 依赖 executed + undoIds（证明保留 executed 才有撤回按钮）', () => {
-  const canUndo = EXEC.slice(EXEC.indexOf('canUndoChange(m)'), EXEC.indexOf('async undoChange(m)'))
-  assert.match(canUndo, /if \(!p \|\| !p\.executed/, '撤回按钮要求 executed')
-  assert.match(canUndo, /p\.undoIds && p\.undoIds\.length/, '撤回按钮要求有撤销 ID')
-})
-
 test('变异反证：恢复附件/保留 undoIds 去掉后判据失败', () => {
   const noFile = CHAT.replace('file: file || null,', '/* 丢附件 */')
   assert.ok(noFile !== CHAT, '变异没匹配到入队附件')

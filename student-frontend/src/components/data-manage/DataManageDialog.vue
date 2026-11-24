@@ -1,8 +1,6 @@
 <template>
   <!-- 数据管理弹窗：由 AI 助手标题栏的「数据管理」按钮启动（不是独立页面） -->
-  <Teleport to="body">
-  <Transition name="dialog" appear>
-  <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="close">
+  <DialogShell :visible="visible" :z-index="zIndex" @overlay="close">
     <div class="bg-surface rounded-lg border border-border shadow-card dialog-card dm-card flex flex-col p-5 relative">
       <div class="flex items-center justify-between mb-4 flex-shrink-0">
         <h3 class="text-lg font-bold">数据管理</h3>
@@ -108,6 +106,7 @@
       :original-name="mdDlg.originalName"
       :initial-name="mdDlg.initialName"
       :initial-content="mdDlg.initialContent"
+      :pending="mdSaving"
       @save="onMdSave"
     />
 
@@ -124,15 +123,14 @@
       :content="mdExportDlg.content"
       :default-filename="mdExportDlg.filename"
     />
-  </div>
-  </Transition>
-  </Teleport>
+  </DialogShell>
 </template>
 
 <script setup vapor>
 import { ref, watch } from 'vue'
 import axios from 'axios'
 import AppHelp from '../base/AppHelp.vue'
+import DialogShell from '../base/DialogShell.vue'
 import CustomScrollbar from '../base/CustomScrollbar.vue'
 import ConfirmDialog from '../base/ConfirmDialog.vue'
 import MarkdownEditDialog from './MarkdownEditDialog.vue'
@@ -146,6 +144,8 @@ import { INVOKE } from '../../electronChannels.js'
 defineOptions({ name: 'DataManageDialog' })
 const props = defineProps({
   visible: { type: Boolean, default: false },
+  // 默认沿用 AI 助手里的层级；从「账号数据管理」弹窗里打开时传更高值，避免被压在下层。
+  zIndex: { type: Number, default: 10001 },
 })
 const emit = defineEmits(['update:visible'])
 const { success: notifySuccess, error: notifyError } = useNotification()
@@ -164,6 +164,8 @@ const loadingSkill = ref(false)
 const confirm = ref({ visible: false, title: '', message: '', action: null })
 // Markdown 编辑窗口
 const mdDlg = ref({ visible: false, isNew: false, nameDisabled: false, originalName: '', initialName: '', initialContent: '', target: 'skill' })
+// Markdown 保存请求在途：传给弹窗禁用按钮，防双击连发两次写请求（F02-03）
+const mdSaving = ref(false)
 // 聊天记录导出弹窗
 const chatDlg = ref({ visible: false, id: null, name: '' })
 // Markdown 导出弹窗
@@ -203,16 +205,21 @@ async function loadConversations() {
   try {
     const { data } = await axios.get('/api/ai/conversations')
     conversations.value = data.data || []
-  } catch (_) { conversations.value = [] }
-  finally { loadingConv.value = false }
+  } catch (err) {
+    // 读取失败不能伪装成「暂无聊天记录」：给出可读错误，让用户知道是故障而不是空数据（F02-10）
+    conversations.value = []
+    notifyError(errMsg(err))
+  } finally { loadingConv.value = false }
 }
 async function loadSkills() {
   loadingSkill.value = true
   try {
     const { data } = await axios.get('/api/ai/skills')
     skills.value = data.data || []
-  } catch (_) { skills.value = [] }
-  finally { loadingSkill.value = false }
+  } catch (err) {
+    skills.value = []
+    notifyError(errMsg(err))
+  } finally { loadingSkill.value = false }
 }
 async function loadMemory() {
   try {
@@ -260,7 +267,9 @@ async function openEditSkill(s) {
   } catch (err) { notifyError(errMsg(err)) }
 }
 async function onMdSave(payload) {
+  if (mdSaving.value) return
   const dlg = mdDlg.value
+  mdSaving.value = true
   try {
     if (dlg.target === 'memory') {
       await axios.put('/api/ai/memory', { content: payload.content })
@@ -277,6 +286,7 @@ async function onMdSave(payload) {
     }
     mdDlg.value.visible = false
   } catch (err) { notifyError(errMsg(err)) }
+  finally { mdSaving.value = false }
 }
 function askDeleteSkill(s) {
   confirmAsk('删除技能文件', `确定删除「${s.name}」吗？删除后不可恢复。`, async () => {

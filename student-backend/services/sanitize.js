@@ -260,6 +260,9 @@ const COLUMN_RULES = {
   score_records: {
     类型: { kind: 'enum', values: ['加分', '扣分'] },
     分值: { kind: 'number', min: 0, max: 100000 },
+    // 成员数只允许非负整数：业务路由有 normNumber 兜底，但 AI/MCP 通用写路径
+    // 只过 sanitizeField，规则不声明时 'abc'/'3.7' 会被原样交给 better-sqlite3。
+    成员数: { kind: 'number', min: 0, integer: true },
     // POST 的默认值是 now()（带时分），严格规则照样接受；它同时拒绝非法日期，
     // 否则「2026-13-45」会原样落库，导出排序时才炸。
     加分时间: { kind: 'date' },

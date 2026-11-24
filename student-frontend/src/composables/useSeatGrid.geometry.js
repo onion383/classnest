@@ -410,6 +410,59 @@ export function applyEditedRows(prevSeats, newRows, cols, types, resolveCell) {
   return next
 }
 
+// ---------- 一人一座：把重复出现的人从旧格挪到新格 ----------
+// 场景：座位表里点候选选了已入座的学生。GridView 只知道自己这一格，回传的
+// newRows 里原格还留着这个人 → applyEditedRows 后矩阵里同一 id 出现两次。
+// 这里按「本次变化的格」（changed）判定谁是新位置，清掉其它格的同一人。
+//
+// 只动数字 id：姓名串（历史手输）不参与，免得两个同名字符串被误清。
+// 走廊/空位格本来就恒 null，不用特判。
+// 返回 moved：被清空的旧格坐标，供调用方提示 / 撤销批次共用。
+export function relocateDuplicateSeats(nextSeats, changed, types) {
+  // 原地改传入的快照（调用方持有的是 const 引用），同时返回 moved 清单。
+  const seats = nextSeats
+  const moved = []
+  const touched = new Set((changed || []).map(([r, c]) => `${r}:${c}`))
+  for (const [r, c] of (changed || [])) {
+    const val = seats[r]?.[c]
+    if (!Number.isInteger(val)) continue
+    for (let rr = 0; rr < seats.length; rr += 1) {
+      for (let cc = 0; cc < (seats[rr] || []).length; cc += 1) {
+        if (rr === r && cc === c) continue
+        if (touched.has(`${rr}:${cc}`)) continue
+        if (seats[rr][cc] !== val) continue
+        seats[rr][cc] = null
+        moved.push({ fromRow: rr, fromCol: cc, toRow: r, toCol: c, value: val })
+      }
+    }
+  }
+  return { seats, moved }
+}
+
+// 已入座学生的位置标签：给候选列表标注「已排座：第X行 列Y」用。
+// excludeIds 里的 id 逐个找出它当前坐的格，返回 { id: '第N行 第M座' }。
+// 只扫数字 id；座位列序号按 types 里的座位格计数（走廊不算座号）。
+export function occupiedSeatLabels(seats, cols, types, rows, excludeIds) {
+  const seatIdx = []
+  for (let c = 0; c < cols; c += 1) if (types?.[0]?.[c] !== CELL.AISLE && types?.[0]?.[c] !== CELL.BLANK) seatIdx.push(c)
+  const seatNoOf = (col) => {
+    const i = seatIdx.indexOf(col)
+    return i < 0 ? null : i + 1
+  }
+  const out = {}
+  const wanted = new Set((excludeIds || []).map(Number))
+  for (let r = 0; r < (seats || []).length; r += 1) {
+    for (let c = 0; c < (seats[r] || []).length; c += 1) {
+      const v = seats[r][c]
+      if (!Number.isInteger(v) || !wanted.has(v)) continue
+      const no = seatNoOf(c)
+      const rowLabel = rows?.[r]?.name || `第${r + 1}行`
+      out[v] = no != null ? `${rowLabel} 第${no}座` : rowLabel
+    }
+  }
+  return out
+}
+
 // ---------- 改几何时搬数据 ----------
 // 把旧网格里的座位数据搬到新几何上，按**座位列序号**对齐，而不是按网格列下标。
 // 按网格下标搬会在改 mode（走廊位置变化）时把旧走廊列（值全是 null）搬到新座位列上，

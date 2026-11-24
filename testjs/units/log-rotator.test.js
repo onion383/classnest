@@ -48,6 +48,22 @@ test('rotateIfNeeded：文件不存在 / 未超限都不动，超限只留最近
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
+test('rotateIfNeeded：按字节切尾落在多字节字符中间时不产生替换符', async () => {
+  const dir = tmpDir()
+  const file = path.join(dir, 'zh.log')
+  // 前缀 2 字节 + 3000 字节中文：keep=1000 时切点正好落在某个「中」的中间
+  fs.writeFileSync(file, 'xx' + '中'.repeat(1000))
+
+  assert.equal(await rotateIfNeeded(file, { maxBytes: 1024, keepBytes: 1000 }), true)
+  const after = fs.readFileSync(file, 'utf8')
+  assert.ok(after.startsWith(NOTICE), '截断后应以提示行开头')
+  assert.ok(!after.includes('\uFFFD'), '不能出现替换符（半截 UTF-8 序列已丢弃）')
+  assert.ok(after.slice(NOTICE.length).startsWith('中'), '应从完整字符边界开始')
+  assert.ok(after.endsWith('中'))
+
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 test('appendWithRotation：建目录、串行追加、超限回收', async () => {
   const dir = tmpDir()
   const file = path.join(dir, 'nested', 'deep', 'inp.log')

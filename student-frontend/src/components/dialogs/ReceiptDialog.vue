@@ -1,12 +1,8 @@
 <template>
   <!-- 收据管理：上传 + 列表 + 预览 + 下载 + 删除 -->
-  <Teleport to="body">
-    <Transition name="dialog" appear>
-      <div
-        v-if="visible"
-        class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]"
-        @click.self="close"
-      >
+  <!-- 文档预览打开时收起主面板：灯箱在上层，若主面板仍挂着 DialogShell，
+       它的 Tab 陷阱会与灯箱抢焦点 -->
+  <DialogShell :visible="visible && !docItem" :z-index="10001" @overlay="close">
         <div class="receipt-card bg-surface rounded-lg border border-border shadow-card dialog-card flex flex-col p-5">
           <div class="flex items-center justify-between mb-3 flex-shrink-0">
             <h3 class="text-lg font-bold">管理收据</h3>
@@ -33,7 +29,10 @@
 
           <!-- 查看收据：没有文件时标题和列表整块不渲染，不摆空态占位 -->
           <template v-if="localItems.length">
-            <h4 class="text-sm font-semibold text-text mt-4 mb-2 flex-shrink-0">查看收据</h4>
+            <div class="flex items-center justify-between mt-4 mb-2 flex-shrink-0">
+              <h4 class="text-sm font-semibold text-text m-0">查看收据</h4>
+              <button class="rc-btn shrink-0" :disabled="downloading" @click="downloadAll">下载全部</button>
+            </div>
             <div class="rc-list app-custom-scroll flex-1 min-h-0 overflow-y-auto border border-border rounded-lg">
               <div
                 v-for="(f, i) in localItems"
@@ -57,9 +56,7 @@
             </button>
           </div>
         </div>
-      </div>
-    </Transition>
-  </Teleport>
+  </DialogShell>
 
   <!-- 图片 / 视频：直接用相册那套查看器（同一份样式，见 styles/media-viewer.css） -->
   <MediaViewer
@@ -82,7 +79,7 @@
        · Markdown 用 AI 助手那套 marked + DOMPurify 渲染（懒加载，已 sanitize）。 -->
   <Teleport to="body">
     <Transition name="preview">
-      <div v-if="docItem" class="fixed inset-0 z-[10002] flex flex-col album-viewer" @click.self="closeDoc">
+      <div v-if="docItem" ref="docViewerEl" class="fixed inset-0 z-[10002] flex flex-col album-viewer" role="dialog" aria-modal="true" aria-label="文档预览" tabindex="-1" @click.self="closeDoc">
         <div class="viewer-main flex-1 flex min-h-0">
           <div class="viewer-stage flex-1 min-w-0 relative">
             <button
@@ -115,11 +112,13 @@
 import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 import MediaViewer from '../base/MediaViewer.vue'
+import DialogShell from '../base/DialogShell.vue'
 import { resourceUrl, ensureMediaToken, refreshMediaToken } from '../../utils/apiUrl'
-import { saveBlobWithDialog } from '../../utils/saveFile'
+import { saveBlobWithDialog, saveZipWithDialog } from '../../utils/saveFile'
 import { useNotification } from '../../composables/useNotification'
 import { renderMarkdown } from '../../composables/ai/aiMarkdown.js'
 import { createLatest } from '../../utils/latestOnly.js'
+import { useModalFocus } from '../../composables/useModalFocus.js'
 import { INVOKE } from '../../electronChannels.js'
 import '../../styles/dialog-transition.css'
 
@@ -156,6 +155,9 @@ const downloading = ref(false)
 const mediaOpen = ref(false)
 const mediaIndex = ref(0)
 const docItem = ref(null)         // { kind: 'pdf' | 'text', name, path }
+// 全屏文档预览的焦点管理（N5-11）：灯箱布局保留手写遮罩，但焦点行为与 DialogShell 一致
+const docViewerEl = ref(null)
+useModalFocus(() => !!docItem.value, docViewerEl, closeDoc)
 const docHtml = ref('')
 const docLoading = ref(false)
 // 连续点开不同 md 收据时，慢的旧渲染不能覆盖新收据的内容（#18）
@@ -363,6 +365,26 @@ async function download(f) {
     const blob = await res.blob()
     const saved = await saveBlobWithDialog(f.name || '收据', blob)
     // 空串 = 用户在保存对话框点了取消，不打扰
+    if (saved) notifySuccess('已保存')
+  } catch (err) {
+    notifyError(err.message || '下载失败')
+  } finally {
+    downloading.value = false
+  }
+}
+
+// 下载全部：一次性打成 zip 走磁盘中转（/api/data/zip-to-file + SAVE_FILE_FROM_PATH）。
+// 不逐条 saveBlobWithDialog —— 那会弹 N 次保存框，还受 50MB IPC 上限约束。
+async function downloadAll() {
+  if (downloading.value || !localItems.value.length) return
+  downloading.value = true
+  try {
+    const items = localItems.value.map((f) => ({ path: f.path, name: f.name }))
+    const saved = await saveZipWithDialog('收据', {
+      filename: '收据',
+      receiptGroups: [{ code: '', items }],
+    })
+    // 空串 = 用户取消保存对话框，不打扰
     if (saved) notifySuccess('已保存')
   } catch (err) {
     notifyError(err.message || '下载失败')

@@ -44,10 +44,17 @@ function bucketOf(slug, kind, now) {
 }
 
 // 桶只在请求时惰性重建，长期不来的 slug 会留在 Map 里；班级数量有限，
-// 但换库/测试反复建会积累，所以超过阈值时顺手清一遍过期项。
+// 但换库/测试反复建会积累。过期限任何时候都回收（不再有 minimum 门槛），
+// 另设条数硬顶防键空间失控：「每分钟 9 条刷一小时」这类反复建号会一直加新键。
+const BUCKETS_MAX = 5000;
 function prune(now) {
-  if (buckets.size < 200) return;
   for (const [k, b] of buckets) if (now - b.start >= WINDOW_MS) buckets.delete(k);
+  // Map 迭代按插入序，超顶时从最旧的桶开始淘汰（比它新的请求不受影响）
+  while (buckets.size > BUCKETS_MAX) {
+    const oldest = buckets.keys().next().value;
+    if (oldest === undefined) break;
+    buckets.delete(oldest);
+  }
 }
 
 // 只读判断，不计数：超限的请求不该占额度，否则「被拒」也把自己越推越远。
@@ -65,18 +72,25 @@ function check(slug, kind, now = Date.now()) {
       error: `${lim.label}过于频繁（每分钟最多 ${lim.perMin} 次），请 ${retryAfter} 秒后再试`,
     };
   }
-  if (kind === 'write' && lim.pendingMax) {
-    // 只数 24 小时内的 pending：list() 不触发 store 的惰性过期，
-    // 直接数 status='pending' 会让早该过期的僵尸提案一直占着额度。
-    const since = new Date(now - proposals.MAX_AGE_MS).toISOString();
-    const pending = proposals.countPendingSince(since);
-    if (pending >= lim.pendingMax) {
-      return {
-        ok: false,
-        retryAfter: 60,
-        error: `老师还有 ${pending} 条提案待确认（上限 ${lim.pendingMax} 条），请等老师处理后再提交，不要立即重试`,
-      };
-    }
+  return checkPending(slug, kind, now);
+}
+
+// 只查「老师待确认积压」这一层（write 专用）。
+// 单独拆出来是因为 write 的速率额度已经由 checkAndConsume 原子预占，
+// 只剩这层需要读 DB；两者必须分开，否则又会退化成「先 check 再 await 再 consume」。
+function checkPending(slug, kind, now = Date.now()) {
+  const lim = limits[kind];
+  if (!lim || !lim.pendingMax) return { ok: true };
+  // 只数 24 小时内的 pending：list() 不触发 store 的惰性过期，
+  // 直接数 status='pending' 会让早该过期的僵尸提案一直占着额度。
+  const since = new Date(now - proposals.MAX_AGE_MS).toISOString();
+  const pending = proposals.countPendingSince(since);
+  if (pending >= lim.pendingMax) {
+    return {
+      ok: false,
+      retryAfter: 60,
+      error: `老师还有 ${pending} 条提案待确认（上限 ${lim.pendingMax} 条），请等老师处理后再提交，不要立即重试`,
+    };
   }
   return { ok: true };
 }
@@ -86,6 +100,15 @@ function check(slug, kind, now = Date.now()) {
 function consume(slug, kind, now = Date.now()) {
   if (!kind || !limits[kind]) return;
   bucketOf(slug, kind, now).count += 1;
+}
+
+// 回退一次预占：write 在 checkAndConsume 之后才知道「参数错 / 积压满 / 建提案失败」，
+// 这些都不该占额度（与 consume 只算成功提案的既有语义一致）。
+// 只减不增、最低到 0，重复调用无副作用。
+function release(slug, kind, now = Date.now()) {
+  if (!kind || !limits[kind]) return;
+  const b = buckets.get(`${slug}:${kind}`);
+  if (b && b.count > 0) b.count -= 1;
 }
 
 // 检查并预占额度，一步完成（同步无 await → Node 单线程下原子）。
@@ -112,10 +135,14 @@ function checkAndConsume(slug, kind, now = Date.now()) {
 
 module.exports = {
   check,
+  checkPending,
   consume,
+  release,
   checkAndConsume,
   WINDOW_MS,
   limits: () => limits,
   _resetForTest: () => { buckets.clear(); limits = DEFAULT_LIMITS; },
   _setLimitsForTest: (next) => { limits = { ...DEFAULT_LIMITS, ...next }; },
+  // 仅供单测观察回收是否真的发生（桶 Map 不对外暴露）
+  _sizeForTest: () => buckets.size,
 };

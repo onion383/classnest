@@ -10,9 +10,11 @@
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 const { pathToFileURL } = require('url')
 
-const TMP = path.join(__dirname, '..', 'tmp', 'keepalive-probe')
+// 与其它 keepalive 探针分开目录，避免并行运行时互相覆盖（T01-10）
+const TMP = path.join(os.tmpdir(), 'classnest-probe', 'keepalive-table')
 
 function html() {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -168,7 +170,8 @@ app.whenReady().then(async () => {
     // ---------- B) GridView ----------
     console.log('\n【B】GridView 式普通滚动容器')
     const b0 = await js('window.__setupB(900)')
-    check('滚动到 900', b0.scrollTop === 900, `scrollTop=${b0.scrollTop}`)
+    // 与 A 分支同口径：scrollTop 会被设备像素比落成小数，必须容差比较
+    check('滚动到 900', Math.abs(b0.scrollTop - 900) < 2, `scrollTop=${b0.scrollTop}`)
 
     await js('window.__detachB(600)')
     const b1 = await js('window.__attachB(false)')
@@ -179,7 +182,7 @@ app.whenReady().then(async () => {
     await js('window.__detachB(600)')
     const b2 = await js('window.__attachB(true)')
     console.log('  恢复（修复后）：')
-    check('切回后回到 900', b2.scrollTopAfter === 900, `scrollTop=${b2.scrollTopAfter}`)
+    check('切回后回到 900', Math.abs(b2.scrollTopAfter - 900) < 2, `scrollTop=${b2.scrollTopAfter}`)
   } catch (e) {
     console.error('探针异常：', e && e.message)
     failed++

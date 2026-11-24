@@ -41,24 +41,31 @@ test('补录弹窗：提交周记录后 emit(changed)', () => {
     '提交成功后必须通知父页（写操作在前，通知在后）')
 })
 
+// 判据抽成函数（T07-02）：正例与变异反证共用，变异体回喂同一入口
+function onHistoryChangedGuard(body) {
+  const inv = body.indexOf('invalidateSeatDaily()')
+  const weeks = body.indexOf('fetchHistoryWeeks()')
+  return { ok: inv >= 0 && weeks >= 0 && inv < weeks, inv, weeks }
+}
+
 test('座位页：两个弹窗的 changed 都指向 onHistoryChanged，且先作废账本/指数缓存', () => {
   const src = read(VIEW)
   const bindings = (src.match(/@changed="onHistoryChanged"/g) || []).length
   assert.equal(bindings, 2, '补录与管理周记录两个弹窗都要绑 onHistoryChanged')
   const fn = src.slice(src.indexOf('function onHistoryChanged'))
   const body = fn.slice(0, fn.indexOf('\n}') + 2)
-  const inv = body.indexOf('invalidateSeatDaily()')
-  const weeks = body.indexOf('fetchHistoryWeeks()')
-  assert.ok(inv >= 0, 'onHistoryChanged 必须作废每日快照缓存，否则账本/指数仍是旧数字')
-  assert.ok(weeks >= 0, '仍要刷新周列表')
-  assert.ok(inv < weeks, '先作废缓存再刷新列表（顺序无关正确性，但保持读写口径一致）')
+  const r = onHistoryChangedGuard(body)
+  assert.ok(r.inv >= 0, 'onHistoryChanged 必须作废每日快照缓存，否则账本/指数仍是旧数字')
+  assert.ok(r.weeks >= 0, '仍要刷新周列表')
+  assert.ok(r.inv < r.weeks, '先作废缓存再刷新列表（顺序无关正确性，但保持读写口径一致）')
 })
 
 test('变异反证：去掉 invalidateSeatDaily 调用后，判据必须失败', () => {
   const src = read(VIEW)
   const fn = src.slice(src.indexOf('function onHistoryChanged'))
   const body = fn.slice(0, fn.indexOf('\n}') + 2)
+  assert.equal(onHistoryChangedGuard(body).ok, true, '基线必须通过，否则反证无意义')
   const mutated = body.replace(/\s*invalidateSeatDaily\(\)\r?\n/, '')
   assert.ok(mutated !== body, '变异没匹配到 invalidateSeatDaily()')
-  assert.doesNotMatch(mutated, /invalidateSeatDaily\(\)/, '变异后判据应失败')
+  assert.equal(onHistoryChangedGuard(mutated).ok, false, '判据假绿：去掉缓存作废仍判 PASS')
 })

@@ -574,16 +574,38 @@ router.post('/vacuum', (req, res) => {
 });
 
 // POST /api/data/sources { keys: [...] } —— 取指定表的数据
+// K03-16：逐表序列化写响应，而不是先把所有表 build 成一个数组再 res.json。
+// 峰值内存从「所有选中表的行对象 + 整个响应字符串」降到「最大的那一张表 + 它的片段」。
+// 响应形状保持不变（{ tables: [...] }），前端仍按 JSON 解析。
 router.post('/sources', (req, res) => {
   const keys = Array.isArray(req.body && req.body.keys) ? req.body.keys : [];
-  const out = [];
-  for (const key of keys) {
-    const def = BY_KEY.get(key);
-    if (!def) continue;
-    const data = def.build();
-    out.push({ key: def.key, label: def.label, fields: data.fields, rows: data.rows });
+  const memBefore = memSnapshot();
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.write('{"tables":[');
+  let first = true;
+  let emitted = 0;
+  try {
+    for (const key of keys) {
+      const def = BY_KEY.get(key);
+      if (!def) continue;
+      const data = def.build();
+      const chunk = JSON.stringify({ key: def.key, label: def.label, fields: data.fields, rows: data.rows });
+      res.write((first ? '' : ',') + chunk);
+      first = false;
+      emitted += 1;
+      // chunk 是局部变量：下一轮循环前旧表即可被回收，不与其他表同时驻留
+    }
+    res.write(']}');
+    res.end();
+  } catch (err) {
+    console.error('[data] sources 序列化失败:', err && err.message);
+    // 已经写出部分 JSON 时无法再改状态码：直接断开，让前端按「请求失败」处理，
+    // 不能补一段合法 JSON 让半个结果被当成完整结果吞下去。
+    if (!res.headersSent) return res.status(500).json({ error: '读取数据源失败' });
+    try { res.destroy(); } catch (_) { /* 已断开 */ }
+  } finally {
+    logExportMemory(`sources ${emitted}/${keys.length} 表`, memBefore);
   }
-  res.json({ tables: out });
 });
 
 // zip 里的目录/文件名清洗：不能带 ../、盘符或控制字符
@@ -606,8 +628,9 @@ function safeSegment(s, fallback) {
 // 为什么是流式：收据原件可能有几百 MB，旧实现「readFileSync 收据 → deflate 副本 →
 // 每条局部块 → 终包 concat」会在内存里叠出四份，大班导出直接把后端顶爆（v6 · P2-01）。
 // 现在收据只传磁盘路径，条目边读边写进响应，任何时刻只持有一个 256KB 块。
-router.post('/zip', async (req, res) => {
-  const body = req.body || {};
+// 把 /zip 与 /zip-to-file 共用的入参归一：文本条目解码 + 收据按路径登记。
+// 返回 { items } 或 { error }（缺条目 / base64 坏）。
+function collectZipItems(body) {
   const entries = Array.isArray(body.entries) ? body.entries : [];
 
   // 条目统一成 { name, data } / { name, path }：前者来自前端（表格化文本），
@@ -620,7 +643,7 @@ router.post('/zip', async (req, res) => {
     try {
       buf = Buffer.from(String((e && e.data) || ''), 'base64');
     } catch (_) {
-      return res.status(400).json({ error: `文件「${name}」内容无法解析` });
+      return { error: `文件「${name}」内容无法解析` };
     }
     items.push({ name, data: buf, method: 'deflate' });
   }
@@ -654,11 +677,78 @@ router.post('/zip', async (req, res) => {
       }
     }
   }
+  return { items };
+}
+
+function zipDisplayName(body) {
+  return String(body.filename || '数据导出').replace(/[\\/:*?"<>|]/g, '_');
+}
+
+// 业务 ZIP 的临时落盘中转目录（N2-07）：后端把包写到这里，主进程选定保存路径后
+// 直接移动/流式复制，不再经过 SAVE_FILE 的 50MB IPC 通道。
+// 主进程用同一个目录名做白名单校验（只允许从该目录搬文件），两边必须一致。
+const EXPORT_TMP_DIR = path.join(require('os').tmpdir(), 'classnest-export');
+function sweepExportTmp() {
+  try {
+    const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+    for (const f of fs.readdirSync(EXPORT_TMP_DIR)) {
+      const p = path.join(EXPORT_TMP_DIR, f);
+      try { if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch (_) { /* 占用中留到下次 */ }
+    }
+  } catch (_) { /* 目录不存在 / 无权限：不影响本次导出 */ }
+}
+
+router.post('/zip-to-file', async (req, res) => {
+  const body = req.body || {};
+  const built = collectZipItems(body);
+  if (built.error) return res.status(400).json({ error: built.error });
+  if (!built.items.length) return res.status(400).json({ error: '没有要打包的文件' });
+
+  const password = typeof body.password === 'string' ? body.password : '';
+  const safeName = zipDisplayName(body);
+  const outName = /\.zip$/i.test(safeName) ? safeName : `${safeName}.zip`;
+  const fileName = `export_${Date.now()}_${process.pid}.zip`;
+  const tmpPath = path.join(EXPORT_TMP_DIR, fileName);
+  try {
+    fs.mkdirSync(EXPORT_TMP_DIR, { recursive: true });
+    sweepExportTmp();
+  } catch (err) {
+    return res.status(500).json({ error: '无法创建导出临时目录' });
+  }
+
+  const memBefore = memSnapshot();
+  let finished = false;
+  try {
+    const out = fs.createWriteStream(tmpPath);
+    const closed = new Promise((resolve, reject) => {
+      out.on('close', resolve);
+      out.on('error', reject);
+    });
+    await writeZip(built.items, out, { password });
+    out.end();
+    await closed;
+    const { size } = fs.statSync(tmpPath);
+    finished = true;
+    res.json({ path: tmpPath, filename: outName, bytes: size });
+  } catch (err) {
+    console.error('[data] 导出 zip 落盘失败:', err && err.message);
+    try { fs.unlinkSync(tmpPath); } catch (_) { /* 没写出来就算了 */ }
+    res.status(500).json({ error: '导出文件生成失败' });
+  } finally {
+    logExportMemory(finished ? 'zip-to-file 完成' : 'zip-to-file 失败', memBefore);
+  }
+});
+
+router.post('/zip', async (req, res) => {
+  const body = req.body || {};
+  const built = collectZipItems(body);
+  if (built.error) return res.status(400).json({ error: built.error });
+  const items = built.items;
 
   if (!items.length) return res.status(400).json({ error: '没有要打包的文件' });
 
   const password = typeof body.password === 'string' ? body.password : '';
-  const safeName = String(body.filename || '数据导出').replace(/[\\/:*?"<>|]/g, '_');
+  const safeName = zipDisplayName(body);
   res.setHeader('Content-Type', 'application/zip');
   // 文件名走 RFC 5987，中文名不会变成乱码或被截断
   res.setHeader(

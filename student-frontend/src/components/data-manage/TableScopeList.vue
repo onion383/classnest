@@ -23,6 +23,7 @@
           <AppSelect
             class="flex-none !w-32"
             compact
+            :aria-label="`${t.label}的读取权限`"
             :model-value="levelOf(t)"
             :options="optionsFor(t)"
             @update:model-value="(v) => $emit('level', t, v)"

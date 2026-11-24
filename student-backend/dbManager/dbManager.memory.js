@@ -26,6 +26,9 @@ function writeMemory(slug, content) {
   const p = memoryFilePath(slug);
   const text = String(content == null ? '' : content);
   if (!text.trim()) { try { fs.rmSync(p, { force: true }); } catch (_) { /* 忽略 */ } return; }
+  // 骨架目录正常由启动期 ensureDataDirs 建好；但恢复/搬迁场景可能缺失，
+  // 写入前补建父目录，否则记忆文本抛 ENOENT（N2-11）。
+  fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, text, 'utf8');
 }
 // 追加记忆条目：按日期分组，条目写为列表项

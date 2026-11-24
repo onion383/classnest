@@ -17,7 +17,7 @@ student-backend/
 │   └── dbManager.skills.js        # AI 技能 md 目录（可搬迁）
 ├── schema/
 │   ├── schema.js                  # initSchema 入口：统一建表 + 迁移
-│   ├── schema.core.js             # 学生、表元数据、用户、待处理请求
+│   ├── schema.core.js             # 学生、表元数据、用户
 │   ├── schema.fee.js              # 班费
 │   ├── schema.leave.js            # 请假
 │   ├── schema.score.js            # 分数
@@ -32,7 +32,9 @@ student-backend/
 │   ├── schema.ai.js               # AI 配置、模型、会话、消息、快照
 │   ├── schema.undo.js             # 撤销历史
 │   ├── schemaUtil.js             # 建表前小工具：按真实类型删除同名对象（DROP VIEW 只认视图、DROP TABLE 只认表）
-│   └── schema.widget.js           # 桌面小组件设置
+│   ├── schema.widget.js           # 桌面小组件设置
+│   ├── schema.mcp.js              # MCP 待确认提案与令牌副本
+│   └── schema.log.js              # AI / MCP 读操作访问记录
 └── services/
     └── slotStore.js               # 物理槽位写入（逻辑名视图只读）
 ```
@@ -63,7 +65,7 @@ flowchart LR
 ```
 
 - 驱动：`better-sqlite3-multiple-ciphers`（`SQLCipher`（加密 SQLite 扩展）兼容），在 dbManager 中**懒加载**，缩短就绪时间。
-- 目录：`DATA_DIR`（默认 `userData/data`，唯一可由 `app-config.json` 覆盖的根）下固定四层：`core/`（`index.db`、`<slug>.db` 及 WAL 边车、`.jwt-secret`、`db-master.key`、`.sessions.json`、`.last-db`）、`content/`（`uploads/`、`album-trash/`、`receipt-trash/`、`snapshots/`、`ai-memory/`、`ai-skills/`）、`cache/`（`album-thumbs/`、`ffmpeg/`）、`logs/`。所有路径由 [`dbManager.paths.js`](../../../student-backend/dbManager/dbManager.paths.js) 统一定义，业务代码不再自己拼 `dataDir`。
+- 目录：`DATA_DIR`（默认 `userData/data`，唯一可由 `app-config.json` 覆盖的根）下固定四层：`core/`（`index.db`、`<slug>.db` 及 WAL 边车、`.jwt-secret`、`.auth-policy.json`、`db-master.key`、`.sessions.json`、`.last-db`）、`content/`（`uploads/`、`album-trash/`、`receipt-trash/`、`snapshots/`、`ai-memory/`、`ai-skills/`）、`cache/`（`album-thumbs/`、`ffmpeg/`）、`logs/`。所有路径由 [`dbManager.paths.js`](../../../student-backend/dbManager/dbManager.paths.js) 统一定义，业务代码不再自己拼 `dataDir`。
 
 ### 2. [`db.js`](../../../student-backend/db.js) · 统一入口
 
@@ -71,7 +73,7 @@ flowchart LR
 - 导出 `getFields(tableName)`（取列元数据）与 `renumber(tableName)`（重排行 `position`）。
 - **注意事项**：未绑定库（没走 `auth`）时 `current()` 直接抛「未绑定数据库连接」。
 
-### 3. [`dbManager/`](../../../student-backend/dbManager/dbManager.js) · 七个模块
+### 3. [`dbManager/`](../../../student-backend/dbManager/dbManager.js) · 八个模块
 
 | 文件                                                                                | 职责                                   | 关键导出                                                                                                                                                    |
 | --------------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -82,6 +84,7 @@ flowchart LR
 | [`dbManager.backup.js`](../../../student-backend/dbManager/dbManager.backup.js)   | 备份包导出/恢复、库钥匙包裹                       | `wrapKey`（主密钥包裹库钥匙）、`unwrapKey`（主密钥解包库钥匙）、`wrapKeyBySecret`（用密码/助记词包裹库钥匙）、`decryptBundleKey`（解包备份中的库钥匙）、`exportBundle`（取出备份所需的库文件与钥匙）、`restoreBundle`（用备份数据重建库并登记）                               |
 | [`dbManager.memory.js`](../../../student-backend/dbManager/dbManager.memory.js)   | AI 长期记忆目录（固定位置，不可搬迁）                 | `memoryDir`（AI 长期记忆目录）                                                                                                                           |
 | [`dbManager.skills.js`](../../../student-backend/dbManager/dbManager.skills.js)   | AI 技能 md 目录（固定 `dataDir/ai-skills`）   | `skillsDirRoot`（AI 技能文件根目录，随数据根目录一起搬迁）                                                                                                |
+| [`dbManager.paths.js`](../../../student-backend/dbManager/dbManager.paths.js)     | 数据根目录四层路径常量与派生路径（含 `.auth-policy.json`） | `dataDir` / `coreDir` / `contentDir` / `cacheDir` / `logsDir`、`authPolicyPath` 等路径常量 |
 
 ### 4. 库与密钥体系
 
@@ -94,11 +97,11 @@ flowchart LR
 
 ### 5. 表结构（[`schema/`](../../../student-backend/schema/schema.js)）
 
-`initSchema(conn)` 对任一班主任库建表，全部 `CREATE TABLE IF NOT EXISTS`；每次打开连接都会执行，因此存量库自动迁移。
+`initSchema(conn)` 对任一班主任库建表，全部 `CREATE TABLE IF NOT EXISTS`；每次打开连接都会执行（老库缺的新表会补建；已有表不补列，见下方「迁移方式」）。
 
 | 文件 | 主要表 |
 | --- | --- |
-| [`schema.core.js`](../../../student-backend/schema/schema.core.js) | `students`（学生）、`table_meta`（表元数据）、`users`（用户）、`pending_requests`（待处理请求） |
+| [`schema.core.js`](../../../student-backend/schema/schema.core.js) | `students`（学生）、`table_meta`（表元数据）、`users`（用户） |
 | [`schema.fee.js`](../../../student-backend/schema/schema.fee.js) / [`schema.leave.js`](../../../student-backend/schema/schema.leave.js) / [`schema.score.js`](../../../student-backend/schema/schema.score.js) | 班费、请假、分数 |
 | [`schema.schedule.js`](../../../student-backend/schema/schema.schedule.js) / [`schema.seat.js`](../../../student-backend/schema/schema.seat.js) / [`schema.duty.js`](../../../student-backend/schema/schema.duty.js) | 物理槽位表 `*_slots`（按 kind 分行）+ 逻辑名只读视图（`schedule` / `master_schedule` / `duty_layout` / `seat_template` 等），写入走 [`services/slotStore.js`](../../../student-backend/services/slotStore.js) |
 | [`schemaUtil.js`](../../../student-backend/schema/schemaUtil.js) | 建表前小工具 `dropObjectIfExists(conn, name)`：按 `sqlite_master` 里的**真实类型**删除同名对象。`IF EXISTS` 只抑制「不存在」，**不抑制「类型不对」** —— 老库里这些名字可能还是表（如 `schedule` 拆分前），`DROP VIEW IF EXISTS schedule` 会抛 `use DROP TABLE to delete table schedule`，导致 `initSchema` 批量语句中断、库打不开，且报错指不到是哪个名字型不对 |
@@ -110,6 +113,8 @@ flowchart LR
 | [`schema.ai.js`](../../../student-backend/schema/schema.ai.js) | AI 配置、模型、会话、消息、快照 |
 | [`schema.undo.js`](../../../student-backend/schema/schema.undo.js) | `undo_history`（撤销历史） |
 | [`schema.widget.js`](../../../student-backend/schema/schema.widget.js) | `widget_settings`（含 `desktop_apps` / `class_info`） |
+| [`schema.mcp.js`](../../../student-backend/schema/schema.mcp.js) | `mcp_proposals`（外部客户端待确认的写提案）、`mcp_tokens`（令牌明文副本） |
+| [`schema.log.js`](../../../student-backend/schema/schema.log.js) | `access_log`（AI / MCP 读操作元信息） |
 
 迁移方式：**没有**。建表语句直接写最终形态（新库一次建到位），不再有「探测缺列 → `ALTER TABLE`」的补丁链 —— 第一版尚未发布，没有需要兼容的存量库。版本化迁移的零件已预置在 [`student-backend/migrations/`](../../../student-backend/migrations/README.md)（运行器 / 账本 / 结构清单与对账），**尚未接入启动路径**，第一版发布前接线。
 
@@ -122,7 +127,7 @@ flowchart LR
 #### [`schema/tableRegistry.js`](../../../student-backend/schema/tableRegistry.js) · 表名的唯一名单
 
 - **定位**：物理表名、逻辑表名（`slotStore` 的 kind 键）与业务白名单的唯一来源（v6 · 6-2）。
-- **导出**：`PHYSICAL`（按 schema 文件分组）、`ALL_PHYSICAL`、`LOGICAL`（逻辑表 → 物理表）、`ALL_LOGICAL`、`GENERIC_CRUD_TABLES`、`UNDO_WRITE_TABLES`、`UNDO_DOC_TABLES`、`AI_SEARCH_TABLES`、`SEAT_CURRENT_SLOTS`、`isKnownName(name)`。
+- **导出**：`PHYSICAL`（按 schema 文件分组）、`ALL_PHYSICAL`、`LOGICAL`（逻辑表 → 物理表）、`ALL_LOGICAL`、`GENERIC_CRUD_TABLES`、`UNDO_WRITE_TABLES`、`UNDO_DOC_TABLES`、`AI_SEARCH_TABLES`、`AI_CHECK_RULE_TABLES`、`AI_SCORE_TABLES`、`DUTY_TABLES`、`SEAT_CURRENT_SLOTS`、`HISTORY_VIEWS`、`isKnownName(name)`。
 - **单列一份的理由**：表名此前只存在于 DDL 文本与四份白名单数组里，抄漏一处不会报错，只表现为「撤销少记一条 / AI 少查一张表」。本文件只放名字、不 `require` 任何模块 —— 它要被业务代码、路由、单测与 `eslint.config.mjs` 同时引用，带副作用会把 db 拖进纯计算场景。
 - **注意事项**：`PHYSICAL` 与 `schema/*.js` 的 `CREATE TABLE` 是**双向锁定**（多一张、少一张、分组写错都会让 `architecture-guard` 变红）；`LOGICAL` 与 `services/slotStore.js` 的 `SPEC` 同理。新增可撤销表或 AI 可检索表时改这里，不许改调用点的数组。
 

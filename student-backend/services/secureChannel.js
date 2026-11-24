@@ -55,7 +55,9 @@ function initMaster(master) {
 }
 function hasMaster() { return !!K_MASTER; }
 
-// 会话表：sessionId -> { key: Buffer(32), createdAt }
+// 会话表：sessionId -> { key: Buffer(32), createdAt, authToken }
+// 硬顶兜底：握手风暴期间 TTL 内的会话会线性增长，超过上限按最早握手淘汰（P2-02）。
+const SESSION_MAX = 2000;
 const sessions = new Map();
 function sessionCount() { return sessions.size; }
 
@@ -117,6 +119,12 @@ function performHandshake(clientPubB64) {
   // 之后客户端只发不含 token 的信道凭据即可，登录 token 不再随每次请求上线。
   sessions.set(sessionId, { key, createdAt: Date.now(), authToken: null });
   cleanupSessions();
+  // 清理后仍超顶（极端握手风暴）：按插入序淘汰最早的信道，防止内存无界增长
+  while (sessions.size > SESSION_MAX) {
+    const oldest = sessions.keys().next().value;
+    if (oldest === undefined) break;
+    sessions.delete(oldest);
+  }
   return { sessionId, pub: pubRaw };
 }
 
@@ -320,6 +328,7 @@ module.exports = {
   genServerEphemeral, deriveEcdhShared, deriveSessionKey,
   seal, open, performHandshake, getSessionKey, destroySession,
   cleanupSessions, cleanupNonces, sweepNow, startIdleSweep, stopIdleSweep, IDLE_SWEEP_MS,
+  SESSION_MAX,
   bindAuth, getBoundAuth, unbindAuth,
   requestDecrypt, responseEncrypt, requestAuthProof, encodeStreamEvent,
   SESSION_TTL_MS,

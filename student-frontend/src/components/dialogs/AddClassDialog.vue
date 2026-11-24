@@ -14,8 +14,7 @@
         maxlength="50"
         placeholder="如：初三九班"
         class="w-full px-3 py-2 text-sm rounded-lg bg-surface-hover border focus:outline-none"
-        :class="duplicate ? 'border-danger focus:border-danger' : 'border-border focus:border-primary'"
-      />
+        :class="duplicate ? 'border-danger focus:border-danger' : 'border-border focus:border-primary'" aria-label="如：初三九班"/>
       <!-- 重名就地提示，不等请求回来：后端也会拦（409），但那要一次往返，
            而且错误提示会以全局通知的形式飘在右上角，和输入框离得很远。 -->
       <p v-if="duplicate" class="mt-1.5 text-xs text-danger">已有同名班级，请换个名字</p>

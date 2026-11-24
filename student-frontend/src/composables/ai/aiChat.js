@@ -411,25 +411,37 @@ export function useAiChat(ctx) {
       let last = cont || ctx.messages.value[ctx.messages.value.length - 1]
       ctx.scrollBottom()
       try {
-        const history = ctx.messages.value
+        // 客户端上下文窗口（F03-13）：只带最近 N 条 / 有限字符。
+        // 有 conversationId 时后端会从库重建完整上下文，这份只是回退；
+        // 回退路径同样要有界，否则长会话每轮都把整段历史塞进请求体。
+        const usable = ctx.messages.value
           // 过滤掉：加载占位、写提案消息（结果已随「已执行/已取消」消息续跑）、正文为空的助手消息（提问轮正文已移入过程块）
           .filter((m) => !m.loading && !m.proposal && !(m.role === 'assistant' && !m.content))
-          .map((m) => {
-            if (m.role === 'user' && m.images && m.images.length) {
-              return {
-                role: 'user',
-                content: [
-                  { type: 'text', text: m.content || '' },
-                  ...m.images.map((url) => ({ type: 'image_url', image_url: { url } })),
-                ],
-              }
+        const kept = []
+        let historyChars = 0
+        for (let i = usable.length - 1; i >= 0; i--) {
+          const m = usable[i]
+          const len = typeof m.content === 'string' ? m.content.length : 0
+          if (kept.length >= 60 || historyChars + len > 30000) break
+          kept.unshift(m)
+          historyChars += len
+        }
+        const history = kept.map((m) => {
+          if (m.role === 'user' && m.images && m.images.length) {
+            return {
+              role: 'user',
+              content: [
+                { type: 'text', text: m.content || '' },
+                ...m.images.map((url) => ({ type: 'image_url', image_url: { url } })),
+              ],
             }
-            return { role: m.role, content: m.content || '' }
-          })
+          }
+          return { role: m.role, content: m.content || '' }
+        })
         // 附件已随用户消息落库，后端会按 conversationId 从库中重建「完整上下文」；
         // 这里仍随请求聚合一份附件，作为「会话未落库（无 conversationId）」时的回退。
         const attachments = []
-        for (const m of ctx.messages.value) {
+        for (const m of kept) {
           if (m.role === 'user' && Array.isArray(m.attachments) && m.attachments.length) {
             for (const a of m.attachments) attachments.push({ name: a.name, text: a.text, messageId: m._id })
           }

@@ -93,6 +93,29 @@ test('座位排表 · 走廊行/空位格不参与排表：补位与条件作用
   assert.deepEqual(pipeline.allCells(), [{ r: 0, c: 0 }, { r: 0, c: 1 }])
 })
 
+// F03-02：容量不变量下沉到算法层 —— 装不下的学生不能只被静默丢弃，缺口数必须透出
+test('座位排表 · 容量不足：pipeline 透出 shortfall，不再静默丢人', async () => {
+  const { useSmartArrangementPipeline } = await loadSeat()
+  // 名册 6 人，座位 2×2 只有 4 格，rest 里有 4 人未入座但只能塞下 2 个
+  const ctx = seatCtx('all', undefined, {
+    students: { value: [...SEAT_STUDENTS, { id: 5, 姓名: '钱七' }, { id: 6, 姓名: '孙八' }] },
+  })
+  const pipeline = useSmartArrangementPipeline(ctx, {})
+  const grid = pipeline.initGrid()
+  assert.equal(grid.flat().filter(Boolean).length, 4, '只有 4 个座位能落人')
+  assert.equal(ctx.shortfall, 2, '装不下的 2 人必须由算法层报出，不能静默消失')
+})
+
+test('座位排表 · 容量刚好/table 模式：shortfall 为 0', async () => {
+  const { useSmartArrangementPipeline } = await loadSeat()
+  const ctxAll = seatCtx('all')
+  useSmartArrangementPipeline(ctxAll, {}).initGrid()
+  assert.equal(ctxAll.shortfall, 0, '4 人 4 格刚好装满，缺口为 0')
+  const ctxTable = seatCtx('table')
+  useSmartArrangementPipeline(ctxTable, {}).initGrid()
+  assert.equal(ctxTable.shortfall, 0, 'table 模式只排表内已有的人，不产生缺口')
+})
+
 // A5-01：table 模式下 excludeNew 是上一轮「全部同学」的选择残留，不能拿它排除表内已有成员
 test('座位排表 · 现有排表表格：excludeNew 不能排除表内已有的新同学', async () => {
   const { useSmartArrangementPipeline } = await loadSeat()

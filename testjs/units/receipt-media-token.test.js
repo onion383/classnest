@@ -92,9 +92,31 @@ test('接线：预览与下载都走 fetchMedia，且文件里不再有裸 fetch
   const download = src.slice(src.indexOf('async function download'))
   assert.match(openMarkdown.slice(0, 600), /await fetchMedia\(f\.path\)/, 'Markdown 预览没用 fetchMedia')
   assert.match(download.slice(0, 600), /await fetchMedia\(f\.path\)/, '下载没用 fetchMedia')
-  const bare = src.match(/fetch\(resourceUrl\(/g) || []
-  assert.equal(bare.length, 1, '只允许 fetchMedia 内部那一处裸 fetch(resourceUrl(...))')
+  // 不钉死总数 1（T06-06：fetchMedia 内部加一处探测/重试就会误红）；要求「函数体内至少一处、
+  // 函数体外零处」，语义才与「只允许封装内部裸 fetch」一致。
+  const body = sliceFunctionBody(src, 'fetchMedia')
+  assert.ok(body.length > 0, '找不到 fetchMedia 函数体')
+  assert.ok(/fetch\(resourceUrl\(/.test(body), 'fetchMedia 内部必须真的走裸 fetch（否则判据空转）')
+  const outside = src.split(body).join('')
+  assert.equal((outside.match(/fetch\(resourceUrl\(/g) || []).length, 0,
+    'fetchMedia 之外不允许裸 fetch(resourceUrl(...))')
 })
+
+function sliceFunctionBody(s, name) {
+  const i = s.indexOf('function ' + name)
+  if (i < 0) return ''
+  const open = s.indexOf('{', i)
+  if (open < 0) return ''
+  let depth = 0
+  for (let j = open; j < s.length; j++) {
+    if (s[j] === '{') depth++
+    else if (s[j] === '}') {
+      depth--
+      if (depth === 0) return s.slice(open + 1, j)
+    }
+  }
+  return ''
+}
 
 test('变异反证：下载改回裸 fetch 后接线判据必红', () => {
   const mutated = src.replace(

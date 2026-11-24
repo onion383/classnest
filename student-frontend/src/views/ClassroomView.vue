@@ -446,7 +446,12 @@ async function deleteStudent(id) {
   try {
     const res = await axios.get(`${API_BASE}/students/${id}/relations`)
     rel = res.data || rel
-  } catch (_) { /* 预览失败按“无关联”处理，不阻断删除 */ }
+  } catch (err) {
+    // 预览失败 ≠ 无关联：不能拿全零默认值走直删分支，否则网络抖动时会跳过级联确认（F06-03）
+    const msg = (err && err.response && err.response.data && err.response.data.error) || (err && err.message)
+    notifyError(msg ? '关联信息读取失败：' + msg : '关联信息暂时无法读取，请稍后重试')
+    return
+  }
 
   const finish = async () => {
     await fetchStudents()

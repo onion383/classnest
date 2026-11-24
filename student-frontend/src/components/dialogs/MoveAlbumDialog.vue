@@ -12,7 +12,7 @@
 
       <!-- 选择移动到的相册：只列虚拟相册，且排除当前所在相册 -->
       <label class="block text-sm text-text-secondary mb-1">选择移动到的相册</label>
-      <AppSelect v-model="targetId" :options="options" class="w-full mb-2" placeholder="选择相册" />
+      <AppSelect v-model="targetId" aria-label="选择移动到的相册" :options="options" class="w-full mb-2" placeholder="选择相册" />
       <p v-if="!options.length" class="text-xs text-warning mb-2">
         没有可用的目标相册：只能用「其他相册」创建的虚拟相册承接照片，请先用「新建相册 → 其他相册」新建一个。
       </p>

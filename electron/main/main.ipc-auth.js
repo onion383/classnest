@@ -132,11 +132,14 @@ function installIpcGuard() {
   const { ipcMain } = require('electron')
   const rawHandle = ipcMain.handle.bind(ipcMain)
   const rawOn = ipcMain.on.bind(ipcMain)
+  const rawOnce = ipcMain.once.bind(ipcMain)
 
   ipcMain.handle = (channel, listener) => {
     if (typeof listener !== 'function') return rawHandle(channel, listener)
     return rawHandle(channel, (event, ...args) => {
-      if (!checkSender(channel, event)) return undefined
+      // invoke 是请求-响应：拒绝时必须 reject，否则渲染层拿到 resolve(undefined)，
+      // 与超时/成功空值无法区分（X1-03）。
+      if (!checkSender(channel, event)) throw new Error('IPC 通道未授权')
       return listener(event, ...args)
     })
   }
@@ -144,6 +147,16 @@ function installIpcGuard() {
   ipcMain.on = (channel, listener) => {
     if (typeof listener !== 'function') return rawOn(channel, listener)
     return rawOn(channel, (event, ...args) => {
+      if (!checkSender(channel, event)) return undefined
+      return listener(event, ...args)
+    })
+  }
+
+  // once 与 on 同一强度（E01-01 / X1-01）：过去只包 handle/on，
+  // 将来任何用 ipcMain.once 注册的通道会直接绕过发送方校验。
+  ipcMain.once = (channel, listener) => {
+    if (typeof listener !== 'function') return rawOnce(channel, listener)
+    return rawOnce(channel, (event, ...args) => {
       if (!checkSender(channel, event)) return undefined
       return listener(event, ...args)
     })

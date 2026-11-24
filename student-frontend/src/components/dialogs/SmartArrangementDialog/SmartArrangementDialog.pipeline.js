@@ -51,6 +51,8 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
     initGrid() {
       const grid = Array.from({ length: ctx.rows.value }, () => new Array(ctx.cols.value).fill(null))
       const used = new Set()
+      // id → 学生：逐格 find 是 O(R·C·N)，先建索引（P3-02）
+      const byId = new Map(ctx.students.value.map(s => [s.id, s]))
       // 新同学(字符串名字)没有真实 id，给一个负 id 占位，使其能走通排表流水线
       let pseudoId = -1
       const pseudoCache = {}
@@ -67,7 +69,7 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
           const val = ctx.baseSeats.value?.[r]?.[c]
           let s = null
           if (typeof val === 'number') {
-            s = ctx.students.value.find(x => x.id === val)
+            s = byId.get(val) || null
           } else if (typeof val === 'string') {
             // 班级学生存 id，字符串名字均为"新同学"（未识别的自由文本）
             const n = val.trim()
@@ -83,6 +85,10 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
       }
       // 数据源「现有排表表格」：只重排表里已有的人，空位保持空着；
       // 「全部同学」：把学生表里还没入座的同学补进空位
+      // F03-02：容量不变量下沉到算法层。可用格装不下名册里未入座的人时，
+      // 把缺口数透出给调用方（UI 已有 seatShortage 守卫），不再静默丢人。
+      // 这里只记数、不拦结果：grid 仍是当前落位，调用方按 shortfall 决定提示。
+      ctx.shortfall = 0
       if (ctx.dataSource.value !== 'table') {
         const rest = ctx.students.value.filter(s => !used.has(s.id))
         let k = 0
@@ -92,6 +98,7 @@ export function useSmartArrangementPipeline(ctx, CONDITION_REGISTRY) {
             if (!grid[r][c]) { grid[r][c] = rest[k++]; used.add(rest[k - 1].id) }
           }
         }
+        ctx.shortfall = rest.length - k
       }
       return grid
     },

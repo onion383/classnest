@@ -176,6 +176,8 @@ app.use('/api/access-log', auth(['teacher']), require('./routes/accessLog'));
 // 队列跑完前就到达 —— 路由不存在会直接 404，前端首屏就拿不到数据。
 // 这里只 require 一个很轻的 Router；9 个业务读函数仍在 handler 内按需 require。
 app.use('/api/dashboard', auth(['teacher']), require('./routes/dashboard'));
+// 挂件概览（P3-14）：单请求替代 5 份全量文档；模块本身很轻，随 dashboard 一起提前挂好
+app.use('/api/widget-overview', auth(['teacher']), require('./routes/widgetOverview'));
 // 首屏 AI 配置：App.vue 挂载后立刻 GET /api/ai/config 决定是否显示浮动按钮，与 dashboard
 // 同一条原则 —— 首屏依赖不能交给让路链。慢机器上链要 ~85ms 才跑到 ai 这一步，请求先到
 // 就是 404，AI 入口会一直消失到下次刷新。
@@ -334,6 +336,15 @@ function startServer(port, attempt = 0) {
     console.log(`✅ 服务器已启动：http://127.0.0.1:${port}`);
     _boot('监听成功 = 就绪');
 
+    // 启动期回收上一轮崩溃遗留的临时文件（超过 24h 视为孤儿）。延后到监听成功后执行，
+    // 不与首屏请求抢 IO；失败静默，绝不影响启动（P2-08）。
+    setImmediate(() => {
+      try {
+        const n = require('./services/tmpSweep').sweepTempOrphans({ dataDir: dbManager.dataDir });
+        if (n) console.log(`[tmp] 已清理 ${n} 个过期临时条目`);
+      } catch (_) { /* 清理失败不影响启动 */ }
+    });
+
     // 2-17 归因：区分「TCP 连接到达」与「请求进入 Express」。
     // 若连接到达早、请求日志晚，说明后端事件循环被占；若连接本身晚，说明在 OS/客户端建连段。
     if (process.env.PERF_STARTUP === '1') {
@@ -437,6 +448,8 @@ function startServer(port, attempt = 0) {
       () => { app.use('/api/undo', auth(['teacher']), require('./routes/undo/undo')); },
       () => { app.use('/api/search', auth(['teacher']), require('./routes/search')); },
       () => { app.use('/api/cadres', auth(['teacher']), require('./routes/cadres')); },
+      // 账号数据管理（设置页弹窗）：默认永久保留，清除只由用户显式触发
+      () => { app.use('/api/retention', auth(['teacher']), require('./routes/retention')); },
       // ⚠️ /api/ai 是首屏依赖（App.vue 挂载后立刻拉 /api/ai/config）。它不许进
       // lateLoaders（那要等 800ms），但配置部分的路由已在「关键路由」区提前挂好，
       // 所以这里只负责完整 ai router 的注册与重模块预热，首屏不会等它。
@@ -574,9 +587,14 @@ function startServer(port, attempt = 0) {
         // 全量现场只进本地日志：这是用户自己机器上的单用户工具，控制台是唯一的诊断入口。
         console.error('[express-error]', req.method, req.originalUrl, '->', status, err);
         // 响应体形状必须保持 { error: string }：前端大量代码读 err.response.data.error。
-        // 暂仍回传原始 message（本地工具，用户截图反馈时信息更全）；
-        // 若将来要避免 SQL 语句 / 文件路径外露，只需改这一行。
-        res.status(status).json({ error: (err && err.message) || '服务器内部错误' });
+        // 错误分层（N3-09）：4xx 是业务可读错误，message 原样返回（「班级库不存在」这类）；
+        // 5xx 一律通用文案，SQL 语句 / 文件路径 / 模块名只进上面的本地日志。
+        // 需要把 5xx 的原始原因给前端时，显式给 err.expose = true。
+        const isClientError = status >= 400 && status < 500;
+        const message = isClientError || (err && err.expose === true)
+          ? ((err && err.message) || '请求无效')
+          : '服务器内部错误，请查看日志后重试';
+        res.status(status).json({ error: message });
       });
     };
 
@@ -686,10 +704,15 @@ function startServer(port, attempt = 0) {
 // 退出钩子只装一次：startServer 顺延时会在同一个进程里重复执行，
 // 写在函数体内会让 SIGTERM / exit 监听器随重试次数累积。
 function installExitHooks() {
-  // 优雅退出：收到 SIGTERM 时关闭当前服务器
+  // 优雅退出：收到 SIGTERM 时先通知扫描子进程收工，再关闭服务器退出。
+  // exit 事件是同步的，挂在那里的 shutdown 只是把 IPC 排进管道，进程退出后不保证送达（K01-01）。
   process.on('SIGTERM', () => {
-    if (!currentServer) return process.exit(0);
-    currentServer.close(() => process.exit(0));
+    const finish = () => {
+      try { require('./scanWorker').shutdown(); } catch (_) { /* 模块未加载过就算了 */ }
+      process.exit(0);
+    };
+    if (!currentServer) return finish();
+    currentServer.close(() => finish());
   });
 
   // 退出前先叫醒扫描子进程。
@@ -721,7 +744,7 @@ process.on('message', (msg) => {
     return;
   }
   if (msg.type !== 'ping') return;
-  try { if (process.send) process.send({ type: 'pong', t: msg.t }) } catch (_) { /* 通道断开忽略 */ }
+  try { if (process.send) process.send({ type: 'pong', t: msg.t, pid: process.pid }) } catch (_) { /* 通道断开忽略 */ }
 });
 
 installExitHooks();

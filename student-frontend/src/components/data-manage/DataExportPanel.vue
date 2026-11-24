@@ -108,14 +108,12 @@
               v-model="dlg.password"
               type="password"
               class="dm-input w-full max-w-[280px] border border-border bg-surface text-text p-2"
-              placeholder="密码（建议字母数字）"
-            />
+              placeholder="密码（建议字母数字）" aria-label="密码（建议字母数字）"/>
             <input
               v-model="dlg.password2"
               type="password"
               class="dm-input w-full max-w-[280px] border border-border bg-surface text-text p-2"
-              placeholder="再输一次"
-            />
+              placeholder="再输一次" aria-label="再输一次"/>
           </div>
           <p v-if="dlg.pwdError" class="text-xs text-danger mt-1 max-w-[340px]">{{ dlg.pwdError }}</p>
           <!-- 这行提示必须限宽：卡片是 flex item，宽度按「不换行时最宽」算，
@@ -140,10 +138,11 @@ import IconGlyph from '../base/IconGlyph.vue'
 // 但静态 import 会把 ExportExcel + exporters 两个 chunk 打进设置页首屏（约 33KB）。
 // 改成 async 组件 + 动态 import，让它们跟着弹窗一起按需加载。
 const ExportExcel = defineAsyncComponent(() => import('../import-export/ExportExcel/ExportExcel.vue'))
-import { saveBlobWithDialog } from '../../utils/saveFile.js'
+import { saveZipWithDialog } from '../../utils/saveFile.js'
 import { blobToBase64 } from '../../utils/base64.js'
 import { localDateStr } from '../../utils/dateTime.js'
 import { useNotification } from '../../composables/useNotification'
+import { pinyinHit } from '../../utils/pinyinSearch.js'
 
 defineOptions({ name: 'DataExportPanel' })
 
@@ -160,8 +159,9 @@ const loadingSingle = ref(false)
 const filteredTables = computed(() => {
   const q = keyword.value.trim().toLowerCase()
   if (!q) return tables.value
+  // 文本 / 手写首字母 / pinyin-match 三路同口径（Q1-07）
   return tables.value.filter(
-    (t) => String(t.label || '').toLowerCase().includes(q) || String(t.py || '').includes(q)
+    (t) => String(t.label || '').toLowerCase().includes(q) || String(t.py || '').includes(q) || pinyinHit(t.label, q)
   )
 })
 
@@ -336,24 +336,22 @@ async function runZip({ format, filename, reportProgress }) {
     entries.push({ name: f.name, data: await blobToBase64(f.blob) })
   }
 
-  const res = await axios.post(
-    '/api/data/zip',
-    {
-      entries,
-      password: d.usePassword ? d.password : '',
-      filename,
-      // 这里只有表格化后的文本，没有收据原始路径 —— 交给后端按库里的 fee_records 自己分组。
-      // 再挡一次「没勾班费表就别带收据」：开关可能是在勾了班费之后又取消的。
-      includeReceipts: d.includeReceipts && d.keys.includes('fees'),
-    },
-    { responseType: 'blob' }
-  )
   // 扩展名必须写在字面量里（export-format-probe 靠它扫「前端实际在用哪些扩展名」，
   // 与主进程 ALLOWED_SAVE_EXTS 对账；写成变量会让 .zip 变成白名单里的「没人用的口子」）
   const base = String(filename || '数据导出').trim()
-  const saved = await saveBlobWithDialog(`${base}_${localDateStr()}.zip`, res.data)
-  // 空串 = 用户在保存对话框点了取消，不是失败，不提示
+  const outName = `${base}_${localDateStr()}.zip`
+  // N2-07：走磁盘中转（后端落临时文件 → 主进程搬移），大包不再撞 50MB IPC 上限
+  const saved = await saveZipWithDialog(outName, {
+    entries,
+    password: d.usePassword ? d.password : '',
+    filename: outName,
+    // 这里只有表格化后的文本，没有收据原始路径 —— 交给后端按库里的 fee_records 自己分组。
+    // 再挡一次「没勾班费表就别带收据」：开关可能是在勾了班费之后又取消的。
+    includeReceipts: d.includeReceipts && d.keys.includes('fees'),
+  })
+  // 空串 = 用户在保存对话框点了取消，不是失败，不提示；回传给弹窗决定是否关闭（F02-02）
   if (saved) notifySuccess(`已导出 ${out.length} 张表`)
+  return saved
 }
 </script>
 

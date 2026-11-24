@@ -40,8 +40,7 @@
         :placeholder="'搜索' + (field === 'id' ? 'ID' : field) + '的值'"
         autocomplete="off"
         @keydown.enter.prevent="onEnter"
-        @keydown.esc.prevent="$emit('close')"
-      />
+        @keydown.esc.prevent="$emit('close')" :aria-label="'搜索' + (field === 'id' ? 'ID' : field) + '的值'"/>
       <button v-if="keyword" type="button" class="dtf-search-clear" title="清空搜索" @click="keyword = ''">
         <IconGlyph name="close" tint="current" glyph :size="11" :stroke-width="2.6" />
       </button>
@@ -63,6 +62,7 @@
         <IconGlyph name="check" tint="current" glyph class="dtf-item-check" :size="13" :stroke-width="2.6" />
       </button>
       <p v-if="!shownOptions.length" class="dtf-none">{{ keyword ? '没有匹配的值' : '没有可选的值' }}</p>
+      <p v-else-if="truncated" class="dtf-none">仅显示前 {{ OPTION_LIMIT }} 项，输入关键字缩小范围</p>
     </div>
 
     <div class="dtf-foot">
@@ -104,12 +104,17 @@ const z = ref(10020)
 const panel = ref(null)
 const kw = ref(null)
 
-// 关键字只过滤「值列表」，纯前端过滤，不触发数据筛选
-const shownOptions = computed(() => {
+// 关键字只过滤「值列表」，纯前端过滤，不触发数据筛选。
+// 高基数列（学号/姓名/备注）去重值可能上千，面板一次全渲染没有意义，
+// 最多显示前 OPTION_LIMIT 项，其余靠关键字缩小范围（Q1-09）。
+const OPTION_LIMIT = 200
+const filteredOptions = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
   if (!kw) return props.options
   return props.options.filter(o => displayValue(o.value).toLowerCase().includes(kw))
 })
+const shownOptions = computed(() => filteredOptions.value.slice(0, OPTION_LIMIT))
+const truncated = computed(() => filteredOptions.value.length > OPTION_LIMIT)
 const selectedCount = computed(() => { return props.options.filter(o => o.selected).length })
 const posStyle = computed(() => { return { left: pos.value.left + 'px', top: pos.value.top + 'px', zIndex: z.value } })
 

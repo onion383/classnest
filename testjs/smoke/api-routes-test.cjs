@@ -37,6 +37,9 @@ const express = require(path.join(BACKEND_MODULES, 'express'))
 const dbManager = require(path.join(BACKEND, 'dbManager', 'dbManager'))
 const helpers = require(path.join(BACKEND, 'routes', 'ai', 'ai.helpers'))
 const { executors } = require(path.join(BACKEND, 'routes', 'undo', 'undo.executors'))
+// X2-02：快照创建改用工具层（HTTP /api/ai/snapshot 已下线）；runSnapshotCreate
+// 与还原共用同一份「checkpoint → 整文件复制」实现，恰是本测试要验证的对称性。
+const aiExecutors = require(path.join(BACKEND, 'routes', 'ai', 'ai.tools', 'tools.executors', 'executors'))
 const { consumeStream } = require(path.join(BACKEND, 'routes', 'ai', 'ai.llm'))
 
 const albumRouter = require(path.join(BACKEND, 'routes', 'album'))
@@ -292,15 +295,16 @@ async function cleanup() {
 
   // ===== B03-02 快照还原后列缓存失效 =====
   console.log('\n== B03-02 还原后列缓存 ==')
-  const snap = await postJson(port, '/api/ai/snapshot', {})
-  check('创建快照成功', snap.status === 200 && snap.json && snap.json.ok === true, snap.json || snap.text)
+  // 用工具层造快照夹具（HTTP 创建入口已下线），仍走真实的 checkpoint → 整文件复制
+  const snapResult = await dbManager.withDb(slug, () => aiExecutors.runSnapshotCreate({ slug }))
+  check('创建快照成功（工具层）', snapResult.ok === true && !!snapResult.snapshot, snapResult)
   // 模拟「快照之后库结构变了」：加一列，并把 AI 的列缓存预热成含该列的版本
   const primed = dbManager.withDb(slug, () => {
     dbManager.current().exec('ALTER TABLE students ADD COLUMN 曾用名 TEXT')
     return helpers.tableColumns('students')
   })
   check('预热缓存已包含新增列「曾用名」', primed.includes('曾用名'), primed)
-  const restored = await postJson(port, '/api/ai/snapshot/restore', { snapshot: snap.json && snap.json.snapshot })
+  const restored = await postJson(port, '/api/ai/snapshot/restore', { snapshot: snapResult.snapshot })
   check('还原快照成功', restored.status === 200 && restored.json && restored.json.ok === true, restored.json || restored.text)
   const afterRestore = dbManager.withDb(slug, () => helpers.tableColumns('students'))
   const realCols = dbManager.withDb(slug, () => dbManager.current()

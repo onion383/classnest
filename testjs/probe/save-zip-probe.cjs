@@ -54,6 +54,8 @@ function ok(cond, msg) {
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'save-zip-'))
+// handler 抛错也要回收临时目录（T02-06）
+process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true }) } catch (_) { /* 已清理 */ } })
 const payload = Buffer.from('PK\u0003\u0004 fake zip body', 'utf8')
 const arrayBuffer = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength)
 

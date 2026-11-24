@@ -3,8 +3,10 @@
 // 入口：node testjs/probe/data-export-probe.cjs；有断言，属回归资产（改后端表口径后必须重跑）。
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 
-const TMP = path.join(__dirname, '..', 'tmp', 'data-probe')
+// 临时产物落平台临时目录（T01-10）：写仓库 testjs/tmp 会让并行探针互相读到旧包
+const TMP = path.join(os.tmpdir(), 'classnest-probe', 'data-export')
 fs.rmSync(TMP, { recursive: true, force: true })
 process.env.DATA_DIR = TMP
 process.env.DB_MASTER_KEY = 'probe-only-key'
@@ -201,7 +203,7 @@ const server = app.listen(0, '127.0.0.1', async () => {
       body: JSON.stringify({ entries, password: 'Test1234', filename: '班级数据/导出' }),
     })
     const buf = Buffer.from(await res.arrayBuffer())
-    const zipPath = path.join(__dirname, '..', 'tmp', 'data-export.zip')
+    const zipPath = path.join(TMP, 'data-export.zip')
     fs.writeFileSync(zipPath, buf)
     console.log(`  zip ${res.status} ${buf.length} 字节 → ${zipPath}`)
     check('zip 返回 200 + application/zip', res.status === 200 && res.headers.get('content-type') === 'application/zip')
@@ -219,6 +221,8 @@ const server = app.listen(0, '127.0.0.1', async () => {
         receiptGroups: [
           { code: 'F001', items: [{ path: '/uploads/r1.pdf', name: '运动会发票.pdf' }] },
           { code: '', items: [{ path: '/uploads/r1.pdf', name: '无编码.jpg' }] },
+          // 磁盘上不存在的收据：用来真正触发「单条读失败只跳过」的容错分支（T01-05）
+          { code: 'F001', items: [{ path: '/uploads/missing-receipt.pdf', name: '已删除.jpg' }] },
         ],
       }),
     })
@@ -226,8 +230,15 @@ const server = app.listen(0, '127.0.0.1', async () => {
     // zip 的文件名在本地头与中央目录里都是 UTF-8 明文，直接按字节找
     check('收据按「收据文件/编码/原名」进包', buf2.includes(Buffer.from('收据文件/F001/运动会发票.pdf', 'utf8')))
     check('编码为空时落到「未编号」', buf2.includes(Buffer.from('收据文件/未编号/无编码.jpg', 'utf8')))
-    fs.writeFileSync(path.join(__dirname, '..', 'tmp', 'data-export-receipts.zip'), buf2)
-    check('收据文件读取失败不影响其它条目', buf2.length > 0)
+    fs.writeFileSync(path.join(TMP, 'data-export-receipts.zip'), buf2)
+    // 读失败样本必须真的进了入参：坏路径缺席、可读条目与普通条目仍在、端点仍然 200（T01-05）
+    check('收据文件读取失败不影响其它条目：端点 200', res2.status === 200)
+    check('收据文件读取失败不影响其它条目：可读收据仍入包',
+      buf2.includes(Buffer.from('收据文件/F001/运动会发票.pdf', 'utf8')))
+    check('收据文件读取失败不影响其它条目：普通条目仍入包',
+      buf2.includes(Buffer.from('班费记录.xlsx', 'utf8')))
+    check('收据文件读取失败不影响其它条目：坏路径条目缺席',
+      !buf2.includes(Buffer.from('已删除.jpg', 'utf8')))
 
     // 数据管理这条路：前端只有表格化文本，拿不到收据路径，所以传 includeReceipts
     // 让后端按库里的 fee_records 自己分组（编码 → 目录，空编码 → 未编号）
@@ -245,7 +256,7 @@ const server = app.listen(0, '127.0.0.1', async () => {
     check('includeReceipts：后端自己按库分组', buf3.includes(Buffer.from('收据文件/F2/采购单.pdf', 'utf8')))
     check('includeReceipts：老格式（纯路径）也能进包', buf3.includes(Buffer.from('收据文件/F1/a.jpg', 'utf8')))
     check('includeReceipts：库里不存在的文件被跳过而非报错', !buf3.includes(Buffer.from('收据文件/F1/b.jpg', 'utf8')))
-    fs.writeFileSync(path.join(__dirname, '..', 'tmp', 'data-export-include-receipts.zip'), buf3)
+    fs.writeFileSync(path.join(TMP, 'data-export-include-receipts.zip'), buf3)
 
     // 不传就不该带收据目录（默认关闭，别让「导个表」莫名其妙多出几百 MB）
     const res4 = await fetch(`${base}/zip`, {

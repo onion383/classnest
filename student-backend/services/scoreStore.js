@@ -96,6 +96,11 @@ function dashboardSummary(today) {
   return { count, top }
 }
 
+// 删除单条成绩记录（X2-01：前端删除入口此前打到未注册路由，恒 404）
+function deleteById(id) {
+  return db.prepare('DELETE FROM score_records WHERE id = ?').run(id)
+}
+
 module.exports = {
   readAll,
   list,
@@ -103,5 +108,6 @@ module.exports = {
   findStudentById,
   findStudentsByXuehao,
   insertMany,
+  deleteById,
   dashboardSummary,
 }

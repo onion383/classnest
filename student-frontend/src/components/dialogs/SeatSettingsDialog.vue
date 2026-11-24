@@ -4,18 +4,18 @@
       <h3 class="text-lg font-bold mb-4">座位设置</h3>
       <div class="mb-3">
         <label class="block text-sm font-medium">行数</label>
-        <input v-model.number="localRows" type="number" min="1" max="50" class="w-full border px-3 py-2 rounded" />
+        <input v-model.number="localRows" type="number" min="1" max="50" class="w-full border px-3 py-2 rounded" aria-label="行数" />
       </div>
       <div class="mb-4">
         <div class="flex items-center gap-1.5 mb-1">
           <label class="block text-sm font-medium">座位列数</label>
           <AppHelp text="只数「坐人的列」，不含走廊。走廊列由座位模式自动加在列间：单座每列后一条，双座每两列后一条，混合桌初始与双座相同。" aria-label="座位列数说明" />
         </div>
-        <input v-model.number="localCols" type="number" min="1" max="30" class="w-full border px-3 py-2 rounded" />
+        <input v-model.number="localCols" type="number" min="1" max="30" class="w-full border px-3 py-2 rounded" aria-label="座位列数" />
       </div>
       <div class="mb-4">
         <label class="block text-sm font-medium mb-1">座位模式</label>
-        <select v-model="localMode" class="w-full border px-3 py-2 rounded bg-surface text-text">
+        <select v-model="localMode" class="w-full border px-3 py-2 rounded bg-surface text-text" aria-label="座位模式">
           <option value="single">单座</option>
           <option value="double">双座</option>
           <option value="mixed">混合桌</option>

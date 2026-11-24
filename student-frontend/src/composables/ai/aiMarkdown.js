@@ -18,7 +18,12 @@ export async function ensureMarkdown() {
     _purify = purifyModule.default
     _marked.setOptions({ gfm: true, breaks: true })
     _purify.addHook('afterSanitizeAttributes', (node) => {
-      if (node.tagName === 'A') node.setAttribute('target', '_blank')
+      if (node.tagName === 'A') {
+        node.setAttribute('target', '_blank')
+        // 新窗口打开必须同时断 opener：否则被注入的链接可以通过 window.opener
+        // 反向操作班集页面（N3-17）。noreferrer 顺带不泄露来源地址。
+        node.setAttribute('rel', 'noopener noreferrer')
+      }
     })
   })()
   try {

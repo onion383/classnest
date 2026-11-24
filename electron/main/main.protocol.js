@@ -12,6 +12,7 @@ const { app, session, protocol } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { createApiProxy, nodeFetch } = require('./main.api-proxy')
+const { atomicWriteFile } = require('./main.atomic-write')
 const ports = require('../../config/ports.cjs')
 
 const { isDev } = require('./main.env')
@@ -113,7 +114,7 @@ function pruneStaleCodeCache(dir) {
     .then((entries) => Promise.all(entries
       .filter((e) => e.name !== '.cc-version')
       .map((e) => fs.promises.rm(path.join(dir, e.name), { recursive: true, force: true }).catch(() => {}))))
-    .then(() => fs.promises.writeFile(marker, cur, 'utf8').catch(() => {}))
+    .then(() => atomicWriteFile(marker, cur, { fs: fs.promises }).catch(() => {}))
     .catch(() => {})
 }
 
@@ -164,8 +165,27 @@ function setupAppProtocol() {
   // 懒加载 stream：只有生产模式的静态资源流式返回用得到，挪出主进程启动关键路径
   const { Readable } = require('stream')
   _p('require stream 完成')
-  const serveFile = (file, headers) =>
-    new Response(Readable.toWeb(fs.createReadStream(file)), { headers })
+  // 等文件真正打开后再构造 Response：dist 缺文件 / 无权限时能回 404/500，
+  // 而不是把错误流塞进 Response 让渲染层只看到无状态码的网络错误（E02-07）。
+  // 不在每个请求上额外 stat 一次 —— createReadStream 的 open/error 已经给了结果。
+  const serveFile = async (file, headers) => {
+    const stream = fs.createReadStream(file)
+    try {
+      await new Promise((resolve, reject) => {
+        stream.once('open', resolve)
+        stream.once('error', reject)
+      })
+    } catch (err) {
+      const notFound = !err || err.code === 'ENOENT' || err.code === 'ENOTDIR'
+      return new Response(notFound ? 'Not Found' : 'Internal Server Error', {
+        status: notFound ? 404 : 500,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      })
+    }
+    // 打开后仍可能中断（盘读失败）：吞掉错误，避免未处理的 stream error 打崩主进程
+    stream.on('error', () => { /* 已返回的响应无法改状态码，这里只做兜底 */ })
+    return new Response(Readable.toWeb(stream), { headers })
+  }
 
   // 内容安全策略（打包版生效；开发模式页面由 Vite dev server 提供，不走这里）。
   // 只放行实际用到的三类「非 self」资源，其余一律拒绝：

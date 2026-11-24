@@ -157,16 +157,24 @@ async function exportPDF(cols, body, name, title) {
   const { default: autoTable } = await import('jspdf-autotable')
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
   let fontLoaded = false
+  const pdfText = collectPdfText(title, name, toRaw(cols), toRaw(body))
   try {
     // 字体按「本次实际要画的字符」现做子集（十几 KB）再嵌入，不再整份塞 13MB 全量字体。
     // 加载链路（gzip 魔数判断）与「子集失败退回全量」的兜底见 utils/pdfFont.js。
     // toRaw：入参可能来自响应式状态，逐属性读代理比读原始对象慢得多（见 pdfFont.js 的说明）。
-    const fontBase64 = await loadPdfFontBase64(collectPdfText(title, name, toRaw(cols), toRaw(body)))
+    const fontBase64 = await loadPdfFontBase64(pdfText)
     doc.addFileToVFS('NotoSansSC.ttf', fontBase64)
     doc.addFont('NotoSansSC.ttf', 'NotoSansSC', 'normal')
     doc.addFont('NotoSansSC.ttf', 'NotoSansSC', 'bold')
     fontLoaded = true
-  } catch (e) { console.warn('中文字体加载失败:', e) }
+  } catch (e) {
+    console.warn('中文字体加载失败:', e)
+    // jsPDF 内置 helvetica 不含 CJK 字形：有中文时降级出 PDF = 方块/空白，用户却以为导出成功。
+    // 有中文就阻断并让调用方提示换格式；纯 ASCII 内容继续用内置字体是安全的（F04-03）。
+    if (/[\u3400-\u9fff\uf900-\ufaff]/.test(pdfText)) {
+      throw new Error('中文字体加载失败，生成的中文 PDF 会显示空白或方块，请改用 Excel / 图片格式导出')
+    }
+  }
   const pdfFont = fontLoaded ? 'NotoSansSC' : 'helvetica'
   const pageWidth = doc.internal.pageSize.getWidth()
   // 标题在每页重画（只画一次的话，第 2 页起只有表头没有标题，打印留档时对不上）

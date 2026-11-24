@@ -151,10 +151,39 @@ function applyRowStudentRef(table, row) {
   return r;
 }
 
+// ---------------------------------------------------------------------------
+// 批量导入的同名选人：用户在导入前已为某一行指定了学生，这里把决定落成权威 id。
+//
+// picked: 数字 id（名册里选中的某位）| 'new'（名册外的新同学）| undefined（没指定）
+// 返回 { id, name, is_provisional } 或 null（没指定 / 指定无效）。
+// 数字 id 必须校验存在，并**忽略表里填的姓名**：权威是用户选中的那个人，
+// 快照姓名以 students 表为准；'new' 才按名字建临时学生（正式名单里有同名也不复用）。
+// ---------------------------------------------------------------------------
+function resolvePickedForImport(picked, rawName) {
+  if (picked === undefined || picked === null || picked === '') return null
+  const name = String(rawName == null ? '' : rawName).trim()
+  if (picked === 'new') {
+    if (!name) return null
+    // 直接建临时学生：正式名单里已有同名也照建（用户明确说这是新同学）。
+    const info = insertRow('students', { 姓名: name, is_provisional: 1 })
+    return { id: Number(info.id), name, is_provisional: true, created: true }
+  }
+  const id = Number(picked)
+  if (!Number.isInteger(id) || id <= 0) return null
+  const stu = db.prepare('SELECT id, 姓名, is_provisional FROM students WHERE id = ?').get(id)
+  if (!stu) {
+    const err = new Error(`选择的学生 id=${id} 不存在`)
+    err.status = 400
+    throw err
+  }
+  return { id: Number(stu.id), name: String(stu.姓名 ?? ''), is_provisional: !!stu.is_provisional, created: false }
+}
+
 module.exports = {
   resolveOne,
   resolveNames,
   ensureProvisionalStudent,
+  resolvePickedForImport,
   ROW_STUDENT_REFS,
   applyRowStudentRef,
 };

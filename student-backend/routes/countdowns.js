@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { renumber } = require('../db');
-const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../utils/sql');
+const { now, cleanUp, maxPosition, buildInsert, buildUpdate, isDateStr } = require('../utils/sql');
 const { readRowsByIds } = require('../services/createdRows');
 const countdownStore = require('../services/countdownStore');
 
@@ -16,6 +16,10 @@ router.get('/', (req, res) => {
 // POST /api/countdowns 新增
 router.post('/', (req, res) => {
     const data = cleanUp(req.body || {}, EDITABLE, 'countdowns');
+  // 必填校验（K03-07）：名称/截止日为空会落一条永远无法显示「还剩几天」的脏记录。
+  if (!String(data.名称 == null ? '' : data.名称).trim()) return res.status(400).json({ error: '请填写倒计时名称' });
+  if (!String(data.截止日 == null ? '' : data.截止日).trim()) return res.status(400).json({ error: '请选择截止日' });
+  if (!isDateStr(data.截止日)) return res.status(400).json({ error: '截止日格式不正确（应为 YYYY-MM-DD）' });
   data.position = maxPosition('countdowns') + 1;
   const result = buildInsert('countdowns', data);
   renumber('countdowns');

@@ -3,7 +3,7 @@ const router = express.Router();
 const { db } = require('../db');
 const cadreStore = require('../services/cadreStore');
 const studentLookup = require('../services/studentLookup');
-const { resolveOne } = require('../services/provisionalStudents');
+const { resolveOne, resolvePickedForImport } = require('../services/provisionalStudents');
 const { cleanText } = require('../services/sanitize');
 
 // ======================== 数据读写 ========================
@@ -132,7 +132,8 @@ router.post('/:id/members', (req, res) => {
 // 移除担任学生
 router.delete('/members/:id', (req, res) => {
     const id = Number(req.params.id);
-  cadreStore.deleteMember(id);
+  const result = cadreStore.deleteMember(id);
+  if (!result || result.changes === 0) return res.status(404).json({ error: '担任学生不存在' });
   res.json({ tree: buildTree() });
 });
 
@@ -187,16 +188,18 @@ router.post('/members/:id/move', (req, res) => {
 
 /**
  * POST /api/cadres/import —— 从 Excel 导入班干部职务与担任学生
- * body: { fields, rows }
+ * body: { fields, rows, studentIds? }
  * 列：`职务`（必填）、`上级职务`（可选，按名称匹配已有职务）、`可担任人数`（可选，仅新建时生效）、
  *     `担任学生`（可选，支持「张三、李四」等多种分隔符）
+ * studentIds: 同名选人的结果，key = `${行idx}:${该行姓名的slotIdx}`（与 ImportExcel 一致），
+ *   值 = 学生 id / 'new'。前端传了就按用户选的人落库，不传维持旧的按姓名解析。
  *
  * 语义是「合并追加」：同一上级下同名职务复用，已有成员不重复添加；
  * 导出文件可以原样导回（先序遍历保证上级行排在下级行之前）。
  */
 router.post('/import', (req, res) => {
   try {
-    const { fields, rows } = req.body || {};
+    const { fields, rows, studentIds } = req.body || {};
     if (!Array.isArray(fields) || !Array.isArray(rows)) {
       return res.status(400).json({ error: '缺少有效的字段或数据' });
     }
@@ -230,7 +233,7 @@ router.post('/import', (req, res) => {
         maxCount = Math.max(1, Math.floor(n));
       }
       const students = splitNames(cell(row, ['担任学生', '姓名', '学生']));
-      return { rowNo, title, parentName, maxCount, students };
+      return { rowNo, rowIdx: idx, title, parentName, maxCount, students };
     });
 
     // 按姓名认人：名册里唯一命中就用它，名册外就落一条临时学生（与单条新增同一套解析）。
@@ -264,20 +267,26 @@ router.post('/import', (req, res) => {
           node = { id: info.lastInsertRowid, name: item.title, max_count: item.maxCount || 1 };
           created.cadres.push({ id: node.id, name: node.name, parent_id: parentId, max_count: node.max_count, sort_order: sort });
         }
-        for (const name of item.students) {
+        for (let slotIdx = 0; slotIdx < item.students.length; slotIdx++) {
+          const name = item.students[slotIdx];
           if (cadreStore.findMemberByName(node.id, name)) continue;
           if (cadreStore.countMembers(node.id) >= node.max_count) {
             throw new Error(`第 ${item.rowNo} 行：「${node.name}」人数已达上限 ${node.max_count} 人`);
           }
-          const resolved = resolveMember(name);
+          // 同名选人：前端带 studentIds 时按用户选的人落 id（数字 id 不存在会抛 400，
+          // 由外层 catch 回给前端）；没带则维持旧的按姓名解析（歧义留空）。
+          const picked = studentIds && studentIds[`${item.rowIdx}:${slotIdx}`];
+          const resolved = picked === undefined ? resolveMember(name) : resolvePickedForImport(picked, name);
           const studentId = resolved ? resolved.id : null;
+          // 用户选中的人姓名以库为准（可能是临时学生），不再 blindly 用表格里的姓名快照
+          const memberName = studentId ? (resolved.name || name) : name;
           const sort = cadreStore.maxMemberSort(node.id) + 1;
-          const infoMember = cadreStore.insertMember(node.id, studentId, name, sort);
+          const infoMember = cadreStore.insertMember(node.id, studentId, memberName, sort);
           created.members.push({
             id: infoMember.lastInsertRowid,
             cadre_id: node.id,
             student_id: studentId,
-            student_name: name,
+            student_name: memberName,
             sort_order: sort
           });
         }

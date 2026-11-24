@@ -9,7 +9,7 @@
       <!-- 从哪里新建（下拉选择，不用分段切换组件） -->
       <div class="flex items-center gap-3 mb-4 flex-shrink-0">
         <span class="text-sm text-text-secondary flex-shrink-0">从那里新建相册</span>
-        <AppSelect v-model="kind" :options="KIND_OPTIONS" class="w-36" />
+        <AppSelect v-model="kind" aria-label="新建相册方式" :options="KIND_OPTIONS" class="w-36" />
       </div>
 
       <!-- 相册名称 -->
@@ -17,14 +17,13 @@
       <input
         v-model="name"
         :placeholder="kind === 'folder' ? '默认取文件夹名' : '如：文艺晚会精选'"
-        class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4"
-      />
+        class="border border-border bg-surface text-text px-3 py-2 rounded w-full mb-4" :aria-label="kind === 'folder' ? '默认取文件夹名' : '如：文艺晚会精选'"/>
 
       <!-- 文件夹相册：选一个文件夹（递归扫描，含所有子文件夹） -->
       <template v-if="kind === 'folder'">
         <label class="block text-sm text-text-secondary mb-1">选择文件夹路径</label>
         <div class="flex gap-2 mb-2">
-          <input v-model="folderPath" placeholder="点击右侧按钮选择文件夹" readonly @click="pickFolder" class="border border-border bg-surface text-text px-3 py-2 rounded flex-1 min-w-0" />
+          <input v-model="folderPath" placeholder="点击右侧按钮选择文件夹" readonly @click="pickFolder" class="border border-border bg-surface text-text px-3 py-2 rounded flex-1 min-w-0" aria-label="点击右侧按钮选择文件夹"/>
           <button @click="pickFolder" class="bg-surface-hover hover:bg-surface-hover text-text px-4 py-2 rounded transition-theme whitespace-nowrap border border-border">选择文件夹</button>
         </div>
         <p class="text-xs text-text-muted mb-4">递归读取该文件夹及其所有子文件夹里的照片/视频。系统也不会移动或修改文件夹里的任何文件。</p>
@@ -34,7 +33,7 @@
       <template v-else>
         <label class="block text-sm text-text-secondary mb-1">选择相册照片</label>
         <div class="flex gap-2 mb-2">
-          <AppSelect v-model="sourceAlbumId" :options="albumOptions" class="flex-1 min-w-0" placeholder="选择相册" />
+          <AppSelect v-model="sourceAlbumId" aria-label="选择相册照片来源" :options="albumOptions" class="flex-1 min-w-0" placeholder="选择相册" />
           <button
             @click="openPicker"
             :disabled="!sourceAlbumId"

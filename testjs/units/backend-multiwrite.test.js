@@ -21,6 +21,8 @@ const assert = require('node:assert/strict')
 const { createBackendDb } = require('./_db-express-fixture.cjs')
 
 const fx = createBackendDb({ label: 'multiwrite', faults: true })
+// X2-02：POST /dimensions/move 已下线（前端零调用），排序事务测试改为直调服务函数
+const groupDim = require('../../student-backend/services/groupDim')
 
 test.before(async () => {
   await fx.mount('/api/duty', 'student-backend/routes/duty.js')
@@ -90,8 +92,7 @@ test('groupManage 的 dimensions/move：排序更新中途失败不能改坏已�
   ins.run('维度乙', 0, 9)
   fx.inject({ failAt: 2 })
 
-  const r = await fx.call('POST', '/api/group-manage/dimensions/move', { id: 3, direction: 'up' })
-  assert.ok(r.status >= 400, '排序更新中途失败应报错（实际 ' + r.status + '）')
+  assert.throws(() => groupDim.moveDimension(3, 'up'), '排序更新中途失败应抛错')
 
   const rows = conn.prepare('SELECT name, sort_order FROM group_dimensions ORDER BY id').all()
   assert.deepEqual(
@@ -114,8 +115,7 @@ test('groupManage 的 dimensions/move：排序失败时不能把「新建默认�
   // 第 1 次写 = ensureDefaultDim 建默认维度；第 2 次写 = 排序 UPDATE → 在这里失败
   fx.inject({ failAt: 2 })
 
-  const r = await fx.call('POST', '/api/group-manage/dimensions/move', { id: 1, direction: 'down' })
-  assert.ok(r.status >= 400, '排序更新中途失败应报错（实际 ' + r.status + '）')
+  assert.throws(() => groupDim.moveDimension(1, 'down'), '排序更新中途失败应抛错')
 
   const count = conn.prepare('SELECT COUNT(*) AS c FROM group_dimensions').get().c
   assert.equal(count, 2, '排序失败后不能凭空多出「内置默认维度」（实际 ' + count + ' 个维度）')

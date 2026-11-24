@@ -33,6 +33,27 @@ test('前端：明文模式也能刷新媒体凭据', () => {
   assert.ok(/getToken\(\)/.test(fn), '仍应以登录 token 作为刷新前提')
 })
 
+test('前端：媒体凭据登记进用户级清理表，clearAuth 一条链必清（F05-01 / N3-14）', () => {
+  const src = read('student-frontend/src/utils/apiUrl.js')
+  assert.ok(/import \{[^}]*registerUserScopedReset[^}]*\} from '\.\/userScopedCache\.js'/.test(src),
+    'apiUrl 必须引入 registerUserScopedReset')
+  assert.ok(/registerUserScopedReset\(clearMediaToken\)/.test(src),
+    '媒体凭据必须登记到用户级清理表，否则路由守卫等新入口还会漏清')
+  const auth = read('student-frontend/src/utils/authStorage.js')
+  assert.ok(/function clearAuth\(\)[\s\S]*?resetUserScopedCaches\(\)/.test(auth),
+    'clearAuth 必须调用 resetUserScopedCaches（登记表才会被触发）')
+})
+
+test('后端：凭证变更（改密/删号）联动撤销该班 MCP token（N3-04）', () => {
+  const src = read('student-backend/services/credentialChange.js')
+  assert.ok(/require\('\.\/mcpTokenStore'\)\.revokeBySlug\(s\)/.test(src),
+    'revokeAccountSessions 必须联动 mcpTokenStore.revokeBySlug')
+  const store = read('student-backend/services/mcpTokenStore.js')
+  assert.ok(/function revokeBySlug\(slug\)/.test(store))
+  assert.ok(/x\.slug !== slug \|\| x\.revoked_at/.test(store), '只撤销该班且未撤销的令牌')
+  assert.ok(/module\.exports = \{[^}]*revokeBySlug/.test(store), '必须导出 revokeBySlug')
+})
+
 test('后端：媒体凭据只放行静态资源，业务 API 必须拒绝', async () => {
   const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'banji-media-'))
   process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'media-credential-test-key'

@@ -13,7 +13,9 @@ const os = require('node:os')
 const path = require('node:path')
 
 const ROOT = path.resolve(__dirname, '../..')
-const Database = require(path.join(ROOT, 'student-backend/node_modules/better-sqlite3-multiple-ciphers'))
+// 按后端 manifest 解析依赖，不假设 node_modules 就装在仓库里（T05-02）
+const { createRequire } = require('node:module')
+const Database = createRequire(path.join(ROOT, 'student-backend/package.json'))('better-sqlite3-multiple-ciphers')
 const { inspectDb, inspectDir, isEncryptedError, runSelftest } = require('../probe/db-size-probe.cjs')
 
 function makePlainDb(dir) {

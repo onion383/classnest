@@ -94,7 +94,7 @@ test('LRU 硬顶：全部在用且达到硬顶时拒绝新连接，不无限增�
   )
   assert.equal(base.connCache.has('hard_extra'), false, '被拒绝的新连接不能留在缓存里')
   assert.equal(base.connCache.size, base.CONN_CACHE_HARD_MAX)
-  assert.deepEqual(closed, [], '硬顶拒绝不能用 close 在途连接来腾位置')
+  assert.deepEqual(closed, ['hard_extra'], '被拒绝的新连接必须 close（否则句柄悬空，K01-18）；在途连接不能动')
 
   for (const c of base.connCache.values()) { try { c.close() } catch (_) { /* 已关闭 */ } }
   base.connCache.clear()

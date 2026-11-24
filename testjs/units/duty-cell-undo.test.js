@@ -223,7 +223,8 @@ test('来源判定：op- 批次是手改，ai-/子agent 才是助手，32 位 he
   fx.reset()
   const push = (origin) => fx.call('POST', '/', {
     key: '值日表', type: 'duty_cell', label: `x·${origin}`,
-    payload: { table: 'duty_layout', mode: 'daily', item: 'x', day: '周一', index: 0, oldValue: '', newValue: '甲' },
+    // 项目/星期必须是设置里真实存在的，否则入库前的校验会拒绝（Q2-12）
+    payload: { table: 'duty_layout', mode: 'daily', item: '扫地', day: '周一', index: 0, oldValue: '', newValue: '甲' },
     origin,
   })
 

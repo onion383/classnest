@@ -56,8 +56,12 @@ test('真实测试跑完：仓库固定目录哨兵与外部 DATA_DIR 哨兵都�
     encoding: 'utf8',
     timeout: 60000,
   })
+  // 用例数从子套件源码动态解析（T07-07）：写死 8 会让「子套件加/减一条隔离测试」
+  // 先误红，而这条断言与目录隔离本身无关。
+  const expected = (fs.readFileSync(SOURCE, 'utf8').match(/^\s*await test\(/gm) || []).length
+  assert.ok(expected > 0, '未能从子套件解析出用例数')
   assert.equal(r.status, 0, r.stdout + r.stderr)
-  assert.match(r.stdout, /通过 8 项.*全部通过/, '真实测试必须完整跑完 8 项')
+  assert.match(r.stdout, new RegExp(`通过 ${expected} 项.*全部通过`), `真实测试必须完整跑完 ${expected} 项`)
 
   assert.ok(fs.existsSync(repoSentinel), '仓库固定目录里的其它产物绝不能被测试删掉')
   assert.equal(fs.readFileSync(repoSentinel, 'utf8'), 'REPO-SENTINEL')

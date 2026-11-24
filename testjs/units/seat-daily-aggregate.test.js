@@ -117,6 +117,27 @@ const byName = (got) => {
 
 test('单遍合并与改造前两份遍历逐学生一致（随机 5 组）', async () => {
   const { aggregateSeatDaily } = await import(MODULE)
+  // 独立不变量（T07-06）：上面两份「改造前副本」当 oracle 有同源盲区 ——
+  // 若旧实现漏算某类格子而新实现照抄同一处，两份一起漏，deepEqual 仍绿。
+  // 这里不复刻遍历逻辑，只核「总量守恒」：账本/指数各自的总和必须等于
+  // 对应区间的权重总和，格漏算或算两遍都会立刻对不上。
+  const weightSum = (f, upto, includeNameCells) => {
+    let t = 0
+    for (const day of f.days) {
+      if (upto && day.snap_date > upto) continue
+      day.seats.forEach((row, r) => {
+        const wRow = f.weights[r]
+        if (!Array.isArray(row) || !Array.isArray(wRow)) return
+        row.forEach((val, c) => {
+          const w = wRow[c]
+          if (typeof w !== 'number') return
+          if (includeNameCells) { if (val !== null && val !== undefined && val !== '') t += w }
+          else if (typeof val === 'number') t += w
+        })
+      })
+    }
+    return t
+  }
   for (const seed of [1, 7, 42, 2024, 99991]) {
     const f = makeFixture(seed)
     const indexTo = '2026-10-09'
@@ -132,6 +153,13 @@ test('单遍合并与改造前两份遍历逐学生一致（随机 5 组）', as
 
     assert.deepEqual(got.ledger, oldLedger(filterTo(f.days, ledgerTo), f.weights), `seed ${seed} 账本不一致`)
     assert.deepEqual(byName(got), oldIndex(filterTo(f.days, indexTo), f.weights, f.studentName), `seed ${seed} 指数不一致`)
+
+    // 浮点求和顺序不同会差 1e-14 量级；总量守恒只要求在这个容差内相等
+    const near = (a, b) => Math.abs(a - b) < 1e-9
+    const ledgerSum = Object.values(got.ledger).reduce((a, b) => a + b, 0)
+    assert.ok(near(ledgerSum, weightSum(f, ledgerTo, false)), `seed ${seed} 账本总量不守恒（${ledgerSum} vs ${weightSum(f, ledgerTo, false)}）`)
+    const indexSum = Object.values(got.acc).reduce((a, b) => a + b, 0)
+    assert.ok(near(indexSum, weightSum(f, indexTo, true)), `seed ${seed} 指数总量不守恒（${indexSum} vs ${weightSum(f, indexTo, true)}）`)
   }
 })
 

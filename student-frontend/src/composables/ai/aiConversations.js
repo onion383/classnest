@@ -260,6 +260,8 @@ export function useAiConversations(ctx) {
       ctx.confirmDeleteId.value = null
       try {
         await axios.delete(`/api/ai/conversations/${id}`)
+        // 删除成功即作废在途的历史/补载请求：被删会话的旧响应不能落回空上下文（F04-02）
+        convSeq.invalidate()
         // 如果删除的是当前会话，切到空状态
         if (ctx.conversationId.value === id) {
           ctx.conversationId.value = null

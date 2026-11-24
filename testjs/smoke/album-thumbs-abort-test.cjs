@@ -102,11 +102,14 @@ async function main() {
   const req = startBatch(port, ids)
   // 等第一批真的落盘再掐断。死等 120ms 在慢机器上可能「还没开始就中断」，
   // 那样 afterAbort=0 也能过断言，等于没测到「在跑的那批」。
-  await waitFor(() => countOnDisk(slug) > 0, { label: '第一批开始生成' })
+  // waitFor/waitForStable 超时返回 false 而不是抛 —— 必须消费返回值，否则慢机器上仍是真空通过（T02-01）
+  const started = await waitFor(() => countOnDisk(slug) > 0, { label: '第一批开始生成' })
+  check('第一批缩略图在超时窗口内开始生成', started, { onDisk: countOnDisk(slug) })
   req.destroy()
   // 等「已经在跑的那批」跑完（并发生成不会再启动新批）：计数连续几次不变即视为收尾，
   // 比死等 3s 更快，也不会在慢机器上砍在中间。
-  await waitForStable(() => countOnDisk(slug), { intervalMs: 200, stableTimes: 3, label: '在跑批次收尾' })
+  const settled = await waitForStable(() => countOnDisk(slug), { intervalMs: 200, stableTimes: 3, label: '在跑批次收尾' })
+  check('在跑批次在超时窗口内收尾', settled, { onDisk: countOnDisk(slug) })
   const afterAbort = countOnDisk(slug)
   check(`中断后落盘 ${afterAbort} 张 < 请求的 ${N} 张（剩余不再生成）`, afterAbort < N, { afterAbort, N })
 

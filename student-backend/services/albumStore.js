@@ -3,6 +3,7 @@
 // 语句收在这里。**事务仍留在路由**：相册的复合写都夹着 FS 副作用（删缩略图、派发子进程），
 // 把事务搬进 service 会让「先删缓存再删库」这类顺序变得看不见。
 const { db } = require('../db')
+const { cleanText } = require('../services/sanitize')
 
 // ---------- 相册列表 ----------
 // cover_photo_id：相册卡片的封面取「最新一张图片」的 id（按 mtime 倒序，排除视频），
@@ -70,6 +71,25 @@ function setAlbumSort(id, sortOrder) {
 function updateAlbumFields(id, name, folderPath, ts) {
   return db.prepare('UPDATE albums SET name = ?, folder_path = ?, updated_at = ? WHERE id = ?')
     .run(name, folderPath, ts, id)
+}
+
+// 改名/改路径的唯一实现：清洗 + 校验 + 写库。
+// 逻辑原先内联在 PATCH /api/album/:id（前端零调用），X2-02 删路由后下沉到这里，
+// backend-consistency.test.js 直接测本函数——仍是真写 SQLite 再读回，不是纯函数假绿。
+// 返回 { ok, error? }，不给调用方留「清洗后仍落脏值」的旁路。
+function updateAlbumFieldsChecked(id, patch, ts) {
+  const { name, kind } = patch || {}
+  const row = db.prepare('SELECT name, folder_path, kind FROM albums WHERE id = ?').get(id)
+  if (!row) return { ok: false, error: '相册不存在' }
+  // 同时认 HTTP 的 folder_path 与内部约定的 folderPath（两种调用方都在用）
+  const rawFolder = patch && patch.folderPath != null ? patch.folderPath : (patch && patch.folder_path)
+  const cleanName = cleanText(name == null ? row.name : name)
+  const cleanFolder = cleanText(rawFolder == null ? row.folder_path : rawFolder)
+  if (!cleanName) return { ok: false, error: '相册名称不能为空' }
+  // 虚拟相册的 folder_path 按设计就是空串；文件夹相册必须有路径，否则展示会指向不存在的目录。
+  if ((kind || row.kind) === 'folder' && !cleanFolder) return { ok: false, error: '文件夹路径不能为空' }
+  updateAlbumFields(id, cleanName, cleanFolder, ts)
+  return { ok: true }
 }
 
 function touchAlbum(id, ts) {
@@ -216,6 +236,7 @@ module.exports = {
   insertVirtualAlbum,
   setAlbumSort,
   updateAlbumFields,
+  updateAlbumFieldsChecked,
   touchAlbum,
   deleteAlbumRow,
   photoById,

@@ -30,6 +30,7 @@ try {
   if (typeof NodeModule.enableCompileCache === 'function') NodeModule.enableCompileCache(_ccDir)
 } catch (_) { /* 编译缓存不可用时静默忽略，不影响启动 */ }
 const startupTimer = require('./main.startup-timer')
+const contract = require('./main.ipc-contract')
 const ports = require('../../config/ports.cjs')
 
 // 异步 fs：主进程里凡是「可能慢」的磁盘操作（目录遍历、整目录复制/删除、大文件写盘）
@@ -171,9 +172,6 @@ function registerDeferredIpc() {
   // 版本更新 IPC。状态广播只发给主窗口（内部自带判空 + isDestroyed），故把出口函数注入 updater。
   getUpdater().registerUpdateIpc((payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CH.FROM_MAIN, payload)
-  }, {
-    // 安装前必须等后端退出：它还占着数据库文件，安装器 /CLOSEAPPLICATIONS 会替换失败
-    stopBackend: () => backend.stopBackendProcess(),
   })
 
   // 文件/文件夹对话框与本地文件读写 IPC
@@ -547,7 +545,7 @@ IPC.on(CH.AI_CONTEXT_MENU, (event) => {
 // 后端就绪检测（detectBackendReady / readyBuffer）已随后端生命周期迁至 backend.js：
 // backend.js 在 startBackend 里自行监听子进程 stdout 并做滚动缓冲 + 子串匹配，此处不再保留副本。
 
-// ========== 版本更新（自建：GitHub Releases + Inno Setup 静默升级）==========
+// ========== 版本更新（自建：GitHub Releases + 用户手动安装）==========
 // 见 updater.js：registerUpdateIpc（get-app-version / update-check / update-install）/ runUpdateFlow
 
 app.whenReady().then(() => {
@@ -785,7 +783,7 @@ IPC.handle(CH.SET_CONTENT_PROTECTION, (event, enabled) => {
 
 // 复制敏感文本：写剪贴板，并在 TTL 后「仅当剪贴板仍是这段文本」时清空，
 // 不覆盖用户后来复制的内容。默认 60 秒。
-IPC.handle(CH.COPY_SENSITIVE_TEXT, (event, { text, ttlMs } = {}) => {
+IPC.handle(CH.COPY_SENSITIVE_TEXT, contract.safeReject((event, { text, ttlMs } = {}) => {
   if (typeof text !== 'string' || !text) return false
   clipboard.writeText(text)
   const ttl = Math.min(Math.max(Number(ttlMs) || 60000, 1000), 10 * 60 * 1000)
@@ -793,7 +791,7 @@ IPC.handle(CH.COPY_SENSITIVE_TEXT, (event, { text, ttlMs } = {}) => {
     try { if (clipboard.readText() === text) clipboard.clear() } catch (_) { /* 读剪贴板失败忽略 */ }
   }, ttl)
   return true
-})
+}))
 
 // 见 tray.js：registerTrayIpc（shutdown-action / win-minimize / win-maximize-toggle / win-close）/
 // handleMainClose / resetShutdownState / createTray / destroyTray / isTrayAlive / beginCloseWithoutMenu
@@ -1271,7 +1269,7 @@ IPC.handle(CH.GET_SETUP_WARMUP, () => setupWarmup)
 // 引导期「储存设置」：只写入唯一的数据根目录。首次建库前直接写配置；
 // 若引导中已建库（数据目录已存在），复用安全搬迁流程移动文件，随后重启后端让新目录生效。
 // 相册缩略图与 AI 技能固定为根下的 album-thumbs / ai-skills 子目录，不再单独选择。
-IPC.handle(CH.SET_INITIAL_DATA_DIR, async (event, payload) => {
+IPC.handle(CH.SET_INITIAL_DATA_DIR, contract.safeReject(async (event, payload) => {
   const p = payload || {}
   // 引导期同样来自渲染层：沿用与设置页一致的目录校验，拒绝相对路径/盘符根/系统保护目录
   const safeData = p.dataDir ? pathGuard.resolveSafeWriteDir(p.dataDir) : null
@@ -1308,7 +1306,7 @@ IPC.handle(CH.SET_INITIAL_DATA_DIR, async (event, payload) => {
   await backend.stopBackendProcess()
   backend.startBackend()
   return { ok: true, dataDir: resolveDataDir(), thumbsDir: resolveThumbsDir(), changed: true }
-})
+}))
 
 // ========== 数据目录搬迁：带进度的校验 + 复制 ==========
 // 搬迁引擎（路径清单/哈希校验/复制/复检/写配置）已迁至 migration.js：
@@ -1321,7 +1319,7 @@ IPC.handle(CH.SET_INITIAL_DATA_DIR, async (event, payload) => {
 //   预检（有效班主任库/无再读写）→ 校验源文件 → 复制（字节进度）→ 复检（失败单拷 + 全局哈希）→ 写配置；
 // 只有前面全部通过才切配置、删旧目录。配置写入失败会中止并保留旧目录，绝不产生「数据在新目录、
 // 配置却指向已删除旧目录」的错位状态。
-IPC.handle(CH.SET_DATA_DIR, async (event, dir) => {
+IPC.handle(CH.SET_DATA_DIR, contract.safeReject(async (event, dir) => {
   if (migrationRunning) throw new Error('已有数据库迁移正在进行，请稍候')
   // 目录来自渲染层：只接受绝对路径，拒绝盘符根与系统保护目录（Windows/System32/安装目录等）
   const safe = pathGuard.resolveSafeWriteDir(dir)
@@ -1378,7 +1376,7 @@ IPC.handle(CH.SET_DATA_DIR, async (event, dir) => {
     if (!migrationUiReady) reopenAfterMigration()
     throw new Error(err?.message || String(err))
   }
-})
+}))
 
 // 变更「数据库加密方式」：复用数据目录迁移那套流程——关闭全部其它窗口、只留独立进度窗口，
 // 完成后自动重开主窗口并经提示条反馈结果。实际转换由后端的 NDJSON 流接口执行
@@ -1389,7 +1387,7 @@ IPC.handle(CH.SET_DATA_DIR, async (event, dir) => {
 // 所以它是「能力已备好、入口未接」而不是死代码：**保留通道 + 授权给主窗口**，
 // 将来补一个设置项即可直接用；真要删，得连后端接口与迁移窗的 crypt 分支一起删。
 // 审查 v4 · B01-01 把这条记为死通道，与代码事实不符，已在台账更正。
-IPC.handle(CH.SET_DB_ENCRYPTION, async (event, payload) => {
+IPC.handle(CH.SET_DB_ENCRYPTION, contract.safeReject(async (event, payload) => {
   if (migrationRunning) throw new Error('已有数据库任务正在进行，请稍候')
   const encrypt = !!(payload && payload.encrypt)
   // 先取当前登录令牌交给进度窗口调用后端接口：接口只从 JWT 取 slug，绝不接受客户端传入 slug
@@ -1417,7 +1415,7 @@ IPC.handle(CH.SET_DB_ENCRYPTION, async (event, payload) => {
   // 通知进度窗口开始转换（携带目标状态与登录令牌），其完成后经 migration-dismiss 回报结果
   sendMigration({ type: 'crypt-start', encrypt, token })
   return { ok: true, started: true, encrypt }
-})
+}))
 
 // 「缩略图缓存目录」「AI 技能目录」两个独立设置通道已移除：
 // 数据目录统一为单一根，两者固定为 <dataDir>/album-thumbs 与 <dataDir>/ai-skills，

@@ -19,6 +19,14 @@ export function shuffle(arr) {
 export function buildRoster({ dataSource, students = [], groups = [], includeNew = false }) {
   const named = s => String((s && s.姓名) || '').trim()
   const rosterStudents = (students || []).filter(s => named(s))
+  // 姓名 → 名册对象。重名时要能看出「这个姓名不唯一」，不能再 find 到第一个人
+  // 就当成他（第二人会拿到第一人的 id / 性别，后续 relation/gender 条件全错配，F03-05）。
+  const byName = new Map()
+  for (const s of rosterStudents) {
+    const n = named(s)
+    if (!byName.has(n)) byName.set(n, [])
+    byName.get(n).push(s)
+  }
   // 分组表里的成员名（按出现顺序去重）
   const memberNames = []
   const seen = new Set()
@@ -30,9 +38,14 @@ export function buildRoster({ dataSource, students = [], groups = [], includeNew
   }
   const known = new Set(rosterStudents.map(named))
   if (dataSource === 'table') {
-    // 只重排已经在表里的人：能对上名册的取名册对象（带 id / 性别），对不上的用临时对象
+    // 只重排已经在表里的人：能对上名册的取名册对象（带 id / 性别），对不上的用临时对象。
+    // 重名（命中多个名册对象）同样按临时对象处理 —— 成员记录里没有学生 id，
+    // 用姓名猜人只会把第二人当成第一人。
     // 表里的人一律带上（含名册外的新同学）——「现有分组表格」就是以表里的内容为准
-    return memberNames.map(n => rosterStudents.find(s => named(s) === n) || { 姓名: n })
+    return memberNames.map(n => {
+      const hits = byName.get(n)
+      return hits && hits.length === 1 ? hits[0] : { 姓名: n }
+    })
   }
   // 全部同学：名册全员（带 id / 性别）
   if (!includeNew) return rosterStudents
@@ -74,7 +87,7 @@ export function useSmartGroupPipeline(ctx) {
 
       // 依次应用流水线条件
       for (const st of ctx.stages.value) {
-        if (st.type === 'relation') applyRelation(ctx, st, roster, members, leaders, target, G)
+        if (st.type === 'relation') applyRelation(ctx, st, roster, members, leaders, forcedLeaders, notLeaders, target, G)
         else if (st.type === 'identity') applyIdentity(ctx, st, roster, members, leaders, forcedLeaders, notLeaders)
         else if (st.type === 'gender') applyGender(ctx, st, roster, members, target, G)
       }
@@ -113,7 +126,7 @@ function moveBody(members, leaders, si, from, to) {
 }
 
 // 特殊关系：XXX 和 YYY 在一组 / 不在一组
-function applyRelation(ctx, st, roster, members, leaders, target, G) {
+function applyRelation(ctx, st, roster, members, leaders, forcedLeaders, notLeaders, target, G) {
   const a = st.a, b = st.b
   if (!a || !b) return
   const ia = roster.findIndex(s => String(s.id) === String(a))
@@ -133,6 +146,21 @@ function applyRelation(ctx, st, roster, members, leaders, target, G) {
         ok = true
         break
       }
+      // 满组兜底（F03-01）：round-robin 后每组恰好 target，G=2 时永远找不到空位，
+      // 拆散成功率实测只有 55.6%。这里与另一组一名「自由成员」互换：
+      // b 去 h 组、victim 来 gb 组，两组人数不变。
+      if (!ok) {
+        for (let h = 0; h < G; h++) {
+          if (h === gb) continue
+          const victim = pickSwappable(ctx, roster, members, leaders, forcedLeaders, notLeaders, h, st.key, [ia, ib])
+          if (victim < 0) continue
+          if (relationConflict(ctx, roster, members, ib, h, st.key)) continue
+          moveBody(members, leaders, ib, gb, h)
+          moveBody(members, leaders, victim, h, gb)
+          ok = true
+          break
+        }
+      }
     }
   } else { // together
     if (ga === gb) {
@@ -140,9 +168,63 @@ function applyRelation(ctx, st, roster, members, leaders, target, G) {
     } else {
       if (members[ga].size < target) { moveBody(members, leaders, ib, gb, ga); ok = true }
       else if (members[gb].size < target) { moveBody(members, leaders, ia, ga, gb); ok = true }
+      // 满组兜底（同 F03-01）：两组皆满时与对方组里的自由成员互换。
+      if (!ok) {
+        const victim = pickSwappable(ctx, roster, members, leaders, forcedLeaders, notLeaders, ga, st.key, [ia, ib])
+        if (victim >= 0 && !relationConflict(ctx, roster, members, ib, ga, st.key)) {
+          moveBody(members, leaders, ib, gb, ga)
+          moveBody(members, leaders, victim, ga, gb)
+          ok = true
+        }
+      }
+      if (!ok) {
+        const victim = pickSwappable(ctx, roster, members, leaders, forcedLeaders, notLeaders, gb, st.key, [ia, ib])
+        if (victim >= 0 && !relationConflict(ctx, roster, members, ia, gb, st.key)) {
+          moveBody(members, leaders, ia, ga, gb)
+          moveBody(members, leaders, victim, gb, ga)
+          ok = true
+        }
+      }
     }
   }
   ctx.trackSatisfaction(st.key, ok ? 1 : 0, 1)
+}
+
+// 交换兜底里可以动的人：不参与任何其它关系条件（动了会破坏已满足的条件）、
+// 不是指定/禁任组长，也不是当前组长（换走会把组长位置弄空）。
+function pickSwappable(ctx, roster, members, leaders, forcedLeaders, notLeaders, groupIdx, skipKey, exclude) {
+  for (const si of members[groupIdx]) {
+    if (si === exclude[0] || si === exclude[1]) continue
+    if (forcedLeaders.has(si) || notLeaders.has(si)) continue
+    if (leaders[groupIdx] === si) continue
+    if (isRelationParticipant(ctx, roster, si, skipKey)) continue
+    return si
+  }
+  return -1
+}
+
+function isRelationParticipant(ctx, roster, si, skipKey) {
+  const id = roster[si] && roster[si].id
+  if (id == null) return false
+  for (const st of ctx.stages.value) {
+    if (st.type !== 'relation' || st.key === skipKey || !st.a || !st.b) continue
+    if (String(id) === String(st.a) || String(id) === String(st.b)) return true
+  }
+  return false
+}
+
+// 把 si 移到 to 组后，是否会让**其它**已应用的关系条件从满足变成违反。
+function relationConflict(ctx, roster, members, si, to, skipKey) {
+  for (const st of ctx.stages.value) {
+    if (st.type !== 'relation' || st.key === skipKey || !st.a || !st.b) continue
+    const ia = roster.findIndex(s => String(s.id) === String(st.a))
+    const ib = roster.findIndex(s => String(s.id) === String(st.b))
+    if (ia < 0 || ib < 0) continue
+    if (si !== ia && si !== ib) continue
+    const other = si === ia ? ib : ia
+    if (st.kind === 'apart' ? groupOf(members, other) === to : groupOf(members, other) !== to) return true
+  }
+  return false
 }
 
 // 指定身份：XXX 担任/不担任 组长
@@ -222,6 +304,11 @@ function applyGender(ctx, st, roster, members, target, G) {
   }
 
   // balanced：男女尽量均匀 —— 把多余的男生调到男生少、且人数不满的小组
+  // 没有男生时「男女均匀」是空命题，应视为满足，而不是拿 0/1 记 0%（F03-04）。
+  if (totalBoy === 0) {
+    ctx.trackSatisfaction(st.key, total, total)
+    return
+  }
   const desiredBoy = Math.round(totalBoy / G)
   const boysNow = Array(G).fill(0)
   boyIdx.forEach(si => boysNow[groupOf(members, si)]++)

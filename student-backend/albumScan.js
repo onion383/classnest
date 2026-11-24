@@ -322,12 +322,19 @@ function claimScanTask(conn, albumId, mode, token, resumeFrom) {
 // 带 token 限定：只更新「属于本次扫描」的那一行。
 // 否则上一次扫描的收尾（persistScanClear）会把本次刚写的行删掉。
 // 每个扫描任务（albumId + token）各自计数，避免并发扫描互相把对方的计数清零
-const persistCounters = new Map();
+const persistCounters = new Map(); // key -> { count, at }
+// 崩溃/强杀会留下未收口的计数键；一小时没再推进的按残留清掉（P2-03）
+const PERSIST_COUNTER_TTL_MS = 60 * 60 * 1000;
 function persistScanProgress(conn, albumId, token, mode, phase, donePath, scanned, total, force) {
   const key = `${albumId}:${token || 0}`;
-  const count = (persistCounters.get(key) || 0) + 1;
+  const nowMs = Date.now();
+  for (const [k, v] of persistCounters) {
+    if (nowMs - v.at > PERSIST_COUNTER_TTL_MS) persistCounters.delete(k);
+  }
+  const cur = persistCounters.get(key) || { count: 0, at: nowMs };
+  const count = cur.count + 1;
   if (!force && count % PERSIST_EVERY !== 0) {
-    persistCounters.set(key, count);
+    persistCounters.set(key, { count, at: nowMs });
     return;
   }
   persistCounters.delete(key);
@@ -764,6 +771,8 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
 
     // 补图没跑完（用户停止/暂停）→ 保留断点，下次续扫只补剩下的图
     if (!thumbCompleted) return;
+    // 取消是独立终态：断点行就是下次续扫的依据，绝不能被 clear 抹掉（K01-02）
+    if (task.cancelled) return;
 
     conn.prepare('UPDATE albums SET updated_at = ? WHERE id = ?').run(now(), albumId);
     // 跑完了：清掉持久化记录（下次不需要续扫）
@@ -861,9 +870,9 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
         const old = existing.get(full);
 
         if (old) {
-          // 文件已存在：mtime 变了 = **源图变了**，必须重算日期并重建缩略图。
-          // 这是「跳过已有」的唯一例外 —— 缩略图还在，但它对应的是旧图，留着就是显示错图。
-          if (old.mtime !== mtime) {
+          // 文件已存在：mtime 或大小变了 = **源图变了**，必须重算日期并重建缩略图。
+          // 只看 mtime 会漏掉 `cp -p`、解压保留时间戳、原地另存把时间戳复位的场景（K01-03）。
+          if (old.mtime !== mtime || old.file_size !== st.size) {
             const isVideo = VIDEO_EXT.test(name);
             const when = await resolvePhotoDate(full, mtime, isVideo);
             updateMeta.run(name, st.size, mtime, when.date, when.exif, when.src, old.id);
@@ -932,6 +941,8 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
     }
     thumbWriter.flush();
 
+    // 被用户停止/取消时保留断点行（main 侧可能已清理；这里再清一次会让续扫依据永久消失，K01-02）
+    if (task.cancelled) return;
     conn.prepare('UPDATE albums SET updated_at = ? WHERE id = ?').run(now(), albumId);
     // 跑完了：清掉持久化记录（下次不需要续扫）
     persistScanClear(conn, albumId, task.token);
@@ -1023,6 +1034,8 @@ async function refreshVirtual(conn, albumId, resumeFrom, slug, onProgress, token
       if (!progressed) break;
     }
     thumbWriter.flush();
+    // 取消/中断时保留断点行，下次才能续扫（K01-02）
+    if (task.cancelled) return;
     conn.prepare('UPDATE albums SET updated_at = ? WHERE id = ?').run(now(), albumId);
     persistScanClear(conn, albumId, task.token);
   } finally {

@@ -44,7 +44,8 @@ router.get('/', (req, res) => {
 // 与布尔）在 sanitize 的 assertSlotElements 里，这里只负责把它的错误转成 400。
 // 两处写入口都直接调用 sanitizeField（不抽包装函数）：覆盖矩阵 write.sanitize_gate 按
 // handler 体内是否出现该调用判定，间接调用会让已修的地方仍报 GAP。
-// apply-master 不重复清洗：它整份复制已经过校验的 master 文档。
+// apply-master 也要过同一判据：主课表可能被 AI/撤销/历史恢复等通道写脏，
+// 「整份复制已校验文档」的假设不成立，模板脏值会直接带进实行课表。
 router.put('/', (req, res) => {
     const { cells: rawCells, settings } = req.body;
   let cells;
@@ -85,7 +86,13 @@ router.put('/master', (req, res) => {
 router.post('/apply-master', (req, res) => {
     const master = store.getDoc('master_schedule');
   if (!master) return res.status(400).json({ error: '一般课表为空' });
-  store.setDoc('schedule', { cells: master.cells, settings: master.settings });
+  let cells;
+  try {
+    cells = sanitizeField(JSON.parse(master.cells || '[]'), 'schedule', 'cells');
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  store.setDoc('schedule', { cells: JSON.stringify(cells), settings: master.settings });
   res.json({ message: '已将一般课表应用为实行课表' });
 });
 

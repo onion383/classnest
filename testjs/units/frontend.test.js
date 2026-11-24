@@ -357,6 +357,15 @@ test('filterRowsByKeyword：单元格为 null/undefined 不匹配', async () => 
   assert.deepEqual(filterRowsByKeyword(rows, 'a', 'x').map(r => r.a), ['x'])
 })
 
+test('filterRowsByKeyword：全半角与内嵌空格归一后命中（Q1-03）', async () => {
+  const { filterRowsByKeyword, normSearchText } = await loadTableSearch()
+  const rows = [{ 姓名: '张 三', 学号: 'S１００１' }, { 姓名: '李四', 学号: 'S1002' }]
+  // 搜「张三」要命中「张 三」；搜「S1001」要命中全角数字的「S１００１」
+  assert.deepEqual(filterRowsByKeyword(rows, '姓名', '张三').map(r => r.姓名), ['张 三'])
+  assert.deepEqual(filterRowsByKeyword(rows, '学号', 'S1001').map(r => r.学号), ['S１００１'])
+  assert.equal(normSearchText('　张 三　'), '张三')
+})
+
 test('isSearchNoResult：有数据但被筛光 → true', async () => {
   const { isSearchNoResult } = await loadTableSearch()
   assert.equal(isSearchNoResult(ROWS, [], '姓名', '查无此人'), true)

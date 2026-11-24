@@ -115,7 +115,10 @@ export function useScheduleActive(ctx, { API_BASE }) {
       // 越界防御：内存里的 cells 若已被上一轮异常改动压短，splice 会写出 holes，
       // 后端遍历时就会抛 "reading 'N'"。宁可这次不生效，也不能再往库里写坏数据。
       const srcCells = ctx.activeCells.value;
-      if (!Array.isArray(srcCells) || fromLessonIdx < 0 || fromLessonIdx >= srcCells.length) return;
+      // splice 对越界下标会静默钳位到首尾（不抛错），目标下标必须与源下标同套边界检查，
+      // 否则事件序列异常时行会被插到末尾、界面不提示。
+      if (!Array.isArray(srcCells) || fromLessonIdx < 0 || fromLessonIdx >= srcCells.length
+        || toLessonIdx < 0 || toLessonIdx >= srcCells.length) return;
       const prev = JSON.parse(JSON.stringify(ctx.activeCells.value));
       // 移动语义：与拖动时的让位预览一致（取出源行插入目标位置，中间行顺移）
       const newCells = [...ctx.activeCells.value];
@@ -135,12 +138,14 @@ export function useScheduleActive(ctx, { API_BASE }) {
     },
     async onActiveSwapColumns(fromIdx, toIdx) {
       if (fromIdx === toIdx) return;
+      const cols = ctx.activeColHeaders.value.length;
+      // 列交换同样要双向边界检查：splice 越界会钳位，列序会静默错位。
+      if (fromIdx < 0 || fromIdx >= cols || toIdx < 0 || toIdx >= cols) return;
       const fromHeader = ctx.activeColHeaders.value[fromIdx] ?? `列${fromIdx + 1}`, toHeader = ctx.activeColHeaders.value[toIdx] ?? `列${toIdx + 1}`;
       const prev = JSON.parse(JSON.stringify(ctx.activeCells.value));
       // 移动语义：取出源列插入目标位置，中间列的数据顺移（表头固定）
       // 先按列数把每行补齐/截齐：行长短不一时 splice 会产出 undefined 单元格，
       // 渲染与保存链路随后就会崩在 "reading '0'" 这类下标访问上。
-      const cols = ctx.activeColHeaders.value.length;
       const newCells = ctx.activeCells.value.map(row => {
         const r = Array.isArray(row) ? [...row] : [];
         while (r.length < cols) r.push({ course: '' });
@@ -166,13 +171,20 @@ export function useScheduleActive(ctx, { API_BASE }) {
       });
       if (rowIdx < flat.length) {
         const target = flat[rowIdx].item;
-        if (field === 'label') target.name = value;
-        else if (field === 'time') {
-          const parts = value.split('-');
-          if (parts.length === 2) {
-            target.start = parts[0].trim();
-            target.end = parts[1].trim();
-          }
+        if (field === 'label') {
+          const label = String(value ?? '').trim();
+          if (!label) { ctx.notifyError('行标签不能为空'); return; }
+          target.name = label;
+        } else if (field === 'time') {
+          // 非法格式不能静默保留旧值：用户以为改了，实际落库的还是上一次的时间。
+          const m = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})\s*[-~—]\s*(\d{1,2}):(\d{2})$/);
+          if (!m) { ctx.notifyError('时间段格式应为 HH:MM-HH:MM'); return; }
+          const start = `${m[1].padStart(2, '0')}:${m[2]}`;
+          const end = `${m[3].padStart(2, '0')}:${m[4]}`;
+          const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+          if (toMin(end) <= toMin(start)) { ctx.notifyError('结束时间必须晚于开始时间'); return; }
+          target.start = start;
+          target.end = end;
         }
         ctx.activeSettings.value.sections = sections;
         ctx.saveActive();

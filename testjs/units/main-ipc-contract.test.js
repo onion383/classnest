@@ -16,6 +16,7 @@ const assert = require('node:assert')
 const path = require('path')
 const fs = require('fs')
 const Module = require('module')
+const { pathToFileURL } = require('node:url')
 
 const ROOT = path.resolve(__dirname, '..', '..')
 
@@ -491,24 +492,19 @@ test('B01-13 preload.once：wrapper 登记进 listenerMap 且返回句柄', () =
 // 前端侧：失败必须抛出去（判据 D）
 // =========================================================================
 test('B01-06 前端：失败被抛出去，取消被安静吞掉', async () => {
-  const saveFileSrc = fs.readFileSync(path.join(ROOT, 'student-frontend/src/utils/saveFile.js'), 'utf8')
-  // 复现 classify 逻辑
-  const classify = (res) => {
-    if (!res || typeof res !== 'object') return 'fail'
-    if (res.outcome === 'ok') return 'ok'
-    if (res.outcome === 'fail') return 'fail'
-    if (res.outcome === 'canceled') return 'canceled'
-    if (res.canceled === true) return 'canceled'
-    if (res.success === false) return 'fail'
-    if (res.filePath) return 'ok'
-    return 'fail'
-  }
+  // 直接引入真实纯函数（T06-01）：本地镜像一份 classify 时，源码改口径副本不跟随 → 假绿
+  const { classifySaveResult: classify } = await import(
+    pathToFileURL(path.join(ROOT, 'student-frontend/src/utils/saveResult.js')).href
+  )
   assert.strictEqual(classify({ outcome: 'ok', filePath: '/x' }), 'ok')
   assert.strictEqual(classify({ outcome: 'fail', error: 'x' }), 'fail')
   assert.strictEqual(classify({ outcome: 'canceled' }), 'canceled')
   // 旧形状也要能判
   assert.strictEqual(classify({ canceled: true }), 'canceled')
   assert.strictEqual(classify({ success: false, error: 'x' }), 'fail')
+  assert.strictEqual(classify(null), 'fail', '空返回值必须判失败，不能当成功或取消')
+
+  const saveFileSrc = fs.readFileSync(path.join(ROOT, 'student-frontend/src/utils/saveFile.js'), 'utf8')
 
   // 源码里：取消 → return ''；失败 → throw
   assert.ok(/kind === 'canceled'\) return ''/.test(saveFileSrc),

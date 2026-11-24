@@ -13,7 +13,7 @@
         </div>
         <div class="panel-header">
           <span class="title">工具箱</span>
-          <button class="close-btn" @click="closeToIcon"><IconGlyph name="close" :size="14" tint="current" /></button>
+          <button class="close-btn" type="button" aria-label="关闭工具箱" title="关闭工具箱" @click="closeToIcon"><IconGlyph name="close" :size="14" tint="current" /></button>
         </div>
         <template v-if="!exitConfirm">
           <div class="menu-grid">

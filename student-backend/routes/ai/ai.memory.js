@@ -157,7 +157,11 @@ router.get('/memory', (req, res) => {
 
 // PUT /api/ai/memory —— 覆盖写入长期记忆，body: { content }
 router.put('/memory', (req, res) => {
-    dbManager.writeMemory(req.user && req.user.dbSlug, req.body && req.body.content);
+    const content = req.body && req.body.content;
+  // 类型与长度上限（K02-06）：记忆会整段注入系统提示，超长文本会挤爆上下文窗口。
+  if (typeof content !== 'string') return res.status(400).json({ error: 'content 必须是字符串' });
+  if (content.length > 512000) return res.status(400).json({ error: '长期记忆过长（上限 512000 字符）' });
+  dbManager.writeMemory(req.user && req.user.dbSlug, content);
   res.json({ success: true, message: '已保存' });
 });
 

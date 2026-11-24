@@ -3,6 +3,8 @@ node_modules/
 node_modules_old/
 dist/
 dist_empty/
+# 构建前的旧 dist 备份目录（形如 dist-old-20261125010344），不入库
+dist-old-*/
 # 后端单文件 bundle 产物（student-backend/build.bundle.mjs 生成）
 student-backend/app.bundle.js
 

@@ -1,5 +1,5 @@
 <template>
-  <DialogShell :visible="visible" :z-index="10004" overlay-class="bg-black/40">
+  <DialogShell :visible="visible" :z-index="zIndex" overlay-class="bg-black/40">
         <div class="bg-surface rounded-lg p-5 shadow-card dialog-card border border-border flex flex-col overflow-hidden" style="width: 720px; height: 640px; max-width: 92vw; max-height: 90vh;">
           <h3 class="text-lg font-bold mb-4">管理周值日记录</h3>
 
@@ -7,7 +7,7 @@
           <div class="flex items-center gap-3 mb-3">
             <label class="text-sm font-medium whitespace-nowrap">选择学期</label>
             <div style="width: 220px;">
-              <AppSelect v-model="semesterId" :options="semesterOptions" placeholder="请选择学期" />
+              <AppSelect v-model="semesterId" aria-label="选择学期" :options="semesterOptions" placeholder="请选择学期" />
             </div>
             <span v-if="semesterRangeText" class="text-xs text-text-muted">{{ semesterRangeText }}</span>
           </div>
@@ -69,6 +69,7 @@
             confirm-text="删除"
             cancel-text="取消"
             :show-cancel="true"
+            :z-index="zIndex + 1"
             @confirm="confirmDelete"
             @cancel="cancelDelete"
           />
@@ -93,7 +94,8 @@ defineOptions({ name: 'DutyRecordSettingsDialog' })
 const props = defineProps({
   visible: { type: Boolean, default: false },
   // 值日模式：daily 日常值日 / big 大扫除
-  mode: { type: String, default: 'daily' }
+  mode: { type: String, default: 'daily' },
+  zIndex: { type: Number, default: 10004 },
 })
 defineEmits(['close'])
 

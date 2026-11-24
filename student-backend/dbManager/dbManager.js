@@ -41,6 +41,7 @@ module.exports = {
   linkAccount: account.linkAccount,
   backfillPasswordHash: account.backfillPasswordHash,
   registrySetClassName: base.registrySetClassName,
+  registryUpsert: base.registryUpsert,
   accountFindByUsername: base.accountFindByUsername,
   // 多班级：改密/改账号名要同步账号表（各库 users 表不再作为校验依据）
   accountSetPassword: base.accountSetPassword,
@@ -78,6 +79,7 @@ module.exports = {
   registrySetEncrypted: base.registrySetEncrypted,
   registryDelete: base.registryDelete,
   evictConn: conn.evictConn,
+  checkpointForBackup: conn.checkpointForBackup,
   // 扫描子进程（worker.scan.js）要自己开一个独立连接开库 —— 它没有请求上下文 ALS，
   // 不能走 withDb，故需要 openFile 这个底层原语。
   openFile: base.openFile,

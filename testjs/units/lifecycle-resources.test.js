@@ -13,6 +13,10 @@
 //   ② 监听器：`addEventListener(` 的每一处都要被 `removeEventListener(` / `.listen(` /
 //      `{ once: true }` / `{ signal }` 之一覆盖；
 //   ③ 豁免只给「应用/窗口级单例」，且每个豁免项都必须仍然需要豁免（防止过期白名单）。
+//
+// 边界（T06-05）：本守卫是**计数型**覆盖，不按「同事件名 add/remove」逐条配对 ——
+//   它能防「完全没清理」，防不住「清错事件 / 两个 interval 只清一个」。要收得更紧，
+//   需把 audit 改成按 {target,event,once,signal} 键集合对账（中期项，未做）。
 // =========================================================================
 const test = require('node:test')
 const assert = require('node:assert/strict')

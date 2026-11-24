@@ -216,10 +216,6 @@ function setModelActive(id) {
   db.prepare('UPDATE ai_models SET is_active = 1 WHERE id = ?').run(id)
 }
 
-function findModelConnection(id) {
-  return db.prepare('SELECT provider, base_url, api_key FROM ai_models WHERE id = ?').get(id)
-}
-
 function findModel(id) {
   return db.prepare('SELECT * FROM ai_models WHERE id = ?').get(id)
 }
@@ -268,7 +264,6 @@ module.exports = {
   deleteModel,
   findOtherModelId,
   setModelActive,
-  findModelConnection,
   findModel,
   updateModel,
   setReasoning,

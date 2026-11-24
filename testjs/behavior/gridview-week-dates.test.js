@@ -21,6 +21,9 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const {
+  analyze, walk, memberPath, scriptBlocks, htmlStartTagAt,
+} = require('../_source-scan.cjs')
 
 const SRC = path.join(__dirname, '../../student-frontend/src')
 
@@ -28,14 +31,17 @@ function read(p) {
   return fs.readFileSync(path.join(SRC, p), 'utf8')
 }
 
-// GridView 的列头模板块（含日期副行的那段 th）
+// GridView 的列头模板块（含日期副行的那段 th）。
+// 为什么不用 v-for 原文当锚点：锚到 "v-for=\"(col, colIdx) in displayHeaders\"" 会绑死空格写法。
+// 改为稳定符号 displayHeaders，再由它反查所属 <th>…</th> 元素范围。
 function gridViewHeaderBlock() {
   const s = read('components/tables/GridView/GridView.vue')
-  const i = s.indexOf('v-for="(col, colIdx) in displayHeaders"')
-  assert.ok(i > 0, 'GridView 里找不到列头 v-for 块')
-  const j = s.indexOf('</tr>', i)
-  assert.ok(j > i, 'GridView 列头块没有闭合')
-  return s.slice(i, j)
+  const i = s.indexOf('displayHeaders')
+  assert.ok(i > 0, 'GridView 里找不到列头绑定 displayHeaders')
+  const start = s.lastIndexOf('<th', i)
+  const end = s.indexOf('</th>', i)
+  assert.ok(start >= 0 && end > i, 'GridView 列头 th 块不完整')
+  return s.slice(start, end + '</th>'.length)
 }
 
 test('GridView：列头渲染日期副行，且按表头文字（不是列下标）取日期', () => {
@@ -153,8 +159,15 @@ test('GridView：todayCol 是可选 prop，不传就不高亮', () => {
   // 表头：th 的 class 绑定里要挂上 grid-col-today
   const thBlock = gridViewHeaderBlock()
   assert.ok(/grid-col-today/.test(thBlock), '表头 th 的 class 绑定里没有 grid-col-today')
-  // 数据格：td 的 class 绑定里要挂上 grid-cell-today
-  const tdBlock = s.slice(s.indexOf('data-data-cell'), s.indexOf('data-data-cell') + 1200)
+  // 数据格：td 的 class 绑定里要挂上 grid-cell-today。
+  // 为什么不再 slice(indexOf(...), +1200)：固定窗口在标签排版变化后会切掉 class 绑定（假红）；
+  // indexOf 返回 -1 时 slice(-1, 1199) 还会悄悄退化成一个不相干的片段（漏报）。
+  // 改为「稳定属性锚点 + 引号感知地取整个 <td …> 开始标签」。
+  const anchor = s.indexOf('data-data-cell')
+  assert.ok(anchor > 0, 'GridView 里找不到数据格绑定 data-data-cell')
+  const tdTag = htmlStartTagAt(s, anchor)
+  assert.ok(tdTag && /^<td\b/.test(tdTag.text), 'data-data-cell 应绑定在 <td> 开始标签上')
+  const tdBlock = tdTag.text
   assert.ok(/grid-cell-today/.test(tdBlock), '数据格 td 的 class 绑定里没有 grid-cell-today')
   // 两处都必须按 todayColIdx 判定，而不是写死
   assert.ok(/todayColIdx/.test(thBlock), '表头高亮没有按 todayColIdx 判定')
@@ -164,12 +177,32 @@ test('GridView：todayCol 是可选 prop，不传就不高亮', () => {
 test('GridView：「今天」按原始表头列下标定位（拖拽时表头文字会临时改写，按文字会跳）', () => {
   const s = read('components/tables/GridView/GridView.vue')
   assert.ok(/todayColIdx/.test(s), '没有 todayColIdx 计算属性')
-  // 定位必须查 props.colHeaders（原始表头），不能查 displayHeaders（会被拖拽改写）
-  const m = /const todayColIdx = computed\(\(\) => \{[\s\S]{0,400}?\}/.exec(s)
-  assert.ok(m, 'todayColIdx 的定义没找到')
-  assert.ok(/props\.colHeaders/.test(m[0]),
+  // 定位必须查 props.colHeaders（原始表头），不能查 displayHeaders（会被拖拽改写）。
+  // 为什么用 AST：/const todayColIdx = computed\(\(\) => \{[\s\S]{0,400}?\}/ 既有 400 字符窗口，
+  // 又在第一个 `}` 处截断（函数体里有 if/for 时会误判）。直接从 VariableDeclarator 取 computed 回调。
+  const { ast } = analyze(scriptBlocks(s))
+  let decl = null
+  walk(ast.program, (node) => {
+    if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier' && node.id.name === 'todayColIdx') {
+      decl = node
+    }
+  })
+  assert.ok(decl, 'todayColIdx 的定义没找到')
+  assert.ok(decl.init && decl.init.type === 'CallExpression' && memberPath(decl.init.callee) === 'computed',
+    'todayColIdx 应该用 computed(...) 定义')
+  const cb = decl.init.arguments[0]
+  assert.ok(cb && (cb.type === 'ArrowFunctionExpression' || cb.type === 'FunctionExpression'),
+    'computed 应传入回调函数')
+
+  let readsColHeaders = false
+  let readsDisplayHeaders = false
+  walk(cb.body, (node) => {
+    if (node.type === 'MemberExpression' && memberPath(node) === 'props.colHeaders') readsColHeaders = true
+    if (node.type === 'Identifier' && node.name === 'displayHeaders') readsDisplayHeaders = true
+  })
+  assert.ok(readsColHeaders,
     'todayColIdx 没有查 props.colHeaders（应按原始表头定位，拖拽时才不会跳）')
-  assert.ok(!/displayHeaders/.test(m[0]),
+  assert.ok(!readsDisplayHeaders,
     'todayColIdx 查了 displayHeaders —— 拖拽时表头文字被临时改写，高亮会乱跳')
 })
 

@@ -1,8 +1,6 @@
 <template>
   <!-- 临时学生：值日 / 座位 / 分组 / 加分里直接填名字时自动建的档，由学生管理工具栏独立入口进来统一转正 -->
-  <Teleport to="body">
-    <Transition name="dialog" appear>
-      <div v-if="visible" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001]" @click.self="close">
+  <DialogShell :visible="visible" :z-index="10001" @overlay="close">
         <div class="bg-surface rounded-lg border border-border shadow-card dialog-card flex flex-col p-5 relative ps-card">
           <div class="flex items-center justify-between mb-2 flex-shrink-0">
             <h3 class="text-lg font-bold flex items-center gap-1.5">
@@ -65,14 +63,25 @@
 
           <div class="flex items-center justify-end gap-2 mt-4 flex-shrink-0">
             <button class="ps-btn" @click="close">取消</button>
-            <button class="ps-btn primary" :disabled="!selectedIds.length || converting" @click="convert">
+            <button class="ps-btn primary" :disabled="!selectedIds.length || converting" @click="confirmOpen = true">
               {{ converting ? '正在转换…' : (selectedIds.length ? `转为正式学生 (${selectedIds.length})` : '转为正式学生') }}
             </button>
           </div>
         </div>
-      </div>
-    </Transition>
-  </Teleport>
+  </DialogShell>
+
+    <!-- 批量转正确认：状态翻转后需要再编辑才能回退，先问一句（F02-08） -->
+    <ConfirmDialog
+      :visible="confirmOpen"
+      :z-index="10010"
+      title="转为正式学生"
+      :message="`确定把选中的 ${selectedIds.length} 名临时学生转为正式学生吗？`"
+      confirm-text="确定转正"
+      cancel-text="取消"
+      :show-cancel="true"
+      @confirm="convert"
+      @cancel="confirmOpen = false"
+    />
 </template>
 
 <script setup vapor>
@@ -83,7 +92,9 @@ import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 import { useNotification } from '../../composables/useNotification'
 import AppHelp from '../base/AppHelp.vue'
+import DialogShell from '../base/DialogShell.vue'
 import EmptySnapshot from '../base/EmptySnapshot.vue'
+import ConfirmDialog from '../base/ConfirmDialog.vue'
 import '../../styles/dialog-transition.css'
 
 defineOptions({ name: 'ProvisionalStudentsDialog' })
@@ -106,6 +117,8 @@ const selectedIds = ref([])
 const loading = ref(false)
 const loadError = ref(false)
 const converting = ref(false)
+// 批量转正确认框是否打开（F02-08）
+const confirmOpen = ref(false)
 
 watch(() => props.visible, (v) => {
   if (v) { load() } else { selectedIds.value = [] }
@@ -155,6 +168,7 @@ function relText(rel) {
 }
 
 async function convert() {
+  confirmOpen.value = false
   if (!selectedIds.value.length || converting.value) return
   converting.value = true
   try {

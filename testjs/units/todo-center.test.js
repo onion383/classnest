@@ -66,7 +66,8 @@ test('通知窗常驻挂载 + 复用通用 dialog 动画，关闭才有离场过
   assert.match(mount[0], /:visible="todoOpen"/, '显隐必须交给内部 Transition 的 visible')
 
   const s = read('components/dialogs/TodoCenterDialog.vue')
-  assert.match(s, /<Transition name="dialog"/, '复用通用 dialog 过渡，不要另写一套动画')
+  // N5-11 后统一由 DialogShell 提供通用 dialog 过渡（Teleport + Transition + 焦点管理）
+  assert.match(s, /<DialogShell[^>]*:visible="visible"/, '复用 DialogShell（含通用 dialog 过渡与焦点管理）')
   assert.match(s, /class="[^"]*dialog-card[^"]*"/, '卡片带 dialog-card 才有进出场的回弹缩放')
   assert.match(s, /import '\.\.\/\.\.\/styles\/dialog-transition\.css'/, '组件自治：自己引入通用动画样式')
 })

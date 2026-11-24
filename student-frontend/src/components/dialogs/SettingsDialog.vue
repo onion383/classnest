@@ -19,6 +19,7 @@
           type="date"
           :value="semesterStart"
           @input="$emit('update:semesterStart', $event.target.value)"
+          aria-label="学期开始日期"
           class="border p-1 rounded text-sm mt-1 w-full"
         />
       </div>
@@ -27,9 +28,9 @@
       <div class="mb-4">
         <span class="font-semibold">一周天数</span>
         <div class="flex items-center gap-2 mt-1">
-          <AppSelect v-model="startDay" :options="dayOptions" class="w-24" />
+          <AppSelect v-model="startDay" aria-label="一周起始日" :options="dayOptions" class="w-24" />
           <span class="text-sm">到</span>
-          <AppSelect v-model="endDay" :options="dayOptions" class="w-24" />
+          <AppSelect v-model="endDay" aria-label="一周结束日" :options="dayOptions" class="w-24" />
         </div>
       </div>
 
@@ -42,11 +43,11 @@
             <button @click="addItem('morning')" class="bg-primary text-text-inverse px-2 py-1 rounded text-sm">＋ 新加上午时间段</button>
           </div>
           <div v-for="(item, idx) in sections.morning" :key="idx" class="flex items-center gap-2 mb-1">
-            <AppSelect v-model="item.type" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
-            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" />
-            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" />
+            <AppSelect v-model="item.type" aria-label="时段类型" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
+            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" aria-label="名称"/>
+            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}开始时间`" />
             <span class="text-sm">到</span>
-            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" />
+            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}结束时间`" />
             <button @click="removeItem('morning', idx)" class="text-danger text-sm">删除</button>
           </div>
         </div>
@@ -58,11 +59,11 @@
             <button @click="addItem('noon')" class="bg-primary text-text-inverse px-2 py-1 rounded text-sm">＋ 新加中午时间段</button>
           </div>
           <div v-for="(item, idx) in sections.noon" :key="idx" class="flex items-center gap-2 mb-1">
-            <AppSelect v-model="item.type" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
-            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" />
-            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" />
+            <AppSelect v-model="item.type" aria-label="时段类型" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
+            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" aria-label="名称"/>
+            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}开始时间`" />
             <span class="text-sm">到</span>
-            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" />
+            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}结束时间`" />
             <button @click="removeItem('noon', idx)" class="text-danger text-sm">删除</button>
           </div>
         </div>
@@ -74,11 +75,11 @@
             <button @click="addItem('afternoon')" class="bg-primary text-text-inverse px-2 py-1 rounded text-sm">＋ 新加下午时间段</button>
           </div>
           <div v-for="(item, idx) in sections.afternoon" :key="idx" class="flex items-center gap-2 mb-1">
-            <AppSelect v-model="item.type" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
-            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" />
-            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" />
+            <AppSelect v-model="item.type" aria-label="时段类型" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
+            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" aria-label="名称"/>
+            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}开始时间`" />
             <span class="text-sm">到</span>
-            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" />
+            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}结束时间`" />
             <button @click="removeItem('afternoon', idx)" class="text-danger text-sm">删除</button>
           </div>
         </div>
@@ -90,11 +91,11 @@
             <button @click="addItem('evening')" class="bg-primary text-text-inverse px-2 py-1 rounded text-sm">＋ 新加傍晚时间段</button>
           </div>
           <div v-for="(item, idx) in sections.evening" :key="idx" class="flex items-center gap-2 mb-1">
-            <AppSelect v-model="item.type" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
-            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" />
-            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" />
+            <AppSelect v-model="item.type" aria-label="时段类型" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
+            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" aria-label="名称"/>
+            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}开始时间`" />
             <span class="text-sm">到</span>
-            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" />
+            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}结束时间`" />
             <button @click="removeItem('evening', idx)" class="text-danger text-sm">删除</button>
           </div>
         </div>
@@ -106,11 +107,11 @@
             <button @click="addItem('night')" class="bg-primary text-text-inverse px-2 py-1 rounded text-sm">＋ 新加晚上时间段</button>
           </div>
           <div v-for="(item, idx) in sections.night" :key="idx" class="flex items-center gap-2 mb-1">
-            <AppSelect v-model="item.type" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
-            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" />
-            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" />
+            <AppSelect v-model="item.type" aria-label="时段类型" :options="[{ value: 'lesson', label: '学习' }, { value: 'rest', label: '休息' }]" class="w-24" />
+            <input v-model="item.name" placeholder="名称" class="border p-1 text-sm rounded w-24" aria-label="名称"/>
+            <input type="time" v-model="item.start" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}开始时间`" />
             <span class="text-sm">到</span>
-            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" />
+            <input type="time" v-model="item.end" class="border p-1 text-sm rounded w-20" :aria-label="`${item.name || '时段'}结束时间`" />
             <button @click="removeItem('night', idx)" class="text-danger text-sm">删除</button>
           </div>
         </div>
@@ -132,6 +133,18 @@
         @import-data="onImportData"
         @cancel="importVisible = false"
       />
+
+      <!-- 导入会整体替换当前作息表：覆盖前先确认，校验失败不要先关导入弹窗（F02-11） -->
+      <ConfirmDialog
+        :visible="!!importTarget"
+        title="覆盖当前作息时间"
+        :message="`导入将替换当前已填写的作息时间，是否继续？`"
+        confirm-text="确定覆盖"
+        cancel-text="取消"
+        :show-cancel="true"
+        @confirm="applyImport"
+        @cancel="importTarget = null"
+      />
     </div>
   </DialogShell>
 </template>
@@ -148,6 +161,7 @@ import { ref, watch, defineAsyncComponent } from 'vue'
 // Excel 导入：弹窗提前加载一次，导入组件本身仍按需懒加载
 const loadImportExcel = () => import('../import-export/ImportExcel.vue')
 const ImportExcel = defineAsyncComponent(loadImportExcel)
+const ConfirmDialog = defineAsyncComponent(() => import('../base/ConfirmDialog.vue'))
 
 defineOptions({ name: 'SettingsDialog' })
 
@@ -213,6 +227,8 @@ function removeItem(section, idx) {
 
 // ==================== 从表格导入作息 ====================
 const importVisible = ref(false)
+// 待确认覆盖的导入结果：校验通过后先存这里，确认后再替换当前作息表（F02-11）
+const importTarget = ref(null)
 const importMounted = ref(false)
 watch(importVisible, (v) => { if (v) importMounted.value = true })
 const importFields = [
@@ -230,7 +246,6 @@ function normTime(raw) {
   return m ? `${m[1].padStart(2, '0')}:${m[2]}` : ''
 }
 function onImportData({ fields, rows }) {
-  importVisible.value = false
   const objects = rows.map(row => {
     const obj = {}
     fields.forEach((name, i) => { obj[name] = String(row[i] ?? '').trim() })
@@ -258,6 +273,15 @@ function onImportData({ fields, rows }) {
   for (const key of SECTIONS) {
     if (!Array.isArray(next[key])) next[key] = []
   }
+  // 校验通过才关导入弹窗；覆盖现有内容前先确认（F02-11）
+  importVisible.value = false
+  importTarget.value = next
+}
+// 确认覆盖后才真正替换当前作息表
+function applyImport() {
+  const next = importTarget.value
+  importTarget.value = null
+  if (!next) return
   sections.value = next
   useNotification().success('已导入作息时间，请确认后点「保存设置」')
 }
@@ -273,11 +297,34 @@ function save() {
 
   const sectionsData = JSON.parse(JSON.stringify(sections.value));
   const periods = [];
-  ['morning','noon','afternoon','evening','night'].forEach(key => {
-    sectionsData[key].forEach(item => {
-      periods.push({ name: item.name, start: item.start, end: item.end, type: item.type });
+  const sectionLabel = { morning: '上午', noon: '中午', afternoon: '下午', evening: '傍晚', night: '晚上' };
+  const errors = [];
+  const toMin = (t) => {
+    const [h, m] = String(t || '').split(':').map(Number);
+    return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : -1;
+  };
+  SECTIONS.forEach(key => {
+    sectionsData[key].forEach((item, idx) => {
+      const label = `${sectionLabel[key]}第 ${idx + 1} 项`;
+      const name = String(item.name || '').trim();
+      const start = normTime(item.start);
+      const end = normTime(item.end);
+      if (!name) { errors.push(`${label}缺少名称`); return }
+      if (!start || !end) { errors.push(`${label}的时间需为 HH:mm 格式`); return }
+      if (toMin(end) <= toMin(start)) { errors.push(`${label}的结束时间必须晚于开始时间`); return }
+      // 落库口径与导入一致：名称去空白、时间补零
+      item.name = name; item.start = start; item.end = end;
+      periods.push({ name, start, end, type: item.type });
     });
   });
+  if (!periods.length) {
+    useNotification().error('至少保留一个作息时段');
+    return;
+  }
+  if (errors.length) {
+    useNotification().error(errors[0] + (errors.length > 1 ? `（共 ${errors.length} 处问题）` : ''));
+    return;
+  }
 
   emit('save', { sections: sectionsData, periods, days });
 }

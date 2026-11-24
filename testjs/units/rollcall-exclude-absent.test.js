@@ -124,7 +124,7 @@ function rollCallOk(src) {
   // 开关门必须在过滤之前；请假数据取不到时不能静默退回全员名单
   return /axios\.get\('\/api\/widget-settings'\)/.test(before)
     // 必须是完整的「开关关 → 直接返回全员」门，不能只在注释里出现开关名
-    && /if \(!settings\?\.data\?\.data\?\.rollcallExcludeAbsent\) return \{ list: all, excludedCount: 0 \}/.test(before)
+    && /if \(!settings\?\.data\?\.data\?\.rollcallExcludeAbsent\) \{[\s\S]{0,220}?return \{ list: [^}]*excludedCount: 0 \}/.test(before)
     && /axios\.get\('\/api\/leaves'\)/.test(before)
     && /throw new Error\('无法获取请假记录/.test(src)
     && /excludedCount\.value = result\.excludedCount/.test(src)
@@ -185,8 +185,10 @@ test('反证：漏掉建库列 / 补丁式守卫 / ctx 解构 / 开关门，判�
     '保存时不带新字段还能判绿 = 回显会永远回滚')
 
   const rollcall = read(ROLLCALL)
-  assert.equal(rollCallOk(rollcall.replace("if (!settings?.data?.data?.rollcallExcludeAbsent) return { list: all, excludedCount: 0 }", '')), false,
-    '去掉开关门还能判绿 = 开关根本不生效')
+  assert.equal(rollCallOk(rollcall.replace(
+    'if (!settings?.data?.data?.rollcallExcludeAbsent) {',
+    'if (false) {'
+  )), false, '去掉开关门还能判绿 = 开关根本不生效')
   assert.equal(rollCallOk(rollcall.replace("throw new Error('无法获取请假记录，为避免点到不在校的同学，本次点名已取消')", '')), false,
     '请假接口失败静默降级还能判绿 = 会点到不在校的同学')
 })

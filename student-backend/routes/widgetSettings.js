@@ -136,8 +136,12 @@ router.get('/apps', (req, res) => {
 });
 
 router.put('/apps', (req, res) => {
+    // 非法/缺失请求体不能当成「清空」（K03-08）：前端某个调用少传字段就会把用户的
+    // 常用软件列表整份抹掉。显式数组才写；空数组仍表示用户主动清空。
+  const raw = req.body && req.body.desktopApps;
+  if (!Array.isArray(raw)) return res.status(400).json({ success: false, error: 'desktopApps 必须是数组' });
     // 超出 8 个的部分直接丢弃：前端已阻止继续添加，这里保证接口层同样不可突破
-  const clean = normalizeApps(req.body?.desktopApps) || [];
+  const clean = normalizeApps(raw) || [];
   widgetSettingsStore.writeDesktopApps(JSON.stringify(clean));
   res.json({ success: true, data: clean });
 });

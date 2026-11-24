@@ -8,9 +8,14 @@
     <Transition name="dialog">
       <div
         v-if="visible"
+        ref="overlayEl"
         class="fixed inset-0 flex items-center justify-center"
         :class="overlayClass"
         :style="{ zIndex }"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="label || undefined"
+        tabindex="-1"
         @click.self="$emit('overlay')"
       >
         <slot />
@@ -21,7 +26,7 @@
 
 <script setup vapor>
 import '../../styles/dialog-transition.css'
-import { onBeforeUnmount, watch } from 'vue'
+import { onBeforeUnmount, watch, nextTick, ref } from 'vue'
 import { useDisposables } from '../../utils/disposables.js'
 import { pushDialog, removeDialog, isTopDialog } from '../../utils/dialogStack.js'
 
@@ -31,6 +36,8 @@ const props = defineProps({
   zIndex: { type: Number, default: 10006 },
   // 遮罩附加 class：默认沿用确认框样式；个别弹窗需要不同遮罩浓度/对齐方式时整体覆盖
   overlayClass: { type: String, default: 'bg-black/50 pointer-events-auto' },
+  // 弹窗可访问名：不传则由面板内的标题等元素自行承担（读屏按序朗读）
+  label: { type: String, default: '' },
 })
 
 const emit = defineEmits(['overlay'])
@@ -43,17 +50,67 @@ const emit = defineEmits(['overlay'])
 // 栈必须**跨实例共享**，所以放在 utils/dialogStack.js 的模块作用域，
 // 不能写在 setup 里（每个实例一份，等于没有层级判断 —— 审查 v5 · V5-003）。
 const self = {}
+const overlayEl = ref(null)
+// 打开前的焦点位置：关闭时还回去（键盘/读屏用户不能每次关完弹窗就掉到 body）
+let lastFocus = null
+
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+
+function focusables(root) {
+  return Array.from(root.querySelectorAll(FOCUSABLE))
+    .filter((el) => el.getClientRects().length > 0)
+}
+
 watch(
   () => props.visible,
   (v) => {
-    if (v) pushDialog(self)
-    else removeDialog(self)
+    if (!v) {
+      removeDialog(self)
+      if (lastFocus && typeof lastFocus.focus === 'function') {
+        try { lastFocus.focus() } catch (_) { /* 触发点已被移除 */ }
+      }
+      lastFocus = null
+      return
+    }
+    lastFocus = document.activeElement
+    pushDialog(self)
+    // 打开后把焦点移进弹窗：优先第一个可聚焦控件，没有就聚焦容器本身（N5-11）
+    nextTick(() => {
+      const root = overlayEl.value
+      if (!root) return
+      const first = focusables(root)[0]
+      if (first) first.focus()
+      else root.focus()
+    })
   },
   { immediate: true },
 )
 
+// Tab 焦点陷阱：只在最上层弹窗里循环，不能 Tab 到被遮住的页面背后（N5-11）
+function trapTab(e) {
+  const root = overlayEl.value
+  if (!root) return
+  const list = focusables(root)
+  if (!list.length) { e.preventDefault(); return }
+  const first = list[0]
+  const last = list[list.length - 1]
+  const active = document.activeElement
+  // 焦点不在本层（上层灯箱/另一个 Shell）时不要抢焦点，否则 Tab 会把用户从上层拽回来
+  if (!root.contains(active)) return
+  if (e.shiftKey) {
+    if (active === first) { e.preventDefault(); last.focus() }
+  } else if (active === last) {
+    e.preventDefault(); first.focus()
+  }
+}
+
 function onKeydown(e) {
-  if (!props.visible || e.key !== 'Escape') return
+  if (!props.visible) return
+  if (e.key === 'Tab') {
+    if (isTopDialog(self)) trapTab(e)
+    return
+  }
+  if (e.key !== 'Escape') return
   if (!isTopDialog(self)) return
   // 内层自己处理过 Esc（下拉展开、过滤框）就别再关弹窗
   if (e.defaultPrevented) return

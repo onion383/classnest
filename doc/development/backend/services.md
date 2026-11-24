@@ -12,69 +12,90 @@ classnest/
 │   │   ├── dynamicTable.js
 │   │   └── historyRoutes.js  # 历史快照路由工厂
 │   ├── services/
+│   │   ├── accessLogStore.js  # 数据访问记录的持久层；只在 Store 里写 SQL，写入失败不影响主流程
+│   │   ├── accessTimeline.js  # 访问记录弹窗的合并视图：读来自 access_log，已执行的写来自 undo_histor…
 │   │   ├── accountRename.js  # 改用户名的跨库两写（带补偿）
-│   │   ├── activityStore.js  # activities 的 SQL 出口（列表、删除、导入批量插入）
-│   │   ├── aiConfigStore.js  # ai_settings / ai_models 的 SQL 出口（开关、启用模型、密钥复用判断）
-│   │   ├── aiConversationStore.js  # ai_conversations / ai_messages 的 SQL 出口（会话与消息分页、标题、摘要、token 记账）
-│   │   ├── aiStore.js  # AI 域（routes/ai/**）的 SQL 出口：表结构缓存、引用统计、工具所需的各业务表查询、单行 CRUD
-│   │   ├── albumStore.js  # 相册索引（albums / album_photos）的 SQL 出口；事务留在路由（夹着缩略图与扫描的 FS 副作用）
-│   │   ├── authPolicy.js  # 登录保持天数（按账号）：token 寿命、续签窗口、名单清理期、媒体凭据四个派生值的唯一来源
+│   │   ├── activityStore.js  # activities：列表、删除、导入批量插入
+│   │   ├── aiConfigStore.js  # ai_settings / ai_models：开关、启用模型、密钥复用判断、模型 CRUD
+│   │   ├── aiConversationStore.js  # ai_conversations / ai_messages：会话与消息分页、标题、摘要、t…
+│   │   ├── aiEndpoint.js  # AI 出站地址的唯一校验入口：只放行 http/https、必须有主机名、拒绝云厂商元数据地…
+│   │   ├── aiPrivacy.js  # 发给第三方模型前的身份替换：姓名可逆别名、电话可逆令牌、本地路径不可逆归一
+│   │   ├── aiReadScope.js  # 按表关闭的读闸门单一作用域：effectiveReadTables() 与 isTableR…
+│   │   ├── aiStore.js  # AI 域（routes/ai/）：表结构缓存、引用统计、工具所需的各业务表查询、按表单行 C…
+│   │   ├── aiWriteScope.js  # 只读 / 读写档的唯一判定点：合并 readonly_tables 与 closed_tab…
+│   │   ├── albumStore.js  # 相册索引 albums / album_photos：列表与封面、照片分页、索引复制与删除、…
+│   │   ├── authPolicy.js  # 登录保持天数
 │   │   ├── backupArchive.js  # 备份包 v3 写包
 │   │   ├── bcryptAsync.js  # 用户名规则
 │   │   ├── bundleRestore.js  # 备份包落盘还原
 │   │   ├── businessRules.js  # 业务规则校验
-│   │   ├── cadreStore.js  # cadres / cadre_members 的 SQL 出口（树形层级、成员排序、级联删除）
-│   │   ├── countdownStore.js  # countdowns 的 SQL 出口
+│   │   ├── cadreStore.js  # cadres / cadre_members：树形层级、排序、级联删除、按名查重
+│   │   ├── countdownStore.js  # countdowns：列表、删除、导入批量插入
 │   │   ├── createdRows.js  # 导入结果回读
 │   │   ├── credentialChange.js  # 凭证变更动作层
+│   │   ├── dashboardAgg.js  # 首屏聚合的 SQL 出口：首页只取需要的列/聚合（学生 id + 姓名、班费余额/本月收支/…
 │   │   ├── dutyCells.js
 │   │   ├── dutyConfig.js  # 值日列名与模式配置
 │   │   ├── dutyCycle.js  # 大扫除命中日
 │   │   ├── dutyMode.js  # 值日单元格工具
-│   │   ├── exportQuery.js  # 导出侧的只读查询出口：单表读失败返回空结果，不拖垮整份导出
+│   │   ├── dutyWrite.js  # 值日域写入的事务唯一出口，供路由、AI 工具与撤销执行器复用
+│   │   ├── exportQuery.js  # 导出侧只读查询：单表读取失败返回空结果，不拖垮整份导出
 │   │   ├── ffmpeg.js  # 视频处理封装
-│   │   ├── groupDim.js  # 分组维度 / 小组 / 成员的 SQL 出口，含「必须在同一事务里才一致」的复合操作（改组数、删维度、移动成员、导入）
-│   │   ├── leaveStore.js  # 请假记录与今日到班列顺序的 SQL 出口；分页 hasMore 用「多取一条」判定
+│   │   ├── groupDim.js  # 分组维度 / 小组 / 成员：CRUD 与复合事务操作（改组数、删维度带快照、移动成员、智能…
+│   │   ├── leaveStore.js  # leave_records + 今日到班列顺序：全量与分页列表、学生带出、三态写、导入、列顺…
+│   │   ├── loginThrottle.js  # 登录失败节流与 /accounts 频控：同账号 + IP 失败 5 次锁 30 秒、10 …
+│   │   ├── mcpProposalExec.js  # 执行已确认的 MCP 提案，复用本地 AI 的写入原语与学生引用保护
+│   │   ├── mcpProposalStore.js  # MCP 写提案的持久层，只存意图，SQL 只在这里
+│   │   ├── mcpProposalView.js  # 提案的人读视图：把表名 / 操作 / 字段翻成老师能判断的说明
+│   │   ├── mcpRateLimit.js  # MCP 工具调用频率闸门：防止跑飞或脚本批量驱动堆满待确认提案
+│   │   ├── mcpTokenStore.js  # MCP 访问令牌存储（core/.mcp-tokens.json，应用级配置）
+│   │   ├── mcpTools.js  # 暴露给外部客户端的工具实现；写操作只生成提案不落库
 │   │   ├── ocr.js  # 文字识别
 │   │   ├── pdfDomShim.js  # PDF DOM 兼容层
 │   │   ├── pendingRegs.js  # 注册草稿暂存
-│   │   ├── perfMem.js  # 导出内存峰值探针（v6 · 0-5）：PERF_EXPORT=1 时在导出前后采 process.memoryUsage()，打 rss/heap/external 差值；默认返回 null，零开销
+│   │   ├── perfMem.js  # 导出内存峰值探针（v6 · 0-5）：PERF_EXPORT=1 时 memSnapshot…
 │   │   ├── provisionalStudents.js  # 临时学生建档
 │   │   ├── receiptTrash.js  # 收据文件移进 dataDir/receipt-trash/。收据扩到视频后，删除只改数据库数…
 │   │   ├── recoveryKey.js  # 恢复密钥
 │   │   ├── sanitize.js  # 数据清洗
-│   │   ├── scoreStore.js  # score_records 的 SQL 出口（列表分页、导入、首页摘要口径）
+│   │   ├── scoreStore.js  # score_records：全量/分页列表、学生定位、导入、首页摘要
 │   │   ├── searchLimits.js  # 全局搜索分页
-│   │   ├── searchQuery.js  # 全局搜索的查询实现：各数据源 SQL / 内存 JSON 源的构造、分页与展示文案
+│   │   ├── searchQuery.js  # 全局搜索的查询实现：各数据源 SQL 与内存 JSON 源、分页、展示文案
 │   │   ├── seatGrid.js  # 座位网格几何（后端纯计算）
 │   │   ├── seatSnapshot.js  # 座位快照 payload
 │   │   ├── seatWrite.js  # 座位单格写入唯一入口
 │   │   ├── secureChannel.js  # 安全通道
-│   │   ├── semesterStore.js  # semesters 的 SQL 出口，并持有「当前学期」的唯一判定（slotStore.semesterRange 复用）
+│   │   ├── semesterStore.js  # semesters：列表、增删改、切换当前；「当前学期」的唯一判定（无标记时回退最新一条）
 │   │   ├── sessions.js  # 登录会话
 │   │   ├── slotStore.js  # 槽位存储
+│   │   ├── studentLookup.js  # 在 students 里认人的单源实现：按 id / 学号 / 姓名带出学生，列清单由调用方…
 │   │   ├── studentRelations.js  # 学生引用维护
 │   │   ├── studentRename.js  # 学生改名级联
 │   │   ├── tableService.js  # 表格服务
-│   │   ├── undoStore.js  # 撤销记录表与执行器动作的 SQL 出口（复合动作带事务；FS 顺序留在执行器）
+│   │   ├── thumbPurge.js  # 清理缩略图文件（只删文件，不碰索引；逐文件容错，回报删除数与字节数）
+│   │   ├── thumbSweep.js  # 按库对账回收孤儿缩略图（默认只读，apply=true 才删；库打不开则整目录跳过）
+│   │   ├── tmpSweep.js  # 启动期回收崩溃遗留临时文件：AI 附件 / 还原上传 / 解包目录 / OCR 中转四处，只…
+│   │   ├── undoStore.js  # undo_history + 撤销执行器：记录入栈与每 key 淘汰、方向 CAS、按批次取…
 │   │   ├── unzipSafe.js  # 安全解压
 │   │   ├── uploadSignatures.js  # 收据上传的类型判定：扩展名白名单（图片 20MB / PDF 30MB / ooxml 30…
-│   │   ├── userStore.js  # users 的 SQL 出口（登录取凭据、改用户名、改密码、恢复哈希）
 │   │   ├── usernameRules.js
-│   │   ├── widgetSettingsStore.js  # widget_settings 的 SQL 出口（挂件设置、桌面应用列表、班级信息）
+│   │   ├── userStore.js  # users：登录取凭据、改用户名、改密码、恢复哈希
+│   │   ├── widgetSettingsStore.js  # widget_settings：挂件设置、桌面应用列表、班级信息
 │   │   ├── zipStream.js  # 流式 ZIP 写入（备份包 / 数据导出共用）：条目「边读边写」，任何时刻只持有一个 256…
 │   │   └── zipWriter.js  # ZIP 的共用零件（不含打包流程）：CRC32（含增量版，供流式大文件边读边算）、归档内路径…
 │   ├── utils/
+│   │   ├── backendRoot.js  # 后端根目录（student-backend/）的唯一来源。打包时后端被 esbuild 合成…
 │   │   ├── date.js  # 本地日期字符串
 │   │   ├── json.js  # JSON 安全读写
+│   │   ├── scanTaskKey.js  # 扫描任务键的单一实现：slug:albumId，避免两班同号相册互相塌缩
 │   │   ├── securityLevel.js  # 账号安全等级判定（plain / nopass / password / privacy）。…
 │   │   ├── semester.js  # 学期推荐值（按当前月份推学期名与起止日期）。两个调用方共用这一份：设置页「增加学期」与课表路…
 │   │   ├── slugScopes.js  # 按库（slug）隔离的进程内状态：各库 album_photos.id 独立自增，裸 id …
 │   │   ├── sql.js  # SQL 辅助
-│   │   └── textHead.js  # 只读文件头部 N 个字符（避免「为截断而整份读入」）
+│   │   └── textHead.js  # 只读文件头部 N 个字符：按字节读够用就停，避免「为截断而整份读入」（20MB 的 txt …
 │   ├── albumExif.js  # EXIF/XMP 拍摄时间（读不到就是空串，不拿 mtime 冒充）
 │   ├── albumOps.js  # 回收站移入/恢复、删缩略图
-│   ├── albumScan.js  # 扫描引擎（主/子进程共用）：递归收集、断点推进、缩略图、批量写库、暂停等待
+│   ├── albumScan.js  # 扫描引擎（主/子进程共用）：递归收集、断点推进、缩略图、批量写库、暂停等待。全量扫描分两阶段…
 │   ├── albumThumbs.js  # 缩略图按库隔离 + 64MB LRU + 批量二进制读取
 │   ├── scanWorker.js  # 扫描子进程生命周期与 IPC（懒启动、空闲 60s 退出、崩溃限流重建）
 │   └── worker.scan.js  # 子进程本体（按 IPC 跑扫描与补图队列）
@@ -316,6 +337,7 @@ classnest/
 | [`services/aiStore.js`](../../../student-backend/services/aiStore.js) | AI 域（`routes/ai/**`）：表结构缓存、引用统计、工具所需的各业务表查询、按表单行 CRUD | `tableColumns`、`countReferences`、`rowsByIds`、`insertRow`、`updateColumns`、`deleteRow`、`queryAll` |
 | [`services/aiConfigStore.js`](../../../student-backend/services/aiConfigStore.js) | `ai_settings` / `ai_models`：开关、启用模型、密钥复用判断、模型 CRUD | `readFlags`、`readActiveModel`、`listModels`、`activateModel`、`updateModel`、`setReasoning` |
 | [`services/aiConversationStore.js`](../../../student-backend/services/aiConversationStore.js) | `ai_conversations` / `ai_messages`：会话与消息分页、标题、摘要、token 记账 | `listConversations`、`listMessagesPage`、`insertMessage`、`updateMessage`、`getSummary`、`updateSummary` |
+| [`services/retentionStore.js`](../../../student-backend/services/retentionStore.js) | `ai_settings.retention_json`：四类数据（AI 消息 / 历史快照 / 相册回收站 / 收据回收站）的保留偏好（默认永久）、占用统计、明细、手动清除。前两类走 SQL `created_at`，回收站两类走目录文件 `mtime`；目录只从 `dbManager` 受信任常量取，符号链接不跟随也不删。回收站是撤销还原源，**不接写入路径自动清理**，`clear` 只由设置页显式调用 | `readPolicy`、`writePolicy`、`stats`、`list`、`deleteAll`、`preview`、`applyNow`、`autoClean` |
 | [`services/albumStore.js`](../../../student-backend/services/albumStore.js) | 相册索引 `albums` / `album_photos`：列表与封面、照片分页、索引复制与删除、缩略图路径、日期计数 | `listAlbums`、`listPhotos`、`photoDateCountsPage`、`copyPhotoRow`、`updateThumbPath`、`randomPhotoId` |
 | [`services/exportQuery.js`](../../../student-backend/services/exportQuery.js) | 导出侧只读查询：单表读取失败返回空结果，不拖垮整份导出 | `all`、`get`、`countOf` |
 | [`services/undoStore.js`](../../../student-backend/services/undoStore.js) | `undo_history` + 撤销执行器：记录入栈与每 key 淘汰、方向 CAS、按批次取 id、各执行器的复合动作（删维度 / 合并相册 / 删职务 / 删学生 / 相册增删 / 照片移动）、动态表行级与网格列写 | `push`、`claimDir`、`idsByOrigin`、`restoreDimension`、`restoreMergedAlbum`、`restoreStudentCascade`、`applyRowPositions`、`writeGridSnapshot` |
@@ -344,6 +366,10 @@ classnest/
 | [`services/mcpTools.js`](../../../student-backend/services/mcpTools.js) | 暴露给外部客户端的工具实现；写操作只生成提案不落库 |
 | [`services/studentLookup.js`](../../../student-backend/services/studentLookup.js) | 在 `students` 里认人的单源实现：按 id / 学号 / 姓名带出学生，列清单由调用方点单 |
 | [`utils/scanTaskKey.js`](../../../student-backend/utils/scanTaskKey.js) | 扫描任务键的单一实现：`slug:albumId`，避免两班同号相册互相塌缩 |
+| [`services/aiEndpoint.js`](../../../student-backend/services/aiEndpoint.js) | AI 出站地址的唯一校验入口：只放行 http/https、必须有主机名、拒绝云厂商元数据地址；**刻意不封** localhost / 局域网（本地 LLM 是核心用法） |
+| [`services/dashboardAgg.js`](../../../student-backend/services/dashboardAgg.js) | 首屏聚合的 SQL 出口：首页只取需要的列/聚合（学生 `id + 姓名`、班费余额/本月收支/条数），避免整表读进内存 |
+| [`services/loginThrottle.js`](../../../student-backend/services/loginThrottle.js) | 登录失败节流与 `/accounts` 频控：同账号 + IP 失败 5 次锁 30 秒、10 次锁 15 分钟，成功清零；账号列表按 IP 限 60 次/分钟 |
+| [`services/tmpSweep.js`](../../../student-backend/services/tmpSweep.js) | 启动期回收崩溃遗留临时文件：AI 附件 / 还原上传 / 解包目录 / OCR 中转四处，只删超过 24 小时的条目，失败静默 |
 
 ---
 

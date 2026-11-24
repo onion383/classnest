@@ -102,9 +102,7 @@
     <!-- 软件自己的 MIT 协议与第三方许可证共用下方同一个弹窗（见 OWN_LICENSE），
          不再单独维护 dialogProtocol / licenseBodyRef 那套实现。 -->
     <!-- 许可证弹窗：默认英文原文（按需懒加载），中文说明通过切换查看 -->
-    <Teleport to="body">
-      <Transition name="dialog">
-        <div v-if="activeLicense" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" @click.self="closeLicense">
+    <DialogShell :visible="!!activeLicense" :z-index="9999" overlay-class="bg-black/40" @overlay="closeLicense">
           <!-- 高度固定：英文全文/中文要点/加载态长短不一，不固定会在切换语言时整窗跳高。
                内容区已 flex-1 min-h-0 overflow-y-auto，长文本在区内滚动。 -->
           <div class="dialog-card bg-surface rounded-xl shadow-2xl border border-border w-full max-w-2xl mx-4 h-[70vh] flex flex-col relative min-w-0" @click.stop>
@@ -169,14 +167,10 @@
               <button @click="closeLicense" class="px-4 py-2 rounded-lg bg-primary text-text-inverse text-sm">关闭</button>
             </div>
           </div>
-        </div>
-      </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- 版本更新弹窗 -->
-    <Teleport to="body">
-      <Transition name="dialog">
-        <div v-if="dialogVersion" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" @click.self="dialogVersion = false">
+    <DialogShell :visible="!!dialogVersion" :z-index="9999" overlay-class="bg-black/40" @overlay="dialogVersion = false">
           <!-- 高度上限：70vh 仍偏高（上下几乎不留白），再降到 60vh。
                上半信息块 shrink-0 不动，下半更新历史区 flex-1 min-h-0 自动收缩并内部滚动。 -->
           <div class="dialog-card bg-surface rounded-xl shadow-2xl border border-border w-full max-w-md mx-4 relative flex flex-col max-h-[60vh]" @click.stop>
@@ -195,12 +189,17 @@
 
             <!-- 更新状态与下载进度 -->
             <div class="mt-3 text-xs font-medium" :class="statusClass">{{ statusText }}</div>
+            <div class="mt-1 text-[11px] text-text-muted">安装包未签名，请确认来源后安装</div>
+            <div v-if="digestWarnText" class="mt-1 text-[11px] text-amber-500">{{ digestWarnText }}</div>
             <div v-if="updateStatus === 'downloading'" class="mt-2">
               <div class="h-1.5 rounded-full bg-bg border border-border overflow-hidden">
                 <div class="h-full rounded-full bg-primary transition-[width] duration-300" :style="{ width: updatePercent + '%' }"></div>
               </div>
             </div>
-            <button v-if="updateStatus === 'downloaded'" @click="installUpdate" class="mt-3 px-4 py-2 rounded-lg bg-primary text-text-inverse text-sm">重启并安装</button>
+            <div v-if="updateStatus === 'downloaded'" class="mt-3 flex items-center justify-center gap-2">
+              <button @click="installUpdate" class="px-4 py-2 rounded-lg bg-primary text-text-inverse text-sm">打开安装包</button>
+              <button @click="openReleasesPage" class="px-3 py-2 rounded-lg bg-primary/10 text-primary text-sm">去发布页下载</button>
+            </div>
           </div>
 
           <!-- 下半部分：更新历史（可滚动文本框） -->
@@ -224,14 +223,10 @@
             </div>
           </div>
         </div>
-        </div>
-      </Transition>
-    </Teleport>
+    </DialogShell>
 
     <!-- 打赏弹窗 -->
-    <Teleport to="body">
-      <Transition name="dialog">
-        <div v-if="dialogDonate" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" @click.self="dialogDonate = false">
+    <DialogShell :visible="!!dialogDonate" :z-index="9999" overlay-class="bg-black/40" @overlay="dialogDonate = false">
           <div class="dialog-card bg-surface rounded-xl shadow-2xl border border-border w-full max-w-md mx-4" @click.stop>
           <div class="flex items-center justify-between px-6 py-4 border-b border-border">
             <h2 class="text-lg font-semibold text-text">打赏</h2>
@@ -254,9 +249,7 @@
             <button @click="dialogDonate = false" class="px-4 py-2 rounded-lg bg-primary text-text-inverse text-sm">确定</button>
           </div>
         </div>
-      </div>
-      </Transition>
-    </Teleport>
+    </DialogShell>
   </div>
 </template>
 
@@ -264,6 +257,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { SEND, INVOKE, RECEIVE } from '../electronChannels.js'
 import CustomScrollbar from '../components/base/CustomScrollbar.vue'
+import DialogShell from '../components/base/DialogShell.vue'
 // 协议全文直接引用仓库根 LICENSE.md，避免正文出现两份
 import licenseText from '../../../LICENSE.md?raw'
 // 第三方许可证英文原文改成按需加载：见 utils/licenseDocs.js（首次点开弹窗时才 import）。
@@ -523,6 +517,13 @@ const latestVersion = ref('')
 const updateStatus = ref('idle') // idle | checking | available | downloading | downloaded | not-available | error
 const updatePercent = ref(0)
 const updateError = ref('')
+const updateDigestSource = ref('')
+// 摘要没走独立清单时给一行短提示；文案从简，详情由主进程日志承担
+const digestWarnText = computed(() => {
+  if (updateDigestSource.value === 'size-only') return '仅按大小校验，请核对来源'
+  if (updateDigestSource.value === 'asset-only') return '摘要未独立确认'
+  return ''
+})
 let updateListener = null
 
 const statusText = computed(() => {
@@ -530,14 +531,15 @@ const statusText = computed(() => {
     case 'checking': return '正在检查…'
     case 'available': return latestVersion.value ? `发现新版本 v${latestVersion.value}，正在下载…` : '发现新版本，正在下载…'
     case 'downloading': return `正在下载 ${updatePercent.value}%`
-    case 'downloaded': return '新版本已下载，重启即可安装'
+    case 'downloaded': return '新版本已下载，打开安装包安装'
+    case 'opened': return '已打开安装包，按提示完成安装'
     case 'not-available': return '已经是最新版本'
     case 'error': return updateError.value ? `更新失败：${updateError.value}` : '更新失败'
     default: return '等待检查'
   }
 })
 const statusClass = computed(() => {
-  if (updateStatus.value === 'downloaded' || updateStatus.value === 'not-available') return 'text-emerald-500'
+  if (['downloaded', 'opened', 'not-available'].includes(updateStatus.value)) return 'text-emerald-500'
   if (updateStatus.value === 'error') return 'text-red-500'
   return 'text-primary'
 })
@@ -555,6 +557,7 @@ function applyUpdateState(s) {
   if (s.latestVersion) latestVersion.value = s.latestVersion
   updatePercent.value = typeof s.percent === 'number' ? s.percent : 0
   updateError.value = s.error || ''
+  updateDigestSource.value = s.digestSource || ''
 }
 
 async function fetchAppVersion() {
@@ -580,6 +583,12 @@ async function checkUpdate() {
 
 function installUpdate() {
   window.electron?.send(SEND.UPDATE_INSTALL)
+}
+
+function openReleasesPage() {
+  const url = 'https://github.com/onion383/classnest/releases'
+  if (window.electron?.invoke) window.electron.invoke(INVOKE.OPEN_EXTERNAL, url)
+  else window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 onMounted(() => {

@@ -13,6 +13,7 @@ import { friendlyError } from '../../utils/blobError.js'
 import { resetUserScopedCaches } from '../../utils/userScopedCache.js'
 import { bumpClassScope } from '../../utils/classScope.js'
 import { useNotification } from '../../composables/useNotification.js'
+import { rewindNotice, replayNotice, undoStepNotice, undoMemberNotice, apiErrorNotice } from './undoNotices.js'
 
 // 这里不再自己读 Blob：响应错误拦截器（utils/blobError.js）已把失败体还原成对象，
 // 统一从 friendlyError 取文案，避免每个 blob 调用点各写一份解析。
@@ -265,13 +266,12 @@ export function useSettingsData(ctx) {
       try {
         const { data } = await rewindTo(anchor)
         if (data.ok) {
-          const tail = data.batch > 1 ? `（连带回退 ${data.batch} 项）` : ''
           // 结果走提示条：审查是连续动作（一条接一条地退），弹窗要点掉才能继续，反而拖节奏。
           // 失败也走提示条 —— 文案本身写清了原因，不需要用户「点一下表示知道了」。
-          useNotification().success((data.label ? `已回退：${data.label}` : '已成功回退') + tail)
+          useNotification().success(rewindNotice(data))
         }
       } catch (err) {
-        useNotification().error(err.response?.data?.error || '回退失败，这条之后的数据可能已被改动')
+        useNotification().error(apiErrorNotice(err, '回退失败，这条之后的数据可能已被改动'))
       } finally {
         ctx.busyUndo.value = false
         await ctx.loadUndo()
@@ -300,9 +300,9 @@ export function useSettingsData(ctx) {
       ctx.busyUndo.value = true
       try {
         const { data } = await undoBatch(entry.origin)
-        if (data.ok) useNotification().success(data.label ? `已撤销：${data.label}` : '已撤销这一步')
+        if (data.ok) useNotification().success(undoStepNotice(data))
       } catch (err) {
-        useNotification().error(err.response?.data?.error || '撤销失败，这一步之后的数据可能已被改动')
+        useNotification().error(apiErrorNotice(err, '撤销失败，这一步之后的数据可能已被改动'))
       } finally {
         ctx.busyUndo.value = false
         await ctx.loadUndo()
@@ -315,9 +315,9 @@ export function useSettingsData(ctx) {
       ctx.busyUndo.value = true
       try {
         const { data } = member.isolate === 'row' ? await undoById(member.id) : await undoOnly(member.id)
-        if (data.ok) useNotification().success(data.label ? `已撤销：${data.label}` : '已撤销这一条')
+        if (data.ok) useNotification().success(undoMemberNotice(data))
       } catch (err) {
-        useNotification().error(err.response?.data?.error || '只撤失败，请从最新的一条开始退')
+        useNotification().error(apiErrorNotice(err, '只撤失败，请从最新的一条开始退'))
       } finally {
         ctx.busyUndo.value = false
         await ctx.loadUndo()
@@ -329,12 +329,9 @@ export function useSettingsData(ctx) {
       const anchor = Math.min(...entry.ids)
       try {
         const { data } = await replayTo(anchor)
-        if (data.ok) {
-          const tail = data.batch > 1 ? `（连带重做 ${data.batch} 项）` : ''
-          useNotification().success((data.label ? `已重做：${data.label}` : '已成功重做') + tail)
-        }
+        if (data.ok) useNotification().success(replayNotice(data))
       } catch (err) {
-        useNotification().error(err.response?.data?.error || '重做失败')
+        useNotification().error(apiErrorNotice(err, '重做失败'))
       } finally {
         ctx.busyUndo.value = false
         await ctx.loadUndo()

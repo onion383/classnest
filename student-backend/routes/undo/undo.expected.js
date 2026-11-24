@@ -4,15 +4,19 @@
 // 为什么需要：撤销记录存的是每一步的整行前后快照。若跳过中间记录去撤旧记录
 // （例如 A 新增 → B MCP 改名 → 手改 → C 助手再改，却直接撤 B），执行器会
 // 盲目把 B 的 oldRow 整行回写，把手改/C 的改动无声吞掉。
-// 本模块在 flip 抢占方向之前，先确认「当前行仍是这条记录写入后留下的样子」，
+// 本模块在 flip 抢占方向之前，先确认「当前数据仍是这条记录写入后留下的样子」，
 // 不一致就拒绝，提示用户先撤后面的。
 //
-// 范围：行式三类 row_insert / row_update / row_delete。
-// 复合类型（student_cascade_delete / rows_batch_* / doc_update / grid_cell…）
-// 的快照形状不同，留给「回退到指定记录之前」的统一入口处理，本模块一律放行。
+// 覆盖面（Q2-02/Q2-04/Q2-05 收敛后）：
+//   · 行式 row_insert / row_update / row_delete：整行快照比对；
+//   · 格子类 cell_update / grid_cell / duty_cell：执行器自带 currentValue，
+//     当前值必须等于这一步写入后的值（undo 比 newValue、redo 比 oldValue）；
+//   · 复合回插类：撤销前检查显式 id 是否已被新数据占用（占用则业务化拒绝，
+//     而不是让 INSERT 主键冲突抛成通用失败）。
 // =========================================================================
 
 const undoStore = require('../../services/undoStore')
+const { executors } = require('./undo.executors')
 
 const ROW_TYPES = new Set(['row_insert', 'row_update', 'row_delete'])
 
@@ -25,6 +29,13 @@ function norm(v) {
   return String(v)
 }
 
+// 格子值比较：空格子可能是 null / undefined / ''，三者都视为「空」。
+function normCell(v) {
+  if (v == null) return ''
+  if (typeof v !== 'object') return String(v)
+  try { return JSON.stringify(v) } catch { return String(v) }
+}
+
 // 快照字段与当前行逐字段比对。只比「快照里有、当前行也有」的键：
 //   · 前端 row 对象会带 _rowKey/_isNew 等内部字段 —— 当前行没有它们，跳过；
 //   · 老快照可能缺列 —— 剩下的键仍比，全缺则放行（残缺快照不误杀）。
@@ -35,10 +46,56 @@ function matchSnapshot(current, snapshot) {
   return keys.every((k) => norm(current[k]) === norm(snapshot[k]))
 }
 
+// 格子类：当前值必须仍是这条记录写入后留下的值。
+// 过去这段只在 undoCellOnly 里做，其余入口（/:id/undo、rewind、origin 批次）直接翻方向，
+// 旧值静默覆盖后续手改（Q2-02）；redo 同理（Q2-05）。
+function checkCellCurrent(rec, mode) {
+  const ex = rec && executors[rec.type]
+  if (!ex || typeof ex.currentValue !== 'function') return null
+  const p = rec.payload || {}
+  // 只处理「单值」载荷；整块快照没有 newValue/oldValue，走各自的校验。
+  if (!Object.prototype.hasOwnProperty.call(p, 'newValue') && !Object.prototype.hasOwnProperty.call(p, 'oldValue')) return null
+  const expect = mode === 'undo' ? p.newValue : p.oldValue
+  let cur
+  try { cur = ex.currentValue(p) } catch { return null }
+  if (normCell(cur) === normCell(expect)) return null
+  return mode === 'undo'
+    ? '这一格之后又被改过，请从最新的一条开始退'
+    : '这一格之后又被改过，无法重做，请先撤销后面的改动'
+}
+
+// 复合回插类：undo 会按显式 id 把旧对象写回去。id 已被新数据占用时，
+// 要么主键冲突整批失败、要么与后补数据叠加 —— 统一提前拒绝并说清原因（Q2-04）。
+function checkCompositeUndo(rec) {
+  const p = rec.payload || {}
+  const exists = (table, id) => Number.isInteger(id) && !!undoStore.findRowById(table, id)
+  if (rec.type === 'student_cascade_delete') {
+    const sid = p.student && p.student.id
+    if (exists('students', sid)) return '该学生已被重新创建，无法撤销本次删除'
+  } else if (rec.type === 'rows_batch_delete') {
+    const hit = (p.rows || []).find((r) => r && exists(p.table, r.id))
+    if (hit) return `记录 id=${hit.id} 已被重新创建，无法撤销本次删除`
+  } else if (rec.type === 'cadre_delete') {
+    if (exists('cadres', p.node && p.node.id)) return '该职务已被重新创建，无法撤销本次删除'
+  } else if (rec.type === 'group_dimension_delete') {
+    if (exists('group_dimensions', p.dimension && p.dimension.id)) return '该分组维度已被重新创建，无法撤销本次删除'
+  } else if (rec.type === 'album_delete') {
+    if (exists('albums', p.album && p.album.id)) return '该相册已被重新创建，无法撤销本次删除'
+  } else if (rec.type === 'album_merge') {
+    const hit = (p.sources || []).find((s) => s && s.album && exists('albums', s.album.id))
+    if (hit) return `相册「${hit.album.name || hit.album.id}」已被重新创建，无法撤销本次合并`
+  }
+  return null
+}
+
 // 返回 null 表示通过；返回字符串表示拒绝原因。
 function checkExpected(rec, mode) {
   const type = rec && rec.type
-  if (!ROW_TYPES.has(type)) return null
+  if (!type) return null
+  const cellErr = checkCellCurrent(rec, mode)
+  if (cellErr) return cellErr
+  if (!ROW_TYPES.has(type)) return mode === 'undo' ? checkCompositeUndo(rec) : null
+
   const p = rec.payload || {}
   const table = p.table
   if (!table) return null // validate 已挡掉缺表参数，这里保守放行

@@ -19,10 +19,13 @@ function listConversations() {
   `).all()
 }
 
-// 删会话（含其消息）。两条语句保持原顺序，不额外引入事务（行为与下沉前一致）。
+// 删会话（含其消息）。两条写必须在同一事务里：中间崩溃会留下「消息没了、会话壳还在」
+// 的零消息空会话（K04-02）。显式删消息保留作 FK 未生效时的应用层兜底。
 function deleteConversation(id) {
-  db.prepare('DELETE FROM ai_messages WHERE conversation_id = ?').run(id)
-  db.prepare('DELETE FROM ai_conversations WHERE id = ?').run(id)
+  db.transaction(() => {
+    db.prepare('DELETE FROM ai_messages WHERE conversation_id = ?').run(id)
+    db.prepare('DELETE FROM ai_conversations WHERE id = ?').run(id)
+  })()
 }
 
 // 读取消息：上下文重建用（不含 created_at，少取一列）。
@@ -51,8 +54,11 @@ function listMessagesPage(conversationId, { beforeId, limit }) {
 }
 
 function insertMessage(conversationId, role, content, processJson, attachmentsJson) {
-  return db.prepare('INSERT INTO ai_messages (conversation_id, role, content, process_json, attachments_json) VALUES (?,?,?,?,?)')
+  const r = db.prepare('INSERT INTO ai_messages (conversation_id, role, content, process_json, attachments_json) VALUES (?,?,?,?,?)')
     .run(conversationId, role, content, processJson, attachmentsJson)
+  // 用户设了保留档位才清（默认永久时 autoClean 是空操作）；延迟 require 避免加载期成环。
+  require('./retentionStore').autoClean('messages')
+  return r
 }
 
 function touch(conversationId) {

@@ -34,11 +34,17 @@ const os = require('node:os')
 // Windows 上 rmSync 必然 EBUSY（重试也删不掉），所以「谁创建谁删」在进程内做不到，
 // 只能交给生命周期更长的父进程。实测旧做法每跑一次漏一个目录：
 // api-routes 49 个 / cadre-undo 13 个 / undo-batch 11 个。
-const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'classnest-smoke-run-'))
+// 惰性创建：本文件被单测 require 时只取导出函数，不能凭空造临时目录。
+let TMP_ROOT = null
+function getTmpRoot() {
+  if (!TMP_ROOT) TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'classnest-smoke-run-'))
+  return TMP_ROOT
+}
 
 async function removeTmpRoot() {
+  if (!TMP_ROOT) return
   for (let i = 0; i < 8; i++) {
-    try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); return } catch (_) {
+    try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); TMP_ROOT = null; return } catch (_) {
       // 最后一个子进程刚退出时句柄可能还差一点释放，等一下再试
       await new Promise((r) => setTimeout(r, 150))
     }
@@ -66,25 +72,27 @@ const ORDER_HINT = new Map([
 ])
 
 // ---------- 参数 ----------
-const args = process.argv.slice(2)
-const opt = { list: false, bail: false, only: [], skip: [], requirePass: [] }
-for (const a of args) {
-  if (a === '--list') opt.list = true
-  else if (a === '--bail') opt.bail = true
-  else if (a.startsWith('--only=')) opt.only.push(a.slice(7))
-  else if (a.startsWith('--skip=')) opt.skip.push(a.slice(7))
-  else if (a.startsWith('--require-pass=')) opt.requirePass.push(a.slice(15))
-  else if (a === '-h' || a === '--help') {
-    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(2, 24).join('\n').replace(/^\/\/ ?/gm, ''))
-    process.exit(0)
-  } else {
-    console.error(`未知参数：${a}（用 --help 看用法）`)
-    process.exit(2)
+function parseArgs(argv) {
+  const opt = { list: false, bail: false, only: [], skip: [], requirePass: [] }
+  for (const a of argv) {
+    if (a === '--list') opt.list = true
+    else if (a === '--bail') opt.bail = true
+    else if (a.startsWith('--only=')) opt.only.push(a.slice(7))
+    else if (a.startsWith('--skip=')) opt.skip.push(a.slice(7))
+    else if (a.startsWith('--require-pass=')) opt.requirePass.push(a.slice(15))
+    else if (a === '-h' || a === '--help') {
+      console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(2, 24).join('\n').replace(/^\/\/ ?/gm, ''))
+      process.exit(0)
+    } else {
+      console.error(`未知参数：${a}（用 --help 看用法）`)
+      process.exit(2)
+    }
   }
+  return opt
 }
 
 // ---------- 收集脚本 ----------
-function collect() {
+function collect(opt) {
   if (!fs.existsSync(SMOKE_DIR)) {
     console.error(`未找到 smoke 目录：${SMOKE_DIR}`)
     process.exit(2)
@@ -112,7 +120,7 @@ function runOne(file) {
     const child = spawn(process.execPath, [full], {
       cwd: path.join(__dirname, '..'),
       stdio: 'inherit',
-      env: { ...process.env, PORT: String(BACKEND_PORT), SMOKE_TMP_ROOT: TMP_ROOT },
+      env: { ...process.env, PORT: String(BACKEND_PORT), SMOKE_TMP_ROOT: getTmpRoot() },
     })
     // ⚠️ 必须有超时：单个冒烟脚本 hang（等端口 / 等锁 / 子进程不退出）时，
     //   没有超时 = 整个冒烟批次**永久挂起**，CI/本地都只能强杀 —— 看不到任何失败信息。
@@ -135,8 +143,24 @@ function runOne(file) {
   })
 }
 
-;(async () => {
-  const files = collect()
+// ---------- 汇总判定（唯一实现，单测直接 require 执行） ----------
+// 退出码 0 只表示「没有失败、且被点名的关键用例都真跑过了」。
+// SKIP（code=null）与「没收集到」本身不算失败，但**被 --require-pass 点名**时算。
+function resolveSmokeExit(results, requirePass = []) {
+  const pass = results.filter((r) => r.code === 0)
+  const fail = results.filter((r) => r.code !== 0 && r.code !== null)
+  const skip = results.filter((r) => r.code === null)
+  // 被点名的「必须通过」用例若没跑（SKIP）或没被收集到，算失败 —— 关键回归不许悄悄跳过。
+  // CI 用 --require-pass=secure-channel-retry 保证 401 重试真的跑过。
+  const missingRequired = requirePass.filter((key) =>
+    !results.some((r) => r.file.includes(key) && r.code === 0)
+  )
+  return { pass, fail, skip, missingRequired, exit: fail.length || missingRequired.length ? 1 : 0 }
+}
+
+async function main() {
+  const opt = parseArgs(process.argv.slice(2))
+  const files = collect(opt)
   if (!files.length) {
     console.error('没有匹配到任何冒烟脚本（检查 --only/--skip）')
     await removeTmpRoot()
@@ -168,14 +192,7 @@ function runOne(file) {
   }
 
   // ---------- 汇总 ----------
-  const pass = results.filter((r) => r.code === 0)
-  const fail = results.filter((r) => r.code !== 0 && r.code !== null)
-  const skip = results.filter((r) => r.code === null)
-  // 被点名的「必须通过」用例若没跑（SKIP）或没被收集到，算失败 —— 关键回归不许悄悄跳过。
-  // CI 用 --require-pass=secure-channel-retry 保证 401 重试真的跑过。
-  const missingRequired = opt.requirePass.filter((key) =>
-    !results.some((r) => r.file.includes(key) && r.code === 0)
-  )
+  const { pass, fail, skip, missingRequired, exit } = resolveSmokeExit(results, opt.requirePass)
 
   console.log('\n' + '='.repeat(56))
   console.log(`冒烟汇总：通过 ${pass.length} / 失败 ${fail.length} / 跳过 ${skip.length}（共 ${results.length}）`)
@@ -193,5 +210,9 @@ function runOne(file) {
   }
   console.log('='.repeat(56))
   await removeTmpRoot()
-  process.exit(fail.length || missingRequired.length ? 1 : 0)
-})()
+  process.exit(exit)
+}
+
+module.exports = { resolveSmokeExit }
+
+if (require.main === module) main()

@@ -23,10 +23,12 @@ const path = require('path')
 const { createSingleFlight } = require('./main.single-flight')
 const fs = require('fs')
 const { rotateIfNeeded } = require('./main.logRotator')
+const { atomicWriteFileSync } = require('./main.atomic-write')
 const startupTimer = require('./main.startup-timer')
 const perf = require('./main.perf')
 const { getMasterKey, resolveDataDir, resolveLogsDir, getDbMasterKey, resolveCompileCacheDir, resolveRuntimePortPath } = require('./main.config')
 const ports = require('../../config/ports.cjs')
+const contract = require('./main.ipc-contract')
 
 const { isDev } = require('./main.env')
 
@@ -219,7 +221,17 @@ async function compileBackendProcess() {
   // 目录模型：只注入唯一的数据根目录 dataDir。缩略图与技能文件固定为它的子目录，
   // 由后端从 DATA_DIR 派生（见 dbManager.base.js / dbManager.skills.js），不再单独传路径。
   const dataDir = resolveDataDir()
-  fs.mkdirSync(dataDir, { recursive: true })
+  // 启动前置预检：mkdir 成功不代表能写（只读目录、断开的网盘、权限受限时都可能通过）。
+  // 这里建一个探针文件再删，失败时抛出带路径与原因的中文错误，
+  // 让启动失败页直接告诉用户「数据目录不可写」，而不是笼统的「后端启动失败」（N4-04）。
+  try {
+    fs.mkdirSync(dataDir, { recursive: true })
+    const probe = path.join(dataDir, `.write-probe-${process.pid}`)
+    fs.writeFileSync(probe, '')
+    fs.rmSync(probe, { force: true })
+  } catch (err) {
+    throw new Error(`数据目录不可写：${dataDir}\n请检查该路径是否存在、所在磁盘/网盘是否可用，或换一个有写权限的位置。（${err.message}）`)
+  }
   // 后端进程的 V8 编译缓存。为什么必须用环境变量而不是 enableCompileCache()：
   // 那是进程级 API，fork 出来的子进程不会继承主进程的设置（main.js 里那份只管主进程自己），
   // 所以后端一直没享受到，每次启动都要重新解析 163 个模块的源码（实测约 150ms）。
@@ -425,7 +437,8 @@ function writeRuntimePortFile(port) {
     const file = resolveRuntimePortPath()
     fs.mkdirSync(path.dirname(file), { recursive: true })
     const origin = ports.originFor(port)
-    fs.writeFileSync(file, JSON.stringify({
+    // 原子写：外部 MCP 转发器随时可能读这个文件，不能让它读到半截 JSON（E02-01）
+    atomicWriteFileSync(file, JSON.stringify({
       port,
       origin,
       mcpUrl: `${origin}/mcp`,
@@ -444,6 +457,9 @@ function onBackendMessage(msg) {
   if (!msg) return
   // 心跳应答：清掉等待计时并复位连续失败计数
   if (msg.type === 'pong') {
+    // 只认当前子进程的应答：进程替换的窗口里，旧进程残留的 pong 会清新进程的
+    // 等待定时器，让心跳看起来「还活着」（E01-09）。没有 pid 的老后端消息保守放行。
+    if (msg.pid && backendProcess && msg.pid !== backendProcess.pid) return
     heartbeatPending = false
     heartbeatFailStreak = 0
     clearTimeout(heartbeatAwaitTimer)
@@ -768,14 +784,14 @@ function registerBackendIpc(opts = {}) {
   if (typeof opts.getSetupWindow === 'function') getSetupWindow = opts.getSetupWindow
 
   // 用户点「重启后端」：复位重试计数与失败标记，先停掉旧进程再重新 fork，并重新武装看门狗
-  IPC.handle(CH.RESTART_BACKEND, async () => {
+  IPC.handle(CH.RESTART_BACKEND, contract.safeReject(async () => {
     clearBackendFailure()
     backendRestartCount = 0
     backendReady = false
     try { await stopBackendProcess() } catch (_) { /* 忽略 */ }
     startBackend()
     return { ok: true }
-  })
+  }))
 
   // 失败态查询：兜住「主进程先失败、窗口后加载」的竞态
   IPC.handle(CH.BACKEND_FAILURE, () => backendFailed)
@@ -784,7 +800,7 @@ function registerBackendIpc(opts = {}) {
   // 把用户的每一次失败操作变成探针，不必等下一个 30s 心跳周期才发现后端不可达。
   // 探测成功 → 只是偶发（如请求被取消），不做任何处理；探测失败 → 后端确实不可达，立即走重连。
   // 启动阶段（backendReady 为假）一律不介入：那时该由启动看门狗与失败页负责，避免两套机制并行。
-  IPC.handle(CH.PROBE_BACKEND, async () => {
+  IPC.handle(CH.PROBE_BACKEND, contract.safeReject(async () => {
     if (app.isQuitting || !backendReady) return { ok: false, skipped: true }
     if (reconnecting) return { ok: false, reconnecting: true }
     if (probing) return { ok: false, skipped: true }
@@ -802,7 +818,7 @@ function registerBackendIpc(opts = {}) {
     // 不 await：立即把结果还给渲染层，重连在后台推进
     handleBackendDown('后端不可达（前端请求失败触发）')
     return { ok: false, reconnecting: true }
-  })
+  }))
 
   // 后端就绪状态查询：兜住「后端先就绪、渲染层后注册监听」的竞态（广播事件会漏掉这类窗口）
   IPC.handle(CH.BACKEND_STATUS, () => backendReady)

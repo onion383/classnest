@@ -19,6 +19,9 @@ const POLL_INTERVAL = 800
 export function useAlbumScan() {
   // 本实例发起的轮询定时器（每个调用方一份，互不影响）
   const timers = new Set()
+  // 每个在途 waitScan 的收尾函数：stopAll 必须让它 resolve，
+  // 否则 await 方永久悬挂、闭包持有组件引用（F04-04）。
+  const pendingDones = new Set()
 
   /**
    * 等待某个相册的扫描结束
@@ -34,6 +37,7 @@ export function useAlbumScan() {
       const done = () => {
         clearInterval(timer)
         timers.delete(timer)
+        pendingDones.delete(done)
         resolve()
       }
       const timer = setInterval(async () => {
@@ -51,13 +55,17 @@ export function useAlbumScan() {
         }
       }, POLL_INTERVAL)
       timers.add(timer)
+      pendingDones.add(done)
     })
   }
 
-  // 停止并清空本实例发起的轮询（组件卸载时调用；不会影响其它调用方）
+  // 停止并清空本实例发起的轮询（组件卸载时调用；不会影响其它调用方）。
+  // 同时 settle 在途 Promise，让 await waitScan 的调用方继续收尾。
   function stopAll() {
     for (const t of timers) clearInterval(t)
     timers.clear()
+    for (const done of Array.from(pendingDones)) done()
+    pendingDones.clear()
   }
 
   return { waitScan, stopAll }

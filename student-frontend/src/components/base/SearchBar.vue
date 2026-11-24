@@ -8,6 +8,7 @@
           <!-- 可切换列的下拉框：传了 fields 时用下拉 + 输入框；否则退化为旧式固定列名标签 -->
           <template v-if="hasFields">
             <AppSelect
+              aria-label="搜索字段"
               :model-value="searchField"
               :options="fieldOptions"
               placeholder="选择列"
@@ -21,10 +22,10 @@
           </template>
           <input
             :value="text"
-            @input="onInput"
-            placeholder="输入关键字..."
-            class="w-48 border border-border rounded px-2 py-1 text-sm focus:outline-none focus:border-info"
-          />
+            :disabled="hasFields && !searchField"
+            :placeholder="hasFields && !searchField ? '请先选择搜索列' : '输入关键字...'"
+            class="w-48 border border-border rounded px-2 py-1 text-sm focus:outline-none focus:border-info disabled:opacity-60 disabled:cursor-not-allowed"
+            @input="onInput" :aria-label="hasFields && !searchField ? '请先选择搜索列' : '输入关键字...'"/>
           <button @click="$emit('close')" class="bg-surface-hover border border-border px-2 py-1 text-sm rounded cursor-pointer hover:bg-border text-text transition-theme">取消</button>
         </div>
       </transition>

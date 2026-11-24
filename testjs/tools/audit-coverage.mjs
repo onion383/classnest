@@ -11,12 +11,15 @@
 //   node testjs/tools/audit-coverage.mjs --report-only
 //   node testjs/tools/audit-coverage.mjs --out-dir=<dir> --date=2026-11-21
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_ROOT = path.resolve(HERE, '..', '..')
-const DEFAULT_OUT = path.join(DEFAULT_ROOT, 'doc', '开发文档', 'v7审查结果')
+// 默认输出到系统临时目录：覆盖矩阵是过程产物，不该污染仓库（T01-10）。
+// 需要归档时显式传 --out-dir=<目录>（T03-14）。
+const DEFAULT_OUT = path.join(os.tmpdir(), 'classnest-coverage')
 
 const STATUS = Object.freeze({ PASS: 'PASS', GAP: 'GAP', UNKNOWN: 'UNKNOWN', NA: 'N/A' })
 
@@ -1060,7 +1063,7 @@ function parseArgs(argv) {
 
 function main() {
   const opt = parseArgs(process.argv.slice(2))
-  const result = runAudit({ root: opt.root, outDir: opt.outDir, date: opt.date, write: true })
+  const result = runAudit({ root: opt.root, outDir: opt.outDir, date: opt.date, write: !opt.reportOnly })
   console.log(`入口 ${result.summary.entries} · 格子 ${result.summary.cells} · PASS ${result.summary.byStatus.PASS} · GAP ${result.summary.byStatus.GAP} · UNKNOWN ${result.summary.byStatus.UNKNOWN}`)
   if (result.written) console.log(`已写入 ${result.written.mdPath}\n已写入 ${result.written.jsonPath}`)
   const blocking = result.summary.byStatus.GAP + result.summary.byStatus.UNKNOWN

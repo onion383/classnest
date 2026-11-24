@@ -8,14 +8,17 @@
       :style="menuStyle"
       role="menu"
       @contextmenu.prevent
+      @keydown="onKeydown"
     >
       <div
         v-for="item in items"
         :key="item.label"
         class="px-4 py-2 cursor-pointer hover:bg-surface-hover text-sm text-text transition-theme"
+        :class="{ 'opacity-50 cursor-not-allowed': item.disabled }"
         role="menuitem"
+        :aria-disabled="item.disabled ? 'true' : undefined"
         tabindex="-1"
-        @click="item.action"
+        @click="pick(item)"
       >
         {{ item.label }}
       </div>
@@ -45,6 +48,8 @@ const menuW = ref(0);
 const menuH = ref(0);
 const measured = ref(false);
 const menuEl = ref(null);
+// 键盘用户的开/关焦点：打开时从触发点移进菜单，关闭时还回去（F01-07）
+let lastFocus = null;
 
 // 互斥：打开时向登记表声明自己，登记表会先让**上一个**菜单自行 emit(close)。
 // 放在模块级而不是组件里，是因为行标签菜单与列头菜单是两个实例，互不可见。
@@ -84,11 +89,18 @@ watch(() => props.visible, (v) => {
   if (!v) {
     removeViewportListeners();
     releaseSelf();
+    // 键盘用户关闭后要把焦点还给触发点，否则焦点掉到 body（F01-07）
+    if (lastFocus && typeof lastFocus.focus === 'function') {
+      try { lastFocus.focus(); } catch (_) { /* 触发点已被移除 */ }
+    }
+    lastFocus = null;
     // **不在这里重置 measured**：Transition 的离场动画还要播 ~100ms，而 menuStyle
     // 用 measured 控制 inline visibility —— 一重置就把菜单藏了，离场一帧都看不见。
     // 改成下次打开时先隐藏再量，两件事都在同一帧内完成。
     return;
   }
+  // 记录触发菜单的元素，关闭/选择后还原焦点
+  lastFocus = document.activeElement;
   // 先登记互斥：新菜单打开时，上一个菜单会收到 close 并由调用方收起。
   releaseMenu = claimContextMenu(menuToken, closeSelf);
   // 下次打开必须重新量：items 变了宽度也会变。先隐藏一帧，避免看到位置错误的那一帧。
@@ -99,6 +111,9 @@ watch(() => props.visible, (v) => {
     if (el) {
       menuW.value = el.offsetWidth;
       menuH.value = el.offsetHeight;
+      // 键盘用户：打开后焦点进入第一个可用项（F01-07）
+      const first = el.querySelector('[role="menuitem"]:not([aria-disabled="true"])');
+      if (first) first.focus();
     }
     // 量不到（el 为空）也要放行，否则菜单永久不可见
     measured.value = true;
@@ -118,6 +133,47 @@ onBeforeUnmount(() => {
 
 function onViewportChange() {
   if (props.visible) emit('close');
+}
+
+// 禁用项不执行动作；菜单项的 action 原本可能是 undefined（只读项）
+function pick(item) {
+  if (!item || item.disabled) return
+  if (typeof item.action === 'function') item.action()
+}
+
+// 方向键在菜单项之间移动，Enter/Space 执行，Esc 关闭（F01-07）。
+// Esc 要 stopPropagation：外层弹窗的 window 监听不该跟着一起关。
+function onKeydown(e) {
+  const el = menuEl.value
+  if (!el) return
+  const items = Array.from(el.querySelectorAll('[role="menuitem"]'))
+  if (!items.length) return
+  const idx = items.indexOf(document.activeElement)
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault()
+    const step = e.key === 'ArrowDown' ? 1 : -1
+    let next = idx < 0 ? (step > 0 ? 0 : items.length - 1) : (idx + step + items.length) % items.length
+    // 跳过禁用项；全部禁用时停在原处
+    for (let i = 0; i < items.length && items[next] && items[next].getAttribute('aria-disabled') === 'true'; i++) {
+      next = (next + step + items.length) % items.length
+    }
+    items[next] && items[next].focus()
+  } else if (e.key === 'Home') {
+    e.preventDefault()
+    items[0].focus()
+  } else if (e.key === 'End') {
+    e.preventDefault()
+    items[items.length - 1].focus()
+  } else if (e.key === 'Enter' || e.key === ' ') {
+    const it = items[idx]
+    if (!it) return
+    e.preventDefault()
+    pick(props.items[idx])
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    emit('close')
+  }
 }
 function addViewportListeners() {
   if (cancelViewport.length) return;

@@ -124,6 +124,7 @@ function printResult(res, label) {
   }
   console.log(`合计孤儿：${res.totalOrphans}`)
   console.log(`注：${res.note}`)
+  return res.totalOrphans
 }
 
 // —— 自证：内存库种出已知孤儿，确认「查得出来」而不是恒返回 0 ——
@@ -175,14 +176,17 @@ function main() {
     process.exit(2)
   }
   const db = new Database(file, { readonly: true, fileMustExist: true })
+  let orphans = 0
   try {
     if (key) db.pragma(`key = '${key}'`)
     // 加密库用错密钥时这条会抛，能区分「打不开」与「没孤儿」
     db.prepare('SELECT 1 FROM students LIMIT 1').get()
-    printResult(checkOrphans(db), path.basename(file))
+    orphans = printResult(checkOrphans(db), path.basename(file))
   } finally {
     db.close()
   }
+  // 发现即失败：扫出孤儿仍以 0 退出，会让老库的引用不一致在批跑里被静默放行（T03-05）
+  process.exit(orphans ? 1 : 0)
 }
 
 module.exports = { checkOrphans }

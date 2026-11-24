@@ -105,6 +105,16 @@ const DEMAND_BATCH = 8;
 const demandQueue = [];
 let demandBusy = false;
 
+// 子进程 IPC 入参形状：主进程通常已校验，但子进程是独立的信任边界，
+// 非法 slug / albumId 直接进入 connFor/keyCache 会把错误推迟到更难定位的位置。
+const SLUG_RE = /^[A-Za-z0-9_@-]{1,64}$/;
+function isValidSlug(slug) {
+  return typeof slug === 'string' && SLUG_RE.test(slug);
+}
+function isValidAlbumId(id) {
+  return Number.isInteger(id) && id > 0;
+}
+
 async function runDemand() {
   if (demandBusy) return;
   demandBusy = true;
@@ -117,14 +127,17 @@ async function runDemand() {
         batch.push(demandQueue.shift().id);
       }
       const conn = connFor(slug);
+      // 连不上库时不能按 batch.length 回执：主进程会误判这批缩略图需求已满足。
+      let done = 0;
       if (conn) {
         // 生成 + 写库都在子进程做（主进程不碰这些行的写）
         await albumScan.genThumbsByIds(conn, batch, slug, (photoId, thumbPath) => {
           reportThumb(slug, photoId, thumbPath);
         });
+        done = batch.length;
       }
       flushThumbs(slug);
-      send({ type: 'demand-done', slug, count: batch.length });
+      send({ type: 'demand-done', slug, count: done });
     }
   } catch (err) {
     // 异常时把各库已攒的条目按各自 slug 发干净：留在桶里会等下一次别的库 flush
@@ -137,7 +150,16 @@ async function runDemand() {
 }
 
 async function runScan(slug, albumId, mode, resumeFrom, token) {
-  const conn = connFor(slug);
+  // connFor 会做 registry 查找 / 解封钥匙 / 打开文件，任何一步都可能抛错。
+  // 必须在 try 内调用：否则异常会逃出消息处理器，变成子进程的 unhandled rejection，
+  // 主进程也收不到 error 回执。
+  let conn;
+  try {
+    conn = connFor(slug);
+  } catch (err) {
+    send({ type: 'error', slug, albumId, message: err && err.message });
+    return;
+  }
   if (!conn) {
     send({ type: 'error', slug, albumId, message: '库不存在或无法打开' });
     return;
@@ -179,6 +201,23 @@ async function runScan(slug, albumId, mode, resumeFrom, token) {
   }
 }
 
+// 收到主进程的 'lock'（登出）后的全部清理动作（T07-05）：
+//   · 关闭该库连接：登出后本进程不能再持有可读句柄；
+//   · 丢弃钥匙：隐私模式下钥匙不能留驻；
+//   · 先按各自 slug 把残留的缩略图索引发干净（否则会一直等到下一次别的库 flush）；
+//   · 清该库的扫描作用域。
+// 抽成可导出的纯函数，单测直接执行它，而不是对 worker 源码做「消息名称出现」的正则断言
+// —— 那种断言抓不到「消息发了但子进程没处理」，正是 #12 的事故面。
+function applyLock(slug, deps = { openConns, keyCache, thumbReport, slugScopes }) {
+  const conn = deps.openConns.get(slug);
+  if (conn) { try { conn.close(); } catch (_) { /* 连接已损坏也要继续丢钥匙 */ } deps.openConns.delete(slug); }
+  deps.keyCache.delete(slug);
+  deps.thumbReport.flushAll();
+  deps.slugScopes.clearAllForSlug(slug);
+}
+
+module.exports = { applyLock };
+
 process.on('message', async (msg) => {
   if (!msg || !msg.cmd) return;
   // 任何派活消息携带的库钥匙都先记下（同一库钥匙在会话内恒定）
@@ -188,14 +227,23 @@ process.on('message', async (msg) => {
   }
   switch (msg.cmd) {
     case 'start':
+      if (!isValidSlug(msg.slug) || !isValidAlbumId(msg.albumId)) {
+        send({ type: 'error', slug: '', albumId: 0, message: '非法的扫描参数' });
+        break;
+      }
       await runScan(msg.slug, msg.albumId, msg.mode || 'incremental', msg.resumeFrom || '', msg.token || 0);
       break;
     case 'resume':
-      for (const t of (msg.tasks || [])) {
+      for (const t of (Array.isArray(msg.tasks) ? msg.tasks : [])) {
+        if (!t || !isValidSlug(t.slug) || !isValidAlbumId(t.albumId)) continue;
         await runScan(t.slug, t.albumId, t.mode || 'incremental', t.resumeFrom || '', t.token || 0);
       }
       break;
     case 'demand': {
+      if (!isValidSlug(msg.slug)) {
+        send({ type: 'error', slug: '', albumId: 0, message: '非法的扫描参数' });
+        break;
+      }
       // 主进程配额闸放不下的补图需求：排队到子进程生成
       const ids = Array.isArray(msg.ids) ? msg.ids : [];
       for (const id of ids) {
@@ -227,12 +275,7 @@ process.on('message', async (msg) => {
     }
     case 'lock': {
       // 主进程登出：关闭该库连接并丢掉钥匙，之后本进程不再持有可读句柄
-      const conn = openConns.get(msg.slug);
-      if (conn) { try { conn.close(); } catch (_) { /* 忽略 */ } openConns.delete(msg.slug); }
-      keyCache.delete(msg.slug);
-      // 先按各自 slug 发干净（否则残留条目会一直等到下一次别的库 flush），再清该库状态
-      thumbReport.flushAll();
-      slugScopes.clearAllForSlug(msg.slug);
+      applyLock(msg.slug);
       break;
     }
     case 'shutdown':

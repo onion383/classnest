@@ -131,6 +131,7 @@ app.whenReady().then(() =>
     log('失败: ' + (e && e.stack))
     try { await fsp.mkdir(path.dirname(LOG), { recursive: true }) } catch (_) {}
     await fsp.writeFile(LOG, lines.join('\n') + '\n', 'utf8')
-    app.quit()
+    // 异常必须非零退出，否则「截图源为空 / thumbnail 抛错」会被 quit 成通过（T02-08）
+    app.exit(1)
   })
 )

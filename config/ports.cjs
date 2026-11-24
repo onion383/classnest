@@ -22,7 +22,11 @@ function readPort(names, fallback) {
   for (const name of names) {
     const raw = process.env[name]
     if (raw === undefined || raw === '') continue
-    const value = Number(raw)
+    // 只接受纯十进制数字串（E01-07）：Number() 会把 '0x50' / '0b1010' 也解析成端口，
+    // 环境变量写错时反而静默落到一个看不出问题的值上。
+    const text = String(raw).trim()
+    if (!/^\d+$/.test(text)) continue
+    const value = Number(text)
     if (Number.isInteger(value) && value > 0 && value <= 65535) return value
   }
   return fallback

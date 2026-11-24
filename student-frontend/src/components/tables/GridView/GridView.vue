@@ -194,8 +194,7 @@
                         @keydown.escape.prevent="cancelEdit"
                         @blur="onEditBlur"
                         @input="onEditInput(rowIdx, colIdx)"
-                        @mousedown.stop
-                      />
+                        @mousedown.stop :aria-label="candidatePlaceholder || (enableCandidate ? '输入姓名' : '输入课程')"/>
                     </div>
                     <template v-else>
                       <!-- 空位：画一个明确的「空位」标，而不是留一格白 —— 留白会被当成「还没填」 -->
@@ -236,9 +235,14 @@
               @mouseenter="candidateHighlightIndex = idx"
             >
               <span class="flex-1 min-w-0 truncate">{{ getCandidateLabel(item) }}</span>
+              <!-- 已入座的学生：标注原位置，点选即把他移到这里（原格自动清空） -->
+              <span v-if="getCandidateSeat(item)" class="shrink-0 text-[10px] leading-4 px-1 rounded bg-info/15 text-info whitespace-nowrap">已排座 {{ getCandidateSeat(item) }}</span>
               <!-- 临时学生：只是「成员状态」，与正式学生共用同一个 id，这里标出来便于选中它本身而不是重敲一遍 -->
               <span v-if="item.is_provisional" class="shrink-0 text-[10px] leading-4 px-1 rounded bg-warning/15 text-warning">临时</span>
             </div>
+          </div>
+          <div v-else-if="canCreateProvisional" class="px-3 py-2 text-sm cursor-pointer hover:bg-info/10 text-info" @mousedown.prevent="createProvisional">
+            {{ editingCellData?.course?.trim() }} · 新增临时学生
           </div>
           <div v-else class="px-3 py-2 text-sm text-text-muted">无匹配项</div>
         </div>
@@ -259,6 +263,8 @@
 import { ref, computed, watch, onMounted, onActivated, onBeforeUnmount, nextTick, toRef, TransitionGroup } from 'vue';
 import { useGridViewDrag } from './GridView.drag.js';
 import { useDisposables } from '../../../utils/disposables.js';
+import { normSearchText } from '../../../utils/tableSearch.js';
+import { formatStudentLabel } from '../../../utils/studentLabel.js';
 import CustomScrollbar from '../../base/CustomScrollbar.vue';
 import IconGlyph from '../../base/IconGlyph.vue';
 
@@ -329,6 +335,9 @@ const props = defineProps({
     // 避免「正式张三 / 临时张三」同名时又回头按姓名猜。
     // 课表候选是课程（label/value），不传即完全不产生 _studentId。
     candidateIdField: { type: String, default: '' },
+    // 已入座学生的位置标注：{ id: '第X行 第Y座' }。传了就在候选里照常显示这些人，
+    // 标「已排座：…」；选中即移动（由 useSeatGrid 把原格清空）。不传则沿用剔除逻辑。
+    candidateOccupied: { type: Object, default: () => ({}) },
     candidatePlaceholder: { type: String, default: '' },
     allowDuplicate: { type: Boolean, default: false },
     minTableHeight: { type: Number, default: 400 },
@@ -453,6 +462,7 @@ const ctx = {
   candidateLabelField: toRef(props, 'candidateLabelField'),
   candidateValueField: toRef(props, 'candidateValueField'),
   candidateIdField: toRef(props, 'candidateIdField'),
+  candidateOccupied: toRef(props, 'candidateOccupied'),
   candidatePlaceholder: toRef(props, 'candidatePlaceholder'),
   allowDuplicate: toRef(props, 'allowDuplicate'),
   minTableHeight: toRef(props, 'minTableHeight'),
@@ -484,6 +494,11 @@ const ctx = {
   _rowSlotGhost: null, _colSlotGhost: null, _rowRaf: 0, _colRaf: 0,
   _rowGeom: null, _colGeom: null, _rowPending: null, _colPending: null,
   _rowAutoScroll: null, _colAutoScroll: null,
+  // 拖拽几何与落点签名：先声明再赋值，避免首次拖拽时给 ctx 新增键
+  _rowGeomContainer: null, _rowEls: null,
+  _colGeomHeaderTop: null, _colGeomDataTop: null, _colGeomTblBottom: null, _colGeomContainer: null,
+  _colEls: null, _rowDropSig: null, _colDropSig: null, _colSlotSig: null,
+  _noRowFlipOnce: false, _rowSlotH: 0, _colSlotW: 0, _periodCells: null,
   emit,
 }
 
@@ -506,7 +521,7 @@ const filteredCandidates = computed(() => {
       const list = ctx.candidateBaseList.value;
       const text = ctx.editingCellData.value.course?.trim() || '';
       if (text) {
-        const kw = text.toLowerCase();
+        const kw = normSearchText(text);
         // 用预缓存的标签小写，避免每次击键都对每个候选现场 String+toLowerCase 分配（同行为、更快）
         const cache = ctx.candidateLabelCache.value;
         return list.filter(s => cache.get(s).includes(kw));
@@ -527,7 +542,7 @@ const candidateLabelCache = computed(() => {
       const field = ctx.candidateLabelField.value;
       const map = new Map();
       for (const item of ctx.candidateItems.value) {
-        map.set(item, String(item[field] ?? item.姓名 ?? '').toLowerCase());
+        map.set(item, normSearchText(item[field] ?? item.姓名 ?? ''));
       }
       return map;
 })
@@ -570,6 +585,14 @@ function isHoleCell(row, colIdx) {
   const cell = row && row.cells ? row.cells[colIdx] : null
   return !!(cell && cell._blank)
 }
+
+// 名册里没有这个姓名时给「新增临时学生」入口：只有学生候选（落 id）才提供，
+// 课表这类选课程的候选不该出现。点它直接保存当前文本，后端会按姓名建临时学生。
+const canCreateProvisional = computed(() => {
+  if (!props.candidateIdField) return false
+  const t = String(editingCellData.value?.course ?? '').trim()
+  return t.length > 0 && filteredCandidates.value.length === 0
+})
 
 const methods = {
     ...useGridViewDrag(ctx),
@@ -753,11 +776,16 @@ const methods = {
 
       const { row, col } = ctx.editingCell.value;
       const newRows = ctx.rows.value.map(r => (r._isSeparator || r._mergeCells || r._isPodium) ? r : { ...r, cells: [...r.cells] });
-      const cell = { course: ctx.editingCellData.value.course || '' };
+      // 以原格子为基底再覆盖内容：_bg/_fg 这类装饰字段（热力图底色、深底白字）
+      // 不参与编辑，但一旦用白名单重建对象就会被抹掉（F03-07）。
+      const original = ctx.rows.value[row].cells[col] || {};
+      const cell = { ...original, course: ctx.editingCellData.value.course || '' };
       // 候选选中的学生 id 随格子保存：调用方（如座位）优先按 id 落库。
       // 格子被清空时不保留，避免留下「空名字 + 旧 id」的孤儿格。
       if (ctx.candidateIdField.value && cell.course && ctx.editingCellData.value._studentId != null) {
         cell._studentId = ctx.editingCellData.value._studentId;
+      } else if (!cell.course) {
+        cell._studentId = null;
       }
       newRows[row].cells[col] = cell;
       emit('update:cells', newRows);
@@ -804,8 +832,22 @@ const methods = {
       }
       ctx.saveEditCell();
     },
+    createProvisional() {
+      // onEditInput 已清空 _studentId；直接保存，后端按姓名建临时学生并回填 id。
+      ctx.saveEditCell();
+    },
     getCandidateLabel(item) {
-      return item[ctx.candidateLabelField.value] ?? item.姓名 ?? '';
+      const raw = item[ctx.candidateLabelField.value] ?? item.姓名 ?? '';
+      // 学生候选（candidateIdField 有值）显示「姓名 · 学号」：名册里有同名两人时，
+      // 候选列表靠学号区分；课表等只看 label 字段的候选不受影响。
+      // 临时学生没有学号，模板已有「临时」标签，这里不重复标。
+      const label = ctx.candidateIdField.value && item.学号
+        ? formatStudentLabel(raw, item.学号)
+        : raw;
+      return label;
+    },
+    getCandidateSeat(item) {
+      return ctx.candidateOccupied.value?.[item.id] || '';
     },
     getCandidateValue(item) {
       const field = ctx.candidateValueField.value || ctx.candidateLabelField.value;
@@ -827,7 +869,7 @@ const {
   setCellRef, canDragRow, onCellMouseDown, onCellMouseEnter, onCellDoubleClick,
   onEditInput, onEditBlur, cancelEdit, candidateSelect,
   candidateHighlightNext, candidateHighlightPrev, candidateSelectHighlighted,
-  isCellSelected, isDragTarget, isEditing, getCandidateLabel,
+  isCellSelected, isDragTarget, isEditing, getCandidateLabel, getCandidateSeat, createProvisional,
   getCellColor, getCellTextColor, onRowHandleDown, onColHandleDown, onRowLabelContextMenu,
   onColLabelContextMenu,
 } = methods

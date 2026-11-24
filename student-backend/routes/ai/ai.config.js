@@ -35,9 +35,12 @@ const PROVIDER_PRESETS = {
   custom: { base_url: '', model: '' },
 };
 
+// 出站地址校验统一走 services/aiEndpoint（协议 / 主机 / 元数据地址闸，N3-08）
+const { normalizeAiBaseUrl } = require('../../services/aiEndpoint');
+
 function resolveEndpoint(cfg) {
   const preset = PROVIDER_PRESETS[cfg.provider] || PROVIDER_PRESETS.custom;
-  const base = (cfg.base_url || preset.base_url || '').replace(/\/+$/, '');
+  const base = normalizeAiBaseUrl(cfg.base_url || preset.base_url || '');
   const model = cfg.model || preset.model;
   return { url: `${base}/chat/completions`, model };
 }
@@ -75,7 +78,7 @@ function discoverCacheKey(provider, base, apiKey) {
 async function discoverModels(cfg) {
   if (!cfg.api_key) throw new Error('尚未填写 API Key');
   const preset = PROVIDER_PRESETS[cfg.provider] || PROVIDER_PRESETS.custom;
-  const base = (cfg.base_url || preset.base_url || '').replace(/\/+$/, '');
+  const base = normalizeAiBaseUrl(cfg.base_url || preset.base_url || '');
   const cacheKey = discoverCacheKey(cfg.provider, base, cfg.api_key);
   const hit = discoverCache.get(cacheKey);
   if (hit && Date.now() - hit.at < DISCOVER_TTL_MS) return hit.models.slice();
@@ -88,7 +91,10 @@ async function discoverModels(cfg) {
     throw new Error(`模型服务返回 ${r.status}: ${text.slice(0, 200)}`);
   }
   const j = await r.json();
-  const models = (j.data || []).map((x) => x.id).filter(Boolean);
+  // 兼容服务商返回非数组（如 {"data":{"models":[]}} 或错误信封）：不能直接 .map
+  // 否则抛 TypeError，前端只看到「服务器错误」而不是可读的服务商响应异常（K01-09）
+  const list = j && Array.isArray(j.data) ? j.data : [];
+  const models = list.map((x) => x && x.id).filter(Boolean);
   if (models.length) {
     // 只缓存成功结果：失败不缓存，用户配好密钥重试时能立刻生效
     discoverCache.set(cacheKey, { models, at: Date.now() });
@@ -201,6 +207,9 @@ router.post('/models', async (req, res) => {
     api_key: key,
     is_active: isActive,
   });
+  // 并发首添时两个请求都可能读到 count===0 并各自置 1（K01-08）。
+  // 插入后统一走 activateModel 的「先清其余、再置目标」事务，最终只会留下一条 active。
+  if (isActive) aiConfigStore.activateModel(info.lastInsertRowid);
   res.json({ success: true, message: t.message + '，已添加', id: info.lastInsertRowid });
 });
 
@@ -246,19 +255,6 @@ router.post('/models/discover', async (req, res) => {
   }
 });
 
-// GET /api/ai/models/:id/models —— 用该模型已存密钥列出其服务商可用模型（用于卡片下拉切换）
-router.get('/models/:id/models', async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const m = aiConfigStore.findModelConnection(id);
-    if (!m) return res.status(404).json({ error: '模型不存在' });
-    const models = await discoverModels({ provider: m.provider, base_url: m.base_url, api_key: m.api_key });
-    res.json({ success: true, models });
-  } catch (err) {
-    res.status(500).json({ error: err.message, models: [] });
-  }
-});
-
 // PUT /api/ai/models/:id —— 编辑模型：可改 名称/服务商/模型名/Base URL/API Key，先验证连通再保存。
 //   仅传 model（卡片内下拉切换）时，其余字段沿用原值。API Key 留空表示不改动（优先沿用本条已有密钥）。
 router.put('/models/:id', async (req, res) => {
@@ -296,16 +292,6 @@ router.put('/models/:id/reasoning', (req, res) => {
   res.json({ success: true, message: '已保存' });
 });
 
-// POST /api/ai/config/test —— 测试当前选中模型的连通性
-router.post('/config/test', async (req, res) => {
-  try {
-    const t = await testConnection(currentSettings());
-    if (!t.ok) return res.status(400).json({ error: t.message });
-    res.json({ success: true, message: t.message });
-  } catch (err) {
-    res.status(500).json({ error: err.message || '连接失败' });
-  }
-});
 
 
 module.exports = router;

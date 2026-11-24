@@ -18,10 +18,12 @@
 
 const { app, BrowserWindow, screen } = require('electron')
 const fs = require('fs')
+const os = require('os')
 const path = require('path')
 const koffi = require('koffi')
 
-const LOG = path.join(__dirname, '..', 'tmp', 'toplevel-bottom-probe.log')
+// 日志放系统临时目录：多次运行不再往仓库里堆（T02-09）
+const LOG = path.join(os.tmpdir(), 'classnest-probe', 'toplevel-bottom-probe.log')
 try { fs.mkdirSync(path.dirname(LOG), { recursive: true }) } catch (_) {}
 function log(msg) {
   try { fs.appendFileSync(LOG, '[' + new Date().toISOString() + '] ' + msg + '\n') } catch (_) {}
@@ -236,6 +238,8 @@ app.whenReady().then(async () => {
 
   log('SIT TIGHT for ' + KEEP + 'ms')
   await new Promise((r) => setTimeout(r, KEEP))
-  log('done')
-  app.exit(0)
+  // 判定必须回传退出码（T02-08）：贴不到桌面层级时，只写日志等于「跑完就过」
+  const ok = isJustAboveDesktop(self)
+  log('done' + (ok ? '' : ' ✗ 未能贴在桌面之上'))
+  app.exit(ok ? 0 : 1)
 })

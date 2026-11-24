@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const store = require('../services/slotStore');
+const { studentsBrief } = require('../services/dashboardAgg');
 const { safeJson } = require('../utils/json');
 const { isDateStr } = require('../utils/sql');
 // 日期口径统一走 utils/date（本地时区）。此前本文件自己复制了一份
@@ -27,27 +28,35 @@ const dutyWrite = require('../services/dutyWrite');
 // ======================== 全局设置（时间 + 劳动项目） ========================
 // 列名按模式分键存储：日常值日是「周一…周五」，大扫除是「分组名 + 全部」。
 // 读写一律走 services/dutyConfig.js（唯一入口），别处不要直接 SELECT days。
-router.get('/settings', (req, res) => {
-    const mode = normalizeMode(req.query.mode);
+// 读取单抽成函数：GET /settings 与 /overview（P3-15）共用同一口径。
+function readSettings(modeRaw) {
+    const mode = normalizeMode(modeRaw);
     const row = store.getDoc('duty_settings');
-    if (!row) return res.json({ days: dutyConfig.readDays(mode), items: [] });
-    res.json({
+    if (!row) return { days: dutyConfig.readDays(mode), items: [] };
+    return {
       days: dutyConfig.readDays(mode),
       items: unpackMode(row.items, mode, []), // items 的模式值是数组：缺失/旧结构回 []，不能回 {}
       config: dutyConfig.readConfig(mode)
-    });
+    };
+}
+
+router.get('/settings', (req, res) => {
+    res.json(readSettings(req.query.mode));
 });
 
-router.put('/settings', (req, res) => {
-    const { days, items } = req.body;
-    const mode = normalizeMode(req.body.mode || req.query.mode);
-    // 大扫除的列名是派生的（组数的纯函数）→ 不传 days；日常值日必须传
-    if (!Array.isArray(items) || (mode === 'daily' && !Array.isArray(days))) {
-        return res.status(400).json({ error: '参数格式错误' });
-    }
-    // 列名、项目、模式配置三张表同事务写入（见 services/dutyWrite）
-    dutyWrite.saveSettings(mode, { days, items, config: req.body.config });
-    res.json({ message: '设置已保存' });
+// GET /overview —— 值日页首屏一次拿齐（v8 · P3-15）：
+// 原先 mount 并发拉 settings/template/现行表/权重 + 名册，这里合成一条；
+// 名册只带 id/姓名/学号（值日指数要用学号区分同名学生）。
+router.get('/overview', (req, res) => {
+    const mode = req.query.mode;
+    res.json({
+        mode: normalizeMode(mode),
+        settings: readSettings(mode),
+        active: readDuty(mode),
+        template: readTemplate(mode),
+        weight: readWeight(mode),
+        students: studentsBrief(),
+    });
 });
 
 // ======================== 当前值日表 ========================
@@ -101,14 +110,18 @@ router.put('/', (req, res) => {
 });
 
 // ======================== 值日模板 ========================
+function readTemplate(modeRaw) {
+    const mode = normalizeMode(modeRaw);
+    const row = store.getDoc('duty_template');
+    if (!row) return { cells: {}, settings: {} };
+    return {
+        cells: unpackMode(row.cells, mode),
+        settings: unpackMode(row.settings, mode)
+    };
+}
+
 router.get('/template', (req, res) => {
-    const mode = normalizeMode(req.query.mode);
-  const row = store.getDoc('duty_template');
-  if (!row) return res.json({ cells: {}, settings: {} });
-  res.json({
-    cells: unpackMode(row.cells, mode),
-    settings: unpackMode(row.settings, mode)
-  });
+    res.json(readTemplate(req.query.mode));
 });
 
 router.put('/template', (req, res) => {
@@ -152,23 +165,30 @@ router.post('/apply-master', (req, res) => {
     const mode = normalizeMode(req.query.mode);
   const template = store.getDoc('duty_template');
   if (!template) return res.status(400).json({ error: '模板为空' });
-  const row = store.getDoc('duty_layout');
-  const mergedCells = packMode(row ? row.cells : null, mode, unpackMode(template.cells, mode));
-  const mergedSettings = packMode(row ? row.settings : null, mode, unpackMode(template.settings, mode));
-  store.setDoc('duty_layout', {
-    cells: JSON.stringify(mergedCells),
-    settings: JSON.stringify(mergedSettings),
-  });
+  // 与手工保存同一出口：saveLayout 在事务内先 validateRow 再合并落库，
+  // 直接 setDoc 会绕过行级校验（模板被其它通道写脏时原样带进当前表）。
+  try {
+    dutyWrite.saveLayout(mode, {
+      cells: unpackMode(template.cells, mode),
+      settings: unpackMode(template.settings, mode),
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message || '应用模板失败' });
+  }
   res.json({ message: '已应用模板' });
 });
 
 // ======================== 值日项目权重表 ========================
 // 权重挂在「劳动项目 × 星期」上，与值日表同构；按 daily/big 分模式打包存储。
 // 从未保存过时返回 {}，由前端用 items[].difficulty 铺满作为默认值。
+function readWeight(modeRaw) {
+    const mode = normalizeMode(modeRaw);
+    const row = store.getDoc('duty_weight');
+    return { weights: row ? unpackMode(row.weights, mode) : {} };
+}
+
 router.get('/weight', (req, res) => {
-    const mode = normalizeMode(req.query.mode);
-  const row = store.getDoc('duty_weight');
-  res.json({ weights: row ? unpackMode(row.weights, mode) : {} });
+    res.json(readWeight(req.query.mode));
 });
 
 router.put('/weight', (req, res) => {
@@ -287,24 +307,6 @@ router.get('/daily', (req, res) => {
     const { from, to } = req.query;
   const mode = normalizeMode(req.query.mode);
   res.json(store.histDaily('duty', { from, to, mode }).map(snapshotRow));
-});
-
-// 保存某一天的值日表快照（手动保存 / 补存都会走到这里）：按 snap_date + mode 幂等 upsert
-router.post('/snapshot', (req, res) => {
-    const body = req.body || {};
-  // 过渡期兼容：旧前端仍传 week_start，没有 snap_date 时以其作为快照日期
-  const snapDate = body.snap_date || body.week_start;
-  if (!snapDate) return res.status(400).json({ error: '缺少快照日期' });
-  // 快照日期直接落库并据此推导周一：非法串会生成 NaN 周键，历史列表出现幽灵周
-  if (!isDateStr(snapDate)) return res.status(400).json({ error: '快照日期格式不正确（应为 YYYY-MM-DD）' });
-  const mode = normalizeMode(body.mode);
-  store.histUpsert('duty', {
-    weekStart: mondayOf(snapDate),
-    snapDate,
-    mode,
-    payload: { cells: body.cells || {}, settings: body.settings || {} },
-  });
-  res.json({ message: '快照已保存' });
 });
 
 // 补存历史快照：仅学期范围内。过去日期缺失才补（沿用最近一天该模式的值日表），

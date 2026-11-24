@@ -40,7 +40,7 @@ router.post('/dimensions', (req, res) => {
     });
     res.json({ id: dimId, message: '添加成功' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status((err && err.status) || 500).json({ error: err.message });
   }
 });
 
@@ -77,7 +77,7 @@ router.put('/dimensions/:id', (req, res) => {
     });
     res.json({ message: '保存成功' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status((err && err.status) || 500).json({ error: err.message });
   }
 });
 
@@ -90,21 +90,6 @@ router.delete('/dimensions/:id', (req, res) => {
   // removed 带回完整快照：维度删除原先不可撤销，删掉后所有小组/成员只能手工重建。
   const removed = groupDim.deleteDimension(id);
   res.json({ message: '删除成功', removed });
-});
-
-// 移动维度
-router.post('/dimensions/move', (req, res) => {
-  try {
-    const { id, direction } = req.body;
-    // 「确保内置默认维度存在」是写操作，已与排序更新一起收进 groupDim.moveDimension 的同一事务：
-    // 排序中途失败时不会凭空多出一个默认维度（原先它藏在读函数里、且独立提交）。
-    if (!groupDim.moveDimension(Number(id), direction)) {
-      return res.status(400).json({ error: '已到边界' });
-    }
-    res.json({ message: '排序已更新' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
 // ============ 组 ============
@@ -122,11 +107,36 @@ router.post('/dimensions/:dimId/groups', (req, res) => {
     }
     res.json({ id: groupDim.addGroup(dimId, name), message: '添加成功' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status((err && err.status) || 500).json({ error: err.message });
   }
 });
 
 // PUT /api/group-manage/groups/:id —— 修改小组名字
+// PUT /api/group-manage/groups/rename-batch —— 批量改名（组名自动编号一次往返）
+// 必须声明在 /groups/:id 之前：Express 会把 rename-batch 先当成 :id 匹配掉。
+router.put('/groups/rename-batch', (req, res) => {
+  const items = req.body && req.body.items;
+  if (!Array.isArray(items)) return res.status(400).json({ error: '请提供要改名的 items 数组' });
+  if (items.length > 500) return res.status(400).json({ error: '一次最多改名 500 个小组' });
+  // 同 id 后写覆盖先写，避免重复项把同一条更新两次
+  const byId = new Map();
+  for (const it of items) {
+    const id = Number(it && it.id);
+    const name = it && typeof it.name === 'string' ? it.name.trim() : '';
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '小组 id 必须是正整数' });
+    if (!name) return res.status(400).json({ error: '小组名字不能为空' });
+    if (name.length > 50) return res.status(400).json({ error: '小组名字不能超过 50 个字' });
+    byId.set(id, name);
+  }
+  if (!byId.size) return res.status(400).json({ error: '请提供至少一个要改名的小组' });
+  try {
+    const updated = groupDim.renameGroupsBatch([...byId].map(([id, name]) => ({ id, name })));
+    res.json({ message: '保存成功', updated });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
 router.put('/groups/:id', (req, res) => {
     const id = Number(req.params.id);
   const { name } = req.body;
@@ -228,12 +238,13 @@ router.post('/group-members/move', (req, res) => {
     if (!dimData) return res.status(404).json({ error: '维度不存在' });
     res.json({ dimensions: groupDim.listDimensions(), ...dimData });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status((err && err.status) || 500).json({ error: err.message });
   }
 });
 
 // POST /api/group-manage/dimensions/:dimId/apply-grouping —— 智能分组写回
-// body: { groups: [ [姓名, ...], ... ] }；每组第一个姓名为组长。
+// body: { groups: [ [姓名, ...], ... ], studentIds? }；每组第一个姓名为组长。
+// studentIds 是同名选人/名册带 id 的结果，key = `${组号}:${组内位置}`（与 groups 下标一一对应）。
 // 清空该维度下所有小组成员，再按顺序把姓名写回对应（第 i 组 → groups[i]）。
 router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
   try {
@@ -242,6 +253,7 @@ router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
     if (!dim) return res.status(404).json({ error: '维度不存在' });
     const rawGroups = req.body?.groups;
     if (!Array.isArray(rawGroups)) return res.status(400).json({ error: '分组数据格式不正确' });
+    const studentIds = req.body?.studentIds;
     const groupTotal = groupDim.groupCount(dimId);
     if (rawGroups.length > groupTotal) {
       return res.status(400).json({ error: `分组数量不能超过该维度的 ${groupTotal} 个小组` });
@@ -259,12 +271,12 @@ router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
       }
     }
 
-    groupDim.replaceGroupMembers(dimId, rawGroups);
+    groupDim.replaceGroupMembers(dimId, rawGroups, studentIds);
 
     const data = groupDim.loadDimension(dimId);
     res.json({ dimensions: groupDim.listDimensions(), ...data });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status((err && err.status) || 500).json({ error: err.message });
   }
 });
 
@@ -281,7 +293,7 @@ router.post('/dimensions/:dimId/import', (req, res) => {
     const dimId = Number(req.params.dimId);
     const dim = groupDim.dimensionById(dimId);
     if (!dim) return res.status(404).json({ error: '维度不存在' });
-    const { fields, rows } = req.body || {};
+    const { fields, rows, studentIds } = req.body || {};
     if (!Array.isArray(fields) || !Array.isArray(rows)) {
       return res.status(400).json({ error: '缺少有效的字段或数据' });
     }
@@ -298,13 +310,15 @@ router.post('/dimensions/:dimId/import', (req, res) => {
     };
 
     // 先整体解析成条目（缺列直接报错，不带行号之外的副作用），再交给 service 落库
+    // studentIds 是同名选人结果（key = 行号），前端传了就按用户选的人落 id。
     const entries = rows.map((row, idx) => {
       const rowNo = idx + 1;
       const groupName = cell(row, ['小组', '小组名', '组名']);
       const memberName = cell(row, ['姓名', '成员姓名', '成员']);
       if (!groupName) throw new Error(`第 ${rowNo} 行缺少「小组」`);
       if (!memberName) throw new Error(`第 ${rowNo} 行缺少「姓名」`);
-      return { groupName, memberName, remark: cell(row, ['备注']), rowNo };
+      const picked = studentIds && studentIds[String(idx)];
+      return { groupName, memberName, remark: cell(row, ['备注']), rowNo, picked };
     });
 
     const perGroupLimit = dim.members_per_group > 0

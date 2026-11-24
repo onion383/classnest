@@ -14,15 +14,18 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const {
+  analyze, walk, functionEntries, scriptBlocks,
+} = require('../_source-scan.cjs')
 
 const SRC = path.join(__dirname, '../../student-frontend/src')
 // 只查前端行为层（views/composables/components）；utils 里纯函数不含 I/O 不受影响
 const SCOPE = /student-frontend[\\/]+src[\\/]+(views|composables|components)[\\/]/
 
-function walk(dir, out = []) {
+function walkFiles(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name)
-    if (e.isDirectory()) walk(p, out)
+    if (e.isDirectory()) walkFiles(p, out)
     else if (/\.(js|vue)$/.test(e.name)) out.push(p)
   }
   return out
@@ -36,79 +39,86 @@ const FEEDBACK = /notify|showAlert|reportError|useNotification\b|\bthrow\b|\bret
 // 设计性静默的注释豁免：带意图说明的注释吞（预览不阻断/回滚不叠加/持久化不阻塞对话等）
 const DOCUMENTED = /behavior-ok|不阻断|不阻塞|不叠加|不影响|回滚|忽略|静默|无从排查|已[^*\\n]{0,15}处理/
 
-// 从 src 中抽取「名字 → 函数体」（function 声明 / const 箭头 / 对象方法简写）
-function extractFunctions(src) {
-  const out = []
-  const patterns = [
-    /(?:^|\s)(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g,
-    /(?:^|\s)(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\s*\([^)]*\)|\([^)]*\)\s*=>|\w+\s*=>)\s*\{/g,
-    /^\s{2,}(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm,
-  ]
-  for (const re of patterns) {
-    for (const m of src.matchAll(re)) {
-      const braceStart = src.indexOf('{', m.index + m[0].length - 1)
-      if (braceStart < 0) continue
-      // 括号配平切出函数体
-      let depth = 0
-      let end = braceStart
-      for (let i = braceStart; i < src.length; i++) {
-        if (src[i] === '{') depth++
-        else if (src[i] === '}') {
-          depth--
-          if (depth === 0) { end = i; break }
-        }
-      }
-      out.push({ name: m[1], body: src.slice(braceStart, end + 1), index: m.index })
-    }
-  }
-  return out
+// ---------------------------------------------------------------------------
+// 为什么改成 AST：
+//   · 旧 extractFunctions 用正则 + 裸花括号配平：字符串/模板串里出现 `{` 就会把配平带偏，
+//     且对象方法只认 2+ 空格缩进。
+//   · 旧判据在整段 catch 原文上查豁免/反馈关键词：注释里写「静默」、字符串里写「回滚失败」
+//     都会误判成「已豁免 / 已有反馈」—— 真正的静默吞因此漏报。
+// 现在：函数与 catch 用 AST 定位；豁免只读 catch 体里的**注释**，
+//       反馈只在**去掉注释与字符串的代码**里判断（字符串文案不算失败反馈）。
+// ---------------------------------------------------------------------------
+
+function sourceCodeOf(file) {
+  const s = fs.readFileSync(file, 'utf8')
+  return file.endsWith('.vue') ? scriptBlocks(s) : s
 }
 
-// 取函数体里「顶层」catch 块（嵌套在其它 catch 里的属回滚-of-回滚，豁免）
-function topLevelCatches(body) {
-  const spans = []
-  for (const m of body.matchAll(/catch\s*(?:\([^)]*\))?\s*\{/g)) {
-    const start = m.index
-    const braceStart = body.indexOf('{', start + m[0].length - 1)
-    let depth = 0
-    let end = braceStart
-    for (let i = braceStart; i < body.length; i++) {
-      if (body[i] === '{') depth++
-      else if (body[i] === '}') {
-        depth--
-        if (depth === 0) { end = i; break }
+// 收集写函数内的 catch 处理器：
+//   · try/catch：TryStatement.handler.body
+//   · 链式 .catch(fn)：只取块体（与旧判据覆盖范围一致）
+function collectHandlers(fnNode) {
+  const tryHandlers = []
+  const catchCalls = []
+  walk(fnNode, (node) => {
+    if (node.type === 'TryStatement' && node.handler && node.handler.body) {
+      tryHandlers.push(node.handler.body)
+    }
+    if (node.type === 'CallExpression' && node.callee && node.callee.type === 'MemberExpression'
+      && node.callee.property && node.callee.property.type === 'Identifier'
+      && node.callee.property.name === 'catch') {
+      const arg = node.arguments[0]
+      if (arg && (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression')
+        && arg.body && arg.body.type === 'BlockStatement') {
+        catchCalls.push(arg.body)
       }
     }
-    spans.push({ start, end, text: body.slice(braceStart, end + 1) })
-  }
-  // 剔除被其它 catch 包住的
-  return spans.filter((s) => !spans.some((o) => o !== s && o.start < s.start && s.end < o.end))
+  })
+  return { tryHandlers, catchCalls }
+}
+
+function judge(handlerBody, kind, ctx) {
+  const { src, codeNoStrings, comments } = ctx
+  // 只读 handler 体内部的注释作为豁免依据（带意图说明的设计性静默）
+  const commentText = comments
+    .filter((c) => c.start >= handlerBody.start && c.end <= handlerBody.end)
+    .map((c) => src.slice(c.start, c.end))
+    .join('\n')
+  if (/behavior-ok/.test(commentText)) return null
+  if (DOCUMENTED.test(commentText)) return null
+  // 反馈判据只看代码，注释文案/字符串文案都不算
+  const bodyCode = codeNoStrings.slice(handlerBody.start, handlerBody.end)
+  if (FEEDBACK.test(bodyCode)) return null
+  return kind
 }
 
 function scan() {
   const violations = []
-  for (const f of walk(SRC)) {
+  for (const f of walkFiles(SRC)) {
     if (!SCOPE.test(f)) continue
-    let s = fs.readFileSync(f, 'utf8')
-    if (f.endsWith('.vue')) s = (s.match(/<script[^>]*>([\s\S]*?)<\/script>/) || [])[1] || ''
-    for (const fn of extractFunctions(s)) {
+    const src = sourceCodeOf(f)
+    if (!src.trim()) continue
+    const { ast, codeNoStrings, comments } = analyze(src)
+    const ctx = { src, codeNoStrings, comments }
+    for (const fn of functionEntries(ast)) {
       if (!WRITE_VERB.test(fn.name)) continue
-      if (!IO_MARK.test(fn.body)) continue
-      for (const c of topLevelCatches(fn.body)) {
-        if (/behavior-ok/.test(c.text)) continue // 显式逃生口
-        if (DOCUMENTED.test(c.text)) continue // 带意图注释的设计性静默
-        if (FEEDBACK.test(c.text)) continue
-        const line = s.slice(0, fn.index).split('\n').length
-        violations.push(`${path.relative(SRC, f).replace(/\\/g, '/')}:${line} ${fn.name}() 的 catch 无失败反馈`)
+      // IO 判据用 codeNoStrings：字符串里写一句 "axios.get" 不算真 I/O
+      if (!IO_MARK.test(codeNoStrings.slice(fn.start, fn.end))) continue
+      const { tryHandlers, catchCalls } = collectHandlers(fn.node)
+      // 嵌套在别的 catch 里的 catch 属于「回滚之回滚」，豁免（与旧 topLevelCatches 一致）
+      const topTryHandlers = tryHandlers.filter((h) => !tryHandlers.some(
+        (o) => o !== h && o.start < h.start && h.end < o.end,
+      ))
+      const line = src.slice(0, fn.start).split('\n').length
+      for (const h of topTryHandlers) {
+        if (judge(h, 'catch', ctx)) {
+          violations.push(`${path.relative(SRC, f).replace(/\\/g, '/')}:${line} ${fn.name}() 的 catch 无失败反馈`)
+        }
       }
-      // 链式 .catch( 的处理函数同样要求可感知
-      for (const m of fn.body.matchAll(/\.catch\(\s*(?:async\s*)?(?:\([^)]*\)\s*=>|\w+\s*=>|\s*function\s*\([^)]*\))\s*\{([\s\S]*?)\}\s*\)/g)) {
-        const text = m[1]
-        if (/behavior-ok/.test(text)) continue
-        if (DOCUMENTED.test(text)) continue
-        if (FEEDBACK.test(text)) continue
-        const line = s.slice(0, fn.index).split('\n').length
-        violations.push(`${path.relative(SRC, f).replace(/\\/g, '/')}:${line} ${fn.name}() 的 .catch() 无失败反馈`)
+      for (const h of catchCalls) {
+        if (judge(h, '.catch', ctx)) {
+          violations.push(`${path.relative(SRC, f).replace(/\\/g, '/')}:${line} ${fn.name}() 的 .catch() 无失败反馈`)
+        }
       }
     }
   }
@@ -123,12 +133,13 @@ test('失败语义：写操作链路的 catch 必须可感知（notify/报错/�
 test('失败语义：扫描器自检——约定覆盖面非空（动词+I/O 命中若干函数）', () => {
   // 保证本测试不是"什么都没查所以通过"
   let hit = 0
-  for (const f of walk(SRC)) {
+  for (const f of walkFiles(SRC)) {
     if (!SCOPE.test(f)) continue
-    let s = fs.readFileSync(f, 'utf8')
-    if (f.endsWith('.vue')) s = (s.match(/<script[^>]*>([\s\S]*?)<\/script>/) || [])[1] || ''
-    for (const fn of extractFunctions(s)) {
-      if (WRITE_VERB.test(fn.name) && IO_MARK.test(fn.body)) hit++
+    const src = sourceCodeOf(f)
+    if (!src.trim()) continue
+    const { ast, codeNoStrings } = analyze(src)
+    for (const fn of functionEntries(ast)) {
+      if (WRITE_VERB.test(fn.name) && IO_MARK.test(codeNoStrings.slice(fn.start, fn.end))) hit++
     }
   }
   assert.ok(hit >= 10, `写操作函数样本量过少（${hit}），检查匹配规则是否失效`)

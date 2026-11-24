@@ -88,4 +88,7 @@ const first = marks[0]
 const last = marks[marks.length - 1]
 console.log(`\nexternal 变化: ${mb(first.external)} → ${mb(last.external)}（${((last.external - first.external) / 1024 / 1024).toFixed(1)}MB）`)
 console.log(`rss 变化:      ${mb(first.rss)} → ${mb(last.rss)}（${((last.rss - first.rss) / 1024 / 1024).toFixed(1)}MB）`)
-console.log(last.external - first.external < 8 * 1024 * 1024 ? '判定: 未见泄漏（external 平稳）' : '判定: 可疑增长，需复查')
+const leaked = last.external - first.external >= 8 * 1024 * 1024
+console.log(leaked ? '判定: 可疑增长，需复查' : '判定: 未见泄漏（external 平稳）')
+// 结论必须映射到退出码，否则真实泄漏在门禁/批量对账里仍算通过（T02-03）
+if (leaked) process.exitCode = 1

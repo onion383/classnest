@@ -1,5 +1,5 @@
 import { getToken, setToken } from './authStorage.js'
-import { userScopedGeneration } from './userScopedCache.js'
+import { userScopedGeneration, registerUserScopedReset } from './userScopedCache.js'
 import { absorbRenewalTokens } from './tokenRenewal.js'
 import { safe, applyAuthHeader, encryptBody, decryptBody, resetAuthBinding } from '../composables/secureChannel'
 import { decodeJwtPayload } from './jwt'
@@ -79,6 +79,10 @@ export function storeMediaToken(token) {
 export function clearMediaToken() {
   try { localStorage.removeItem(MEDIA_KEY) } catch (_) {}
 }
+
+// 媒体凭据跟着登录主体走：登记到用户级清理表，clearAuth → resetUserScopedCaches 一条链
+// 同时作废它。此前靠各登出入口手工配对，路由守卫的过期路径就漏了（F05-01 / N3-14）。
+registerUserScopedReset(clearMediaToken)
 
 // 滑动续期：后端在 token 快到期时随响应下发新凭据（30 天 token / 媒体凭据），落盘后生效。
 // fetch 的 Headers 与 axios 的 AxiosHeaders 都支持 .get()（大小写不敏感），裸对象走括号取值。

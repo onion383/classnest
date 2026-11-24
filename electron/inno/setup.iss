@@ -30,9 +30,9 @@
 ;       4) 「取消」/「卸载 班集」按钮
 ;     取消勾选时，usPostUninstall 会删掉数据目录（含设置页搬走后的自定义 dataDir）
 ;     与 %APPDATA%\classnest 用户配置目录，操作不可恢复。
-;     两条入口（开始菜单快捷方式 / 卸载注册表项 UninstallString）都带
-;     /SILENT /CUSTOMUNINSTALL：/SILENT 抑制 Inno 自带的确认框与完成提示，
-;     自定义开关表示由本脚本弹卸载页；直接双击 unins000.exe 则回退到 Inno 默认界面。
+;     开始菜单快捷方式 / 卸载注册表项 UninstallString 都带 /SILENT /CUSTOMUNINSTALL；
+;     自绘卸载页对所有非静默入口生效（含直接双击 unins000.exe），只有 /VERYSILENT
+;     无人值守卸载跳过，避免弹窗卡死。
 ;
 ; 说明：
 ;   - 低版本系统提示页预览：给安装包加命令行参数 /OSWARN=1 可无条件展示该页
@@ -208,9 +208,8 @@ const
   OS_DOWNLOAD_URL = 'https://www.microsoft.com/zh-cn/software-download/windows11';
 
   { ---- 卸载侧 ---- }
-  { 自定义卸载开关：与 /SILENT 一起加进卸载快捷方式和卸载注册表项。
-    /SILENT 抑制 Inno 自带的确认框与「卸载完成」提示（进度窗仍显示），
-    带这个开关才弹自绘卸载页；直接双击 unins000.exe / 系统静默卸载则回退默认行为。 }
+  { 自定义卸载开关：仍随 /SILENT 一起写进卸载快捷方式和注册表项（历史兼容），
+    但不再作为弹页条件——现在除 /VERYSILENT 外一律弹自绘卸载页。 }
   UNINSTALL_SWITCH = '/CUSTOMUNINSTALL';
   { 用户取消勾选「保留用户数据」时写的标记。卸载是两阶段进程，用文件把选择
     从 InitializeUninstall 传到 usPostUninstall，比全局变量更保险。 }
@@ -861,17 +860,12 @@ end;
 { ============================================================================
   卸载侧：自绘卸载页 + 「保留用户数据」真开关
   ----------------------------------------------------------------------------
-  两条入口（开始菜单快捷方式、卸载注册表项 UninstallString）都带
-  /SILENT /CUSTOMUNINSTALL。/SILENT 抑制 Inno 自带的确认框与完成提示
-  （进度窗仍显示），/CUSTOMUNINSTALL 表示由本脚本弹卸载页。
+  除 /VERYSILENT 无人值守卸载外，所有入口都弹自绘卸载页（含直接双击
+  unins000.exe）。/SILENT 只抑制 Inno 自带的确认框与完成提示（进度窗仍显示），
+  双击时没有 /SILENT，Inno 默认确认框仍可能出现——不影响自绘页的逻辑。
   Inno 卸载端既不支持自定义向导页，也不能 ExtractTemporaryFile，
   所以卸载页用 CreateCustomForm 造独立模态窗体，logo 从安装目录里
   额外落下的 uninstall-logo.png 读取。 ======================================== }
-
-function HasCustomUninstallSwitch(): Boolean;
-begin
-  Result := Pos(Uppercase(UNINSTALL_SWITCH), Uppercase(GetCmdTail())) > 0;
-end;
 
 { 数据目录可以被设置页整体搬走，路径记在 userData 根的 app-config.json。
   LoadStringsFromFile 支持无 BOM 的 UTF-8，中文路径不会乱码。
@@ -1078,8 +1072,8 @@ begin
   end;
 end;
 
-{ 卸载入口：只有带自定义开关才弹自绘页。直接双击 unins000.exe、
-  系统静默卸载（/VERYSILENT）都保持 Inno 默认行为，且一律保留数据。 }
+{ 卸载入口：除 /VERYSILENT 无人值守卸载外一律弹自绘页，含直接双击 unins000.exe。
+  /VERYSILENT 无人值守时保持 Inno 默认行为、不弹页且一律保留数据，避免卡死。 }
 function InitializeUninstall(): Boolean;
 var
   FlagPath: String;
@@ -1088,7 +1082,7 @@ begin
   RemoveUserData := False;
   FlagPath := ExpandConstant(UNINSTALL_FLAG_FILE);
   DeleteFile(FlagPath);
-  if not HasCustomUninstallSwitch() then
+  if Pos('/VERYSILENT', Uppercase(GetCmdTail())) > 0 then
     Exit;
   Result := ShowUninstallDialog();
   if not Result then

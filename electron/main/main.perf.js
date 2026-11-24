@@ -21,7 +21,7 @@ const fsp = require('node:fs/promises')
 const { getPrivateWorkingSetKB } = require('./main.privateWorkingSet')
 const { scanDiskUsage, logFilePaths } = require('./main.disk-usage')
 const { clearLogFile } = require('./main.logRotator')
-const { ok, fail } = require('./main.ipc-contract')
+const { ok, fail, safe, safeReject } = require('./main.ipc-contract')
 const startupTimer = require('./main.startup-timer')
 const { startEventLoopSampling, readEventLoopStats, markEventLoopWindow } = require('./main.eventloop')
 
@@ -344,7 +344,7 @@ function registerPerfIpc(opts = {}) {
   if (typeof opts.getThumbsDir === 'function') getThumbsDir = opts.getThumbsDir
 
   // 内存快照：逐进程列表 + 前端/后端/小组件存活状态 + 总计/平均/最高汇总
-  IPC.handle(CH.PERF_SNAPSHOT, async () => {
+  IPC.handle(CH.PERF_SNAPSHOT, safeReject(async () => {
     const procs = await collectProcList()
     const total = procs.reduce((s, p) => s + procMemKB(p), 0)
     // 面板打开时也记一笔，让「平均/最高」与逐进程列表的当前值保持同步
@@ -363,7 +363,7 @@ function registerPerfIpc(opts = {}) {
       backend: procs.some((p) => p.kind === 'backend'),
     }
     return { procs, alive, total, avg1min: memAvgKB(), max: memMaxKB, frontKB, backendKB, otherKB, eventLoop: readEventLoopStats({ reset: true }) }
-  })
+  }))
 
   // 重启前端：直接重载主窗口页面
   IPC.handle(CH.PERF_RESTART_FRONTEND, () => {
@@ -401,7 +401,7 @@ function registerPerfIpc(opts = {}) {
   })
 
   // 手动 GC：主进程 global.gc + 各渲染进程 CDP 回收 + 后端自报 GC
-  IPC.handle(CH.PERF_GC, async () => {
+  IPC.handle(CH.PERF_GC, safeReject(async () => {
     // 主进程
     let main = false
     try {
@@ -418,7 +418,7 @@ function registerPerfIpc(opts = {}) {
     const backend = (await queryBackendGc()) === true
 
     return { main, front, widget: toolbox || desktop, backend }
-  })
+  }))
 
   // 上次启动耗时与打点时间线
   IPC.handle(CH.PERF_STARTUP, () => startupTimer.getTimeline())

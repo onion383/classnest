@@ -6,11 +6,13 @@
  *   ① 正常 60 页 pptx        → 解析成功，文本按页分段
  *   ② 单个条目解压 25MB      → 拒绝（单条目上限 20MB）
  *   ③ 总解压 120MB           → 拒绝（合计上限 100MB）
- *   ④ 10GB 级文件            → 交给 multer 的 20MB 限制拦（这里只验上限判定存在）
+ *   ④ 10GB 级文件：由 multer 的 20MB 体积限制在进入解析前拦截，
+ *      本脚本不构造超大文件（构造 10GB 样本不现实），覆盖口径以 ①②③ 为准。
  *
  * 跑法：node testjs/smoke/pptx-guard-test.cjs
  */
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const http = require('node:http')
 const { execFileSync } = require('node:child_process')
@@ -19,7 +21,9 @@ const BACKEND = path.join(__dirname, '..', '..', 'student-backend')
 const express = require(path.join(BACKEND, 'node_modules', 'express'))
 const router = require(path.join(BACKEND, 'routes', 'ai', 'ai.upload.js'))
 
-const TMP = path.join(__dirname, '..', 'tmp', 'pptxguard')
+const TMP = path.join(os.tmpdir(), 'classnest-smoke', 'pptxguard')
+// 无论成功/失败退出都回收样本目录（T03-11）
+process.on('exit', () => { try { fs.rmSync(TMP, { recursive: true, force: true }) } catch (_) { /* 已清理 */ } })
 const PY = process.env.PYTHON || 'python'
 
 // 样本依赖 Python 的 zipfile；没装 python 时应判「环境不具备」而不是失败

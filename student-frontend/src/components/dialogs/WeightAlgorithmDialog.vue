@@ -7,7 +7,7 @@
       <div class="border border-border rounded-lg p-4 mb-4 flex-shrink-0">
         <div class="flex items-center gap-4 mb-3">
           <span class="text-sm font-medium text-text w-24 flex-shrink-0">中心区域</span>
-          <AppSelect v-model="centerType" :options="centerTypeOptions" class="w-40" />
+          <AppSelect v-model="centerType" aria-label="中心区域类型" :options="centerTypeOptions" class="w-40" />
         </div>
 
         <div v-if="centerType === 'point'" class="flex items-center gap-4">

@@ -12,7 +12,7 @@
       <button @click="ctx.openStatsExport()" class="bg-warning hover:bg-warning-hover text-text-inverse px-4 py-2 rounded flex items-center gap-1.5 transition-theme">
         <IconGlyph name="download" :size="14" tint="current" /> 导出 Excel
       </button>
-      <AppSelect v-model="ctx.statMode" :options="ctx.statModeOptions" class="w-32 ml-auto" />
+      <AppSelect v-model="ctx.statMode" aria-label="统计方式" :options="ctx.statModeOptions" class="w-32 ml-auto" />
     </div>
 
     <div class="bg-surface border border-border rounded-xl p-5 mb-6">

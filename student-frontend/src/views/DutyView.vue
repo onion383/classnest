@@ -4,7 +4,7 @@
       <h1 class="text-2xl font-bold text-text flex items-center gap-2">
         <IconGlyph name="duty" /> 卫生值日
       </h1>
-      <AppSelect v-model="dutyMode" :options="dutyModes" class="w-32" @change="onDutyModeChange" />
+      <AppSelect v-model="dutyMode" aria-label="值日模式" :options="dutyModes" class="w-32" @change="onDutyModeChange" />
     </div>
 
     <Tabs :tabs="tabItems" v-model="activeTab">
@@ -1408,7 +1408,7 @@ const weightDisplayRows = computed(() => {
 // 所以子行之间是**联动**的：改任意一格 → 整个项目的权重一起变。
 // GridView 的编辑事件只换掉被编辑的那一格，其余子行仍是旧值，
 // 因此要拿改动前的值当参照逐行比对，定位「用户刚改的那一格」（见 utils/dutyWeightGroups.js）。
-function onWeightCellsUpdate(newRows) {
+async function onWeightCellsUpdate(newRows) {
   const prev = JSON.parse(JSON.stringify(dutyWeights.value))
   const days = settingsDays.value
   const groups = {}
@@ -1432,8 +1432,9 @@ function onWeightCellsUpdate(newRows) {
     max: WEIGHT_MAX,
   })
   dutyWeights.value = next
-  recordGridSnapshotUndo('值日表', 'duty_weight', prev, next, '编辑权重')
-  saveWeight()
+  // 先落库，成功才登记撤销：保存失败时 saveWeight 已提示并回滚，
+  // 此时再登记一条「从未生效」的快照只会让撤销面板多一条死记录（F06-02 同族）。
+  if (await saveWeight()) recordGridSnapshotUndo('值日表', 'duty_weight', prev, next, '编辑权重')
 }
 function onWeightSwapRows(oldIndex, newIndex) {
   if (oldIndex === newIndex) return
@@ -1502,12 +1503,14 @@ const weightAlgoVisible = ref(false)
 const weightAlgoMounted = ref(false)
 watch(() => weightAlgoVisible.value, v => { if (v) weightAlgoMounted.value = true })
 function openWeightAlgo() { weightAlgoVisible.value = true }
-function onApplyWeightAlgorithm(weights) {
+async function onApplyWeightAlgorithm(weights) {
   const prev = JSON.parse(JSON.stringify(dutyWeights.value))
   dutyWeights.value = weights
-  recordGridSnapshotUndo('值日表', 'duty_weight', prev, weights, '生成中心权重')
-  saveWeight()
   weightAlgoVisible.value = false
+  // 不判 saveWeight 返回值就弹「已生成并应用」，保存失败时用户看到的是假成功（F06-02）。
+  // saveWeight 内部已负责错误提示与回滚，这里只在成功后登记撤销 + 报成功。
+  if (!(await saveWeight())) return
+  recordGridSnapshotUndo('值日表', 'duty_weight', prev, weights, '生成中心权重')
   notifySuccess('已生成并应用权重')
 }
 
@@ -1779,10 +1782,60 @@ async function silentBackfill() {
   catch (_) { /* 静默失败 */ }
 }
 
+// P3-15：值日页首屏改走 /duty/overview（settings + 现行表 + 模板 + 权重 + 名册一次回）。
+// 设置先落值再铺权重初始矩阵；任一项缺失或请求失败返回 false，由调用方回退到逐项加载。
+async function loadDutyOverview() {
+  try {
+    const res = await axios.get(`${API_BASE}/duty/overview?mode=${dutyMode.value}`)
+    const d = res.data
+    if (!d || !d.settings) return false
+    // 名册先落：syncCellsNames 需要它判断「是否为新名字」
+    if (Array.isArray(d.students)) { allStudents.value = d.students; studentsLoaded = true }
+    settingsDays.value = Array.isArray(d.settings.days) ? d.settings.days : []
+    settingsItems.value = Array.isArray(d.settings.items) ? d.settings.items : []
+    settingsConfig.value = (d.settings.config && typeof d.settings.config === 'object') ? d.settings.config : {}
+    settingsLoaded.value = true
+    if (d.active) {
+      activeCells.value = d.active.cells || {}
+      syncCellsNames(activeCells.value)
+      activeError.value = false
+      activeLoaded.value = true
+    }
+    if (d.template) {
+      masterCells.value = d.template.cells || {}
+      syncCellsNames(masterCells.value)
+      masterError.value = false
+      masterLoaded.value = true
+    }
+    const w = (d.weight && d.weight.weights) || {}
+    if (Object.keys(w).length > 0) dutyWeights.value = w
+    else {
+      // 与 loadWeight 的空表分支同一口径：items[].difficulty 铺满 days
+      const init = {}
+      settingsItems.value.forEach(it => {
+        init[it.name] = {}
+        const diff = Number(it.difficulty)
+        settingsDays.value.forEach(day => { init[it.name][day] = isNaN(diff) ? 0.5 : diff })
+      })
+      dutyWeights.value = init
+    }
+    weightLoaded.value = true
+    weightError.value = false
+    return true
+  } catch (e) {
+    console.error(e)
+    return false
+  }
+}
+
 onMounted(async () => {
-  // 学生名册与学生相关请求共用同一批：值日人名同步要先有学生名册才能判断「是否为新名字」
-  const settingsReady = fetchSettings()
-  await Promise.all([settingsReady, loadActive(), loadMaster(), primeStudentsOnce(), loadWeight(settingsReady)])
+  const fromOverview = await loadDutyOverview()
+  if (!fromOverview) {
+    // 概览不可用（老后端 / 请求失败）：回退到逐项加载，行为与改造前一致
+    // 学生名册与学生相关请求共用同一批：值日人名同步要先有学生名册才能判断「是否为新名字」
+    const settingsReady = fetchSettings()
+    await Promise.all([settingsReady, loadActive(), loadMaster(), primeStudentsOnce(), loadWeight(settingsReady)])
+  }
   silentBackfill()
   // 跨页定位：带 ?focus= 进入本页时定位到目标格子
   _applyRowFocus()

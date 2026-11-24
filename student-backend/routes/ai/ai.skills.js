@@ -10,6 +10,13 @@ const dbManager = require('../../dbManager/dbManager');
 
 const router = express.Router();
 const slugOf = (req) => req.user && req.user.dbSlug;
+// 技能正文长度上限（K02-06）：技能会整份注入系统提示，超长文本会挤爆上下文窗口。
+const MAX_SKILL_CHARS = 512000;
+function skillContentError(content) {
+  if (content != null && typeof content !== 'string') return 'content 必须是字符串';
+  if (typeof content === 'string' && content.length > MAX_SKILL_CHARS) return `技能内容过长（上限 ${MAX_SKILL_CHARS} 字符）`;
+  return '';
+}
 
 // GET /api/ai/skills —— 技能列表
 router.get('/skills', (req, res) => {
@@ -29,6 +36,8 @@ router.post('/skills', (req, res) => {
     const rawName = (req.body && req.body.name) || '';
     if (!rawName.trim()) return res.status(400).json({ error: '请填写文件名' });
     if (dbManager.skillExists(slugOf(req), rawName)) return res.status(400).json({ error: '同名技能已存在' });
+    const contentErr = skillContentError(req.body && req.body.content);
+    if (contentErr) return res.status(400).json({ error: contentErr });
     const content = (req.body && req.body.content) || `# ${rawName.trim()}\n`;
     dbManager.writeSkill(slugOf(req), rawName, content);
     res.json({ success: true, data: dbManager.listSkills(slugOf(req)) });
@@ -44,6 +53,8 @@ router.put('/skills/:name', (req, res) => {
     if (!String(next).trim()) return res.status(400).json({ error: '请填写文件名' });
     const renamed = String(next).trim() !== String(original).trim();
     if (renamed && dbManager.skillExists(slugOf(req), next)) return res.status(400).json({ error: '同名技能已存在' });
+    const contentErr = skillContentError(req.body && req.body.content);
+    if (contentErr) return res.status(400).json({ error: contentErr });
     dbManager.writeSkill(slugOf(req), next, (req.body && req.body.content) || '');
     if (renamed) dbManager.deleteSkill(slugOf(req), original);
     res.json({ success: true, data: dbManager.listSkills(slugOf(req)) });

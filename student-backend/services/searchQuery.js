@@ -11,6 +11,8 @@ const { safeJson } = require('../utils/json')
 const { SEAT_CELL } = require('./sanitize')
 // 分页与防失控阈值的唯一入口：页大小固定、OFFSET 翻页；词数 / 拼音候选值带硬上限。
 const { resolveSearchLimits, clipPage, windowOf } = require('./searchLimits')
+// 表名白名单的唯一来源：搜索源不许再手抄一份、也不许出现注册表之外的名字（X3-23）
+const { isKnownName } = require('../schema/tableRegistry')
 
 // 标题栏「全局搜索」的服务端数据源：对若干业务表的文本列做 LIKE 匹配，分组返回。
 // 表名/列名全部来自本文件的白名单常量（不接受请求参数拼接），杜绝注入。
@@ -59,7 +61,6 @@ function getPinyinMatch() {
 // 维度名命中的维度 id（每次请求前重算，供 groups 源的 extra 子句使用）。
 // 请求处理全程同步（better-sqlite3），不存在跨请求交错的窗口。
 let dimHitIds = []
-
 // 每个数据源：table=表名；match=参与 LIKE 匹配的文本列（白名单）；
 // dynamic=true 表示还要把 table_meta 里的自定义列并进来（只有支持加列的表才有意义）；
 // label/sub 从命中行派生展示文案；focus 生成跳转页的定位 id。
@@ -206,6 +207,13 @@ const SOURCES = [
   },
 ]
 
+// 对账守卫：搜索源表名必须来自注册表（物理表 / 逻辑槽位 / 历史视图）。
+// 新增源忘了登记会在这里立刻失败，而不是悄悄多出第三份表名清单。
+const SEARCH_SOURCE_TABLES = Object.freeze(SOURCES.map((s) => s.table))
+for (const t of SEARCH_SOURCE_TABLES) {
+  if (!isKnownName(t)) throw new Error(`searchQuery 搜索源未在 tableRegistry 登记：${t}`)
+}
+
 // 课程表：内容不是按行存储，而是存在 cells 这一列的二维 JSON 里
 // （cells[节次索引][周几索引] = { course, ... }），无法用 LIKE + 行 id，
 // 故单独解析后分组返回；focus 形如 `s:节次:周几`（s=实行课表，m=一般课表）。
@@ -243,15 +251,28 @@ function likePattern(q) {
 // 单列拼音匹配：值转拼音后判断是否命中查询（支持首字母缩写与全拼）。空值/异常不命中。
 function matchPinyin(fn, value, q) {
   if (value === null || value === undefined || value === '') return false
-  try { return !!fn(String(value), q) } catch (_) { return false }
+  // 间隔号（少数民族姓名「阿·依古扎」）会打断拼音库的音节切分，导致整串无法命中；
+  // 喂库前剥掉分隔符，原值仍用于汉字子串匹配。
+  const flat = String(value).replace(/[·・.．\s]/g, '')
+  try { return !!fn(flat, q) } catch (_) { return false }
+}
+
+// 搜索文本归一：NFKC 折叠全半角（S１００１ → S1001）、去掉所有空白（张 三 → 张三）、转小写。
+// SQL LIKE 路径暂不归一（列值未入库归一，需要索引/迁移），但非 SQL 数据与命中列判定
+// 统一走这里，至少让界面内搜索与课程表数据口径一致（Q1-03；繁简映射未包含）。
+function normSearchText(v) {
+  if (v === null || v === undefined) return ''
+  return String(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase()
 }
 
 // 名称匹配（用于非 SQL 的课程表数据）：文本子串（忽略大小写）或拼音。
 function nameHit(name, q, pm) {
-  if (name.toLowerCase().includes(q)) return true
+  const n = normSearchText(name)
+  const k = normSearchText(q)
+  if (n.includes(k)) return true
   // 拼音只对纯字母的词有意义：中文词不该被塞进拼音匹配器（结果不可控）。
   // 这里按词判断，多词查询里的字母词依然能走拼音（Q1-02）。
-  return pm && /^[a-z]+$/i.test(q) ? matchPinyin(pm, name, q) : false
+  return pm && /^[a-z]+$/i.test(k) ? matchPinyin(pm, n, k) : false
 }
 
 // 多词版：每个词都要命中（词内仍支持拼音），语义与 SQL 侧一致。
@@ -264,8 +285,8 @@ function allTermsHit(name, terms, pm) {
 // ==================== 分词 / 字段限定 / 排序 / 命中列 ====================
 
 // 空格分词：多个词是「且」关系（「张三 请假」= 姓名含张三、且某列含请假）。
-// 词数上限由请求参数给（默认 12、硬上限 20）：5 个词就把第 6 个起静默丢掉，
-// 会让「且」条件凭空变松，属于用户看不见的错误结果。
+// 词数上限由请求参数给（默认 12、硬上限 20）：超出时截断，但必须在 meta 里回报，
+// 让前端提示「仅按前 N 个词搜索」—— 静默丢弃会让「且」条件凭空变松。
 
 // 字段限定：`姓名:张三` 只在姓名列里搜。
 // 别名表 = 用户可能输入的字段名 → 实际列名。一个别名可映射多列（电话 = 家长/学生两列；
@@ -318,13 +339,16 @@ function termWhere(term, cols, prefix = '') {
   }
 }
 
-// 拼音候选：主列的 distinct 值。上限由请求参数控制，超限时不再静默截断索引。
-function primaryValues(table, primary, limit) {
+// 拼音候选：主列的 distinct 值。上限由请求参数控制；命中上限说明候选被截断，
+// 通过 stats.pinyinDegraded 回报给前端（否则用户只会看到「拼音搜不到」）。
+function primaryValues(table, primary, limit, stats) {
   try {
-    return db.prepare(
+    const rows = db.prepare(
       `SELECT DISTINCT "${primary}" AS v FROM ${table}
        WHERE "${primary}" IS NOT NULL AND "${primary}" <> '' LIMIT ?`
-    ).all(limit).map(r => r.v)
+    ).all(limit)
+    if (stats && rows.length >= limit) stats.pinyinDegraded = true
+    return rows.map(r => r.v)
   } catch (_) {
     return [] // 存量库缺表/缺列：退化为纯 LIKE，不影响其它分组
   }
@@ -388,8 +412,9 @@ function hitColumn(cols, terms, row) {
   for (const c of cols) {
     const v = row[c]
     if (v === null || v === undefined || v === '') continue
-    const s = String(v).toLowerCase()
-    if (terms.some(t => s.includes(t.text.toLowerCase()))) return c
+    const s = normSearchText(v)
+    // 带字段限定的词只在限定列内判定，否则标签会标到没参与 WHERE 的列（SUPP-02）
+    if (terms.some(t => (!t.cols || t.cols.includes(c)) && s.includes(normSearchText(t.text)))) return c
   }
   return ''
 }
@@ -400,10 +425,15 @@ function runSearch(query) {
     const perGroup = limits.perGroup
     // 所有源共用一个 pageState：任一组多取到一条 ⇒ 整次查询还有下一页。
     const pageState = { hasMore: false }
-    const meta = { page: limits.page, perGroup, hasMore: false }
+    const meta = { page: limits.page, perGroup, hasMore: false, pinyinDegraded: false }
     const q = String(query.q || '').trim()
     if (!q) return { groups: [], meta }
+    // 截断必须可见：termsTotal 是用户输入的词数，termsUsed 是实际参与过滤的词数。
+    const termsTotal = String(q).split(/\s+/).filter(Boolean).length
     const terms = splitTerms(q, limits.maxTerms)
+    meta.termsUsed = terms.length
+    meta.termsTotal = termsTotal
+    meta.truncatedTerms = termsTotal > terms.length
     if (!terms.length) return { groups: [], meta }
     // 只要有一个词是纯字母就启用拼音匹配器；**每个词自己**决定要不要走拼音（Q1-02）。
     // 旧写法要求「整条查询只有一个词」，于是 `zs 张三` / `zs ls` 这类多词查询里
@@ -426,7 +456,7 @@ function runSearch(query) {
       const canPinyin = pm && src.primary && src.pinyin !== false && cols.includes(src.primary)
       const pinyinByTerm = canPinyin
         ? pinyinAlternatives(terms, pm, src.primary, cols,
-          primaryValues(src.table, src.primary, limits.pinyinValues))
+          primaryValues(src.table, src.primary, limits.pinyinValues, meta))
         : null
       // 字段限定：本表没有该字段时 buildWhere 返回 null，整组跳过（也省掉这次扫描）
       const w = buildWhere(terms, cols, '', pinyinByTerm)
@@ -498,6 +528,12 @@ function runSearch(query) {
     let idNameMap = null
     const nameOfSeat = (v) => {
       if (v === null || v === undefined || v === '') return ''
+      // 历史对象格 { student_id, name }：不能落到 String(v)（会变成 "[object Object]"），
+      // 先按 id 取名册姓名，再退回对象里的 name（K05-08）
+      if (typeof v === 'object') {
+        const byId = v.student_id != null ? nameOfSeat(v.student_id) : ''
+        return byId || String(v.name || '')
+      }
       if (typeof v === 'number') {
         if (!idNameMap) {
           idNameMap = {}
@@ -622,7 +658,7 @@ function runSearch(query) {
       // 字段限定：`姓名:张三` 里的姓名别名含 member_name，能命中分组成员；限定到本表没有的字段则整组跳过。
       // 拼音按词补进同一个 WHERE（不再「没凑够再回表 OR 一次」，那样多词时会绕开 AND 关系）。
       const memberPinyin = pinyinAlternatives(terms, pm, 'member_name', ['member_name', 'remark'],
-        pm ? primaryValues('group_members', 'member_name', limits.pinyinValues) : [])
+        pm ? primaryValues('group_members', 'member_name', limits.pinyinValues, meta) : [])
       const mw = buildWhere(terms, ['member_name', 'remark'], 'm.', memberPinyin)
       let rows = []
       if (mw) {
@@ -654,7 +690,7 @@ function runSearch(query) {
                               FROM cadre_members m LEFT JOIN cadres c ON c.id = m.cadre_id`
     try {
       const cadrePinyin = pinyinAlternatives(terms, pm, 'student_name', ['student_name'],
-        pm ? primaryValues('cadre_members', 'student_name', limits.pinyinValues) : [])
+        pm ? primaryValues('cadre_members', 'student_name', limits.pinyinValues, meta) : [])
       const cw = buildWhere(terms, ['student_name'], 'm.', cadrePinyin)
       let rows = []
       if (cw) {
@@ -716,4 +752,4 @@ function runSearch(query) {
     return { groups, meta }
 }
 
-module.exports = { runSearch }
+module.exports = { runSearch, normSearchText, SEARCH_SOURCE_TABLES }

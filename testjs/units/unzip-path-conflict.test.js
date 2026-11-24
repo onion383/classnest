@@ -15,6 +15,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { createRequire } = require('node:module')
+const { spawnSync } = require('node:child_process')
 
 const ROOT = path.join(__dirname, '../..')
 const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
@@ -87,12 +88,37 @@ test('正常包仍能解压（补偿式 try/catch 不能误伤正常路径）', 
   assert.equal(fs.readFileSync(path.join(dest, 'sub', 'file.txt'), 'utf8'), 'ok-data')
 })
 
-test('变异反证：去掉 entry 回调的 try/catch 后，接线判据失败', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'student-backend/services/backupArchive.js'), 'utf8')
-  // 修复标志：mkdirSync 外层有 try，且注释点明 uncaughtException
-  assert.match(src, /entry 回调由 yauzl 在事件循环里调用[\s\S]{0,120}uncaughtException/, '缺少原因注释')
-  assert.match(src, /try \{\s*\n\s*fs\.mkdirSync\(path\.dirname\(target\)/, 'mkdirSync 外层要有 try')
-  const mutated = src.replace(/try \{\s*\n\s*fs\.mkdirSync\(path\.dirname\(target\)/, 'fs.mkdirSync(path.dirname(target)')
-  assert.ok(mutated !== src, '变异没匹配到 try')
-  assert.doesNotMatch(mutated, /try \{\s*\n\s*fs\.mkdirSync\(path\.dirname\(target\)/, '变异后判据应失败')
+test('变异反证：把 entry 回调的兜底 catch 改成重新抛出后，同一场景会崩进程', () => {
+  const zipPath = path.join(tmp, 'mutant-conflict.zip')
+  fs.writeFileSync(zipPath, makeStoreZip([{ name: 'a/b.txt', content: 'hello' }]))
+  const dest = path.join(tmp, 'dest-mutant')
+  fs.mkdirSync(dest, { recursive: true })
+  fs.writeFileSync(path.join(dest, 'a'), '占住 a，使 mkdirSync(dest/a) 抛 ENOTDIR')
+
+  // 变异体：把 entry 回调外层 `} catch (err) { fail(err) }` 改成 `throw err`，
+  // 等价于「没有就地兜底」。修复存在时同一场景返回 rejection；变异后同步抛错逃出
+  // 事件回调 → uncaughtException 崩进程。用子进程跑，避免把测试进程本身打挂。
+  const script = `
+    const Module = require('node:module');
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const abs = ${JSON.stringify(path.join(ROOT, 'student-backend/services/backupArchive.js'))};
+    const src = fs.readFileSync(abs, 'utf8');
+    const marker = '        } catch (err) {\\n          fail(err)\\n        }';
+    if (!src.includes(marker)) { console.error('MARKER_NOT_FOUND'); process.exit(7); }
+    const mutated = src.replace(marker, '        } catch (err) {\\n          throw err\\n        }');
+    const m = new Module(abs, null);
+    m.filename = abs;
+    m.paths = Module._nodeModulePaths(path.dirname(abs));
+    m._compile(mutated, abs);
+    setTimeout(() => { console.error('WATCHDOG'); process.exit(3); }, 8000);
+    m.exports.extractZip(${JSON.stringify(zipPath)}, ${JSON.stringify(dest)})
+      .then(() => { console.error('RESOLVED'); process.exit(0); })
+      .catch((e) => { console.error('REJECTED:' + (e && (e.code || e.message))); process.exit(0); });
+  `
+  const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 20000 })
+  assert.notEqual(r.status, 0,
+    '变异后同步抛错逃出 entry 回调 → uncaughtException 非零退出；正例判据「返回 rejection」必然失败')
+  assert.match(String(r.stderr), /ENOTDIR|EEXIST|not a directory/i,
+    '崩溃原因应是路径冲突：' + r.stderr)
 })

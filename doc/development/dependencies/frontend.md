@@ -59,7 +59,7 @@
 
 ### [`pinyin-match`](../../../student-frontend/node_modules/pinyin-match) 1.2.10 · MIT · 拼音模糊匹配
 - 用途：拼音模糊匹配。
-- 使用位置：[`components/base/SearchDialog.vue`](../../../student-frontend/src/components/base/SearchDialog.vue)（全局搜索弹窗）、[`views/SettingsView/searchData.js`](../../../student-frontend/src/config/searchData.js)（搜索数据源）。
+- 使用位置：[`components/base/SearchDialog.vue`](../../../student-frontend/src/components/base/SearchDialog.vue)（全局搜索弹窗）、[`config/searchData.js`](../../../student-frontend/src/config/searchData.js)（搜索数据源）。
 - **备注**：后端也依赖同版本（AI 工具里的姓名匹配）。
 
 ### [`sortablejs`](../../../student-frontend/node_modules/sortablejs) 1.15.7 · MIT · 拖拽排序库

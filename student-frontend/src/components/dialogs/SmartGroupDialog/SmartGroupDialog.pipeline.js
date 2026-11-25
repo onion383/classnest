@@ -78,6 +78,9 @@ export function useSmartGroupPipeline(ctx) {
       const leaders = Array(G).fill(null)                          // 组 -> 组长学生下标
       const forcedLeaders = new Set()
       const notLeaders = new Set()
+      // F03-03：si -> 指定它为组长的那条条件的 key。同组被后一条覆盖时，
+      // 据此把前一条的满足记账撤销（记 -1）、并从 forcedLeaders 移走，避免误报 100%。
+      const leaderKey = new Map()
 
       // 初始：洗牌 + 均匀分配 (round-robin)
       const total = roster.length
@@ -88,14 +91,20 @@ export function useSmartGroupPipeline(ctx) {
       // 依次应用流水线条件
       for (const st of ctx.stages.value) {
         if (st.type === 'relation') applyRelation(ctx, st, roster, members, leaders, forcedLeaders, notLeaders, target, G)
-        else if (st.type === 'identity') applyIdentity(ctx, st, roster, members, leaders, forcedLeaders, notLeaders)
+        else if (st.type === 'identity') applyIdentity(ctx, st, roster, members, leaders, forcedLeaders, notLeaders, leaderKey)
         else if (st.type === 'gender') applyGender(ctx, st, roster, members, target, G)
       }
 
       // 收尾：保证指定组长的成立；补充每组一个组长
+      // F03-03：同组多个强制组长时，流水线后者优先——把前一个人的满足记账撤销（0%）、
+      // 从 forcedLeaders 移走，再写当前这位。不静默保留前一条的 100% 假满足。
       for (const si of forcedLeaders) {
         const g = groupOf(members, si)
-        if (g >= 0) leaders[g] = si
+        if (g < 0) continue
+        const prev = leaders[g]
+        if (prev != null && prev !== si) disownLeader(ctx, prev, forcedLeaders, leaderKey)
+        leaders[g] = si
+        leaderKey.set(si, leaderKey.get(si) || '')
       }
       for (const si of notLeaders) {
         const g = groupOf(members, si)
@@ -227,8 +236,17 @@ function relationConflict(ctx, roster, members, si, to, skipKey) {
   return false
 }
 
+// F03-03：撤销某个被覆盖的强制组长——满足率记回 0（done -1，total 不动），
+// 从 forcedLeaders 移走，清掉 key 映射。流水线后者优先，前一条不能继续报 100%。
+function disownLeader(ctx, si, forcedLeaders, leaderKey) {
+  const key = leaderKey.get(si)
+  if (key) ctx.trackSatisfaction(key, -1, 0)
+  forcedLeaders.delete(si)
+  leaderKey.delete(si)
+}
+
 // 指定身份：XXX 担任/不担任 组长
-function applyIdentity(ctx, st, roster, members, leaders, forcedLeaders, notLeaders) {
+function applyIdentity(ctx, st, roster, members, leaders, forcedLeaders, notLeaders, leaderKey) {
   const id = st.studentId
   if (!id) return
   const si = roster.findIndex(s => String(s.id) === String(id))
@@ -236,7 +254,12 @@ function applyIdentity(ctx, st, roster, members, leaders, forcedLeaders, notLead
   const g = groupOf(members, si)
   let ok = false
   if (st.kind === 'leader') {
+    // 同组已有别的强制组长：流水线后者优先，前一条撤销（0% + 移走），本条接管。
+    if (g >= 0 && leaders[g] != null && leaders[g] !== si) {
+      disownLeader(ctx, leaders[g], forcedLeaders, leaderKey)
+    }
     forcedLeaders.add(si)
+    leaderKey.set(si, st.key)
     notLeaders.delete(si)
     if (g >= 0) {
       leaders[g] = si
@@ -245,6 +268,7 @@ function applyIdentity(ctx, st, roster, members, leaders, forcedLeaders, notLead
   } else { // not-leader
     notLeaders.add(si)
     forcedLeaders.delete(si)
+    leaderKey.delete(si)
     if (g >= 0 && leaders[g] === si) leaders[g] = null
     ok = true
   }

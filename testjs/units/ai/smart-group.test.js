@@ -216,3 +216,51 @@ test('穷举 1~12 人 / 1~5 组：single 模式下人数始终守恒', async () 
   }
   assert.deepEqual(bad, [], '这些组合丢了学生：' + bad.slice(0, 10).join('，'))
 })
+
+// ---- F03-03：同组两名强制组长，流水线后者优先，前一条判 0% ----
+// 累加式 mock（与真实 conditions.js 的 += 口径一致，不是本文件上面的覆盖式 =），
+// 才能验出 disownLeader 的 done=-1 抵消是否让满足率真的归 0。
+async function assignAccum(roster, G, stages) {
+  const { useSmartGroupPipeline } = await loadPipeline()
+  const satisfaction = { value: {} }
+  const ctx = {
+    roster: { value: roster },
+    groups: { value: Array.from({ length: G }, (_, i) => ({ name: '组' + (i + 1) })) },
+    stages: { value: stages },
+    satisfaction,
+    trackSatisfaction(key, done, total) {
+      const e = satisfaction.value[key] || (satisfaction.value[key] = { done: 0, total: 0 })
+      e.done += done
+      e.total += total
+    },
+  }
+  const { buildAssignment } = useSmartGroupPipeline(ctx)
+  const res = buildAssignment()
+  const pct = (key) => {
+    const e = satisfaction.value[key]
+    return !e || !e.total ? 0 : Math.round((e.done / e.total) * 100)
+  }
+  return { res, pct }
+}
+
+test('F03-03：同组两名强制组长，后指定的生效、先指定的满足率判 0%', async () => {
+  const roster = [{ id: 1, 姓名: '甲' }, { id: 2, 姓名: '乙' }, { id: 3, 姓名: '丙' }]
+  const stages = [
+    { type: 'identity', kind: 'leader', studentId: 1, key: 'k1' }, // 先指定甲
+    { type: 'identity', kind: 'leader', studentId: 2, key: 'k2' }, // 后指定乙
+  ]
+  const { res, pct } = await assignAccum(roster, 1, stages)
+  // 最终组长是后指定的乙（流水线后者优先）
+  assert.equal(roster[res.leaders[0]].姓名, '乙')
+  // 关键：先指定的甲那条条件必须判 0%，不能像修复前那样两条都报 100%
+  assert.equal(pct('k1'), 0, '被顶掉的先指定组长必须判 0%，不是 100%')
+  assert.equal(pct('k2'), 100, '后指定的组长应正常满足')
+})
+
+test('F03-03 回归：单个组长正常 100%，不被误撤销', async () => {
+  const roster = [{ id: 1, 姓名: '甲' }, { id: 2, 姓名: '乙' }, { id: 3,姓名: '丙' }]
+  const stages = [{ type: 'identity', kind: 'leader', studentId: 1, key: 'k1' }]
+  const { res, pct } = await assignAccum(roster, 1, stages)
+  assert.equal(roster[res.leaders[0]].姓名, '甲')
+  assert.equal(pct('k1'), 100, '只有一条组长条件时不该被撤销')
+})

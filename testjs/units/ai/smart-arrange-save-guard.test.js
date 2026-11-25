@@ -15,6 +15,7 @@ const test = require('node:test')
 const { abs } = require('#testjs/paths')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const { extractFunctionDecl } = require('#testjs/units/_mechanism.cjs')
 
 const SRC = 'student-frontend/src/views/SeatView.vue'
 const src = fs.readFileSync(abs(SRC), 'utf8')
@@ -49,12 +50,43 @@ test('同族：Excel 导入同样按返回值短路（不能只修智能排表�
     '导入路径也要在 saveSeats 失败时短路')
 })
 
-test('变异反证：去掉失败分支后，判据必须失败', () => {
-  const body = blockOf('async function applySmartArrangement', '// 导入确认弹窗')
-  assert.equal(saveGuard(body).ok, true, '基线必须通过，否则反证无意义')
-  const mutated = body.replace(/if \(!ok\) return\r?\n/, '')
-  assert.ok(mutated !== body, '变异没匹配到失败分支')
-  assert.equal(saveGuard(mutated).ok, false, '判据假绿：去掉失败短路仍判 PASS')
-  // 变异后 saveSeats 的返回值仍被接收，但没有任何地方使用它 —— 正是原来的 bug 形态
-  assert.match(mutated, /const ok = await grid\.saveSeats\(nextSeats\)/)
+// N1-28：把真实源码里的函数抽出来、注入桩依赖真跑，不再只盯字符串位置。
+// 变异直接作用于文件源码（同一 AST 提取入口），然后跑同一个行为判据。
+function runApply(transform = (s) => s) {
+  const source = transform(fs.readFileSync(abs(SRC), 'utf8'))
+  const decl = extractFunctionDecl(source, 'applySmartArrangement')
+  const calls = { save: 0, undo: 0, success: 0, error: 0 }
+  const deps = {
+    smartArrangementVisible: { value: true },
+    arrangeTarget: { value: 'active' },
+    masterGrid: { saveSeats: async () => { calls.save += 1; return true } },
+    activeGrid: { saveSeats: async () => { calls.save += 1; return false } },
+    gridSnapshotOf: () => ({ types: [] }),
+    recordGridSnapshotUndo: () => { calls.undo += 1 },
+    notifySuccess: () => { calls.success += 1 },
+    notifyError: () => { calls.error += 1 },
+    console,
+  }
+  const names = Object.keys(deps)
+  const fn = new Function(...names, `return ${decl}`)(...names.map((k) => deps[k]))
+  return { calls, invoke: () => fn({ seats: [[1]] }) }
+}
+
+test('行为：saveSeats 返回 false 时不登记撤销、不弹成功（真执行函数）', async () => {
+  const { calls, invoke } = runApply()
+  await invoke()
+  assert.equal(calls.save, 1)
+  assert.equal(calls.undo, 0, '写库失败不能登记撤销')
+  assert.equal(calls.success, 0, '写库失败不能提示成功')
+})
+
+test('变异反证：真源码删掉失败分支后，错误路径会登记撤销并提示成功', async () => {
+  const { calls, invoke } = runApply((s) => {
+    const out = s.replace('    if (!ok) return\n', '')
+    if (out === s) throw new Error('变异没匹配到失败分支')
+    return out
+  })
+  await invoke()
+  assert.equal(calls.undo, 1, '守卫失效后错误路径照样登记撤销')
+  assert.equal(calls.success, 1, '守卫失效后会弹出「已应用」假成功')
 })

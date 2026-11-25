@@ -37,6 +37,17 @@ const { isDev } = require('./main.env')
 const MAX_WRITE_BYTES = 50 * 1024 * 1024
 // 一键截屏的 JPEG 质量：90 在界面截图上肉眼几乎无差，编码耗时只有 PNG 的 1/10 左右
 const JPEG_QUALITY = 90
+
+/**
+ * 文件名时间戳：精确到毫秒。
+ *
+ * 只到秒时，1 秒内连存两次会生成同名文件，writeFile 直接把上一次的覆盖掉（静默丢数据）。
+ * 截图与笔记两个保存入口共用这一处 —— 分开写就会像 2026-11 那次一样，
+ * 一处有这行、另一处直接引用不存在的变量，调用才抛 ReferenceError。
+ */
+function fileStamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23)
+}
 // save-file 只服务导出类文件；扩展名由用户可在对话框里改，因此最终路径还要再校验一次。// 白名单与「前端/后端实际能产出的格式」严格对账（见 testjs/probe/export-format-probe.cjs）：
 // 少一个 → 那个格式导出必然被拒；多一个 → 白给一个写盘口子。
 // 注：原先含 '.htm'，但没有任何出口产出该扩展名（.html 已覆盖），属于多开的口子，已去掉。
@@ -381,8 +392,8 @@ function registerDialogsIpc(opts = {}) {
       // 整屏图常有几 MB，写盘走异步，避免截图瞬间主进程冻结
       await fsp.mkdir(saveDir, { recursive: true })
 
-      // 精度必须到毫秒：只到秒时 1 秒内连存两次会生成同名文件，writeFile 直接把上一次的覆盖掉（静默丢数据）
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23)
+      // 精度必须到毫秒（见 fileStamp 注释）
+      const timestamp = fileStamp()
       const filePath = path.join(saveDir, `screenshot_${timestamp}.${imageExt}`)
       await fsp.writeFile(filePath, image)
 
@@ -596,8 +607,8 @@ function registerDialogsIpc(opts = {}) {
     if (safeDir.error) return contract.fail(safeDir.error)
     const saveDir = safeDir.path
     await fsp.mkdir(saveDir, { recursive: true })
-    // 精度必须到毫秒：只到秒时 1 秒内连存两次会生成同名文件，writeFile 直接把上一次的覆盖掉（静默丢数据）
-    const filePath = path.join(saveDir, `note_${timestamp}.png`)
+    // 精度到毫秒（见 fileStamp 注释）
+    const filePath = path.join(saveDir, `note_${fileStamp()}.png`)
     await fsp.writeFile(filePath, buffer)
     return contract.ok({ filePath })
   }))

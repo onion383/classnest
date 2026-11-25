@@ -38,7 +38,6 @@ function buildSummary({ studentCount, scoreAgg, feeAgg, today }) {
     return { name, score: s['类型'] === '扣分' ? -score : score };
   });
 
-  const monthPrefix = today.slice(0, 7); // YYYY-MM，与前端 pad2(month) 同一口径
   // 余额/月收支由 SQL 聚合（K03-09）：不再把整张班费表读进内存逐行累加。
   // feeAgg 由调用方传入，保持 buildSummary 纯函数、便于单测。
   const feeBalance = Number((feeAgg && feeAgg.balance) || 0);

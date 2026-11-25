@@ -15,6 +15,9 @@ const fast = args.includes('--fast')
 const passThrough = args.filter((a) => a !== '--fast')
 
 const boards = [
+  // 守卫台账先跑：它是纯静态扫描（~0.2s），失败信息最具体（哪个文件第几行加了散点守卫），
+  // 放在最前面可以最快给出「这次提交是否在给测试资产加债」的结论。
+  { name: '守卫台账 guards', script: 'tools/guard-ledger.cjs' },
   { name: '单元 units', script: 'run-units.js' },
   { name: '行为 behavior', script: 'run-behavior.js' },
   // 探针必须进快测：它们是外键/守卫这类「只有故意改坏才看得见」的判据，

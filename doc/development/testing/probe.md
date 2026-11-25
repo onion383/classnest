@@ -12,7 +12,6 @@ classnest/
         ├── pages/
         │   └── secure-channel-retry.html  # 断言页（不是独立探针）：用假的 axios 驱动 secureAxios 的 401 处理分…
         ├── _sample-big.cjs  # 大样张数据生成（供相册/表格探针复用）
-        ├── bundle-diff.mjs  # 构建产物体积差异
         ├── card-height-anim-probe.cjs  # composables/useCardHeightAnimation.js 的时序（只测「高…
         ├── cdp-profile.mjs  # 渲染层启动 CPU 采样（CDP Profiler）：给打包版加调试口连上后 Page.re…
         ├── csp-style-probe.cjs  # 打包版「样式全乱」的复现与验证：用真实 dist + 从 electron/main/mai…
@@ -22,11 +21,9 @@ classnest/
         ├── etag-revalidate-probe.cjs  # ETag 重新校验行为
         ├── export-format-probe.cjs  # 导出格式清单对账（批 13）：导出格式在四处独立维护（主进程 ALLOWED_SAVE_EX…
         ├── fk-reject-probe.cjs  # 外键严格的表收到「不存在的 student_id」：路由层必须回 4xx 且不留脏行、绕过路…
-        ├── gdi-shot-bench.cjs  # GDI 截图性能基准
         ├── glyph-render-check.mjs  # 图标字形渲染核对
         ├── grid-row-drag-probe.cjs  # 网格行拖拽让位
         ├── inject-drag.ps1  # SetCursorPos + mouse_event 合成一次真实左键拖动（配合其它探针）
-        ├── inp-compare.mjs  # 两组配置的 INP 对比（如 3.5 / 3.6、VDOM / Vapor）
         ├── inp-probe.mjs  # 交互延迟（INP）：自动起 Vite + 带调试口的 Electron，CDP 派发真实输入…
         ├── ipc-guard-probe.cjs  # IPC 授权拦截层：授权内角色放行、越权时 handler 根本不被调用、表外通道拒绝、安装…
         ├── ipc-policy-gen.mjs  # IPC 授权表生成器：从渲染层静态 import 图推导「通道 → 允许的窗口角色」，输出 …
@@ -40,7 +37,6 @@ classnest/
         ├── longframe-probe.mjs  # 长帧定位（主线程阻塞点）
         ├── main-ipc-contract-probe.cjs  # 主进程 IPC 结果契约（批 13 根因修复的静态护栏）：① 契约层三态互斥（ok/fail…
         ├── mcp-live-connect-probe.cjs  # 用真实 MCP 客户端连运行中的后端：token 鉴权、工具清单、一次只读调用；覆盖传输层、…
-        ├── measure-startup.mjs  # 启动耗时；--backend-only / --dev / --json / --runs …
         ├── mode-probe.mjs  # 日/夜模式切换开销
         ├── night-btn-hover-probe.cjs  # 夜间主题按钮悬停配色
         ├── ocr-probe.mjs  # OCR 可用性（仅 Windows）
@@ -54,8 +50,6 @@ classnest/
         ├── rollback-probe.cjs  # 失败后 UI 必须回滚（「乐观更新」类 bug）：① 失败路径必须有回滚动作（写回旧值 / …
         ├── safe-json-probe.cjs  # 读库 JSON 列必须走统一兜底：① seats.js 的 snapshot/backfil…
         ├── save-zip-probe.cjs  # save-file 能不能落 .zip：替身 electron 跑真实 main.dialo…
-        ├── screenshot-bench.cjs  # 应用内截图性能基准
-        ├── search-bench.cjs  # 全局搜索接口耗时：灌 2 万条加扣分、3 万张照片的内存库，测端到端 p50/p90，并对照…
         ├── search-sources-probe.cjs  # 全局搜索（GET /api/search）各数据源能否命中、排序/多词/字段限定/focus…
         ├── select-db-file-probe.cjs  # 「从数据库登录」选文件通道（select-db-file）回归：① 用户取消必须走 canc…
         ├── slug-scope-probe.cjs  # 跨库状态分桶接线回归（「裸 id / 全局攒批」类 bug）：① scanWorker.js…
@@ -65,9 +59,6 @@ classnest/
         ├── table-service-probe.cjs  # 动态表服务的三条数据契约：删字段后加回同名列能找回旧值、导入行显式写 position（否则…
         ├── toplevel-bottom-probe.cjs  # 「顶层置底」最小原型（顶层窗口 + 透明圆角 + 拖动 + z 序自检，无业务代码）
         ├── upload-signature-probe.cjs  # 收据上传的类型校验：① 11 种真文件（jpg/png/webp/pdf/docx/xlsx…
-        ├── vapor-audit.mjs  # 组件 Vapor 迁移审计
-        ├── vapor-bench.mjs  # Vapor 通道基准
-        ├── vapor-verify.mjs  # 校验产物里 __vapor: true（拼错标记只会静默失效）
         ├── viewer-anim-probe.cjs  # 查看器切换动画
         ├── viewer-load-probe.cjs  # 查看器图片加载
         ├── viewer-open-probe.cjs  # 照片查看器打开耗时
@@ -114,11 +105,8 @@ classnest/
 | [`export-format-probe.cjs`](../../../testjs/probe/export-format-probe.cjs) | 导出格式清单对账（批 13）：导出格式在**四处独立维护**（主进程 `ALLOWED_SAVE_EXTS` / 后端 `EXPORT_FORMATS` / 后端 schema enum / 前端 `FORMAT_OPTIONS` 与实际扩展名），任一处漏改就出现「前端能导出、主进程拒收」的静默失败。本探针四处互校：白名单 ⊇ 前端在用扩展名、白名单 ⊇ 后端枚举、后端枚举 ↔ schema 枚举双向一致、`FORMAT_OPTIONS` 每项都有实现分支，且白名单不得比已知能力更宽；⑦ **收据能上传的类型必须都在白名单里**（来源是后端 `uploadSignatures.js` 的 `KINDS`，收据另存的文件名是动态的、扫不出字面量） |
 | [`ipc-policy-gen.mjs`](../../../testjs/probe/ipc-policy-gen.mjs) | IPC 授权表**生成器**：从渲染层静态 import 图推导「通道 → 允许的窗口角色」，输出 `electron/ipc-policy.json`。公共模块按「能 import 到它的入口集合」判角色；`OVERRIDE` 记人工覆盖（如 `set-db-encryption`：能力已备好、只差设置页入口） |
 | [`csp-style-probe.cjs`](../../../testjs/probe/csp-style-probe.cjs) | 打包版「样式全乱」的复现与验证：用真实 `dist` + 从 `electron/main/main.protocol.js` 提取的真实 CSP 注册 `app://` 加载首屏，检查每个 `<link rel=stylesheet>` 的 `media` 是否变成 `all`、CSS 是否真的加载。**必须走真实 CSP** —— dev 由 Vite 提供页面、不发 CSP 头，这个问题只在打包版出现 | `npx electron testjs/probe/csp-style-probe.cjs`；需先 `npm run build` |
-| [`measure-startup.mjs`](../../../testjs/probe/measure-startup.mjs) | 启动耗时；`--backend-only` / `--dev` / `--json` / `--runs` / `--exe`；数据隔离在 `%LOCALAPPDATA%\ClassNestStartupMeasure` |
 | [`longframe-probe.mjs`](../../../testjs/probe/longframe-probe.mjs) | 长帧定位（主线程阻塞点） |
 | [`inp-probe.mjs`](../../../testjs/probe/inp-probe.mjs) | 交互延迟（INP）：自动起 Vite + 带调试口的 Electron，CDP 派发真实输入（`npm run inp`） |
-| [`inp-compare.mjs`](../../../testjs/probe/inp-compare.mjs) | 两组配置的 INP 对比（如 3.5 / 3.6、VDOM / Vapor） |
-| [`bundle-diff.mjs`](../../../testjs/probe/bundle-diff.mjs) | 构建产物体积差异 |
 | [`refresh-warm-check.cjs`](../../../testjs/probe/refresh-warm-check.cjs) | 刷新/预热后的缓存命中 |
 | [`etag-revalidate-probe.cjs`](../../../testjs/probe/etag-revalidate-probe.cjs) | ETag 重新校验行为 |
 | [`cdp-profile.mjs`](../../../testjs/probe/cdp-profile.mjs) | 渲染层启动 CPU 采样（CDP Profiler）：给打包版加调试口连上后 `Page.reload` 重放首屏，按「自身耗时」聚合热点函数并落盘 `.cpuprofile`；只看渲染层 JS 工作量，整轮启动耗时用 `measure-startup.mjs` |
@@ -127,8 +115,6 @@ classnest/
 
 | 脚本 | 用途 |
 | --- | --- |
-| [`gdi-shot-bench.cjs`](../../../testjs/probe/gdi-shot-bench.cjs) | GDI 截图性能基准 |
-| [`screenshot-bench.cjs`](../../../testjs/probe/screenshot-bench.cjs) | 应用内截图性能基准 |
 | [`glyph-render-check.mjs`](../../../testjs/probe/glyph-render-check.mjs) | 图标字形渲染核对 |
 | [`night-btn-hover-probe.cjs`](../../../testjs/probe/night-btn-hover-probe.cjs) | 夜间主题按钮悬停配色 |
 | [`toplevel-bottom-probe.cjs`](../../../testjs/probe/toplevel-bottom-probe.cjs) | 「顶层置底」最小原型（顶层窗口 + 透明圆角 + 拖动 + z 序自检，无业务代码） |
@@ -159,7 +145,6 @@ classnest/
 | 脚本 | 用途 |
 | --- | --- |
 | [`search-sources-probe.cjs`](../../../testjs/probe/search-sources-probe.cjs) | 全局搜索（`GET /api/search`）各数据源能否命中、排序/多词/字段限定/`focus` 串是否正确；内存库 + `require.cache` 替换 `../db`，22 条断言，失败退出码 1。无需桌面、毫秒级 |
-| [`search-bench.cjs`](../../../testjs/probe/search-bench.cjs) | 全局搜索接口耗时：灌 2 万条加扣分、3 万张照片的内存库，测端到端 p50/p90，并对照旧实现「拉 1000 行 + 逐格拼音」的成本；`--runs=N` 控制轮次，不做门限判定 |
 | [`db-size-probe.cjs`](../../../testjs/probe/db-size-probe.cjs) | 库体积 / freelist / WAL 只读探针（v6 · 0-4）：明文库读 `page_size` / `page_count` / `freelist_count` 并算 `freelistRatio`；加密库只报文件与 `-wal` / `-shm` 体积并标 `encrypted`，不硬解密钥。`--json` 出机器可读结果，`--selftest` 造「删了大量行的明文库 + 随机字节库」自证两类判定 |
 | [`storage-size-probe.cjs`](../../../testjs/probe/storage-size-probe.cjs) | 目录 / 日志体积只读探针（v6 · 0-5）：统计 `uploads` / `album-trash` / `receipt-trash` / `album-thumbs` / `snapshots` / `ai-memory` / `ai-skills` / `ffmpeg` 与四个日志出口的字节数与文件数，给回收站保留期与日志轮转提供基线；`--json` / `--selftest` |
 | [`pkg-size-probe.cjs`](../../../testjs/probe/pkg-size-probe.cjs) | 打包体积构成 + 生产依赖存在性（v6 · 1-12）：把 `release*/win-unpacked` 按 `app.asar` / 根依赖 / 后端依赖 / `locales` / 根目录二进制分桶并按体积降序列出，单独列出 `ffmpeg.exe` 与字体等大文件；同时对 `package.json` 的每个 `dependencies` 做 `require.resolve` 核对（漏装会在打包后表现为启动即崩）。`--dir=` 指定产物、`--json` 出机器可读结果、`--selftest` 自证分桶与格式化 |
@@ -173,9 +158,6 @@ classnest/
 
 | 脚本 | 用途 |
 | --- | --- |
-| [`vapor-verify.mjs`](../../../testjs/probe/vapor-verify.mjs) | 校验产物里 `__vapor: true`（拼错标记只会静默失效） |
-| [`vapor-bench.mjs`](../../../testjs/probe/vapor-bench.mjs) | Vapor 通道基准 |
-| [`vapor-audit.mjs`](../../../testjs/probe/vapor-audit.mjs) | 组件 Vapor 迁移审计 |
 
 ### 其他
 

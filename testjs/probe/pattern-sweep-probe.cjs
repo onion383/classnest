@@ -96,7 +96,7 @@ function isCommentLine(line, inBlock) {
 const SELF_EXEMPT = [
   'testjs/probe/pattern-sweep-probe.cjs',
   'testjs/tools/mutate-sweep.cjs',
-  'testjs/units/sweep-fixes.test.js',
+  'testjs/units/runtime/sweep-fixes.test.js',
 ]
 
 function scanLines(fn, scope) {
@@ -364,7 +364,7 @@ const PATTERNS = [
       return !hasPoll
     },
     known: [
-      'testjs/probe/gdi-shot-bench.cjs',
+      'testjs/tools/gdi-shot-bench.cjs',
     ],
     exemptFiles: [],
     exempt: [],

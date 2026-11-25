@@ -13,13 +13,14 @@ classnest/
 │   │   └── main.startup-timer.js
 │   └── afterPack.js  # 仅 win32
 └── testjs/
-    └── probe/
+    ├── probe/
+    │   ├── etag-revalidate-probe.cjs  # 缓存校验
+    │   ├── inp-probe.mjs  # 交互延迟（INP），自动起 Vite + 带调试口的 Electron，CDP 派发真实输入
+    │   ├── longframe-probe.mjs  # 长帧
+    │   └── pdf-leak-probe.mjs  # PDF 导出内存泄漏（看 V8 external）
+    └── tools/
         ├── bundle-diff.mjs  # 构建产物体积差异
-        ├── etag-revalidate-probe.cjs  # 缓存校验
-        ├── inp-probe.mjs  # 交互延迟（INP），自动起 Vite + 带调试口的 Electron，CDP 派发真实输入
-        ├── longframe-probe.mjs  # 长帧
-        ├── measure-startup.mjs  # 启动耗时；--backend-only / --dev / --json / --runs
-        └── pdf-leak-probe.mjs  # PDF 导出内存泄漏（看 V8 external）
+        └── measure-startup.mjs  # 启动耗时；--backend-only / --dev / --json / --runs
 ```
 <!-- doc-tree:end -->
 
@@ -227,10 +228,10 @@ Node 的 `server.listen()` 要到 `nextTick` 才真正绑定端口（同步返�
 | 命令 / 脚本 | 测量内容 |
 | --- | --- |
 | `npm run inp` → [`testjs/probe/inp-probe.mjs`](../../../testjs/probe/inp-probe.mjs) | 交互延迟（INP），自动起 Vite + 带调试口的 Electron，CDP 派发真实输入 |
-| [`testjs/probe/measure-startup.mjs`](../../../testjs/probe/measure-startup.mjs) | 启动耗时；`--backend-only` / `--dev` / `--json` / `--runs` |
+| [`testjs/tools/measure-startup.mjs`](../../../testjs/tools/measure-startup.mjs) | 启动耗时；`--backend-only` / `--dev` / `--json` / `--runs` |
 | [`testjs/probe/longframe-probe.mjs`](../../../testjs/probe/longframe-probe.mjs) | 长帧 |
 | [`testjs/probe/pdf-leak-probe.mjs`](../../../testjs/probe/pdf-leak-probe.mjs) | PDF 导出内存泄漏（看 V8 external） |
-| [`testjs/probe/bundle-diff.mjs`](../../../testjs/probe/bundle-diff.mjs) | 构建产物体积差异 |
+| [`testjs/tools/bundle-diff.mjs`](../../../testjs/tools/bundle-diff.mjs) | 构建产物体积差异 |
 | [`testjs/probe/etag-revalidate-probe.cjs`](../../../testjs/probe/etag-revalidate-probe.cjs) | 缓存校验 |
 | 性能面板 | `perf-snapshot`（逐进程内存、总计、平均、最高）、`perf-startup`（启动时间线）、`perf-disk-usage`（空间管理归账）、`perf-logs-clear`（清空日志） |
 | `<数据目录>/logs/startup.log` + `backend.log` | 主进程时间线、握手分段、后端 `[boot]` 段与首屏请求到达时刻；两文件零点不同，只做各自内部的段内比较 |

@@ -84,6 +84,75 @@ const ARCH_RULES = {
   ],
 }
 
+// ---------- 源码约定：从测试断言升级而来（写代码时就报，不用等跑测试） ----------
+//
+// 为什么会有这一块：这类约定的共同点是「错误写法可能在任意文件出现，但测试只覆盖了
+// 其中一个文件」。放在 lint 里覆盖面更大，且不必等到有人想起跑测试。
+//
+// ⚠️ 测试里的同名断言**不删**。项目没有 git 钩子、lint 也不挂 build，
+// 所以 lint 是提前量而不是兜底；兜底仍然是 units 里那条断言。
+//
+// 每条的 selector 都要求「命中即真错」，不做风格判断：
+const R_NO_RELOAD = {
+  // 桌面应用整页 reload 会丢滚动位置与当前路由；切班/恢复应走 classScope 的收尾。
+  // 对应测试：class-scope.test.js「切班不得整页重载」
+  selector: "CallExpression[callee.property.name='reload'][callee.object.property.name='location']",
+  message: '不要整页 reload：会丢滚动位置与当前路由，改用 classScope 的切换收尾',
+}
+
+const R_NO_AXIOS_IN_CLASS_DIALOG = {
+  // 这个弹窗是「改完点保存」，读写归调用方；在这里直连接口会绕过保存语义。
+  // 对应测试：class-scope.test.js「重命名不应直接调接口」
+  selector: "Identifier[name='axios']",
+  message: 'ClassInfoDialog 不直连接口：改名走 emit(rename-class)，由调用方统一保存',
+}
+
+const R_NO_MANUAL_UNBIND = {
+  // 这三个监听已登记进 utils/disposables，再手写一遍解绑是双份维护 ——
+  // capture 选项一旦不一致，就是「看起来清了其实没清」。
+  // 只列这三个事件名：App.vue 里 mousemove/mouseup 是 stopUnitDrag 的临时监听，必须手写解绑。
+  // 对应测试：lifecycle-migration.test.js §5-17
+  selector:
+    "CallExpression[callee.property.name='removeEventListener'][arguments.0.value=/^(resize|ai-config-changed|mousedown)$/]",
+  message: '这个监听已登记进 utils/disposables，不要手写解绑（capture 选项会两处不一致）',
+}
+
+const R_NO_TIMER_ID_FIELD = {
+  // defer 自带撤销；把 setTimeout 的 id 写回字段会让「取消」变成两套（cancel() 与 clearTimeout）。
+  // 对应测试：lifecycle-migration.test.js「不该再把 timer id 写回字段」
+  selector: "AssignmentExpression[left.property.name='_measureTimer']",
+  message: '测量防抖用 ctx._measureTimer = d.defer()，不要存 setTimeout 的 id',
+}
+
+const R_NO_CLEAR_DEFER = {
+  // 与上一条配套：既然 id 不再存在，手写 clearTimeout 就是第二套取消路径。
+  // 对应测试：lifecycle-migration.test.js「defer 自带撤销，不该再手写 clearTimeout」
+  selector:
+    "CallExpression[callee.name='clearTimeout'][arguments.0.property.name='_measureTimer']",
+  message: 'defer 自带撤销：用 ctx._measureTimer.cancel()，不要 clearTimeout',
+}
+
+const R_NO_HARDCODED_PORT = [
+  {
+    // 端口只有一个来源：config/ports.cjs（读 config/ports.json）。
+    // 写死 3000/5173 的后果是「改了端口，某一处仍在连旧端口」——不报错，只是连不上。
+    // 对应测试：ports-config.test.js「不得残留写死的端口地址」——那条只查 10 个文件，这里查全仓。
+    selector: "Literal[value=/127\\.0\\.0\\.1:(3000|5173)|localhost:(3000|5173)/]",
+    message: '不要写死端口：从 config/ports.cjs 取（backendOrigin / frontendOrigin）',
+  },
+  {
+    // 模板串里的端口走 TemplateElement（不是 Literal）。注意 esquery 只支持 =/!=/</>/<=/>=，
+    // 不支持 CSS 的 `*=`（踩过：写了 *= 规则静默失效，一条都不报）。
+    // 只认具体端口号，不能只匹配 `127.0.0.1:` —— 那样会误伤 `${port}` 这类合法插值。
+    selector: 'TemplateElement[value.raw=/127\\.0\\.0\\.1:(3000|5173)/]',
+    message: '不要写死端口：从 config/ports.cjs 取（backendOrigin / frontendOrigin）',
+  },
+  {
+    selector: 'TemplateElement[value.raw=/localhost:(3000|5173)/]',
+    message: '不要写死端口：从 config/ports.cjs 取（backendOrigin / frontendOrigin）',
+  },
+]
+
 export default [
   {
     ignores: [
@@ -124,7 +193,7 @@ export default [
         withDefaults: 'readonly',
       },
     },
-    rules: SHARED_RULES,
+    rules: { ...SHARED_RULES, 'no-restricted-syntax': ['error', R_NO_RELOAD, ...R_NO_HARDCODED_PORT] },
   },
 
   // ---------- 后端 + 主进程：CJS + Node ----------
@@ -135,7 +204,7 @@ export default [
       sourceType: 'commonjs',
       globals: { ...globals.node },
     },
-    rules: SHARED_RULES,
+    rules: { ...SHARED_RULES, 'no-restricted-syntax': ['error', ...R_NO_HARDCODED_PORT] },
   },
 
   // ---------- 业务层：架构守卫 ----------
@@ -144,6 +213,28 @@ export default [
   {
     files: ['student-backend/services/**/*.js', 'student-backend/routes/**/*.js', 'student-backend/utils/**/*.js'],
     rules: ARCH_RULES,
+  },
+
+  // ---------- 单文件约定 ----------
+  // ⚠️ flat config 里 `no-restricted-syntax` 同 key 会整组覆盖（不是追加），
+  // 所以每块都要把前端通用那条（R_NO_RELOAD）一起带上，否则这个文件里 reload 就没人管了。
+  {
+    files: ['student-frontend/src/components/dialogs/ClassInfoDialog.vue'],
+    rules: {
+      'no-restricted-syntax': ['error', R_NO_RELOAD, ...R_NO_HARDCODED_PORT, R_NO_AXIOS_IN_CLASS_DIALOG],
+    },
+  },
+  {
+    files: ['student-frontend/src/App.vue'],
+    rules: {
+      'no-restricted-syntax': ['error', R_NO_RELOAD, ...R_NO_HARDCODED_PORT, R_NO_MANUAL_UNBIND],
+    },
+  },
+  {
+    files: ['student-frontend/src/components/tables/GridView/GridView.vue'],
+    rules: {
+      'no-restricted-syntax': ['error', R_NO_RELOAD, ...R_NO_HARDCODED_PORT, R_NO_TIMER_ID_FIELD, R_NO_CLEAR_DEFER],
+    },
   },
 
   // ---------- preload 特例：跑在渲染进程里 ----------

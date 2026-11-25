@@ -76,7 +76,16 @@ function changedFiles(opt) {
 }
 
 const opt = parseArgs(process.argv.slice(2))
-const allTests = fs.readdirSync(UNITS).filter((f) => f.endsWith('.test.js')).sort()
+// 递归：units 已按业务域分目录，非递归只会看到根目录的空壳
+function collect(dir, base = dir, out = []) {
+  for (const e of fs.readdirSync(base, { withFileTypes: true })) {
+    const full = path.join(base, e.name)
+    if (e.isDirectory()) { collect(dir, full, out); continue }
+    if (e.name.endsWith('.test.js')) out.push(path.relative(dir, full).split(path.sep).join('/'))
+  }
+  return out
+}
+const allTests = collect(UNITS).sort()
 const changed = changedFiles(opt)
 const selected = []
 for (const file of allTests) {

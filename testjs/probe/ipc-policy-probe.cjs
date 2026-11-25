@@ -65,22 +65,29 @@ function walk(dir, out = []) {
   return out
 }
 const frontendFiles = walk(FRONTEND)
+// 反向扫一遍：先把「前端实际调用过哪些通道」收集成集合，再对照授权表。
+// 原来是「每条通道 × 每个文件」跑正则（200 × 283 = 5.6 万次 test，实测 6s），
+// 反过来只需 283 个文件各扫两遍（<0.3s），语义完全等价。
+const frontendSources = frontendFiles
+  .filter((f) => path.basename(f) !== 'electronChannels.js') // 常量表，不是调用点
+  .map((f) => {
+    try { return { f, src: fs.readFileSync(f, 'utf8') } } catch (_) { return null }
+  })
+  .filter(Boolean)
 const toKey = (n) => n.replace(/[^a-zA-Z0-9]+/g, '_').toUpperCase()
-for (const c of listed) {
-  const tk = toKey(c)
-  const re1 = new RegExp('\\b(SEND|INVOKE)\\.(' + tk + ')\\b')
-  const re2 = new RegExp("(invoke|send)\\(\\s*['\"]" + c.replace(/[-]/g, '\\-') + "['\"]")
-  let called = false
-  for (const f of frontendFiles) {
-    if (path.basename(f) === 'electronChannels.js') continue // 常量表，不是调用点
-    let src
-    try { src = fs.readFileSync(f, 'utf8') } catch (_) { continue }
-    if (!src.includes(tk) && !src.includes(c)) continue
-    if (re1.test(src) || re2.test(src)) { called = true; break }
+const keyToChannel = new Map([...listed].map((c) => [toKey(c), c]))
+const calledChannels = new Set()
+for (const { src } of frontendSources) {
+  for (const m of src.matchAll(/\b(?:SEND|INVOKE)\.([A-Z][A-Z0-9_]*)\b/g)) {
+    const ch = keyToChannel.get(m[1])
+    if (ch) calledChannels.add(ch)
   }
-  if (called) {
-    assert((policy[c] || []).length > 0, `通道「${c}」前端有调用痕迹但授权为空 → 会被拦截，功能将失效`)
+  for (const m of src.matchAll(/\b(?:invoke|send)\(\s*['"]([a-zA-Z0-9_-]+)['"]/g)) {
+    if (Object.prototype.hasOwnProperty.call(policy, m[1]) || listed.has(m[1])) calledChannels.add(m[1])
   }
+}
+for (const c of calledChannels) {
+  assert((policy[c] || []).length > 0, `通道「${c}」前端有调用痕迹但授权为空 → 会被拦截，功能将失效`)
 }
 
 // ---------- 3) 敏感通道只能给主窗口 ----------
@@ -175,19 +182,23 @@ function roleOfRel(rel) {
   if (rel.startsWith('src/')) return 'main'
   return null
 }
-for (const c of listed) {
-  const tk = toKey(c)
-  const re1 = new RegExp('\\b(SEND|INVOKE)\\.(' + tk + ')\\b')
-  const re2 = new RegExp("(invoke|send)\\(\\s*['\"]" + c.replace(/[-]/g, '\\-') + "['\"]")
-  for (const f of frontendFiles) {
-    const rel = path.relative(ROOT, f).split(path.sep).join('/')
-    if (path.basename(f) === 'electronChannels.js') continue // 常量表，不是调用点
-    let src
-    try { src = fs.readFileSync(f, 'utf8') } catch (_) { continue }
-    if (!src.includes(tk) && !src.includes(c)) continue
-    if (!re1.test(src) && !re2.test(src)) continue
-    const role = roleOfRel(rel)
-    if (!role) continue
+// 注意 rel 的基准是 student-frontend/，不是仓库根 —— ROLE_DIRS 写的是 `src/subwindows/…`。
+// 原来用 path.relative(ROOT, f) 得到 `student-frontend/src/…`，永远匹配不上任何角色，
+// 于是这条断言对每个文件都 continue：看起来在守卫，实际一次都没校验过（假绿）。
+const FRONTEND_ROOT = path.join(ROOT, 'student-frontend')
+for (const { f, src } of frontendSources) {
+  const rel = path.relative(FRONTEND_ROOT, f).split(path.sep).join('/')
+  const role = roleOfRel(rel)
+  if (!role) continue
+  const chans = new Set()
+  for (const m of src.matchAll(/\b(?:SEND|INVOKE)\.([A-Z][A-Z0-9_]*)\b/g)) {
+    const ch = keyToChannel.get(m[1])
+    if (ch) chans.add(ch)
+  }
+  for (const m of src.matchAll(/\b(?:invoke|send)\(\s*['"]([a-zA-Z0-9_-]+)['"]/g)) {
+    if (Object.prototype.hasOwnProperty.call(policy, m[1]) || listed.has(m[1])) chans.add(m[1])
+  }
+  for (const c of chans) {
     assert(
       (policy[c] || []).includes(role),
       `${rel}（${role} 窗口）调用了未授权通道「${c}」→ 该窗口 preload 白名单里没有 → 调用会静默失效`

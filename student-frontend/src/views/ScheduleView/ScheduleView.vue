@@ -380,7 +380,7 @@ const {
   applyMasterToActive, applyActiveToMaster,
 } = { ...master, ...active }
 const {
-  loadHistorySnapshot, fetchHistoryWeeks, captureHistorySnapshot, requestDeleteHistorySnapshot, confirmDeleteHistorySnapshot, onSwitchWeek,
+  fetchHistoryWeeks, confirmDeleteHistorySnapshot,
 } = history
 const { retryFailedLoads, _applyRowFocus } = common
 

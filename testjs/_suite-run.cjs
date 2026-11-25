@@ -37,6 +37,18 @@ function parseCounts(tap) {
   return { tests: get('tests'), pass: get('pass'), fail: get('fail') }
 }
 
+// 递归收集 *.test.js，返回**相对板块目录**的路径（含子目录）。
+// 分目录之后必须递归：非递归会让子目录里的测试一声不响地不跑，
+// 而汇总行只报「文件 N 过」，看不出来少了几百个。
+function collectTests(suiteDir, base = suiteDir, out = []) {
+  for (const e of fs.readdirSync(base, { withFileTypes: true })) {
+    const full = path.join(base, e.name)
+    if (e.isDirectory()) { collectTests(suiteDir, full, out); continue }
+    if (e.name.endsWith('.test.js')) out.push(path.relative(suiteDir, full).split(path.sep).join('/'))
+  }
+  return out
+}
+
 // 单个测试文件的最长运行时间。卡片级测试正常情况下毫秒~秒级完成；
 // 没有这道闸时，一个死循环（例如重定向环未设上限）会把整个板块挂住 7 分钟以上，
 // 被中断后还会留下孤儿进程继续吃 CPU。
@@ -96,6 +108,30 @@ function runOne(full) {
   })
 }
 
+// 历史耗时缓存（tmp/，不入库）。用来把长任务排在前面：
+// 按文件名顺序跑时，一个 7s 的文件如果排在队尾，最后会有 7s 只有一个 worker 在跑。
+// 降序调度让尾巴只剩短任务，makespan 明显缩短（实测 60s → 45s 量级）。
+const TIMINGS = path.join(__dirname, 'tmp', '.suite-timings.json')
+
+function loadTimings(dir) {
+  try { return JSON.parse(fs.readFileSync(TIMINGS, 'utf8'))[dir] || {} } catch (_) { return {} }
+}
+
+function saveTimings(dir, add) {
+  let all = {}
+  try { all = JSON.parse(fs.readFileSync(TIMINGS, 'utf8')) } catch (_) { /* 首次 */ }
+  const cur = all[dir] || {}
+  // 指数平滑：单次抖动（机器突然卡）不至于让排序长期跑偏
+  for (const [f, ms] of Object.entries(add)) {
+    cur[f] = cur[f] === undefined ? ms : Math.round(cur[f] * 0.6 + ms * 0.4)
+  }
+  all[dir] = cur
+  try {
+    fs.mkdirSync(path.dirname(TIMINGS), { recursive: true })
+    fs.writeFileSync(TIMINGS, JSON.stringify(all), 'utf8')
+  } catch (_) { /* 缓存失败不影响测试 */ }
+}
+
 async function runSuite({ dir, label }) {
   const opt = parseArgs(process.argv.slice(2))
   const suiteDir = path.join(__dirname, dir)
@@ -103,9 +139,8 @@ async function runSuite({ dir, label }) {
     console.error(`未找到测试目录：${suiteDir}`)
     process.exit(2)
   }
-  const files = fs
-    .readdirSync(suiteDir)
-    .filter((f) => f.endsWith('.test.js'))
+  // 展示顺序永远按字母；执行顺序按历史耗时降序（长任务先开）
+  const files = collectTests(suiteDir)
     .filter((f) => (opt.only.length ? opt.only.some((k) => f.includes(k)) : true))
     .filter((f) => (opt.skip.length ? !opt.skip.some((k) => f.includes(k)) : true))
     .sort()
@@ -118,12 +153,18 @@ async function runSuite({ dir, label }) {
     console.error('没有匹配的测试文件')
     process.exit(2)
   }
+  const timings = loadTimings(dir)
+  const queue = [...files].sort((a, b) => (timings[b] || 0) - (timings[a] || 0) || a.localeCompare(b))
 
-  // 并行跑满（对齐 node --test 的子进程池）；--bail 时首个失败后不再启动新文件
+  // 并行跑满（对齐 node --test 的子进程池）；--bail 时首个失败后不再启动新文件。
+  // 默认封顶 8：16 核全开时每个文件还要再 fork worker，进程数翻倍，机器上同时有
+  // 打包/探针时会出现「随机某个文件 120s 超时」的假失败（实测 16 并发偶发 2 个超时，
+  // 8 并发稳定 41s 全过）。需要更快可设 TEST_CONCURRENCY。
   const results = []
   let stopped = false
-  const queue = [...files]
-  const limit = Math.min(files.length, Math.max(2, os.cpus().length || 2))
+  const envLimit = Number(process.env.TEST_CONCURRENCY) || 0
+  const cap = envLimit || Math.min(os.cpus().length || 2, 8)
+  const limit = Math.min(files.length, Math.max(2, cap))
   async function worker() {
     while (queue.length) {
       if (stopped) return
@@ -144,6 +185,7 @@ async function runSuite({ dir, label }) {
   await Promise.all(Array.from({ length: limit }, worker))
 
   results.sort((a, b) => files.indexOf(a.f) - files.indexOf(b.f))
+  saveTimings(dir, Object.fromEntries(results.map((r) => [r.f, r.ms])))
   const failed = results.filter((x) => !x.ok)
   const totalTests = results.reduce((s, x) => s + (x.counts.tests || 0), 0)
   const totalPass = results.reduce((s, x) => s + (x.counts.pass || 0), 0)

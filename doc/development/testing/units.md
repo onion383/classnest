@@ -68,7 +68,6 @@ classnest/
         ├── group-dimension-delete.test.js  # 分组维度删除的撤销（Q2-08）：维度 + 该维度全部小组 + 全部成员 + 剩余维度重排合…
         ├── inp-longtask.test.js  # 主线程长任务观察（v6 · 0-2）：16ms 起记录、不支持时不装配、observe/单条 onRecord 抛错不影响后续；longTasks 必须随 INP_REPORT 落盘且 reset 清空
         ├── ipc-binary-payload.test.js  # IPC 大对象载荷（P3-07 / N2-07）：背景图走 ArrayBuffer 不再 base64；业务 ZIP 走磁盘中转且只允许搬临时目录内的 .zip
-        ├── keep-alive.test.js  # 后端 keep-alive 显式配置（v6 · 1-6）：listen 后设 keepAliveTimeout/headersTimeout，且前者必须大于后者
         ├── kill-tree.test.js  # 「杀进程树」端到端（V5-010/011/013）：真实三层进程树（父 → 子 → 孙），W…
         ├── leave-state.test.js  # 「今天在不在校」的唯一口径（utils/leaveState.js）。回归首页右上角「请假 …
         ├── leave-undo-wiring.test.js  # 请假记录全链路撤销（Q2-05）：新增（弹窗 / 行内）、编辑、删除、销假、撤销销假都要登记…
@@ -209,7 +208,11 @@ classnest/
         ├── cadre-member-provisional.test.js  # 班干部成员自己认人（P1-3）
         ├── cadre-tree-member-remove.test.js  # 递归组件的事件转发必须带全参数（#58）
         ├── class-scope.test.js  # 「切班不重启」接线判据
-        ├── cors-origin-null.test.js  # CORS 不许无条件信任 Origin: null
+        ├── cors-origin-null.test.js  # CORS 不许无条件信任 Origin: null（判定函数边界）
+        ├── cors-mechanism.test.js  # CORS 白名单/暴露头固定机制：AST 抽产品配置 + 真 cors/express 请求，不写死源码文本
+        ├── app-wiring-static.test.js  # 后端 app.js 相关静态接线守卫聚合（相册定位/保活超时/收据归一/删学生放行）
+        ├── frontend-static-wiring.test.js  # 前端静态接线守卫聚合（导入提示/弹窗动画/splash 撞名/视频兜底）
+        ├── e2e-seat-score-undo.test.js  # 端到端流水线：排座→加分→改格→撤销→重做，验跨模块状态一致
         ├── custom-scrollbar-reflow.test.js  # 滚动条测量不许制造强制同步布局
         ├── data-checks-dangling.test.js  # 数据体检的「孤立数据」规则
         ├── date-column-validation.test.js  # 日期列拒绝非法日期（4-2 / #61）
@@ -256,7 +259,6 @@ classnest/
         ├── mcp-server.test.js  # 方向 B（班集作为 MCP 服务端）端到端验证
         ├── mcp-token-copy-status.test.js  # 复制失败不能提示成功（v7 §5-8 / #27b）
         ├── mcp-token-store.test.js  # U4：令牌明文可复制（明文存加密班级库，core 只留索引）
-        ├── media-viewer-video-error.test.js  # 视频加载失败不能停在骨架无限等（复核 A4-03）
         ├── multi-class.test.js  # 「一个账号多个班级」接线判据
         ├── not-found-404.test.js  # PUT/DELETE 不存在的 id 必须 404（4-3）
         ├── owned-electron-child.test.js  # 性能探针退出时必须关掉自己启动的 Electron
@@ -326,7 +328,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），337 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），339 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
 - **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
@@ -466,7 +468,6 @@ classnest/
 | [`photo-info-cache.test.js`](../../../testjs/units/photo-info-cache.test.js) | 相册「信息」缓存封顶（v6 · 1-4）：超过 200 条淘汰最久未使用、命中会刷新顺序；模块加载时已登记用户级清理（登出/换号后为空）；接线判据锁 `AlbumView` 不再自带无上限 `Map`、读写与卸载都走该模块 | 前端 ESM 动态 `import()`；3 条用例 |
 | [`secure-channel-idle-sweep.test.js`](../../../testjs/units/secure-channel-idle-sweep.test.js) | 安全通道空闲清扫（v6 · 1-5）：`now` 可注入 → 推进到 TTL 之后会话必被清、未过期不动；清扫定时器幂等、`unref`（不拖住进程退出）、可停；接线判据锁「只有 `initMaster` 成功才启动」且握手/凭据路径上的兜底清扫仍在 | 真 `node:crypto` 生成公钥；3 条用例 |
 | [`secure-response-serialize.test.js`](../../../testjs/units/secure-response-serialize.test.js) | 响应只序列化一次（v6 · 1-2）：加密分支信封与 `JSON.stringify({ d })` **逐字节一致**且不再经过 `res.json`；密文能被同一会话密钥解回原对象；非加密 / 豁免路径 / 会话失效仍走 `res.json` 原路；`no-store` 头保留 | 假 `req`/`res` + 真 seal/open；3 条用例 |
-| [`keep-alive.test.js`](../../../testjs/units/keep-alive.test.js) | 后端 keep-alive 显式配置（v6 · 1-6）：`app.listen` 之后必须设 `keepAliveTimeout` / `headersTimeout`，且后者严格大于前者（否则先按请求头超时掐连接，保活等于没生效），两个值都要大于 Node 默认 5s | 源码接线判据；1 条用例 |
 | [`lifecycle-resources.test.js`](../../../testjs/units/lifecycle-resources.test.js) | 定时器/监听器「创建处 = 销毁处」守卫（v6 · 1-11 + 1-13）：全量扫描 `src/**`，`setInterval` 必须有 `clearInterval` 或 `d.interval`；`window`/`document` 级 `addEventListener` 必须被移除、`.listen()`、`{ once: true }` 或 `{ signal }` 覆盖（元素级监听随元素销毁不计）；豁免表每项都必须仍需要豁免（防止过期白名单）；并用注入样本自证规则真的会判红 | 源码文本审计；4 条用例 |
 | [`data-export-tables.test.js`](../../../testjs/units/data-export-tables.test.js) | `/api/data/tables` 只计数不物化（v6 · 1-3）：内存库 + 真 router，插入 3 名学生 / 2 个活动后计数正确；用 SQL spy 断言整个 GET 期间**没有任何** `SELECT * FROM students\\|activities`、且确实走了 `COUNT(*)`；没有物理表的「应用设置」仍走 `build` 兜底；再按源码判据锁「除派生表外每张表都配了 count」 | 内存库 + `require.cache` 替换 `../db` + 真 HTTP；2 条用例 |
 | [`pkg-size-probe.test.js`](../../../testjs/units/pkg-size-probe.test.js) | 打包体积探针（v6 · 1-12）：`fmtBytes` 的 B/KB/MB 边界与异常值；分桶把 asar / 根依赖 / 作用域依赖 / 后端依赖 / 语言包 / 根目录二进制分开（resources 下的 ffmpeg 不混进主程序）；汇总同桶累加并按体积降序；`package.json` 的每个生产依赖都必须能 `require.resolve` | 纯函数 + 真实 package.json；4 条用例 |
@@ -521,11 +522,10 @@ classnest/
 | [`atomic-write.test.js`](../../../testjs/units/atomic-write.test.js) | 主进程配置/状态文件原子写（E01-05 / E02-01 / N3-15）：正常写入不残留临时文件、中途失败保留旧内容、异步版语义一致 | 临时目录 |
 | [`cache-guards.test.js`](../../../testjs/units/cache-guards.test.js) | 缓存 / 代次 / 变更判据（B-7）：删当前会话作废在途、`useAccessLog`/`usePrivacyConfig`/`useSeatGrid` 代次、限流桶回收、列名缓存硬顶、ffmpeg 旧版本清理 | 源码结构 + 纯函数 |
 | [`cadre-tab-no-flicker.test.js`](../../../testjs/units/cadre-tab-no-flicker.test.js) | 班干部 tab 来回切不闪空态：改用 `v-show` 保活（Vapor 下 KeepAlive 包 `v-if` 异步组件会崩），选中/折叠/滚动不丢、不重复拉取 | 源码文本判据 |
-| [`classinfo-dialog-animation.test.js`](../../../testjs/units/classinfo-dialog-animation.test.js) | 班级设置弹窗必须走通用 dialog 动画，不自建 `scale` 覆盖（各主题观感一致） | 源码判据 |
 | [`ctx-shape.test.js`](../../../testjs/units/ctx-shape.test.js) | `ctx` 共享上下文形状判据：全仓不得 `delete ctx.xxx` 或 `ctx[...]`（否则对象永久进入字典模式）；表格组件的 `ctx._` 运行时字段必须先在字面量 / 模块返回对象里声明，交互期不再新增键；附「扫到 0 个赋值即判据失效」自检 | 源码文本审计；3 条用例 |
+| [`e2e-seat-score-undo.test.js`](../../../testjs/units/e2e-seat-score-undo.test.js) | 端到端流水线（真 HTTP）：排座 → 加分 → 改座位格 → 撤销 → 重做；守跨模块边界——撤销一格不误伤成绩/学生/其它格。两种变异反证通过 | 真内存库 + 3 路由 + fetch；1 条用例 |
 | [`error-leak.test.js`](../../../testjs/units/error-leak.test.js) | 5xx 不回传内部细节（N3-09）：4xx 保留业务文案，5xx 只回通用文案，原始 message 只进日志，例外需 `err.expose` | 纯函数 + 中间件 |
 | [`history-load-guard.test.js`](../../../testjs/units/history-load-guard.test.js) | 历史 tab「数据已在就不再重复拉」：周列表为空 / 选中周失效 / 值日维度变了才拉；SeatView、DutyView 必须经该判定 | 纯函数 + 接线判据 |
-| [`import-template-save-toast.test.js`](../../../testjs/units/import-template-save-toast.test.js) | 下载标准导入表：保存成功才提示，用户取消不打扰，失败走既有 `parseError` | 源码判据 |
 | [`interaction-safety.test.js`](../../../testjs/units/interaction-safety.test.js) | 交互安全接线（A-4）：破坏性动作必须经确认层、提交按钮必须绑在途态（F02-01/03/07/08/11、F06-10） | 源码结构断言 |
 | [`ipc-coverage.test.js`](../../../testjs/units/ipc-coverage.test.js) | IPC 包装层覆盖（档 C-5）：`ipcMain.once` 也过守卫、preload 预取主密钥走白名单、widget 两条通道有第二道 sender 闸 | 静态形态 + 假 `ipcMain` |
 | [`ipc-handler-contract.test.js`](../../../testjs/units/ipc-handler-contract.test.js) | 主进程 `IPC.handle` 统一错误出口（档 B-3 E01-03/X1-04）：例外白名单逐条写理由且不得留过期项 | 源码扫描 + 白名单对账 |
@@ -538,7 +538,6 @@ classnest/
 | [`secure-no-token-plaintext.test.js`](../../../testjs/units/secure-no-token-plaintext.test.js) | 无登录态请求必须走明文：加密拦截器不得把无 token 的公开写请求封包，否则登录/注册/恢复等接口全部 401 | 纯函数 + 接线 |
 | [`shape-errors.test.js`](../../../testjs/units/shape-errors.test.js) | 响应形状 / 失败与空结果区分（B-5）：关联预览失败不当无关联、`DB_LOCKED`→401、不存在 id→404、座位快照带 `types` | 内存库 |
 | [`silent-failure.test.js`](../../../testjs/units/silent-failure.test.js) | 静默失败 / 假成功（A-5）：失败必须可见反馈、不关闭弹窗、回传真实条数（E02-07 / F02-02/06/10 / K03-14） | 源码判据 |
-| [`splash-ring-shadow.test.js`](../../../testjs/units/splash-ring-shadow.test.js) | 占位加载页的 `.ring` 不得被 Tailwind `.ring` 工具类套上黑框（撞名时需更高特异性守卫） | 源码判据 |
 | [`state-lifecycle.test.js`](../../../testjs/units/state-lifecycle.test.js) | 模块状态 / 用户级重置（B-6）：撤销状态换号复位、退出先收子进程、取消保留续扫断点、探活结果必判、活动加载只认最后一次等 | 源码 + 行为 |
 | [`sweep-fixes-c2.test.js`](../../../testjs/units/sweep-fixes-c2.test.js) | 档 C-2 业务规则与算法单点：满组跨组交换兜底、空命题不误报、装饰字段保留、分组快照回填 `student_id`、课表几何越界、`restartWindow` 顺序、`ai.config` 双挂载 | 算法真跑 + 真内存库 |
 | [`tab-chunk-split.test.js`](../../../testjs/units/tab-chunk-split.test.js) | tab 内容分块（异步组件 + hover 预取）接线：两个分支都换子组件、`defineAsyncComponent` 包命名 loader、`tabCtx` 透传 | 源码文本判据 |

@@ -21,7 +21,7 @@ const fsp = require('node:fs/promises')
 const { getPrivateWorkingSetKB } = require('./main.privateWorkingSet')
 const { scanDiskUsage, logFilePaths } = require('./main.disk-usage')
 const { clearLogFile } = require('./main.logRotator')
-const { ok, fail, safe, safeReject } = require('./main.ipc-contract')
+const { ok, fail, safeReject } = require('./main.ipc-contract')
 const startupTimer = require('./main.startup-timer')
 const { startEventLoopSampling, readEventLoopStats, markEventLoopWindow } = require('./main.eventloop')
 

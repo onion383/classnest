@@ -413,9 +413,6 @@ function deletePreviewRow(rowKey) { previewRows.value = previewRows.value.filter
 const dupVisible = ref(false)
 const dupName = ref('')
 const dupRows = ref([])
-// 行号 → 用户选中的学生 id（'new' = 名册外新同学）。import-data 时随 payload 带给后端。
-const resolvedIds = ref({})
-
 // 按姓名分桶：名册里同名 ≥2 的才要选人（正式学生；临时学生同名不参与，避免自建歧义）
 function nameBuckets() {
   const buckets = new Map()
@@ -467,6 +464,7 @@ function confirmImport() {
 
 const pendingGroups = ref([])
 const pendingPayload = ref(null)
+// 行号（或 `${行}:${槽}`）→ 用户选中的学生 id（'new' = 名册外新同学）；全部同名组确认完才随 payload 带给后端。
 const pendingResolved = ref({})
 
 function showNextDuplicate() {
@@ -501,7 +499,6 @@ function showNextDuplicate() {
 }
 
 function onDuplicateConfirm(selections) {
-  const [name] = pendingGroups.value[0]
   for (const { key } of pendingGroups.value[0][1]) {
     const v = selections[key]
     if (!v) continue

@@ -23,7 +23,7 @@ import DialogShell from '../base/DialogShell.vue'
 import '../../styles/dialog-transition.css'
 
 defineOptions({ name: 'SnapshotPickerDialog' })
-const props = defineProps({
+defineProps({
   visible: { type: Boolean, default: false },
   zIndex: { type: Number, default: 10014 },
 })

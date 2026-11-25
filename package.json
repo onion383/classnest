@@ -7,6 +7,11 @@
   "description": "班集（ClassNest）桌面应用",
   "license": "MIT",
   "main": "electron/main/main.js",
+  "imports": {
+    "#testjs/paths": "./testjs/_paths.cjs",
+    "#testjs/source-scan": "./testjs/_source-scan.cjs",
+    "#testjs/units/*": "./testjs/units/*"
+  },
   "scripts": {
     "dev": "node student-frontend/dev-vite.js",
     "dev:new": "node student-frontend/dev-vite.js --vue36",
@@ -19,11 +24,14 @@
     "seed": "node testjs/tools/seed-test-data.js",
     "smoke": "node testjs/run-smoke.cjs",
     "test:units": "node testjs/run-units.js",
+    "test:impact": "node testjs/tools/test-impact.cjs --run",
     "test:probe": "node testjs/run-probes.cjs",
     "check:boundaries": "node testjs/tools/error-boundary-check.cjs",
     "check:boundaries:strict": "node testjs/tools/error-boundary-check.cjs --strict",
     "check:coverage": "node testjs/tools/audit-coverage.mjs",
     "check:coverage:report": "node testjs/tools/audit-coverage.mjs --report-only",
+    "check:guards": "node testjs/tools/guard-ledger.cjs",
+    "check:guards:update": "node testjs/tools/guard-ledger.cjs --update",
     "docs:verify": "node testjs/tools/docs-verify.mjs",
     "check:ipc-policy": "node testjs/probe/ipc-policy-gen.mjs student-frontend --check",
     "policy:gen": "node testjs/probe/ipc-policy-gen.mjs student-frontend",

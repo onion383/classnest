@@ -35,7 +35,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const { createRequire } = require('node:module')
 
-const ROOT = path.resolve(__dirname, '../..')
+const ROOT = require('../_paths.cjs').ROOT // 单一真源，别在这里自己算层级
 const backendRequire = createRequire(path.join(ROOT, 'student-backend/package.json'))
 
 // 建临时数据目录，并登记「进程退出时删掉」。

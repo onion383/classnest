@@ -93,12 +93,12 @@ function summarize({ console: out = console } = {}) {
   if (!installed) return null
   const r = collect()
   const label = `同步IO合计 ${r.ms.toFixed(1)}ms / ${r.calls} 次`
-  try { out.log(`[boot] ${label}`) } catch (_) { /* 打点失败静默 */ }
+  try { out.log(`[boot] ${label}`) } catch (_) { /* best-effort: 打点失败静默 */ }
   for (const row of r.rows) {
     if (!row.count) continue
-    try { out.log(`[boot] fs.${row.name} ${row.ms.toFixed(2)}ms × ${row.count}`) } catch (_) { /* 忽略 */ }
+    try { out.log(`[boot] fs.${row.name} ${row.ms.toFixed(2)}ms × ${row.count}`) } catch (_) { /* best-effort: 启动打点日志失败不影响打开账号库 */ }
   }
-  try { require('./main.startup-timer').mark(label) } catch (_) { /* 时间线不可用则只打印 */ }
+  try { require('./main.startup-timer').mark(label) } catch (_) { /* best-effort: 时间线不可用则只打印 */ }
   return r
 }
 

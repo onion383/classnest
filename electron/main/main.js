@@ -28,7 +28,7 @@ try {
   fs.mkdirSync(_ccDir, { recursive: true })
   const NodeModule = require('module')
   if (typeof NodeModule.enableCompileCache === 'function') NodeModule.enableCompileCache(_ccDir)
-} catch (_) { /* 编译缓存不可用时静默忽略，不影响启动 */ }
+} catch (_) { /* best-effort: 编译缓存不可用时静默忽略，不影响启动 */ }
 const startupTimer = require('./main.startup-timer')
 const contract = require('./main.ipc-contract')
 const ports = require('../../config/ports.cjs')
@@ -301,7 +301,7 @@ function createMainWindow() {
   const _mkT0 = Date.now()
   const _mkPerf = (name) => {
     if (process.env.PERF_STARTUP !== '1') return
-    try { console.log(`[perf] 建窗 ${name} ${Date.now() - _mkT0}ms`) } catch (_) { /* 打点失败忽略 */ }
+    try { console.log(`[perf] 建窗 ${name} ${Date.now() - _mkT0}ms`) } catch (_) { /* best-effort: 打点失败忽略 */ }
   }
   const _profWpT0 = Date.now()
   // devTools 不在这里写死：交给 buildWebPreferences 按环境决定（生产关闭、开发开启）。
@@ -512,7 +512,7 @@ IPC.on(CH.SHOW_NATIVE_CONTEXT_MENU, (event, opts = {}) => {
     // 只有 http/https 才提供「在浏览器中打开」：file:/javascript:/ms-msdt: 等协议
     // 交给系统会触发本地行为，不属于「链接」语义。其余情况只保留复制。
     if (pathGuard.isHttpUrl(opts.linkURL)) {
-      template.push({ label: '在浏览器中打开', click: () => { shell.openExternal(opts.linkURL).catch(() => {}) } })
+      template.push({ label: '在浏览器中打开', click: () => { shell.openExternal(opts.linkURL).catch(() => {}) } }) // best-effort: 外链打不开时保留复制地址即可
     }
     template.push({ label: '复制链接地址', click: () => clipboard.writeText(opts.linkURL) })
   }
@@ -571,7 +571,7 @@ app.whenReady().then(() => {
   // 只「发起」不 await：解密与建窗并行，fork 时复用同一个 Promise。
   // 主密钥不可确认时这里会 reject（保护旧库不被新钥匙覆盖）：预热阶段吞掉即可，
   // 真正的 fork 会复用同一个 rejected Promise，由 startBackend 的 catch 落到启动失败态提示用户。
-  void getDbMasterKey().catch(() => {})
+  void getDbMasterKey().catch(() => {}) // best-effort: 预热阶段吞掉，真正 fork 复用同一 rejected Promise 由启动失败态提示
 
   // ========== 安装后预热（--warmup）==========
   // 由安装器在装完文件之后调用一次（见 inno/setup.iss 的 [Run] 段），随后立即退出。
@@ -594,7 +594,7 @@ app.whenReady().then(() => {
         backend.startBackend()
         const ok = await backend.waitForBackendReadySignal(20000)
         console.log(`[warmup] 后端就绪=${ok}`)
-      } catch (_) { /* 预热失败不影响安装结果，也不能让安装器卡住 */ }
+      } catch (_) { /* best-effort: 预热失败不影响安装结果，也不能让安装器卡住 */ }
       // 预热前端产物：--warmup 不建窗口、不加载页面，所以 student-frontend/dist 仍是冷的。
       // 打包后前端就在 app.asar 里（约 14MB），而 asar 是单个文件、由 Electron 按需解压读取 ——
       // 顺序读一遍整个 asar，等于把前端首屏资源连同主进程代码一起放进系统文件缓存。
@@ -613,7 +613,7 @@ app.whenReady().then(() => {
           fs.closeSync(fd)
           console.log(`[warmup] 已预热 app.asar（${(pos / 1048576).toFixed(1)}MB）`)
         }
-      } catch (_) { /* 读不到就跳过：pre-asar 结构或权限问题都不该影响安装 */ }
+      } catch (_) { /* best-effort: 读不到就跳过：pre-asar 结构或权限问题都不该影响安装 */ }
       try {
         // 必须显式停子进程：app.exit() 直接终止主进程，后端子进程会变成孤儿继续占着端口。
         // 但加 3s 上限 —— 预热超时那条路径下后端可能从未真正起来，等它退出会白等。
@@ -621,7 +621,7 @@ app.whenReady().then(() => {
           backend.stopBackendProcess(),
           new Promise((r) => setTimeout(r, 3000)),
         ])
-      } catch (_) { /* 已退出则忽略 */ }
+      } catch (_) { /* best-effort: 已退出则忽略 */ }
       // 退出必须走 app.quit() 而不是 app.exit()：Node 的编译缓存是异步写进
       // libuv 线程池的，app.exit() 直接终止进程会让它来不及落盘 —— 实测两次
       // --warmup 后 node-compile-cache/ 目录始终是空的，等于白跑一次预热。
@@ -750,7 +750,7 @@ IPC.handle(CH.OPEN_EXTERNAL, (event, url) => {
   // 白名单判定统一走 path-guard：URL 解析后协议必须是 http/https 且有 host，
   // 比 startsWith('http') 更严（可挡掉 `http://` 之外的畸形串与凭据注入）。
   if (pathGuard.isHttpUrl(url)) {
-    return shell.openExternal(url.trim()).catch(() => {})
+    return shell.openExternal(url.trim()).catch(() => {}) // best-effort: 外链打不开时无副作用
   }
 })
 
@@ -788,7 +788,7 @@ IPC.handle(CH.COPY_SENSITIVE_TEXT, contract.safeReject((event, { text, ttlMs } =
   clipboard.writeText(text)
   const ttl = Math.min(Math.max(Number(ttlMs) || 60000, 1000), 10 * 60 * 1000)
   setTimeout(() => {
-    try { if (clipboard.readText() === text) clipboard.clear() } catch (_) { /* 读剪贴板失败忽略 */ }
+    try { if (clipboard.readText() === text) clipboard.clear() } catch (_) { /* best-effort: 读剪贴板失败忽略 */ }
   }, ttl)
   return true
 }))
@@ -853,7 +853,7 @@ let migrationContext = null
 // 向进度窗口推送消息（窗口不存在/已销毁时静默忽略）
 function sendMigration(payload) {
   if (migrationWindow && !migrationWindow.isDestroyed()) {
-    try { migrationWindow.webContents.send(CH.FROM_MAIN, payload) } catch (_) {}
+    try { migrationWindow.webContents.send(CH.FROM_MAIN, payload) } catch (_) {} // best-effort: 迁移窗口销毁中无法接收消息
   }
 }
 
@@ -999,7 +999,7 @@ function getWindowsBuild() {
 function shouldWarnOsVersion() {
   if (FORCE_OS_WARN === 1 || process.env.OS_WARN_FORCE === '1') return true
   if (process.platform !== 'win32') return false
-  try { if (fs.existsSync(osWarningSkipPath())) return false } catch (_) {}
+  try { if (fs.existsSync(osWarningSkipPath())) return false } catch (_) {} // best-effort: 跳过标记路径检查失败时按不存在处理
   const v = getWindowsBuild()
   if (!v) return false
   if (v.major > 10) return false
@@ -1031,7 +1031,7 @@ async function waitBackendReady(timeout = 15000) {
         const data = await res.json().catch(() => ({}))
         return Array.isArray(data.accounts) ? data.accounts : []
       }
-    } catch (_) { /* 后端尚未就绪，继续重试 */ }
+    } catch (_) { /* best-effort: 后端尚未就绪，继续重试 */ }
     if (Date.now() - start > timeout) return null
     // 优先等就绪信号：后端一就绪立即重试；信号缺失时退化为 250ms 退避
     await backend.waitForBackendReadySignal(250)
@@ -1070,7 +1070,7 @@ async function detectFirstRun() {
 // 向引导窗口推送预热进度（窗口不存在/已销毁时静默忽略）
 function sendSetupWarmup(payload) {
   if (setupWindow && !setupWindow.isDestroyed()) {
-    try { setupWindow.webContents.send(CH.FROM_MAIN, payload) } catch (_) {}
+    try { setupWindow.webContents.send(CH.FROM_MAIN, payload) } catch (_) {} // best-effort: 引导窗口销毁中无法接收消息
   }
 }
 function updateWarmup(phase, detail, percent, done = false) {
@@ -1093,10 +1093,10 @@ async function runSetupWarmup() {
   try {
     fs.mkdirSync(resolveDataDir(), { recursive: true })
     fs.mkdirSync(resolveThumbsDir(), { recursive: true })
-  } catch (_) { /* 目录创建失败不阻塞引导 */ }
+  } catch (_) { /* best-effort: 目录创建失败不阻塞引导 */ }
   await new Promise((r) => setTimeout(r, 60))
   updateWarmup('准备编译缓存', '正在预热模块编译缓存', 85)
-  try { fs.mkdirSync(resolveCompileCacheDir(), { recursive: true }) } catch (_) {}
+  try { fs.mkdirSync(resolveCompileCacheDir(), { recursive: true }) } catch (_) {} // best-effort: 编译缓存目录建不起来时降级为不缓存
   await new Promise((r) => setTimeout(r, 60))
   updateWarmup('完成', '优化已自动完成~', 100, true)
 }
@@ -1155,7 +1155,7 @@ function createSetupWindow(plan = launchPlan) {
   // 记「引导未完成」：仅当本次确有引导流程（plan.setup）时写下，走完引导（setup-complete）才清除；
   // 中途关闭/退出后下次启动仍进入引导。纯低版本提示（warn-only）不写标记，避免把自己变成「需引导」。
   if (launchPlan.setup) {
-    try { fs.writeFileSync(setupPendingMarkerPath(), '1') } catch (_) { /* 标记失败不阻塞引导 */ }
+    try { fs.writeFileSync(setupPendingMarkerPath(), '1') } catch (_) { /* best-effort: 标记失败不阻塞引导 */ }
   }
 
   // 兜底（仅 dev：窗口初始隐藏）：渲染层异常/过慢时也先把窗口显示出来，
@@ -1220,11 +1220,11 @@ IPC.on(CH.LAUNCH_SKIP_WARN, (event, payload) => {
   if (!setupWindow || setupWindow.isDestroyed()) return
   if (event.sender !== setupWindow.webContents) return
   if (payload && payload.remember) {
-    try { fs.writeFileSync(osWarningSkipPath(), '1') } catch (_) { /* 标记失败不影响启动 */ }
+    try { fs.writeFileSync(osWarningSkipPath(), '1') } catch (_) { /* best-effort: 标记失败不影响启动 */ }
   }
   if (!launchPlan.setup) {
     setupRunning = false
-    try { fs.rmSync(setupPendingMarkerPath(), { force: true }) } catch (_) {}
+    try { fs.rmSync(setupPendingMarkerPath(), { force: true }) } catch (_) {} // best-effort: 引导未完成标记清理失败不影响后续启动
     if (!mainWindow || mainWindow.isDestroyed()) createMainWindow()
     if (setupWindow && !setupWindow.isDestroyed()) setupWindow.close()
   }
@@ -1234,7 +1234,7 @@ IPC.on(CH.LAUNCH_SKIP_WARN, (event, payload) => {
 IPC.on(CH.LAUNCH_OPEN_DOWNLOAD, (event) => {
   if (!setupWindow || setupWindow.isDestroyed()) return
   if (event.sender !== setupWindow.webContents) return
-  shell.openExternal(WIN_DOWNLOAD_URL).catch(() => { /* 打不开浏览器时静默忽略，不影响退出 */ })
+  shell.openExternal(WIN_DOWNLOAD_URL).catch(() => { /* best-effort: 打不开浏览器时静默忽略，不影响退出 */ })
   app.isQuitting = true
   app.quit()
 })
@@ -1245,7 +1245,7 @@ IPC.on(CH.SETUP_COMPLETE, (event) => {
   if (event.sender !== setupWindow.webContents) return
   setupRunning = false
   // 引导正常完成：清除「未完成」标记，之后启动直接进主窗口
-  try { fs.rmSync(setupPendingMarkerPath(), { force: true }) } catch (_) {}
+  try { fs.rmSync(setupPendingMarkerPath(), { force: true }) } catch (_) {} // best-effort: 引导完成标记清理失败不影响后续启动
   pendingMainNotification = { type: 'success', message: '初始化完成，欢迎使用' }
   if (!mainWindow || mainWindow.isDestroyed()) createMainWindow()
   if (setupWindow && !setupWindow.isDestroyed()) setupWindow.close()

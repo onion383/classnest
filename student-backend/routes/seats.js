@@ -297,7 +297,7 @@ router.post('/apply-master', (req, res) => {
     try {
       const parsed = JSON.parse(template.seats || '[]');
       if (Array.isArray(parsed)) seats = JSON.stringify(resolveNameCells(parsed));
-    } catch (_) { /* 畸形模板：原样搬 */ }
+    } catch (_) { /* best-effort: 畸形模板：原样搬 */ }
     store.setDoc('seat_layout', {
       mode: template.mode,
       rows: template.rows,

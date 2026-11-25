@@ -333,11 +333,11 @@ router.post('/snapshot/restore', (req, res) => {
     // 本请求自己就持有计数，默认行为会静默跳过 → 文件覆盖了但连接还指着旧句柄，
     // 表现为「回滚成功但界面没变」。（这条是 B05-04 加守卫后冒烟立即抓出来的）
     // 同样要先通知扫描子进程关掉该库连接，否则它可能在覆盖文件期间读写旧库（#12）。
-    try { require('../../scanWorker').lockDb(slug); } catch (_) { /* 子进程未启动 */ }
+    try { require('../../scanWorker').lockDb(slug); } catch (_) { /* best-effort: 子进程未启动 */ }
     dbManager.evictConn(slug, { force: true });
     fs.copyFileSync(src, target);
     for (const suffix of ['-wal', '-shm']) {
-      try { fs.rmSync(target + suffix, { force: true }); } catch (_) { /* 忽略 */ }
+      try { fs.rmSync(target + suffix, { force: true }); } catch (_) { /* best-effort: 覆盖库后残留的 WAL/SHM 删不掉时下步会处理 */ }
     }
     dbManager.withDb(slug, () => {}); // 重新打开（懒加载）该库
     // 快照里的表结构可能和还原前不同（例如快照后又增删过列）：AI 的列名缓存必须一并失效，

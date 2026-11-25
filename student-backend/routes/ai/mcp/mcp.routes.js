@@ -45,11 +45,11 @@ router.put('/privacy', (req, res) => {
     if (req.body && req.body.table !== undefined) {
       const r = inDb(req, () => setTableLevel(req.body.table, req.body.level, mcpPrivacyIO));
       if (r && r.error) return res.status(400).json({ error: r.error });
-      try { privacy.invalidate(); } catch (_) { /* 缓存清理失败不阻断设置保存 */ }
+      try { privacy.invalidate(); } catch (_) { /* best-effort: 缓存清理失败不阻断设置保存 */ }
       return res.json({ success: true, data: { ...r, tables: privacyTables(r) }, message: '已保存' });
     }
     const next = inDb(req, () => aiConfigStore.setMcpPrivacy(normalizePrivacyPatch(req.body)));
-    try { privacy.invalidate(); } catch (_) { /* 缓存清理失败不阻断设置保存 */ }
+    try { privacy.invalidate(); } catch (_) { /* best-effort: 缓存清理失败不阻断设置保存 */ }
     res.json({ success: true, data: { ...next, tables: privacyTables(next) }, message: '已保存' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

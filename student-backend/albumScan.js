@@ -102,7 +102,7 @@ async function resolvePhotoDate(filePath, mtime, isVideo) {
     try {
       const exif = await readExifDate(filePath);
       if (exif) return { date: dateKey(exif), exif, src: 'exif' };
-    } catch (_) { /* 读不到就归未知，不让单张图的异常中断整个扫描 */ }
+    } catch (_) { /* best-effort: 读不到就归未知，不让单张图的异常中断整个扫描 */ }
   }
   return { date: '', exif: '', src: 'none' };
 }
@@ -178,7 +178,7 @@ async function genThumb(photoId, filePath, isVideo, slug, opts) {
     albumThumbs.rememberThumb(s, photoId, out, THUMB_VERSION, null);
     return out;
   } catch (_) {
-    try { await fsp.unlink(tmp); } catch (_) {}
+    try { await fsp.unlink(tmp); } catch (_) {} // best-effort: 读缓存失败时清理临时文件也失败可忽略，下面返回空值
     return '';
   } finally {
     releaseThumbSlot();
@@ -202,7 +202,7 @@ async function presentThumbIds(slug) {
       const id = Number(n.slice(0, -4));
       if (Number.isInteger(id) && id > 0) ids.add(id);
     }
-  } catch (_) { /* 目录还不存在 = 一张都没有，全补 */ }
+  } catch (_) { /* best-effort: 目录还不存在 = 一张都没有，全补 */ }
   return ids;
 }
 
@@ -249,7 +249,7 @@ function createThumbWriter(conn) {
     const run = conn.transaction(() => {
       for (const [photoId, thumbPath] of rows) setThumb.run(thumbPath, THUMB_VERSION, photoId);
     });
-    try { run(); } catch (_) { /* 写失败不影响扫描本身，缩略图下次请求时会重建 */ }
+    try { run(); } catch (_) { /* best-effort: 写失败不影响扫描本身，缩略图下次请求时会重建 */ }
   };
   return {
     // 记一条待写回的缩略图；攒够就提交
@@ -312,7 +312,7 @@ function claimScanTask(conn, albumId, mode, token, resumeFrom) {
           state = 'running', token = excluded.token, started_at = excluded.started_at, updated_at = excluded.updated_at`)
         .run(albumId, mode, token, now(), now());
     }
-  } catch (_) { /* 持久化失败不影响扫描本身 */ }
+  } catch (_) { /* best-effort: 持久化失败不影响扫描本身 */ }
 }
 
 // 推进断点：记录已处理完的文件路径与进度
@@ -342,7 +342,7 @@ function persistScanProgress(conn, albumId, token, mode, phase, donePath, scanne
     conn.prepare(`UPDATE album_scan_tasks SET mode = ?, phase = ?, done_path = ?, scanned = ?, total = ?, updated_at = ?
       WHERE album_id = ? AND token = ?`)
       .run(mode, phase, donePath || '', scanned || 0, total || 0, now(), albumId, token || 0);
-  } catch (_) { /* 同上 */ }
+  } catch (_) { /* best-effort: 扫描进度行回写失败可忽略，崩溃重扫时按未推进处理 */ }
 }
 
 // 清除记录：扫描正常跑完，或用户主动停止（这两种情况不需要续扫）
@@ -354,7 +354,7 @@ function persistScanClear(conn, albumId, token) {
   persistCounters.delete(`${albumId}:${token || 0}`);
   try {
     conn.prepare('DELETE FROM album_scan_tasks WHERE album_id = ? AND token = ?').run(albumId, token || 0);
-  } catch (_) {}
+  } catch (_) {} // best-effort: 扫描任务行删除失败可忽略
 }
 
 // 读取未完成的扫描任务（供 /tasks/pending 查询）
@@ -399,7 +399,7 @@ function setScanState(conn, albumId, state, token) {
         token = CASE WHEN excluded.token = 0 THEN album_scan_tasks.token ELSE excluded.token END,
         updated_at = excluded.updated_at`)
       .run(albumId, state, token || 0, now(), now());
-  } catch (_) { /* 状态写失败不致命，扫描本身照跑 */ }
+  } catch (_) { /* best-effort: 状态写失败不致命，扫描本身照跑 */ }
 }
 
 // ------------------------------------------------------------------按 id 补图
@@ -484,7 +484,7 @@ async function waitWhilePaused(conn, task, albumId) {
             task.cancelled = true;
             return false;
           }
-        } catch (_) { /* 读库失败按「没指令」继续跑，不因状态同步失败而中断扫描 */ }
+        } catch (_) { /* best-effort: 读库失败按「没指令」继续跑，不因状态同步失败而中断扫描 */ }
       }
     }
     if (task.paused) {
@@ -566,8 +566,8 @@ async function deletePhotosNotIn(conn, albumId, task, foundPaths, slug, trust = 
       if (foundPaths.has(r.file_path)) continue;   // 文件还在，索引留着
       // 缩略图缓存：索引没了就没人引用，顺手清掉（含内存索引）
       albumThumbs.forgetPhoto(slug, r.id);
-      const jobs = [fsp.unlink(albumThumbs.thumbPathFor(slug, r.id)).catch(() => {})];
-      if (r.thumb_path) jobs.push(fsp.unlink(r.thumb_path).catch(() => {}));
+      const jobs = [fsp.unlink(albumThumbs.thumbPathFor(slug, r.id)).catch(() => {})]; // best-effort: 索引删了没人引用，缩略图清理失败可忽略
+      if (r.thumb_path) jobs.push(fsp.unlink(r.thumb_path).catch(() => {})); // best-effort: 旧缩略图路径清理失败可忽略
       await Promise.all(jobs);
       del.run(r.id);
     }
@@ -699,7 +699,7 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
         // 注意这里**没有** genThumb：缩略图统一放到阶段 2 生成。
         // 处理完这个文件才推进断点（中途崩溃时这个文件会重扫，代价很小）
         persistScanProgress(conn, albumId, task.token, 'full', 'index', full, task.scanned, task.total, false);
-      } catch (_) {}
+      } catch (_) {} // best-effort: 单文件断点推进失败可忽略，崩溃时该文件重扫
       // 每 SCAN_YIELD_EVERY 个文件主动让出一次事件循环：
       // 文件循环里有 await stat 与 await genThumb（sharp 单张约 20ms），
       // 攒 16 个就是 300ms+ 连续计算，不让出后端会明显发闷。
@@ -758,7 +758,7 @@ async function fullScan(conn, albumId, resumeFrom, slug, onProgress, token) {
             if (tp) thumbWriter.add(row.id, tp);
           }
           persistScanProgress(conn, albumId, task.token, 'full', 'thumb', full, task.scanned, task.total, false);
-        } catch (_) {}
+        } catch (_) {} // best-effort: 缩略图阶段断点推进失败可忽略，崩溃时该文件重扫
         // 每 SCAN_YIELD_EVERY 个文件让出一次事件循环：
         // genThumb 单张就要几十毫秒，攒一批不让出后端会明显发闷。
         if (task.scanned % SCAN_YIELD_EVERY === 0) {
@@ -910,7 +910,7 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
         }
         // 处理完这个文件才推进断点（中途崩溃时这个文件会重扫，代价很小）
         persistScanProgress(conn, albumId, task.token, 'incremental', 'process', full, task.scanned, task.total, false);
-      } catch (_) {}
+      } catch (_) {} // best-effort: 增量阶段断点推进失败可忽略，崩溃时该文件重扫
       if (task.scanned % SCAN_YIELD_EVERY === 0) {
         await yieldLoop();
         if (onProgress) onProgress(task);
@@ -930,8 +930,8 @@ async function incrementalScan(conn, albumId, resumeFrom, slug, onProgress, toke
           // 缩略图缓存：按库隔离路径删除，并清掉内存索引
           albumThumbs.forgetPhoto(slug, record.id);
           await Promise.all([
-            fsp.unlink(albumThumbs.thumbPathFor(slug, record.id)).catch(() => {}),
-            record.thumb_path ? fsp.unlink(record.thumb_path).catch(() => {}) : null,
+            fsp.unlink(albumThumbs.thumbPathFor(slug, record.id)).catch(() => {}), // best-effort: 索引删了没人引用，缩略图清理失败可忽略
+            record.thumb_path ? fsp.unlink(record.thumb_path).catch(() => {}) : null, // best-effort: 旧缩略图路径清理失败可忽略
           ]);
           deletePhoto.run(record.id);
           // 清理循环也可能一次删掉很多行，同样分批让出。

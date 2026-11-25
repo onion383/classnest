@@ -175,7 +175,7 @@ export function useRowSortDrag({ items, dragIdx, overIdx, attr, rowClass = '', o
     onMove = null
     onUp = null
     if (raf) { cancelAnimationFrame(raf); raf = null }
-    if (autoScroll) { try { autoScroll.stop() } catch (_) { /* 已停止 */ } autoScroll = null }
+    if (autoScroll) { try { autoScroll.stop() } catch (_) { /* best-effort: 已停止 */ } autoScroll = null }
     if (ghost) { ghost.remove(); ghost = null }
     lastEv = null
     if (rows) {

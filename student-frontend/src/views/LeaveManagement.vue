@@ -732,7 +732,7 @@ async function loadColumnOrder() {
     activeLeaveFields.value = apply(activeLeaveFields.value, data.active)
     returnedLeaveFields.value = apply(returnedLeaveFields.value, data.returned)
     leaveFields.value = apply(leaveFields.value, data.records)
-  } catch (_) { /* 读取失败时保持默认列顺序 */ }
+  } catch (_) { /* best-effort: 读取失败时保持默认列顺序 */ }
 }
 async function saveCell(row, field) {
   const val = row[field.name]

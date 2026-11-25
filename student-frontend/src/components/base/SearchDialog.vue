@@ -188,7 +188,7 @@ const scheduleRemote = disposables.defer()
 // 作用域结束时（含卸载）中止仍在途的请求
 disposables.add(() => {
   if (!remoteAbort) return
-  try { remoteAbort.abort() } catch (_) { /* 已结束 */ }
+  try { remoteAbort.abort() } catch (_) { /* best-effort: 已结束 */ }
   remoteAbort = null
 })
 
@@ -264,7 +264,7 @@ function rememberKeyword(text) {
   if (!v) return
   const next = [v, ...history.value.filter(x => x !== v)].slice(0, HISTORY_MAX)
   history.value = next
-  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(next)) } catch (_) {}
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(next)) } catch (_) {} // best-effort: 本地存储不可用时搜索历史不持久，不影响本次
 }
 function useHistory(text) {
   keyword.value = text

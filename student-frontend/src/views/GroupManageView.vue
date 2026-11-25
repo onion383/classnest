@@ -620,7 +620,7 @@ async function fetchStudents() {
     const list = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : null);
     if (!list) { console.error('[students] 响应形状异常', data); return; }
     allStudents.value = list;
-  } catch (e) { /* 学生列表不可用时不阻塞分组功能 */ }
+  } catch (e) { /* best-effort: 学生列表不可用时不阻塞分组功能 */ }
 }
 const suggestState = reactive({ visible: false, member: null, top: 0, left: 0, width: 0, index: 0, keyword: '' });
 // 资源登记表：防抖与动画收尾定时器都登记在这里，页面卸载时统一清掉
@@ -1396,8 +1396,8 @@ function disposeMemberDrag() {
   if (d.scroller && d.onScrollSync) d.scroller.removeEventListener('scroll', d.onScrollSync);
   if (d.raf) { cancelAnimationFrame(d.raf); d.raf = 0 }
   if (d.ghost) d.ghost.remove();
-  if (d.fromEl) { try { d.fromEl.classList.remove('mem-dragging') } catch (_) { /* 已脱离文档 */ } }
-  if (d.list) { try { clearShift(d.list) } catch (_) { /* 已脱离文档 */ } }
+  if (d.fromEl) { try { d.fromEl.classList.remove('mem-dragging') } catch (_) { /* best-effort: 已脱离文档 */ } }
+  if (d.list) { try { clearShift(d.list) } catch (_) { /* best-effort: 已脱离文档 */ } }
   _memDrag = null;
 }
 onBeforeUnmount(disposeMemberDrag);

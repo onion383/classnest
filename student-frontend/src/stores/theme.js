@@ -62,7 +62,7 @@ try {
   if (savedTheme && !PRESET_IDS.includes(savedTheme)) {
     localStorage.setItem(THEME_KEY, 'glass')
   }
-} catch (_) { /* 非浏览器环境（如静态审计脚本）没有 localStorage，忽略 */ }
+} catch (_) { /* best-effort: 非浏览器环境（如静态审计脚本）没有 localStorage，忽略 */ }
 
 // 数值型设置的读取：**不能用 `parseFloat(x) || 默认值`**。
 // 不透明度滑块的 min 是 0，「完全透明」是合法取值，而 0 会被 `||` 当成"没读到"→ 重载后变回默认值。

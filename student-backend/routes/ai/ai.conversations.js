@@ -56,7 +56,7 @@ function parseMessageRows(rows) {
     let process = null;
     if (pj) { try { process = JSON.parse(pj); } catch (_) { process = null; } }
     let attachments = [];
-    if (aj) { try { const p = JSON.parse(aj); if (Array.isArray(p)) attachments = p; } catch (_) { /* 忽略损坏记录 */ } }
+    if (aj) { try { const p = JSON.parse(aj); if (Array.isArray(p)) attachments = p; } catch (_) { /* best-effort: 忽略损坏记录 */ } }
     return { ...rest, process, attachments };
   });
 }
@@ -177,12 +177,12 @@ router.post('/chat/stream', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders && res.flushHeaders();
-  const send = (obj) => { try { res.write(`data: ${JSON.stringify(encodeStreamEvent(req, obj))}\n\n`); } catch (_) {} };
+  const send = (obj) => { try { res.write(`data: ${JSON.stringify(encodeStreamEvent(req, obj))}\n\n`); } catch (_) {} }; // best-effort: SSE 客户端已断开时写帧失败可忽略
 
   // 心跳帧：上游模型停顿、或工具执行很久时，网关/代理会把「没有字节流动」的连接
   // 判成空闲并断开，前端只能干等且分不清「还在算」和「已经死了」。
   // SSE 里以 ':' 开头的是注释帧，客户端会忽略，不影响协议（审查 v4 · B03-02）。
-  const heartbeat = setInterval(() => { try { res.write(': ping\n\n') } catch (_) {} }, 15000);
+  const heartbeat = setInterval(() => { try { res.write(': ping\n\n') } catch (_) {} }, 15000); // best-effort: 心跳帧写入失败说明客户端断开，由后续流程收尾
   if (heartbeat.unref) heartbeat.unref();
   const stopHeartbeat = () => clearInterval(heartbeat);
   res.on('close', stopHeartbeat);
@@ -197,7 +197,7 @@ router.post('/chat/stream', async (req, res) => {
   res.on('close', () => { if (!res.writableEnded) clientGone.abort(); });
 
   let s;
-  try { s = currentSettings(); } catch (_) {}
+  try { s = currentSettings(); } catch (_) {} // best-effort: 设置读不到时按未配置 AI 处理
   if (!s || !s.enabled || !s.api_key) {
     send({ type: 'err', message: '尚未启用 / 配置 AI，请先在【系统设置 → AI 助手设置】填写并启用' });
     return res.end();
@@ -235,7 +235,7 @@ router.post('/chat/stream', async (req, res) => {
         messages = convCtx.messages;
         attachments = convCtx.attachments;
       }
-    } catch (_) { /* 压缩失败不阻塞对话 */ }
+    } catch (_) { /* best-effort: 压缩失败不阻塞对话 */ }
     finally { compressingConvs.delete(conversationId); }
   }
 
@@ -299,14 +299,14 @@ router.post('/chat/stream', async (req, res) => {
   // 每轮结束时：记录本轮实际用量；若已达上下文阈值，后台摘要较早消息并持久化（不阻塞本次响应）
   function afterRound() {
     if (!conversationId || maxPromptTokens <= 0) return;
-    try { aiConversationStore.setLastPromptTokens(conversationId, maxPromptTokens); } catch (_) {}
+    try { aiConversationStore.setLastPromptTokens(conversationId, maxPromptTokens); } catch (_) {} // best-effort: token 数回写失败不影响本轮对话
     if (!convCtx || maxPromptTokens <= CONTEXT_COMPRESS_AT || compressingConvs.has(conversationId)) return;
     compressingConvs.add(conversationId);
     const rows = convCtx.effectiveRows;
     const upto = convCtx.upto;
     setImmediate(async () => {
       try { await compressConversation(s, conversationId, rows, upto, slug); }
-      catch (_) { /* 后台压缩失败忽略，下次再试 */ }
+      catch (_) { /* best-effort: 后台压缩失败忽略，下次再试 */ }
       finally { compressingConvs.delete(conversationId); }
     });
   }
@@ -390,7 +390,7 @@ router.post('/chat/stream', async (req, res) => {
           const t0 = Date.now();
           send({ type: 'step', step: { id: sid, kind: 'tool', title: info.running, status: 'running' } });
           let args = {};
-          try { args = JSON.parse(tc.arguments || '{}'); } catch (_) {}
+          try { args = JSON.parse(tc.arguments || '{}'); } catch (_) {} // best-effort: 工具参数非法时按空对象处理，由工具自身校验
           const out = await tools().runTool(tc.name, args, ctx);
           if (out.proposal) proposal = out.proposal;
           if (out.ask) ask = out.ask;

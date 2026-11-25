@@ -84,7 +84,7 @@ function classifyEntry(name, slug) {
 async function logBytesIn(dir) {
   let total = 0
   for (const name of LOG_FILENAMES) {
-    try { total += (await fsp.stat(path.join(dir, name))).size } catch (_) { /* 不存在按 0 */ }
+    try { total += (await fsp.stat(path.join(dir, name))).size } catch (_) { /* best-effort: 不存在按 0 */ }
   }
   return total
 }

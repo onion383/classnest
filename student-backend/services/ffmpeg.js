@@ -100,7 +100,7 @@ async function pruneOldVersions(cacheDir, beforeDirs, foundPath) {
   for (const name of beforeDirs) {
     const full = path.resolve(cacheDir, name)
     if (keep.has(full)) continue
-    await fsp.rm(full, { recursive: true, force: true }).catch(() => {})
+    await fsp.rm(full, { recursive: true, force: true }).catch(() => {}) // best-effort: 过期缓存项删不掉就留着，下次仍会跳过
   }
 }
 
@@ -175,7 +175,7 @@ async function ensureFfmpeg() {
 
     if (await hasFreshInflight()) return ''; // 已有并发下载在跑，直接跳过
     // 上次中断残留的锁（进程崩溃/超时）直接清掉再重试
-    await fsp.rm(INFLIGHT_PATH, { force: true }).catch(() => {});
+    await fsp.rm(INFLIGHT_PATH, { force: true }).catch(() => {}); // best-effort: 崩溃残留的 inflight 锁清不掉时后续下载会自行处理
     await fsp.mkdir(CACHE_DIR, { recursive: true });
     // 记录解压前已有的顶层目录，成功后据此清理旧版本
     const beforeDirs = dirsIn(CACHE_DIR).filter((n) => isDir(path.join(CACHE_DIR, n)));
@@ -189,7 +189,7 @@ async function ensureFfmpeg() {
     // 不匹配即删除并中止，避免被中间人替换为恶意二进制。未配置则跳过（无权威参考值）。
     if (process.env.FFMPEG_SHA256) {
       if (!verifySha256(zipPath, process.env.FFMPEG_SHA256)) {
-        await fsp.unlink(zipPath).catch(() => {});
+        await fsp.unlink(zipPath).catch(() => {}); // best-effort: 校验失败时删包失败无妨，接下来直接抛错
         throw new Error('ffmpeg 下载完整性校验失败（sha256 不匹配）');
       }
     }
@@ -204,20 +204,20 @@ async function ensureFfmpeg() {
     // 解压后安全校验：正常 LGPL 包内不应存在符号链接（符号链接可被用于穿越写入缓存目录外）。
     // 一旦发现即视为被篡改，清空缓存并放弃使用该二进制（fail-closed）。
     if (hasSymlink(CACHE_DIR)) {
-      await fsp.unlink(zipPath).catch(() => {});
-      await fsp.rm(CACHE_DIR, { recursive: true, force: true }).catch(() => {});
+      await fsp.unlink(zipPath).catch(() => {}); // best-effort: 符号链接包删除失败无妨，接下来直接中止
+      await fsp.rm(CACHE_DIR, { recursive: true, force: true }).catch(() => {}); // best-effort: 符号链接缓存目录删除失败无妨，接下来直接中止
       throw new Error('解压结果含符号链接，已中止使用（疑似被篡改）');
     }
 
-    await fsp.unlink(zipPath).catch(() => {});
-    await fsp.unlink(INFLIGHT_PATH).catch(() => {});
+    await fsp.unlink(zipPath).catch(() => {}); // best-effort: 压缩包清理失败不影响已解压结果
+    await fsp.unlink(INFLIGHT_PATH).catch(() => {}); // best-effort: inflight 锁清理失败不影响本次完成
 
     const found = findFfmpeg([CACHE_DIR]);
     if (found) await pruneOldVersions(CACHE_DIR, beforeDirs, found);
     return found || '';
   } catch (err) {
-    await fsp.rm(INFLIGHT_PATH, { force: true }).catch(() => {});
-    await fsp.rm(path.join(CACHE_DIR, 'tmp.mp4zip'), { force: true }).catch(() => {});
+    await fsp.rm(INFLIGHT_PATH, { force: true }).catch(() => {}); // best-effort: 下载失败清理锁失败无妨，下面已记录错误
+    await fsp.rm(path.join(CACHE_DIR, 'tmp.mp4zip'), { force: true }).catch(() => {}); // best-effort: 下载失败清理临时包失败无妨，下面已记录错误
     console.error('[ffmpeg] LGPL 下载失败：', err.message);
     return '';
   }

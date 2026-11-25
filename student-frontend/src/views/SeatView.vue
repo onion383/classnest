@@ -541,14 +541,14 @@ async function refreshActive() {
   try {
     await loadActive()
     notifySuccess('已刷新座位表')
-  } catch (e) { /* 错误已在 load 内部处理 */ }
+  } catch (e) { /* best-effort: 错误已在 load 内部处理 */ }
 }
 
 async function refreshMaster() {
   try {
     await loadMaster()
     notifySuccess('已刷新座位表模板')
-  } catch (e) { /* 错误已在 load 内部处理 */ }
+  } catch (e) { /* best-effort: 错误已在 load 内部处理 */ }
 }
 // ==================== 座位范围缩小确认 ====================
 // 三张表（当前座位 / 座位模板 / 权重表）共用同一套「设置」（行列/模式/走廊）：
@@ -1363,7 +1363,7 @@ async function refreshWeight() {
   try {
     await loadWeight()
     notifySuccess('已刷新座位位置权重表')
-  } catch (e) { /* 错误已在 load 内部处理 */ }
+  } catch (e) { /* best-effort: 错误已在 load 内部处理 */ }
 }
 
 // 权重表保存：与 DutyView.saveWeight 同口径——串行保存防并发乱序；
@@ -1382,7 +1382,7 @@ async function saveWeight() {
   if (ok) return true
   console.error('[seat] 权重保存失败', weightSaver.error)
   notifyError('权重保存失败，改动未保存')
-  try { await loadWeight() } catch (_) { /* 回滚也失败时保持提示，不叠加错误 */ }
+  try { await loadWeight() } catch (_) { /* best-effort: 回滚也失败时保持提示，不叠加错误 */ }
   return false
 }
 
@@ -1654,7 +1654,7 @@ async function loadSeatDaily({ force = false } = {}) {
       let from = ''
       try {
         from = await getSemesterStart()
-      } catch (_) { /* 后端未就绪时忽略 */ }
+      } catch (_) { /* best-effort: 后端未就绪时忽略 */ }
       const params = {}
       if (from) params.from = from
       if (to) params.to = to
@@ -1802,7 +1802,7 @@ async function refreshHistory() {
   try {
     await fetchHistoryWeeks({ silent: true })
     notifySuccess('已刷新座位记录')
-  } catch (e) { /* 错误已在 load 内部处理 */ }
+  } catch (e) { /* best-effort: 错误已在 load 内部处理 */ }
 }
 // 补录完成后重新拉取周列表（保持当前选中周不变）
 // 两个记录弹窗（补录 / 管理周记录）改完快照后统一走这里：
@@ -1903,7 +1903,7 @@ onMounted(async () => {
   // 补存成功后作废共用快照缓存 —— 否则账本/指数仍按补存前的序列结算。
   axios.post(`${API_BASE}/seats/snapshot/backfill`, { includeToday: true })
     .then(() => invalidateSeatDaily())
-    .catch(() => {})
+    .catch(() => {}) // best-effort: 草稿回填失败不影响进入座位页
   // 跨页定位：带 ?focus= 进入本页时定位到目标格子
   _applyRowFocus()
 })

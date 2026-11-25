@@ -43,7 +43,7 @@ export function createLongtaskObserver({ Observer, supported, onRecord, warn }) 
   const handler = (list) => {
     for (const entry of list.getEntries()) {
       if (!isLongTask(entry)) continue
-      try { onRecord && onRecord(entry) } catch (_) { /* 单条失败不影响后续 */ }
+      try { onRecord && onRecord(entry) } catch (_) { /* best-effort: 单条失败不影响后续 */ }
     }
   }
   let observer = null
@@ -52,7 +52,7 @@ export function createLongtaskObserver({ Observer, supported, onRecord, warn }) 
     observer.observe({ type: 'longtask', buffered: true })
     return observer
   } catch (err) {
-    try { warn && warn(err) } catch (_) { /* 告警失败静默 */ }
+    try { warn && warn(err) } catch (_) { /* best-effort: 告警失败静默 */ }
     return null
   }
 }
@@ -78,7 +78,7 @@ export function installLongTaskMarks({ min = 50, max = 20, Observer, supported, 
           : Math.round((performance.timeOrigin || Date.now()) + entry.startTime)
         const route = typeof location !== 'undefined' ? (location.hash || location.pathname || '/') : ''
         console.log(`[startup] 长任务 ${Math.round(entry.duration)}ms ${route} @${epoch}`)
-      } catch (_) { /* 打点失败静默 */ }
+      } catch (_) { /* best-effort: 打点失败静默 */ }
     },
   })
 }

@@ -679,7 +679,7 @@ let spinPending = false
 
 function revokeBlobUrl(url) {
   if (!url || !String(url).startsWith('blob:')) return
-  try { URL.revokeObjectURL(url) } catch (_) { /* 忽略 */ }
+  try { URL.revokeObjectURL(url) } catch (_) { /* best-effort: blob URL 已释放时重复释放可忽略 */ }
 }
 
 // 系统的「减少动效」或设置里的「关闭动画」都可能掐掉关键帧，animationend 就不一定来。
@@ -849,7 +849,7 @@ async function loadData(force = false) {
       firstRenderMarked = true
       // 不 await：不能因为打点把首屏骨架屏多留一帧；nextTick 回调里再记时刻。
       // 打点失败不能变成未处理的 rejection（会污染每次首屏），吞掉即可。
-      nextTick().then(() => mark(`首页 patch 渲染 ${perfSince(renderAt)}ms`)).catch(() => {})
+      nextTick().then(() => mark(`首页 patch 渲染 ${perfSince(renderAt)}ms`)).catch(() => {}) // best-effort: 首屏打点失败不产生未处理 rejection
     }
   } catch (err) {
     // 后端不可达（没有 response）时，App 的「后端启动失败」遮罩会统一提示，这里不重复打扰；

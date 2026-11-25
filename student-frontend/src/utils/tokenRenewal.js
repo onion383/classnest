@@ -50,11 +50,11 @@ export function absorbRenewalTokens(headers, opts = {}) {
   if (!token && !media) return { applied: false, reason: 'nothing-renewed' }
 
   if (token && typeof setToken === 'function') {
-    try { setToken(token) } catch (_) { /* 隐私模式写失败：不影响本次请求 */ }
+    try { setToken(token) } catch (_) { /* best-effort: 隐私模式写失败：不影响本次请求 */ }
     onTokenRenewed?.(token)
   }
   if (media && typeof storeMediaToken === 'function') {
-    try { storeMediaToken(media) } catch (_) { /* 同上 */ }
+    try { storeMediaToken(media) } catch (_) { /* best-effort: 媒体凭据存储失败不影响本次 token 更新 */ }
   }
   return { applied: true, token, media }
 }

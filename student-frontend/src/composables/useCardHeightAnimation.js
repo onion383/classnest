@@ -85,7 +85,7 @@ export function useCardHeightAnimation(elRef, options = {}) {
   // 卡片通常是 v-if 出来的，ref 从 null 变成元素时才开始观察
   watch(elRef, (el, oldEl) => {
     if (ro) { ro.disconnect(); ro = null }
-    if (anim) { try { anim.cancel() } catch (_) { /* 已经结束 */ } anim = null }
+    if (anim) { try { anim.cancel() } catch (_) { /* best-effort: 已经结束 */ } anim = null }
     seq += 1
     ignore = false
     if (oldEl) { oldEl.style.height = ''; oldEl.style.overflow = '' }

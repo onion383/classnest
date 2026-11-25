@@ -152,7 +152,7 @@ function onWorkerMessage(msg) {
         // 下游没法知道该清哪个库的待生成集合，只能退回「裸 id 全局 Map」（跨库串）。
         // 协议里 thumbs 报文本来就带 slug，是这里转发时丢了，根因在这一行。
         if (thumbGeneratedListener) {
-          try { thumbGeneratedListener(msg.slug, msg.entries.map(e => e[0])); } catch (_) {}
+          try { thumbGeneratedListener(msg.slug, msg.entries.map(e => e[0])); } catch (_) {} // best-effort: 单个缩略图监听器异常不影响其余条目转发
         }
       }
       break;
@@ -180,7 +180,7 @@ function scheduleIdleShutdown() {
     // 没活了就让 worker 自己收工退出
     if (dispatched.size === 0 && child) {
       expectExit = true;   // 别把这次主动退出当成崩溃去重建
-      try { child.send({ cmd: 'shutdown' }); } catch (_) {}
+      try { child.send({ cmd: 'shutdown' }); } catch (_) {} // best-effort: 子进程已退出时发关停令失败可忽略
     }
   }, SCAN_WORKER_IDLE_MS);
 }
@@ -290,7 +290,7 @@ const CANCEL_LINGER_MS = 5 * 60 * 1000;
 function requestStop(slug, albumId, conn) {
   const key = taskKey(slug, albumId);
   const token = (active.get(key) || {}).token || 0;
-  if (child) { try { child.send({ cmd: 'stop', slug, albumId, token }); } catch (_) {} }
+  if (child) { try { child.send({ cmd: 'stop', slug, albumId, token }); } catch (_) {} } // best-effort: 子进程已退出时发停止令失败，索引侧仍会停
   const c = conn || safeCurrentConn();
   if (c) {
     try {
@@ -300,7 +300,7 @@ function requestStop(slug, albumId, conn) {
       // 这里**必须**带 token：上一次扫描的收尾也会删这行，
       // 不限定归属就会把「刚派出去的新扫描」的行一起删掉。
       albumScan.persistScanClear(c, albumId, token);
-    } catch (_) { /* 未登录/连接不可用等场景忽略，IPC 那条路仍然有效 */ }
+    } catch (_) { /* best-effort: 未登录/连接不可用等场景忽略，IPC 那条路仍然有效 */ }
   }
   dispatched.delete(key);
   const t = active.get(key);
@@ -319,10 +319,10 @@ function requestStop(slug, albumId, conn) {
 function requestPause(slug, albumId, paused, conn) {
   const key = taskKey(slug, albumId);
   const token = (active.get(key) || {}).token || 0;
-  if (child) { try { child.send({ cmd: 'pause', slug, albumId, token, paused: !!paused }); } catch (_) {} }
+  if (child) { try { child.send({ cmd: 'pause', slug, albumId, token, paused: !!paused }); } catch (_) {} } // best-effort: 子进程已退出时发暂停令失败，索引侧仍会暂停
   const c = conn || safeCurrentConn();
   if (c) {
-    try { albumScan.setScanState(c, albumId, paused ? 'paused' : 'running', token); } catch (_) {}
+    try { albumScan.setScanState(c, albumId, paused ? 'paused' : 'running', token); } catch (_) {} // best-effort: 索引状态回写失败由断点记录兜底
   }
   const t = active.get(key);
   if (t) t.paused = !!paused;
@@ -377,11 +377,11 @@ function shutdown() {
   if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
   if (child) {
     expectExit = true;   // 主动退出，别触发崩溃重建
-    try { child.send({ cmd: 'shutdown' }); } catch (_) {}
+    try { child.send({ cmd: 'shutdown' }); } catch (_) {} // best-effort: 子进程已退出时发关停令失败可忽略
     // 兜底：给 2 秒还不走就强杀
     const dying = child;
     setTimeout(() => {
-      try { dying.kill(); } catch (_) {}
+      try { dying.kill(); } catch (_) {} // best-effort: 子进程已退出时强杀失败可忽略
     }, 2000).unref?.();
     child = null;
   }
@@ -397,7 +397,7 @@ function killNow() {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
   if (child) {
-    try { child.kill(); } catch (_) {}
+    try { child.kill(); } catch (_) {} // best-effort: 退出清理时子进程已死，强杀失败可忽略
     child = null;
   }
   dispatched.clear();
@@ -407,7 +407,7 @@ function killNow() {
 // 登出时通知子进程关闭该库的连接并丢弃钥匙（隐私模式下钥匙不能留驻）
 function lockDb(slug) {
   if (!slug || !child) return;
-  try { child.send({ cmd: 'lock', slug }); } catch (_) { /* 子进程已退出 */ }
+  try { child.send({ cmd: 'lock', slug }); } catch (_) { /* best-effort: 子进程已退出 */ }
 }
 
 module.exports = {

@@ -24,7 +24,7 @@ export function prefetch(loader) {
   clearTimeout(timer)
   timer = setTimeout(() => {
     try {
-      if (typeof loader === 'function') loader().catch(() => {})
-    } catch (e) { /* 忽略 */ }
+      if (typeof loader === 'function') loader().catch(() => {}) // best-effort: 预取 loader 自身抛错可忽略
+    } catch (e) { /* best-effort: 预取 loader 自身抛错可忽略 */ }
   }, 32)
 }

@@ -45,7 +45,7 @@ export function createTodoInvalidator(emit) {
       if (!config || config.__todoChangedSent || config.__skipTodoChanged) return false
       if (!shouldInvalidateTodo(config.method, config.url)) return false
       config.__todoChangedSent = true
-      try { emit() } catch (_) { /* 刷新失败不该把一次成功的写变成失败 */ }
+      try { emit() } catch (_) { /* best-effort: 刷新失败不该把一次成功的写变成失败 */ }
       return true
     },
   }

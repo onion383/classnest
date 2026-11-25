@@ -55,7 +55,7 @@ function connFor(slug) {
 }
 
 function send(msg) {
-  try { if (process.send) process.send(msg); } catch (_) { /* 父进程已断开 */ }
+  try { if (process.send) process.send(msg); } catch (_) { /* best-effort: 父进程已断开 */ }
 }
 
 // 已生成的缩略图攒一批就报给主进程（让它预热内存索引，避免首屏走磁盘读）。
@@ -210,7 +210,7 @@ async function runScan(slug, albumId, mode, resumeFrom, token) {
 // —— 那种断言抓不到「消息发了但子进程没处理」，正是 #12 的事故面。
 function applyLock(slug, deps = { openConns, keyCache, thumbReport, slugScopes }) {
   const conn = deps.openConns.get(slug);
-  if (conn) { try { conn.close(); } catch (_) { /* 连接已损坏也要继续丢钥匙 */ } deps.openConns.delete(slug); }
+  if (conn) { try { conn.close(); } catch (_) { /* best-effort: 连接已损坏也要继续丢钥匙 */ } deps.openConns.delete(slug); }
   deps.keyCache.delete(slug);
   deps.thumbReport.flushAll();
   deps.slugScopes.clearAllForSlug(slug);

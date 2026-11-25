@@ -51,7 +51,7 @@ function writeSkill(slug, name, content) {
   const p = skillFilePath(slug, name);
   if (!p) throw new Error('技能名不合法');
   const text = String(content == null ? '' : content);
-  if (!text.trim()) { try { fs.rmSync(p, { force: true }); } catch (_) { /* 忽略 */ } return; }
+  if (!text.trim()) { try { fs.rmSync(p, { force: true }); } catch (_) { /* best-effort: 空技能等于删除，文件已不存在时删除失败可忽略 */ } return; }
   fs.writeFileSync(p, text, 'utf8');
 }
 function deleteSkill(slug, name) {

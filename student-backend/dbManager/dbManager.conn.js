@@ -27,7 +27,7 @@ function getConn(slug, passphrase, encrypted = true) {
     // 首屏请求的第一笔同步开销就在这里（KDF + 全量 DDL 检查），而它发生在
     // 「连接已 accept、路由还没进去」的窗口里 —— 表现是首屏请求凭空多等 100ms+。
     if (process.env.PERF_STARTUP === '1') {
-      try { console.log(`[boot] 首次打开账号库 ${_t1 - _t0}ms（openFile）+ ${Date.now() - _t1}ms（initSchema）`); } catch (_) { /* 静默 */ }
+      try { console.log(`[boot] 首次打开账号库 ${_t1 - _t0}ms（openFile）+ ${Date.now() - _t1}ms（initSchema）`); } catch (_) { /* best-effort: 启动打点日志失败不影响打开账号库 */ }
     }
     reportForeignKeyStatus(slug, conn);
     setCachedConn(slug, conn);
@@ -61,7 +61,7 @@ function reportForeignKeyStatus(slug, conn) {
         + `删学生不会自动级联，依赖应用层清理（缺: ${missing}）`
       );
     }
-  } catch (_) { /* 诊断失败不影响开库 */ }
+  } catch (_) { /* best-effort: 诊断失败不影响开库 */ }
 }
 
 // 关闭并移出某库的缓存连接。
@@ -78,7 +78,7 @@ function evictConn(slug, opts = {}) {
     return false;
   }
   const conn = connCache.get(slug);
-  try { conn.close(); } catch (_) { /* 关闭失败可忽略 */ }
+  try { conn.close(); } catch (_) { /* best-effort: 关闭失败可忽略 */ }
   connCache.delete(slug);
   return true;
 }
@@ -108,7 +108,7 @@ function checkpointForBackup(slug, key, encrypted) {
       if (mode === 'wal') conn.pragma('wal_checkpoint(TRUNCATE)');
       return true;
     } finally {
-      try { conn.close(); } catch (_) { /* 已关闭 */ }
+      try { conn.close(); } catch (_) { /* best-effort: 连接已关闭时重复关闭可忽略 */ }
     }
   } catch (_) {
     return false;
@@ -206,7 +206,7 @@ function lockDb(slug) {
 function warmup() {
   try {
     ensureIndex();
-  } catch (_) { /* 暖机失败不影响正常懒加载路径 */ }
+  } catch (_) { /* best-effort: 暖机失败不影响正常懒加载路径 */ }
 }
 
 // ---------- 「上次真正用的是哪个库」----------
@@ -234,7 +234,7 @@ function rememberDb(slug) {
   try {
     fs.writeFileSync(LAST_DB_FILE(), s, { encoding: 'utf8', mode: 0o600 });
     lastDbWritten = s;
-  } catch (_) { /* 写不进去就算了：下次启动不预热，不影响任何功能 */ }
+  } catch (_) { /* best-effort: 写不进去就算了：下次启动不预热，不影响任何功能 */ }
 }
 
 function rememberedDb() {
@@ -270,9 +270,9 @@ function warmupMostRecent() {
     const t0 = Date.now();
     getConn(slug, passphrase, encrypted);
     if (process.env.PERF_STARTUP === '1') {
-      try { console.log(`[boot] 预热账号库 ${slug} ${Date.now() - t0}ms`); } catch (_) { /* 静默 */ }
+      try { console.log(`[boot] 预热账号库 ${slug} ${Date.now() - t0}ms`); } catch (_) { /* best-effort: 预热账号库失败时首屏请求会自己冷开 */ }
     }
-  } catch (_) { /* 预热失败：首屏请求照旧在自己那次 withDb 里冷开 */ }
+  } catch (_) { /* best-effort: 预热失败：首屏请求照旧在自己那次 withDb 里冷开 */ }
 }
 
 module.exports = { getConn, evictConn, checkpointForBackup, current, currentSlug, withDb, holdConnUntilResponse, lockDb, warmup, warmupMostRecent, rememberedDb };

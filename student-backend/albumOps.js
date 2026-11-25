@@ -20,7 +20,7 @@ const albumThumbs = require('./albumThumbs');
 
 const THUMB_DIR = dbManager.thumbsDir;
 const TRASH_DIR = dbManager.trashDir;
-try { fs.mkdirSync(TRASH_DIR, { recursive: true }); } catch (_) {}
+try { fs.mkdirSync(TRASH_DIR, { recursive: true }); } catch (_) {} // best-effort: 回收站目录建不起来时后续写入会再报错
 
 // 照片归档到回收站的确定性路径（按 id 命名保留原扩展名）。
 // 必须按 slug 分桶：各库的 album_photos.id 都从 1 自增，两班同 id + 同名照片归档到
@@ -91,7 +91,7 @@ async function deleteThumb(photo, slug) {
   if (!s) { albumThumbs.forgetPhoto(s, id); return; }
   const tp = albumThumbs.thumbPathFor(s, id);
   albumThumbs.forgetPhoto(s, id);
-  await fsp.unlink(tp).catch(() => {});
+  await fsp.unlink(tp).catch(() => {}); // best-effort: 索引已忘，缩略图清理失败可忽略
 }
 
 module.exports = { THUMB_DIR, TRASH_DIR, trashPathFor, legacyTrashPathFor, moveToTrash, restoreToOriginal, deleteThumb };

@@ -40,7 +40,7 @@ const path = require('path');
 const dbManager = require('./dbManager/dbManager');
 
 const THUMB_DIR = dbManager.thumbsDir;
-try { fs.mkdirSync(THUMB_DIR, { recursive: true }); } catch (_) {}
+try { fs.mkdirSync(THUMB_DIR, { recursive: true }); } catch (_) {} // best-effort: 缩略图目录建不起来时后续写入会再报错
 
 // ---------------------------------------------------------------------------
 // 按库隔离：slug → 子目录
@@ -60,7 +60,7 @@ function thumbsDirFor(slug) {
   let dir = dirCache.get(key);
   if (!dir) {
     dir = path.join(THUMB_DIR, key);
-    try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} // best-effort: 按库隔离的缩略图目录建不起来时可忽略
     dirCache.set(key, dir);
   }
   return dir;

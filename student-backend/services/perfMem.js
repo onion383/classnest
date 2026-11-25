@@ -33,7 +33,7 @@ function logExportMemory(label, before) {
   }
   try {
     console.log(`[perf] 导出内存 ${label} rss ${delta.rssMB >= 0 ? '+' : ''}${delta.rssMB}MB / heap ${delta.heapMB >= 0 ? '+' : ''}${delta.heapMB}MB / external ${delta.externalMB >= 0 ? '+' : ''}${delta.externalMB}MB`)
-  } catch (_) { /* 日志失败静默 */ }
+  } catch (_) { /* best-effort: 日志失败静默 */ }
   return delta
 }
 

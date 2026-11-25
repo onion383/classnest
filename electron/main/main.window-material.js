@@ -25,7 +25,7 @@ function applyBackgroundMaterial(win, material = 'acrylic') {
 // 关闭窗口系统背景材质（恢复普通背景）。用于：窗口销毁前 / 系统不支持时。
 const disableBackgroundMaterial = (win) => {
   if (process.platform !== 'win32' || !win || win.isDestroyed()) return
-  try { win.setBackgroundMaterial('none') } catch (_) {}
+  try { win.setBackgroundMaterial('none') } catch (_) {} // best-effort: 非 Win32 或窗口已销毁时无法设置背景材质
 }
 
 module.exports = { applyBackgroundMaterial, disableBackgroundMaterial }

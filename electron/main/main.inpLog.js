@@ -77,7 +77,7 @@ function registerInpLogIpc() {
       // 1-1：写前按体积轮转（1MB 封顶、保留最近 512KB），异步追加。
       // 旧实现每次 appendFileSync 且无上限，开发期反复导出会一直涨。
       appendWithRotation(file, lines.join('\n'), { maxBytes: 1024 * 1024, keepBytes: 512 * 1024 })
-    } catch (_) { /* 忽略写入失败 */ }
+    } catch (_) { /* best-effort: 忽略写入失败 */ }
   })
 }
 

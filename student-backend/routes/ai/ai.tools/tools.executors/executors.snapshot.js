@@ -68,16 +68,16 @@ async function runSnapshotCreate(ctx) {
   try {
     // 有 WAL 时，最近提交的数据还在 -wal 里；truncate checkpoint 后主库文件才是完整一致的。
     // 单进程单连接且此处同步执行，checkpoint 与复制之间不会插入其它写入。
-    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* 非 WAL 模式无需 checkpoint */ }
+    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* best-effort: 非 WAL 模式无需 checkpoint */ }
     fs.copyFileSync(dbManager.dbFilePath(slug), file);
   } catch (err) {
     // 半成品快照必须删掉，否则会被当成可用快照出现在列表里
-    try { fs.rmSync(file, { force: true }); } catch (_) { /* 忽略 */ }
+    try { fs.rmSync(file, { force: true }); } catch (_) { /* best-effort: 半成品快照删不掉时下面仍返回错误 */ }
     return { error: `创建快照失败：${err.message}` };
   }
   const files = snapshotFiles(slug);
   for (const f of files.slice(MAX_SNAPSHOTS)) {
-    try { fs.rmSync(path.join(dir, f), { force: true }); } catch (_) { /* 清理失败可忽略 */ }
+    try { fs.rmSync(path.join(dir, f), { force: true }); } catch (_) { /* best-effort: 清理失败可忽略 */ }
   }
   return {
     ok: true, snapshot: name, created: true, count: Math.min(files.length, MAX_SNAPSHOTS),
@@ -92,7 +92,7 @@ function runSnapshotList(ctx) {
   const dir = dbManager.snapshotsDir(slug);
   const items = snapshotFiles(slug).slice(0, MAX_SNAPSHOTS).map((f) => {
     let size = 0;
-    try { size = fs.statSync(path.join(dir, f)).size; } catch (_) { /* 忽略 */ }
+    try { size = fs.statSync(path.join(dir, f)).size; } catch (_) { /* best-effort: 单个快照 stat 失败时按 0 大小展示 */ }
     return { snapshot: f.replace(/\.db$/, ''), size };
   });
   return { count: items.length, snapshots: items };

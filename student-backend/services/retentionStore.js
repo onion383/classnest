@@ -108,7 +108,7 @@ function cutoffFor(days) {
 function removeFiles(files) {
   let deleted = 0
   for (const f of files) {
-    try { fs.unlinkSync(f.path); deleted++ } catch (_) { /* 占用等：不影响其它文件 */ }
+    try { fs.unlinkSync(f.path); deleted++ } catch (_) { /* best-effort: 占用等：不影响其它文件 */ }
   }
   return deleted
 }
@@ -243,7 +243,7 @@ function restoreReceipt(key) {
       fs.copyFileSync(found.path, target)
       fs.unlinkSync(found.path)
     } catch (back) {
-      try { fs.unlinkSync(target) } catch (_) { /* 目标没建成，忽略 */ }
+      try { fs.unlinkSync(target) } catch (_) { /* best-effort: 目标没建成，忽略 */ }
       return { ok: false, error: '恢复失败：' + back.message }
     }
   }

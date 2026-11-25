@@ -64,7 +64,7 @@ function unzipSafe(zipPath, destDir) {
       const fail = (e) => {
         if (settled) return
         settled = true
-        try { zipfile.close() } catch (_) { /* 已经关了 */ }
+        try { zipfile.close() } catch (_) { /* best-effort: 已经关了 */ }
         reject(e)
       }
 

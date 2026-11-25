@@ -39,7 +39,7 @@ function measureCrypto(name, bytes, run) {
       const ms = Number(process.hrtime.bigint() - t0) / 1e6;
       const size = Number.isFinite(bytes) ? `/${bytes}B` : '';
       console.log(`[perf] ${name} ${ms.toFixed(2)}ms${size}`);
-    } catch (_) { /* 打点失败静默 */ }
+    } catch (_) { /* best-effort: 打点失败静默 */ }
   }
 }
 

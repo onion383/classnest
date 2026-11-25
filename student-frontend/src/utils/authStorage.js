@@ -23,10 +23,10 @@ function getToken() {
   try { return localStorage.getItem(TOKEN_KEY) || '' } catch (_) { return '' }
 }
 function setToken(token) {
-  try { if (token) localStorage.setItem(TOKEN_KEY, token) } catch (_) { /* 隐私模式等写失败忽略 */ }
+  try { if (token) localStorage.setItem(TOKEN_KEY, token) } catch (_) { /* best-effort: 隐私模式等写失败忽略 */ }
 }
 function clearToken() {
-  try { localStorage.removeItem(TOKEN_KEY) } catch (_) {}
+  try { localStorage.removeItem(TOKEN_KEY) } catch (_) {} // best-effort: 本地存储不可用时 token 清不掉，下次启动以服务端为准
 }
 
 // ---- 当前用户（登录返回的 user 对象，JSON 持久化）----
@@ -38,10 +38,10 @@ function getCurrentUser() {
   } catch (_) { return null }
 }
 function setCurrentUser(user) {
-  try { if (user) localStorage.setItem(USER_KEY, JSON.stringify(user)) } catch (_) {}
+  try { if (user) localStorage.setItem(USER_KEY, JSON.stringify(user)) } catch (_) {} // best-effort: 本地存储不可用时当前用户不持久
 }
 function clearCurrentUser() {
-  try { localStorage.removeItem(USER_KEY) } catch (_) {}
+  try { localStorage.removeItem(USER_KEY) } catch (_) {} // best-effort: 本地存储不可用时当前用户清不掉，下次启动以服务端为准
 }
 
 // ---- 主动登出的「静默窗口」----

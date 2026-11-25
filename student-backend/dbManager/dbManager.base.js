@@ -31,7 +31,7 @@ function getDatabase() {
       if (!m || process.env[m[1]] !== undefined) continue;
       process.env[m[1]] = m[2].replace(/^["']|["']$/g, '').trim();
     }
-  } catch (_) { /* .env 不存在则忽略 */ }
+  } catch (_) { /* best-effort: .env 不存在则忽略 */ }
 })();
 
 // ---------- 主密钥 ----------
@@ -168,13 +168,13 @@ function decryptBundleKey({ key, wrappedByPassword, wrappedByMnemonic, password,
     if (!passwordSalt) throw new Error('备份包缺少口令派生盐，无法解锁（旧格式包已不支持）');
     try {
       return unwrapKeyByPrivacySecret(wrappedByPassword, password, passwordSalt, kdfParamsPassword);
-    } catch (_) { /* 密码不对，尝试助记词 */ }
+    } catch (_) { /* best-effort: 密码不对，尝试助记词 */ }
   }
   if (wrappedByMnemonic && mnemonic) {
     if (!mnemonicSalt) throw new Error('备份包缺少恢复词派生盐，无法解锁（旧格式包已不支持）');
     try {
       return unwrapKeyByPrivacySecret(wrappedByMnemonic, normalizePhrase(mnemonic), mnemonicSalt, kdfParamsMnemonic);
-    } catch (_) { /* 助记词不对 */ }
+    } catch (_) { /* best-effort: 助记词不对 */ }
   }
   throw new Error('无法解锁备份：密码或助记词不正确');
 }
@@ -240,14 +240,14 @@ function setCachedConn(slug, conn) {
     }
     const evicted = connCache.get(oldestKey);
     connCache.delete(oldestKey);
-    try { evicted.close(); } catch (_) { /* 关闭失败可忽略 */ }
+    try { evicted.close(); } catch (_) { /* best-effort: 关闭失败可忽略 */ }
   }
   // 全部在用、没有空闲可驱逐时，硬顶兜底：拒绝本次新连接，避免连接数无限增长。
   if (connCache.size > CONN_CACHE_HARD_MAX) {
     if (connCache.get(slug) === conn) {
       // 摘除即回收：不 close 会把句柄留在「不在缓存也没关闭」的悬空态（K01-18）
       connCache.delete(slug);
-      try { conn.close(); } catch (_) { /* 关闭失败可忽略 */ }
+      try { conn.close(); } catch (_) { /* best-effort: 关闭失败可忽略 */ }
     }
     throw new Error('同时打开的数据库连接过多，请稍后重试');
   }

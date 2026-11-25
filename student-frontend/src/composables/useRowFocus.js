@@ -47,7 +47,7 @@ export function createRowFocusHost(route, router) {
   let cancels = []
   const d = useDisposables()
   const clearCancels = () => {
-    for (const c of cancels) { try { c() } catch (_) { /* 已结束 */ } }
+    for (const c of cancels) { try { c() } catch (_) { /* best-effort: 已结束 */ } }
     cancels = []
   }
   d.add(() => {

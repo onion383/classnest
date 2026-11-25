@@ -119,7 +119,7 @@ export async function streamThumbBatch(photoIds, signal, onThumb) {
   } catch (_) {
     // abort 也会走到这里（reader.read() 抛 AbortError）。把连接明确放掉，
     // 别让 socket 挂到 GC 才回收。
-    if (reader) { try { reader.cancel() } catch (_) { /* 已经断了 */ } }
+    if (reader) { try { reader.cancel() } catch (_) { /* best-effort: 已经断了 */ } }
     return null
   }
 }

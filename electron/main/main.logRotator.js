@@ -43,7 +43,7 @@ async function readTail(filePath, keepBytes, size) {
     const { bytesRead } = await fh.read(buf, 0, buf.length, start)
     return dropPartialUtf8Head(buf.subarray(0, bytesRead)).toString('utf8')
   } finally {
-    if (fh) await fh.close().catch(() => { /* 关不掉也不影响结果 */ })
+    if (fh) await fh.close().catch(() => { /* best-effort: 关不掉也不影响结果 */ })
   }
 }
 
@@ -75,7 +75,7 @@ function appendWithRotation(filePath, text, opts = {}) {
       await fsp.mkdir(path.dirname(filePath), { recursive: true })
       await rotateIfNeeded(filePath, opts)
       await fsp.appendFile(filePath, text)
-    } catch (_) { /* 日志失败不影响业务 */ }
+    } catch (_) { /* best-effort: 日志失败不影响业务 */ }
   })
   chains.set(filePath, next)
   return next
@@ -90,7 +90,7 @@ function clearLogFile(filePath) {
     try {
       await fsp.mkdir(path.dirname(filePath), { recursive: true })
       await fsp.writeFile(filePath, '')
-    } catch (_) { /* 清日志失败不影响业务，调用方以实际体积差为准 */ }
+    } catch (_) { /* best-effort: 清日志失败不影响业务，调用方以实际体积差为准 */ }
   })
   chains.set(filePath, next)
   return next

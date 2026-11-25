@@ -546,9 +546,9 @@ router.post('/vacuum', (req, res) => {
         },
       });
     }
-    try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* 非 WAL 模式没有可落盘的内容 */ }
+    try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* best-effort: 非 WAL 模式没有可落盘的内容 */ }
     conn.exec('VACUUM');
-    try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* 同上 */ }
+    try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* best-effort: 非 WAL 模式没有可落盘内容 */ }
     const afterBytes = dbDiskBytes(slug);
     res.json({
       success: true,
@@ -602,7 +602,7 @@ router.post('/sources', (req, res) => {
     // 已经写出部分 JSON 时无法再改状态码：直接断开，让前端按「请求失败」处理，
     // 不能补一段合法 JSON 让半个结果被当成完整结果吞下去。
     if (!res.headersSent) return res.status(500).json({ error: '读取数据源失败' });
-    try { res.destroy(); } catch (_) { /* 已断开 */ }
+    try { res.destroy(); } catch (_) { /* best-effort: 已断开 */ }
   } finally {
     logExportMemory(`sources ${emitted}/${keys.length} 表`, memBefore);
   }
@@ -673,7 +673,7 @@ function collectZipItems(body) {
           // 只登记路径：文件在写入器里流式读，读失败时整包中断（旧实现会跳过，
           // 但那要求先把文件读进内存；收据不存在已在上面的 existsSync 挡掉）
           items.push({ name: `收据文件/${code}/${display}`, path: abs });
-        } catch (_) { /* 被占用/权限不足：跳过这一个 */ }
+        } catch (_) { /* best-effort: 被占用/权限不足：跳过这一个 */ }
       }
     }
   }
@@ -693,9 +693,9 @@ function sweepExportTmp() {
     const cutoff = Date.now() - 2 * 60 * 60 * 1000;
     for (const f of fs.readdirSync(EXPORT_TMP_DIR)) {
       const p = path.join(EXPORT_TMP_DIR, f);
-      try { if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch (_) { /* 占用中留到下次 */ }
+      try { if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch (_) { /* best-effort: 占用中留到下次 */ }
     }
-  } catch (_) { /* 目录不存在 / 无权限：不影响本次导出 */ }
+  } catch (_) { /* best-effort: 目录不存在 / 无权限：不影响本次导出 */ }
 }
 
 router.post('/zip-to-file', async (req, res) => {
@@ -732,7 +732,7 @@ router.post('/zip-to-file', async (req, res) => {
     res.json({ path: tmpPath, filename: outName, bytes: size });
   } catch (err) {
     console.error('[data] 导出 zip 落盘失败:', err && err.message);
-    try { fs.unlinkSync(tmpPath); } catch (_) { /* 没写出来就算了 */ }
+    try { fs.unlinkSync(tmpPath); } catch (_) { /* best-effort: 没写出来就算了 */ }
     res.status(500).json({ error: '导出文件生成失败' });
   } finally {
     logExportMemory(finished ? 'zip-to-file 完成' : 'zip-to-file 失败', memBefore);
@@ -766,7 +766,7 @@ router.post('/zip', async (req, res) => {
   } catch (err) {
     // 已经开始写响应体了：只能中断连接，让客户端看到「下载不完整」而不是一个坏包
     console.error('[data] 导出 zip 失败:', err && err.message);
-    try { res.destroy(); } catch (_) { /* 已断开 */ }
+    try { res.destroy(); } catch (_) { /* best-effort: 已断开 */ }
   } finally {
     logExportMemory(finished ? 'zip 完成' : 'zip 失败', memBefore);
   }

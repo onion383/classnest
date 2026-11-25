@@ -72,7 +72,7 @@ export function useViewerPan({ zoom, rotation, stageRef, mediaRef }) {
   /** 换图 / 翻页 / 关闭 / 复位：平移量归零，并把可能仍在进行的拖动彻底收掉 */
   function reset() {
     if (drag) {
-      try { drag.el.releasePointerCapture(drag.id) } catch (_) { /* 元素已移除 */ }
+      try { drag.el.releasePointerCapture(drag.id) } catch (_) { /* best-effort: 元素已移除 */ }
     }
     drag = null
     panning.value = false
@@ -94,8 +94,8 @@ export function useViewerPan({ zoom, rotation, stageRef, mediaRef }) {
       bounds,
     }
     panning.value = true
-    try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) { /* 不支持捕获时仍可拖 */ }
-    try { e.preventDefault() } catch (_) { /* 保留 click 语义，只挡原生图片拖拽/选字 */ }
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) { /* best-effort: 不支持捕获时仍可拖 */ }
+    try { e.preventDefault() } catch (_) { /* best-effort: 保留 click 语义，只挡原生图片拖拽/选字 */ }
   }
 
   function onPointerMove(e) {
@@ -111,7 +111,7 @@ export function useViewerPan({ zoom, rotation, stageRef, mediaRef }) {
 
   function onPointerUp(e) {
     if (!drag || (e.pointerId != null && e.pointerId !== drag.id)) return
-    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch (_) { /* 已自动释放 */ }
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch (_) { /* best-effort: 已自动释放 */ }
     drag = null
     panning.value = false
   }

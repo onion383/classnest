@@ -205,7 +205,7 @@ watch(() => props.visible, (v) => {
     lastFocus = document.activeElement
     nextTick(() => { if (rootEl.value) rootEl.value.focus() })
   } else if (lastFocus) {
-    try { lastFocus.focus() } catch (_) { /* 触发点已被移除 */ }
+    try { lastFocus.focus() } catch (_) { /* best-effort: 触发点已被移除 */ }
     lastFocus = null
   }
 })

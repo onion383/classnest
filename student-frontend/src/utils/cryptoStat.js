@@ -26,6 +26,6 @@ export function startCryptoStat(log, name) {
     try {
       const size = Number.isFinite(bytes) ? `/${bytes}B` : ''
       phases.push(`${name} ${perfNow() - t0}ms${size}`)
-    } catch (_) { /* 打点失败静默 */ }
+    } catch (_) { /* best-effort: 打点失败静默 */ }
   }
 }

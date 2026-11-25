@@ -79,7 +79,7 @@ function readHead(filePath, len = 32) {
   } catch (_) {
     return null;
   } finally {
-    if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) { /* 忽略 */ } }
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) { /* best-effort: fd 已关闭时重复关闭可忽略 */ } }
   }
 }
 

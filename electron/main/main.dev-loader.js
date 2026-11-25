@@ -74,7 +74,7 @@ function devLoadingHtml() {
   try {
     css = fs.readFileSync(SPLASH_CSS_PATH, 'utf8')
     body = fs.readFileSync(SPLASH_HTML_PATH, 'utf8')
-  } catch (_) { /* 读不到共享文件时退化为最小占位，至少不出白屏 */ }
+  } catch (_) { /* best-effort: 读不到共享文件时退化为最小占位，至少不出白屏 */ }
   if (!body) {
     body = '<div class="app-splash"><span class="logo">班集</span><span class="tip" id="boot-tip">加载中，请稍候…</span></div>'
   }
@@ -93,7 +93,7 @@ ${css}
   if(!el) return;
   var api=window.electron;
   if(api&&api.on){api.on('from-main',function(m){if(m&&m.type==='boot-status'&&m.text){el.textContent=m.text}})}
-  if(api&&api.invoke){api.invoke('boot-status').then(function(t){if(t){el.textContent=t}}).catch(function(){})}
+  if(api&&api.invoke){api.invoke('boot-status').then(function(t){if(t){el.textContent=t}}).catch(function(){})} // best-effort: 启动状态查询失败时占位页保持默认文本
 })();
 </script>
 </body></html>`

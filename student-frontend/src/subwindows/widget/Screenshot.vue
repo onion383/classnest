@@ -61,7 +61,7 @@ async function capture() {
       if (settingsRes.data.success) {
         saveDir = settingsRes.data.data.screenshotSavePath
       }
-    } catch (_) { /* 读取设置失败则使用默认路径 */ }
+    } catch (_) { /* best-effort: 读取设置失败则使用默认路径 */ }
 
     // 只保存文件，不回传整屏 base64（本组件只用 filePath，省掉一大块内存）
     // hideWidget 传 false：自己已经藏好了，别让主进程再等 150ms 白等一次

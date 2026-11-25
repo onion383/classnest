@@ -127,7 +127,7 @@ contextBridge.exposeInMainWorld('electron', {
     // 且旧的 wrapper 已不在映射表里 → 永远 off 不掉（与 on() 的同一类问题）。
     const prev = m.get(callback)
     if (prev) {
-      try { ipcRenderer.removeListener(channel, prev) } catch (_) { /* 已结束 */ }
+      try { ipcRenderer.removeListener(channel, prev) } catch (_) { /* best-effort: 已结束 */ }
     }
     const wrapper = (event, ...args) => {
       // 先摘登记再回调：回调里可能再 off 同一个句柄
@@ -135,7 +135,7 @@ contextBridge.exposeInMainWorld('electron', {
         ipcRenderer.removeListener(channel, wrapper)
         m.delete(callback)
         if (m.size === 0) onceMap.delete(channel)
-      } catch (_) { /* 已结束 */ }
+      } catch (_) { /* best-effort: 已结束 */ }
       callback(...args)
     }
     m.set(callback, wrapper)

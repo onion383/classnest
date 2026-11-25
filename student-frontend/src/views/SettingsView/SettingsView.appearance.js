@@ -165,12 +165,12 @@ export function useSettingsAppearance(ctx) {
       try {
         const res = await window.electron?.invoke(INVOKE.GET_USB_AUTO_OPEN)
         ctx.usbAutoOpen.value = !!res?.enabled
-      } catch (_) {}
+      } catch (_) {} // best-effort: U盘自动打开设置读不到时按未开启处理
     },
     // 切换「启用桌面小组件」：持久化到 localStorage，并即时通知主进程创建/关闭桌面小组件窗口
     onDesktopWidgetChange(value) {
       ctx.desktopWidgetEnabled.value = !!value
-      try { localStorage.setItem('desktopWidgetEnabled', ctx.desktopWidgetEnabled.value ? '1' : '0') } catch (_) {}
+      try { localStorage.setItem('desktopWidgetEnabled', ctx.desktopWidgetEnabled.value ? '1' : '0') } catch (_) {} // best-effort: 本地存储不可用时开关状态不持久，不影响本次
       window.electron?.send(SEND.DESKTOP_WIDGET_ENABLED, ctx.desktopWidgetEnabled.value)
     },
     async onUsbAutoOpenChange(value) {
@@ -196,7 +196,7 @@ export function useSettingsAppearance(ctx) {
           ctx.dataDir.value = res.dataDir
           ctx.screenshotDir.value = res.screenshotDir || ''
         }
-      } catch (_) {}
+      } catch (_) {} // best-effort: 截图目录读不到时按默认处理
     },
     async changeDataDir() {
       const picked = await ctx.pickDir()
@@ -222,7 +222,7 @@ export function useSettingsAppearance(ctx) {
       try {
         const { data } = await axios.get('/api/account/security-level')
         ctx.securityLevel.value = data.level || ''
-      } catch (_) { /* 读取失败保持空值 */ } finally {
+      } catch (_) { /* best-effort: 读取失败保持空值 */ } finally {
         ctx.securityLevelLoading.value = false
       }
     },
@@ -320,7 +320,7 @@ export function useSettingsAppearance(ctx) {
     syncPrivacyPhraseGuard(on) {
       try {
         window.electron?.invoke(INVOKE.SET_CONTENT_PROTECTION, !!on)
-      } catch (_) { /* 非 Electron 环境忽略 */ }
+      } catch (_) { /* best-effort: 非 Electron 环境忽略 */ }
     },
     clearPrivacyPhrase() {
       ctx.privacyPhrase.value = ''
@@ -338,7 +338,7 @@ export function useSettingsAppearance(ctx) {
         if (result && result.filePaths && result.filePaths.length > 0) {
           return result.filePaths[0]
         }
-      } catch (_) {}
+      } catch (_) {} // best-effort: 选目录取消/失败时返回空串
       return ''
     },
     async openDir(path) {
@@ -578,7 +578,7 @@ export function useSettingsAppearance(ctx) {
             widget: !!(snap.alive && snap.alive.widget),
           }
         }
-      } catch (_) { /* 后端未就绪等场景静默忽略 */ }
+      } catch (_) { /* best-effort: 后端未就绪等场景静默忽略 */ }
     },
     // 取上次启动耗时
     async loadStartup() {
@@ -587,7 +587,7 @@ export function useSettingsAppearance(ctx) {
         // 不做取整：主进程传来的 total 带 getCreationTime 的微秒级小数，
         // 面板按秒原样呈现（如 1.17285693359375 s）。
         ctx.perfStartupTotal.value = t?.total || 0
-      } catch (_) {}
+      } catch (_) {} // best-effort: 启动耗时数据读不到时按 0 展示
     },
     // 空间管理：按四类 + 其他兜底统计磁盘占用。
     // 不进内存轮询链（体积扫描是目录遍历，代价比读计数大得多）：

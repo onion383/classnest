@@ -125,7 +125,7 @@ function createTray() {
 
 function destroyTray() {
   if (!appTray) return
-  try { appTray.destroy() } catch (_) { /* 忽略 */ }
+  try { appTray.destroy() } catch (_) { /* best-effort: 托盘已销毁时重复销毁可忽略 */ }
   appTray = null
 }
 

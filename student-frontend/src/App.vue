@@ -338,7 +338,7 @@ const { items: todoItems, total: todoTotal } = useTodoCenter()
 const todoOpen = ref(false)
 function goToTodo(key) {
   todoOpen.value = false
-  if (key === 'provisional') router.push({ path: '/students', query: { provisional: '1' } }).catch(() => {})
+  if (key === 'provisional') router.push({ path: '/students', query: { provisional: '1' } }).catch(() => {}) // best-effort: 待办跳转失败不影响当前页
   else router.push({ path: '/leaves', query: { overdue: '1' } }).catch(() => {})
 }
 
@@ -504,7 +504,7 @@ async function openAssistant() {
   if (assistantOpening.value || assistantOpen.value) return
   const scopeAtStart = classScopeKey.value
   assistantOpening.value = true
-  try { await loadAiAssistant() } catch (_) {}
+  try { await loadAiAssistant() } catch (_) {} // best-effort: AI 助手加载失败不阻断启动，下面有班级切换守卫
   // 加载期间切了班：这份内容属于上一个班，不能在新班弹出来
   if (classScopeKey.value !== scopeAtStart) { assistantOpening.value = false; return }
   await new Promise((r) => requestAnimationFrame(r))
@@ -607,7 +607,7 @@ function onUndoHover() { refreshUndoStatus() }
 async function retryBackendFromDead() {
   if (reconnectRetrying.value) return
   reconnectRetrying.value = true
-  try { await window.electron?.invoke(INVOKE.RESTART_BACKEND) } catch (_) {}
+  try { await window.electron?.invoke(INVOKE.RESTART_BACKEND) } catch (_) {} // best-effort: 重启后端失败仍走整页重载兜底
   // 后端已重新 fork：整页重载重走一遍启动流程（若仍起不来会再次显示失败提示）
   setTimeout(() => location.reload(), 400)
 }
@@ -625,7 +625,7 @@ async function fetchPendingNotification() {
       const fn = { success: notify.success, error: notify.error, warning: notify.warning, info: notify.info }[res.type] || notify.info
       fn(res.message)
     }
-  } catch (_) {}
+  } catch (_) {} // best-effort: 拉取待办通知失败不影响主流程
 }
 
 // ---- 智能排表草稿：启动查到草稿就弹一次模态提示（内容待打开智能排表时恢复） ----
@@ -674,7 +674,7 @@ async function applyToolboxPreference() {
     if (classScopeKey.value !== scopeAtStart) return
     const on = !!(data && data.success && data.data && data.data.toolboxEnabled)
     window.electron?.send(SEND.WIDGET_SET_SESSION_VISIBLE, on)
-  } catch (_) {}
+  } catch (_) {} // best-effort: 工具箱显隐广播失败无副作用
 }
 
 // ---- 关闭选择弹窗（复用现有弹窗动画，替代主进程原生菜单） ----
@@ -701,7 +701,7 @@ function setupShutdownIpc() {
     if (data.type === 'navigate') {
       const path = typeof data.path === 'string' ? data.path : ''
       if (path.startsWith('/') && route.fullPath !== path) {
-        router.push(path).catch(() => {})
+        router.push(path).catch(() => {}) // best-effort: 深链导航失败不影响当前页
       }
       return
     }
@@ -785,10 +785,10 @@ function getRememberedShutdown() {
   } catch (_) { return null }
 }
 function setRememberedShutdown(action) {
-  try { localStorage.setItem('shutdown-remember', JSON.stringify({ action })) } catch (_) {}
+  try { localStorage.setItem('shutdown-remember', JSON.stringify({ action })) } catch (_) {} // best-effort: 本地存储不可用时记不住关机动作，不影响本次
 }
 function clearRememberedShutdown() {
-  try { localStorage.removeItem('shutdown-remember') } catch (_) {}
+  try { localStorage.removeItem('shutdown-remember') } catch (_) {} // best-effort: 本地存储不可用时清不掉标记，下次启动自愈
 }
 
 // created 等价：IPC 接管、待展示提示、后端就绪状态探测
@@ -796,7 +796,7 @@ setupShutdownIpc()
 fetchPendingNotification()
 // 兜住「就绪广播早于本组件创建」的竞态：查一次当前状态，确保之后运行期异常能接管提示。
 // 后端确认就绪后顺带查一次智能排表草稿（此时接口才可用，避免启动瞬间静默失败）。
-window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) { backendEverReady.value = true; checkSeatDraft(); loadAiEnabled(); applyToolboxPreference() } }).catch(() => {})
+window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) { backendEverReady.value = true; checkSeatDraft(); loadAiEnabled(); applyToolboxPreference() } }).catch(() => {}) // best-effort: 启动状态查询失败，运行期异常监听仍会接管
 // AI 设置变更（启用/停用、换模型）后刷新图标显隐
 disposables.listen(window, 'ai-config-changed', onAiConfigChanged)
 
@@ -839,7 +839,7 @@ onMounted(() => {
     try {
       const enabled = (localStorage.getItem('desktopWidgetEnabled') ?? '0') !== '0'
       if (window.electron?.send) window.electron.send(SEND.WIDGETS_READY, enabled)
-    } catch (_) {}
+    } catch (_) {} // best-effort: 桌面组件就绪广播失败不影响主窗口
   }
   // 占位页移除时由渲染层入口广播 app-visible（见 src/main.js 的 dropSplash）。
   // 兜底 5s：后端起不来时占位页会常驻（它是失败提示的载体），此时照旧把小组件建出来。

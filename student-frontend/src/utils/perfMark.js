@@ -17,7 +17,7 @@ export function perfNow() {
     if (typeof performance !== 'undefined' && performance.timeOrigin && performance.now) {
       return Math.round(performance.timeOrigin + performance.now())
     }
-  } catch (_) { /* 交给 Date.now 兜底 */ }
+  } catch (_) { /* best-effort: 交给 Date.now 兜底 */ }
   return Date.now()
 }
 
@@ -77,12 +77,12 @@ export function logSummary(label, log) {
     const total = log && log.t0 ? perfSince(log.t0) : 0
     const detail = log && Array.isArray(log.phases) && log.phases.length ? `（${log.phases.join(' / ')}）` : ''
     console.log(`[startup] ${label} 共${total}ms${detail}@${perfNow()}`)
-  } catch (_) { /* 打点失败绝不能影响请求 */ }
+  } catch (_) { /* best-effort: 打点失败绝不能影响请求 */ }
 }
 
 // 标记型打点（只有时刻，没有耗时）；同样失败静默
 export function mark(text) {
   try {
     console.log(`[startup] ${text} @${perfNow()}`)
-  } catch (_) { /* 打点失败绝不能影响请求 */ }
+  } catch (_) { /* best-effort: 打点失败绝不能影响请求 */ }
 }

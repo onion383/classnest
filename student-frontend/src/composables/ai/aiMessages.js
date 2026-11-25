@@ -24,7 +24,7 @@ export function parseMessage(m) {
         const images = parts.filter((p) => p.type === 'image_url').map((p) => p.image_url.url)
         parsed = { role: 'user', content: text, images }
       }
-    } catch (_) { /* 解析失败则当普通文本 */ }
+    } catch (_) { /* best-effort: 解析失败则当普通文本 */ }
   }
   if (!parsed) parsed = { role: m.role, content: m.content || '' }
   // 记住落库 id，回退功能据此精确删除本轮消息

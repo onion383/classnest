@@ -87,7 +87,7 @@ async function dispatchTool(name, args, ctx) {
   // 「新值」若还是代号，确认卡片会显示「真号 → P-xxxxxx」这种荒谬对照。
   // 只有显式带 slug 的主对话 / 子助手才还原；MCP 方向 B 不传 slug，保持原样。
   if (ctx && ctx.slug && args && typeof args === 'object' && !Array.isArray(args)) {
-    try { args = privacy.restore(args, ctx.slug); } catch (_) { /* 保护模块故障不阻断工具 */ }
+    try { args = privacy.restore(args, ctx.slug); } catch (_) { /* best-effort: 保护模块故障不阻断工具 */ }
     if (TOKEN_STRICT_TOOL_RE.test(name) && hasUnrestoredToken(args)) {
       return { result: { ok: false, error: 'AI 数据保护：内容里有无法识别的代号（S-/P-），请按原名重新填写后再试' } };
     }
@@ -377,7 +377,7 @@ function logAiRead(name, args, ctx, result) {
 // 统一的工具执行入口：流式 / 非流式共用
 async function runTool(name, args, ctx) {
   const out = await dispatchTool(name, args, ctx);
-  try { logAiRead(name, args, ctx, out && out.result); } catch (_) { /* 记录失败不阻断 */ }
+  try { logAiRead(name, args, ctx, out && out.result); } catch (_) { /* best-effort: 记录失败不阻断 */ }
   return out;
 }
 

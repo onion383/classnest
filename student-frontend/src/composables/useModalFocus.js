@@ -36,7 +36,7 @@ export function useModalFocus(isOpen, rootRef, onEscape) {
     const el = lastFocus
     lastFocus = null
     if (el && typeof el.focus === 'function') {
-      try { el.focus() } catch (_) { /* 触发点已被移除 */ }
+      try { el.focus() } catch (_) { /* best-effort: 触发点已被移除 */ }
     }
   }
 

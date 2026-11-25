@@ -91,7 +91,7 @@ watch(() => props.visible, (v) => {
     releaseSelf();
     // 键盘用户关闭后要把焦点还给触发点，否则焦点掉到 body（F01-07）
     if (lastFocus && typeof lastFocus.focus === 'function') {
-      try { lastFocus.focus(); } catch (_) { /* 触发点已被移除 */ }
+      try { lastFocus.focus(); } catch (_) { /* best-effort: 触发点已被移除 */ }
     }
     lastFocus = null;
     // **不在这里重置 measured**：Transition 的离场动画还要播 ~100ms，而 menuStyle

@@ -23,7 +23,7 @@ export function warnUndoFailed(label, err) {
   console.warn('[undo] 登记撤销失败：', label || '', err || '')
   import('../composables/useNotification.js')
     .then(({ useNotification }) => useNotification().warning(text))
-    .catch(() => { /* 通知不可用时仅保留日志 */ })
+    .catch(() => { /* best-effort: 通知不可用时仅保留日志 */ })
 }
 
 // 一次用户动作可能登记多条记录（拖一次座位改多格、批量删 N 行）。
@@ -112,7 +112,7 @@ export function recordUndo(spec) {
     .then((res) => {
       // 刷新可用态是附带动作，它炸了不能把「登记成功」伪装成失败
       if (shouldRefresh) {
-        try { h.onRegistered() } catch (_) { /* 状态查询失败不打断用户 */ }
+        try { h.onRegistered() } catch (_) { /* best-effort: 状态查询失败不打断用户 */ }
       }
       return (res && res.data && res.data.id) || null
     })

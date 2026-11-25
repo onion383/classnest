@@ -68,6 +68,6 @@ export function waitForBackendReady(timeoutMs = 4000) {
     waiters.add(onReady)
     timer = setTimeout(() => finish(ready), timeoutMs)
     // 主动查一次当前状态：事件可能在本监听注册之前就已经广播过了
-    api.invoke(INVOKE.BACKEND_STATUS).then((v) => { if (v) finish(true) }).catch(() => {})
+    api.invoke(INVOKE.BACKEND_STATUS).then((v) => { if (v) finish(true) }).catch(() => {}) // best-effort: 状态查询失败时继续等就绪事件
   })
 }

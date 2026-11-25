@@ -198,7 +198,7 @@ async function loadSkillsDir() {
 // 在资源管理器中打开技能文件目录
 async function openSkillsDir() {
   if (!skillsDir.value) return
-  try { await window.electron?.invoke(INVOKE.OPEN_FOLDER, skillsDir.value) } catch (_) { /* 忽略 */ }
+  try { await window.electron?.invoke(INVOKE.OPEN_FOLDER, skillsDir.value) } catch (_) { /* best-effort: 目录打不开时无副作用 */ }
 }
 async function loadConversations() {
   loadingConv.value = true

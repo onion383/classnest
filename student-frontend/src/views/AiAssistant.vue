@@ -713,12 +713,12 @@ function onPermConfirm() {
 // 写入挡位并持久化（下次打开沿用）
 function setPermissionMode(mode) {
   permissionMode.value = mode
-  try { localStorage.setItem(AI_PERMISSION_KEY, mode) } catch (_) { /* 忽略 */ }
+  try { localStorage.setItem(AI_PERMISSION_KEY, mode) } catch (_) { /* best-effort: 本地存储不可用时权限模式不持久 */ }
 }
 // 切换联网搜索开关并持久化（下次打开沿用）
 function onToggleSearch() {
   webSearchOn.value = !webSearchOn.value
-  try { localStorage.setItem(AI_WEB_SEARCH_KEY, webSearchOn.value ? '1' : '0') } catch (_) { /* 忽略 */ }
+  try { localStorage.setItem(AI_WEB_SEARCH_KEY, webSearchOn.value ? '1' : '0') } catch (_) { /* best-effort: 本地存储不可用时联网开关不持久 */ }
 }
 // 抽屉内新建 / 切换会话后自动收起抽屉
 function onConvNew() {
@@ -834,7 +834,7 @@ async function endRegionSelect() {
   if (cancelRegionKey) { cancelRegionKey(); cancelRegionKey = null }
   try {
     if (window.electron && window.electron.invoke) await window.electron.invoke(INVOKE.SCREENSHOT_REGION_END)
-  } catch (_) { /* 忽略 */ }
+  } catch (_) { /* best-effort: 截图结束通道调用失败可忽略 */ }
   regionShot.value = null
   regionRect.value = null
   regionDragging.value = false
@@ -1040,7 +1040,7 @@ onUnmounted(() => {
   // 切班会销毁本组件；若流还在跑，必须 abort —— 否则旧流在 finally 里用换发的新 token
   // 执行旧班的提案，把数据写进新班（#39）。abort 后 aiChat 会标 interrupted，提案不执行。
   // 代次校验（classScopeKey）是第二道防线，防 abort 与提案执行之间的窗口。
-  if (abortCtrl.value) { try { abortCtrl.value.abort() } catch (_) { /* 已结束 */ } }
+  if (abortCtrl.value) { try { abortCtrl.value.abort() } catch (_) { /* best-effort: 已结束 */ } }
   // 贴底跟随的观察器必须断开，否则销毁后回调仍持有已卸载的 msgBox 引用
   _stickOn = false
   if (_stickRo) { _stickRo.disconnect(); _stickRo = null }

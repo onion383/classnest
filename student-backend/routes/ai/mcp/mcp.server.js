@@ -69,14 +69,14 @@ function getHandler() {
             }
           } catch (_) { gate = { ok: true }; }
           if (!gate.ok) {
-            if (writeConsumed) { try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* 回退失败不影响拒绝 */ } }
+            if (writeConsumed) { try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* best-effort: 回退失败不影响拒绝 */ } }
             // 被挡住也要留痕：否则页面上只看到「AI 今天没干活」，看不到被挡了几百次。
             try {
               dbManager.withDb(slug, () => accessLog.record({
                 source: 'mcp', actor, tool, target: '', detail: '', amount: 0,
                 result: 'denied', reason: gate.error,
               }));
-            } catch (_) { /* 忽略 */ }
+            } catch (_) { /* best-effort: 拒绝回执写不进客户端（已断开）时可忽略 */ }
             return {
               content: [{
                 type: 'text',
@@ -88,29 +88,29 @@ function getHandler() {
           // write 的额度已在闸门处原子预占；只有真的建出提案才算数，
           // 参数错 / 建提案失败要回退这次预占（否则 AI 改两遍字段名就把自己锁死了）。
           if (writeConsumed && !(result && result.ok && result.proposal_id)) {
-            try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* 回退失败不影响业务结果 */ }
+            try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* best-effort: 回退失败不影响业务结果 */ }
             writeConsumed = false;
           }
           if (meta.logRead) {
             // 记录失败绝不影响这次工具调用（观测不能反过来打断业务）
-            try { dbManager.withDb(slug, () => logMcpRead(actor, tool, args, result)); } catch (_) { /* 忽略 */ }
+            try { dbManager.withDb(slug, () => logMcpRead(actor, tool, args, result)); } catch (_) { /* best-effort: 读取留痕失败不影响工具调用（观测不能打断业务） */ }
           }
           // 自动执行单独留痕：这是「外部 AI 自己改了数据」，和读表不是一回事。
           // 只在真的执行过（result.auto）时记，未开启自动执行的普通提案不产生噪音。
           if (meta.logWrite && result && result.auto) {
-            try { dbManager.withDb(slug, () => logMcpWrite(actor, tool, result)); } catch (_) { /* 忽略 */ }
+            try { dbManager.withDb(slug, () => logMcpWrite(actor, tool, result)); } catch (_) { /* best-effort: 写入留痕失败不影响工具调用结果 */ }
           }
           return { content: [{ type: 'text', text: mcpTools.toContent(result) }] };
         } catch (e) {
           // 写操作抛异常同样不占额度：这次提案没建成，不该让客户端被自己坑住
-          if (writeConsumed) { try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* 忽略 */ } }
+          if (writeConsumed) { try { mcpRateLimit.release(slug, 'write'); } catch (_) { /* best-effort: 额度释放失败不影响本次拒绝 */ } }
           // 完整现场只进本地日志；返回给外部客户端的文案做脱敏（K02-05 / N3-09）：
           // 业务错误（未找到该表、参数不合法）原样给出，SQL 语句 / 文件路径 / 堆栈一律换通用文案。
           console.error('[mcp-tool-error]', tool, e);
           if (meta.logRead) {
             try {
               dbManager.withDb(slug, () => logMcpRead(actor, tool, args, { ok: false, error: e.message }));
-            } catch (_) { /* 忽略 */ }
+            } catch (_) { /* best-effort: 失败留痕写不进本地日志时可忽略 */ }
           }
           return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: publicToolError(e && e.message) }) }] };
         }

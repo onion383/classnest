@@ -46,7 +46,7 @@ function revokeAccountSessions(userId, dbSlug) {
     revoked += sessions.revokeAllByUser(userId, s);
     // 集成凭据（MCP token）与登录会话是两套存储：改密/删号后不能留着旧 token 继续访问 /mcp（N3-04）。
     // 惰性 require：避免启动路径上把 mcpTokenStore → dbManager → db 的初始化链提前拉起来。
-    try { require('./mcpTokenStore').revokeBySlug(s); } catch (_) { /* 令牌文件不可写不阻断会话吊销 */ }
+    try { require('./mcpTokenStore').revokeBySlug(s); } catch (_) { /* best-effort: 令牌文件不可写不阻断会话吊销 */ }
   }
   return revoked;
 }

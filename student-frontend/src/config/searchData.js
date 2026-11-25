@@ -62,7 +62,7 @@ export function matchKeywords(text, keywords, q, pinyinMatch) {
   if (pinyinMatch) {
     // 间隔号会打断拼音库的音节切分（如「阿·依古扎」），喂库前剥掉分隔符与空白。
     const pyText = lower.replace(/[·・.．\s]/g, '')
-    try { if (pinyinMatch(pyText, q)) return true } catch (_) {}
+    try { if (pinyinMatch(pyText, q)) return true } catch (_) {} // best-effort: 拼音库对该片段匹配异常时跳过，继续其它匹配
   }
   return false
 }

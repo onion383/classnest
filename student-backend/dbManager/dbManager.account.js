@@ -31,7 +31,7 @@ function unlockPrivacy(rec, { password, mnemonic } = {}) {
         key: unwrapKeyByPrivacySecret(rec.wrapped_by_password, password, rec.kdf_salt, rec.kdf_params_password),
         by: 'password',
       };
-    } catch (_) { /* 密码不对，继续尝试恢复词 */ }
+    } catch (_) { /* best-effort: 密码不对，继续尝试恢复词 */ }
   }
   if (rec.wrapped_by_mnemonic && mnemonic) {
     try {
@@ -39,7 +39,7 @@ function unlockPrivacy(rec, { password, mnemonic } = {}) {
         key: unwrapKeyByPrivacySecret(rec.wrapped_by_mnemonic, normalizePhrase(mnemonic), rec.mnemonic_salt, rec.kdf_params_mnemonic),
         by: 'mnemonic',
       };
-    } catch (_) { /* 恢复词不对 */ }
+    } catch (_) { /* best-effort: 恢复词不对 */ }
   }
   return null;
 }
@@ -130,13 +130,13 @@ function deleteTeacher(slug) {
       const acc = accountFindByUsername(username);
       if (acc) accountDelete(acc.id);
     }
-  } catch (_) { /* 清理残留账号失败不影响删班结果 */ }
+  } catch (_) { /* best-effort: 清理残留账号失败不影响删班结果 */ }
   // 账号都没了，{THUMB_DIR}/{slug}/ 整个目录也不可能再被引用：
   // album_photos.id 是 AUTOINCREMENT，别的新账号不会重用这些 id，孤儿只会越积越多。
   // 异步删（几万文件的同步 rm 会卡住事件循环），失败也不影响删账号结果 ——
   // 剩下的由「空间管理 → 回收」按库对账兜住（登记与库文件都没了 = 整个目录是孤儿）。
   if (/^[A-Za-z0-9_@-]{1,64}$/.test(slug)) {
-    fs.promises.rm(path.join(thumbsDir, slug), { recursive: true, force: true }).catch(() => {});
+    fs.promises.rm(path.join(thumbsDir, slug), { recursive: true, force: true }).catch(() => {}); // best-effort: 孤儿缩略图目录清理失败可忽略
   }
 }
 

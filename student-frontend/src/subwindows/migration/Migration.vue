@@ -240,7 +240,7 @@ onBeforeUnmount(() => {
   if (_onMain) window.electron.off(RECEIVE.FROM_MAIN, _onMain)
   // 窗口被关掉时别把流和定时器留给后台：转换进程本身由主进程管，这里只负责断开监听
   if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = 0 }
-  if (_streamAbort) { try { _streamAbort.abort() } catch (_) { /* 已结束 */ } _streamAbort = null }
+  if (_streamAbort) { try { _streamAbort.abort() } catch (_) { /* best-effort: 已结束 */ } _streamAbort = null }
 })
 </script>
 

@@ -16,7 +16,7 @@ function schemaVersion() {
 }
 function tableColumns(table) {
   let slug = 'default'
-  try { slug = dbManager.currentSlug() || 'default' } catch (_) { /* 非请求上下文时退回 default */ }
+  try { slug = dbManager.currentSlug() || 'default' } catch (_) { /* best-effort: 非请求上下文时退回 default */ }
   const key = `${slug}:${table}`
   const ver = schemaVersion()
   const hit = colCache[key]

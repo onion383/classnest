@@ -78,7 +78,7 @@ function doLogout() {
   // 让全局 401 处理静默，不要把已退出说成「登录已过期」。
   markLoggingOut()
   // 通知后端吊销本次会话（原 token 立即失效），再清本地登录态
-  axios.post(AUTH_API.logout).catch(() => {})
+  axios.post(AUTH_API.logout).catch(() => {}) // best-effort: 后端吊销失败无妨，本地 token 已清即视为登出
   clearAuth()
   clearMediaToken() // 媒体凭据与登录同 sid，登出即失效；本地也清掉，避免死 token 继续拼进图片 URL
   confirmOpen.value = false

@@ -68,7 +68,7 @@ async function copyFileAsync(src, dst, onBytes) {
   try {
     const lst = await fsp.lstat(dst)
     if (lst.isSymbolicLink()) await fsp.unlink(dst)
-  } catch (_) { /* 目标不存在是正常情况 */ }
+  } catch (_) { /* best-effort: 目标不存在是正常情况 */ }
   const st = await fsp.stat(src)
   const mode = st.mode & 0o777
   const rh = await fsp.open(src, 'r')
@@ -88,8 +88,8 @@ async function copyFileAsync(src, dst, onBytes) {
     await wh.close()
   }
   // open 的 mode 受 umask 影响，拷贝完成后显式回写源权限与时间戳
-  try { await fsp.chmod(dst, mode) } catch (_) { /* Windows 上 chmod 能力有限，忽略 */ }
-  try { await fsp.utimes(dst, st.atime, st.mtime) } catch (_) { /* 元数据失败不影响字节一致 */ }
+  try { await fsp.chmod(dst, mode) } catch (_) { /* best-effort: Windows 上 chmod 能力有限，忽略 */ }
+  try { await fsp.utimes(dst, st.atime, st.mtime) } catch (_) { /* best-effort: 元数据失败不影响字节一致 */ }
 }
 
 // 建立目录清单：相对路径 → { size, hash }，并回报总文件数/总字节数（用于进度）
@@ -139,7 +139,7 @@ async function clearDir(dir) {
   let entries = []
   try { entries = await fsp.readdir(dir) } catch (_) { return }
   for (const name of entries) {
-    try { await fsp.rm(path.join(dir, name), { recursive: true, force: true }) } catch (_) {}
+    try { await fsp.rm(path.join(dir, name), { recursive: true, force: true }) } catch (_) {} // best-effort: 单个旧项删不掉就跳过，继续清理其余的
   }
 }
 

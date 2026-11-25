@@ -83,7 +83,7 @@ function inTx(db, fn) {
     fn()
     db.exec('COMMIT')
   } catch (e) {
-    try { db.exec('ROLLBACK') } catch (_) { /* 事务可能已被 SQLite 自动回滚 */ }
+    try { db.exec('ROLLBACK') } catch (_) { /* best-effort: 事务可能已被 SQLite 自动回滚 */ }
     throw e
   }
 }
@@ -94,7 +94,7 @@ function inTx(db, fn) {
 function runSteps(db, todo, expected, onProgress) {
   const report = (step, index) => {
     if (typeof onProgress === 'function') {
-      try { onProgress({ index: index + 1, total: todo.length, step }) } catch (_) { /* 进度回调不该影响迁移 */ }
+      try { onProgress({ index: index + 1, total: todo.length, step }) } catch (_) { /* best-effort: 进度回调不该影响迁移 */ }
     }
   }
   let batch = []

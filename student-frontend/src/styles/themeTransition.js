@@ -99,7 +99,7 @@ function readInflightOpacity() {
     const style = window.getComputedStyle(document.documentElement, '::view-transition-new(root)')
     const value = parseFloat(style.opacity)
     if (Number.isFinite(value)) return Math.min(1, Math.max(0, value))
-  } catch (_) {}
+  } catch (_) {} // best-effort: 取不到计算样式时按无透明度处理
   return null
 }
 
@@ -117,7 +117,7 @@ function readInflightElapsed() {
       const time = Number(raw)
       if (Number.isFinite(time) && time >= 0) return time
     }
-  } catch (_) {}
+  } catch (_) {} // best-effort: 取不到过渡时长时走 fallback 计算
   const fallback = performance.now() - inflightStartedAt
   return Number.isFinite(fallback) && fallback >= 0 ? fallback : null
 }
@@ -202,7 +202,7 @@ export function performThemeSwap(swap) {
   // 被后续切换打断（自动 skip）或快照失败都不影响最终状态：
   // swap 已在回调里同步执行完毕，DOM 只会落在正确的那一态。
   transition.finished.then(done, done)
-  transition.ready.catch(() => {})
+  transition.ready.catch(() => {}) // best-effort: ready rejection 只因动画被打断，无副作用
   // swap 内部若抛错，别留下未处理的 rejection
-  transition.updateCallbackDone.catch(() => {})
+  transition.updateCallbackDone.catch(() => {}) // best-effort: 避免未处理的 rejection，不影响 swap 结果
 }

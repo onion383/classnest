@@ -128,7 +128,7 @@ async function collectRendererGarbage(wc) {
   } catch (_) {
     return false
   } finally {
-    try { wc.debugger.detach() } catch (_) { /* 断开失败忽略 */ }
+    try { wc.debugger.detach() } catch (_) { /* best-effort: 断开失败忽略 */ }
   }
 }
 
@@ -177,7 +177,7 @@ async function collectProcList() {
       if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
         labelByPid.set(win.webContents.getOSProcessId(), label)
       }
-    } catch (_) { /* 忽略 */ }
+    } catch (_) { /* best-effort: 窗口已销毁时取进程 id 失败可忽略 */ }
   }
   addWin('迁移窗口', getMigrationWindow())
   addWin('引导窗口', getSetupWindow())
@@ -295,10 +295,10 @@ async function sampleMemTotal() {
     const procs = await collectProcList()
     const ms = Number(process.hrtime.bigint() - t0) / 1e6
     if (ms > 30) {
-      try { console.log(`[perf] 内存采集 ${Math.round(ms)}ms`) } catch (_) { /* 日志失败静默 */ }
+      try { console.log(`[perf] 内存采集 ${Math.round(ms)}ms`) } catch (_) { /* best-effort: 日志失败静默 */ }
     }
     recordMemSample(procs.reduce((s, p) => s + procMemKB(p), 0))
-  } catch (_) { /* 采样失败静默忽略 */ }
+  } catch (_) { /* best-effort: 采样失败静默忽略 */ }
   finally { memSampling = false }
 }
 
@@ -321,7 +321,7 @@ function startMemSampling() {
         console.log(s
           ? `[perf] 事件循环 启动后1s p50=${s.p50}ms p95=${s.p95}ms max=${s.max}ms 样本=${s.count}`
           : '[perf] 事件循环 启动后1s 不可用')
-      } catch (_) { /* 打点失败静默 */ }
+      } catch (_) { /* best-effort: 打点失败静默 */ }
     }, 1000)
   }
 }
@@ -384,7 +384,7 @@ function registerPerfIpc(opts = {}) {
     // 桌面组件：仅当原本存在（说明当前已启用）时重建
     let desktopWidgetWindow = getDesktopWidgetWindow()
     if (desktopWidgetWindow && !desktopWidgetWindow.isDestroyed()) {
-      try { desktopWidgetWindow.destroy() } catch (_) { /* 忽略 */ }
+      try { desktopWidgetWindow.destroy() } catch (_) { /* best-effort: 桌面组件窗口已销毁时销毁失败可忽略 */ }
       setDesktopWidgetWindow(null)
       if (isDesktopEnabled()) createDesktopWidgetWindow()
     }
@@ -406,7 +406,7 @@ function registerPerfIpc(opts = {}) {
     let main = false
     try {
       if (typeof global.gc === 'function') { global.gc(); main = true }
-    } catch (_) { /* 忽略 */ }
+    } catch (_) { /* best-effort: 未开启 --expose-gc 时跳过手动回收 */ }
 
     // 渲染进程并行回收（前端主窗口 + 工具箱 + 桌面组件）
     const [front, toolbox, desktop] = await collectAllRendererGarbage(

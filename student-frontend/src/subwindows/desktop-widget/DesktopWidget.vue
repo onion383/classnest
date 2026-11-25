@@ -527,7 +527,7 @@ function notifyContentReady() {
   contentReadySent = true
   try {
     window.electron?.send?.(SEND.DESKTOP_WIDGET_CONTENT_READY)
-  } catch (_) {
+  } catch (_) { // best-effort: 内容就绪广播失败不影响桌面组件显示
     /* 忽略 */
   }
 }
@@ -553,7 +553,7 @@ async function ensureAppsLoaded() {
 function launchApp(app) {
   if (!app || !app.path) return
   if (window.electron && window.electron.invoke) {
-    window.electron.invoke(INVOKE.APPS_LAUNCH, app.path).catch(() => {})
+    window.electron.invoke(INVOKE.APPS_LAUNCH, app.path).catch(() => {}) // best-effort: 启动应用失败不抛错，用户可重试
   }
 }
 
@@ -561,7 +561,7 @@ function launchApp(app) {
 // 唤醒/重建主窗口并把路由推给主窗口渲染层（见 electron/main/main.widget.js 的 openMainPage）。
 function openMainPage(page) {
   if (!page) return
-  try { window.electron?.send?.(SEND.DESKTOP_WIDGET_OPEN_PAGE, page) } catch (_) {}
+  try { window.electron?.send?.(SEND.DESKTOP_WIDGET_OPEN_PAGE, page) } catch (_) {} // best-effort: 打开主页面广播失败可忽略
 }
 
 function toggleEdit() {
@@ -661,7 +661,7 @@ async function importDroppedFiles(fileList) {
     // 由主进程统一取名称与系统图标（文件夹/普通文件/快捷方式都支持）
     const resolved = await window.electron.invoke(INVOKE.APPS_RESOLVE_PATHS, paths)
     if (Array.isArray(resolved)) entries = resolved
-  } catch (_) { /* 通道不可用时退回本地解析 */ }
+  } catch (_) { /* best-effort: 通道不可用时退回本地解析 */ }
   if (entries.length === 0) entries = paths.map(fallbackEntry)
 
   // 去重：同一路径不重复占槽位
@@ -947,7 +947,7 @@ function onAppDragStart(idx, e) {
   dragStartY = e.clientY
   // 捕获指针：拖出图标/槽位后仍能收到 pointermove/pointerup，不会中断
   // 注意不在这里 preventDefault：要保留 click，非编辑态轻点图标仍可启动应用
-  try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {}
+  try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {} // best-effort: 浏览器不支持指针捕获时拖拽仍靠窗口级监听
 }
 
 function onAppDragMove(e) {
@@ -958,7 +958,7 @@ function onAppDragMove(e) {
     if (Math.abs(e.clientX - dragStartX) < 3 && Math.abs(e.clientY - dragStartY) < 3) return
     dragMoving.value = true
     // 进入拖拽后阻止默认行为，避免触控板/触屏把移动当成页面滚动
-    try { e.preventDefault() } catch (_) {}
+    try { e.preventDefault() } catch (_) {} // best-effort: 被动监听器无法阻止默认时忽略
     createDragGhost()
     createDragSlotVisuals()
     placeDragGhost(e.clientX, e.clientY)
@@ -1028,7 +1028,7 @@ function saveApps(attempt = 0) {
     return axios.put('/api/widget-settings/apps', { desktopApps: apps.value.slice(0, MAX_APPS) })
   }
   // 前一个成功与否都继续排队（catch 吞掉），否则一次失败会把后续保存全卡死
-  appsSaveQueue = appsSaveQueue.catch(() => {}).then(put).catch(() => {
+  appsSaveQueue = appsSaveQueue.catch(() => {}).then(put).catch(() => { // best-effort: 保存失败由后续重试兜底，不卡住队列
     if (attempt < 2) {
       disposables.timeout(() => saveApps(attempt + 1), 2000)
     } else {
@@ -1081,7 +1081,7 @@ async function loadAll() {
     if (Array.isArray(overview.countdowns)) countdowns.value = overview.countdowns
     if (Array.isArray(overview.leaves)) leaves.value = overview.leaves
     if (Array.isArray(overview.students)) students.value = overview.students
-  } catch (_) {
+  } catch (_) { // best-effort: 概览数据拉取失败保留旧数据
     // 静默失败，保留旧数据
   } finally {
     // 只让最新一轮收尾：旧请求结束时不能把新请求的 loadingAll 提前放开
@@ -1145,7 +1145,7 @@ function onWindowDragStart(e) {
   windowDragging = true
   e.preventDefault()
   // 捕获指针：鼠标被甩出窗口时仍能收到 pointermove，否则快速拖动会中途断连
-  try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {}
+  try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {} // best-effort: 指针捕获失败时窗口级监听负责收尾
   window.electron.send(SEND.DESKTOP_WIDGET_DRAG_START, { screenX: e.screenX, screenY: e.screenY })
 }
 
@@ -1188,7 +1188,7 @@ onMounted(() => {
       if (st) isDesktopLayer.value = !!st.desktopLayerEnabled
       if (import.meta.env.DEV) console.info('[dw-timing] layerState=' + JSON.stringify(st || null) + ' isLayer=' + isDesktopLayer.value)
     })
-    .catch(() => {})
+    .catch(() => {}) // best-effort: layerState 探测失败不影响拖拽收尾
   // 拖动/松手都在窗口级监听：指针可能被甩出窗口（捕获失败时），窗口级监听负责收尾
   disposables.listen(window, 'pointermove', onWindowDragMove)
   disposables.listen(window, 'pointerup', onWindowDragEnd)

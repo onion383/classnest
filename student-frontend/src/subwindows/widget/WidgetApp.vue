@@ -288,8 +288,7 @@ async function checkToolboxEnabled() {
       window.electron.send(SEND.WIDGET_SET_SESSION_VISIBLE, persistent)
     }
     window.electron.send(SEND.WIDGET_SET_VISIBLE, persistent)
-  } catch (_) {
-    // 读取失败则保持默认可见
+  } catch (_) { // best-effort: 读取失败则保持默认可见
   }
 }
 

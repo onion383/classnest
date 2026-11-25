@@ -91,8 +91,8 @@ jobs:
       - name: ESLint 检查
         run: npm run lint
 
-      - name: 错误边界检查
-        run: npm run check:boundaries
+      - name: 错误边界检查（strict：空 catch 必须标注 best-effort 原因）
+        run: npm run check:boundaries:strict
 
       # 生成物 ↔ 生成器对账：这三条过去只在本地手工跑，漂移进不了流水线（Q4-02/Q4-03/Q4-04）
       - name: IPC 策略生成物同源（没漂移）
@@ -103,6 +103,17 @@ jobs:
 
       - name: 数据库结构清单对账（空库 initSchema ↔ EXPECTED）
         run: npm run check:schema
+
+      # 文档一致性与覆盖矩阵已清到 0 FAIL（2026-11-25）：死链/路径/计数/覆盖 4 格全绿，才挂进流水线。
+      - name: 文档一致性校验（死链 / 覆盖 / 路由 / 计数）
+        run: npm run docs:verify
+
+      - name: 入口 × 不变量覆盖矩阵（GAP / UNKNOWN 必须为零）
+        run: npm run check:coverage
+
+      # 错误边界 strict 已清零（2026-11-25）：721 处存量逐条甄别——生成物假阳性 184 处由工具跳过、
+      # 工具两个 bug（生成物未排除 / 同行注释识别用错行）修复后批量转绿、其余逐条读上下文标注具体原因，
+      # 未发现需改代码的真吞错。空 catch 现在必须带 best-effort: 原因，新增静默捕获进不了流水线（Q4-02 G29 完成）。
 
       - name: 快测（单元 + 行为）
         run: npm test
@@ -211,10 +222,13 @@ jobs:
           Write-Host "ISCC：$iscc"
 
       # 不用 npm run electron:build：那条脚本没法只给 electron-builder 传 --publish never。
+      # 展开写法必须自带 build:backend —— app.bundle.js 是 git 忽略的生成物，生产优先跑它；
+      # 不显式重建会用工作区残留的旧 bundle，后端源码修复进不了包（electron:build 脚本里本就有这步）。
       # 两条通道顺序执行，输出目录互不覆盖：release/ 是 Vue 3.5 主线，release36/ 是 Vue 3.6 预览。
-      - name: 打包正式版（前端 → electron-builder --dir → Inno Setup）
+      - name: 打包正式版（前端 → 后端 bundle → electron-builder --dir → Inno Setup）
         run: |
           npm run build
+          npm run build:backend
           # 显式关闭 electron-builder 在 CI 下的隐式发布（本流水线只出安装包，不发布）
           npx electron-builder --dir --publish never
           npm run build:win:inno
@@ -225,6 +239,8 @@ jobs:
       - name: 打包 Vue 3.6 预览版（同一套源码，Vue 3.6 + Vapor）
         run: |
           npm run build:new
+          # 后端 bundle 与 Vue 通道无关，但这里也重建以自包含（单独重跑本步骤不会用旧 bundle）
+          npm run build:backend
           npx electron-builder --dir --publish never --config.directories.output=release36
           npm run build:win:inno -- release36 --vue36
 

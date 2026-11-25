@@ -1353,7 +1353,7 @@ function getReceiptCount(row) {
       const cached = ctx._receiptCache.get(row);
       if (cached && cached.raw === raw) return cached.count;
       let count = 0;
-      try { count = JSON.parse(raw).length; } catch { /* 非法 JSON 视为 0 */ }
+      try { count = JSON.parse(raw).length; } catch { /* best-effort: 非法 JSON 视为 0 */ }
       ctx._receiptCache.set(row, { raw, count });
       return count;
     }
@@ -1380,9 +1380,9 @@ function _perfMeasureRender() {
           try {
             performance.mark('perf:rows:end');
             performance.measure('rowsRender', 'perf:rows:start', 'perf:rows:end');
-          } catch (_) { /* 忽略 */ }
+          } catch (_) { /* best-effort: 性能标记重复/不支持时忽略 */ }
         });
-      } catch (_) { /* 忽略 */ }
+      } catch (_) { /* best-effort: 性能标记重复/不支持时忽略 */ }
     }
     // 底部「添加一行 / 取消添加一行」按钮
 function onAddRowBarClick() {

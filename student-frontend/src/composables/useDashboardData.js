@@ -23,7 +23,7 @@ let bootMarked = false
 function bootMark(name) {
   try {
     console.log(`[startup] ${name} @${perfNow()}`)
-  } catch (_) { /* 打点失败绝不能影响请求 */ }
+  } catch (_) { /* best-effort: 打点失败绝不能影响请求 */ }
 }
 
 // 完成时一次性汇总。重试次数来自 axios 拦截器记在 config 上的 __retryCount ——
@@ -41,7 +41,7 @@ function bootSummary(tag, config, perfLog) {
   logSummary(`首屏请求汇总 ${tag} 重试${retries}次`, phaseLogOf(config, perfLog))
   // 资源计时：区分「请求已发起但渲染线程忙、尚未出网」与「已出网、后端/网络慢」。
   // 放到下一宏任务：Resource Timing 条目通常在响应消费完的当前任务之后才注册。
-  try { setTimeout(() => logResourceTiming('/api/dashboard', '首屏资源计时'), 0) } catch (_) { /* 打点失败静默 */ }
+  try { setTimeout(() => logResourceTiming('/api/dashboard', '首屏资源计时'), 0) } catch (_) { /* best-effort: 打点失败静默 */ }
 }
 
 // 登出/换号必须丢掉这份快照：它是整个库的数据（成绩/班费/学生名册），

@@ -34,7 +34,7 @@ export async function apiFetch(path, options = {}) {
         const parsed = JSON.parse(body)
         const already = parsed && typeof parsed.session === 'string' && typeof parsed.d === 'string'
         if (!already) body = JSON.stringify(await encryptBody(parsed))
-      } catch (_) { /* 非 JSON 或加密失败：按明文发送，后端透明兼容 */ }
+      } catch (_) { /* best-effort: 非 JSON 或加密失败：按明文发送，后端透明兼容 */ }
     }
     // 加密响应与会话密钥绑定：安全模式下不能让浏览器缓存，否则换会话后
     // 命中旧密文必然解不开（apiFetch 没有 axios 那层重试，会直接把 { d } 交给调用方）。
@@ -73,11 +73,11 @@ const MEDIA_KEY = 'mediaToken'
 
 export function storeMediaToken(token) {
   if (!token || typeof token !== 'string') return
-  try { localStorage.setItem(MEDIA_KEY, token) } catch (_) {}
+  try { localStorage.setItem(MEDIA_KEY, token) } catch (_) {} // best-effort: 本地存储不可用时媒体凭据不持久
 }
 
 export function clearMediaToken() {
-  try { localStorage.removeItem(MEDIA_KEY) } catch (_) {}
+  try { localStorage.removeItem(MEDIA_KEY) } catch (_) {} // best-effort: 本地存储不可用时媒体凭据清不掉
 }
 
 // 媒体凭据跟着登录主体走：登记到用户级清理表，clearAuth → resetUserScopedCaches 一条链
@@ -126,7 +126,7 @@ export function refreshMediaToken() {
         storeMediaToken(data.mediaToken)
         return data.mediaToken
       }
-    } catch (_) { /* 刷新失败：沿用旧凭据，下次启动/登录再试 */ }
+    } catch (_) { /* best-effort: 刷新失败：沿用旧凭据，下次启动/登录再试 */ }
     return null
   })().finally(() => { mediaRefresh = null })
   return mediaRefresh

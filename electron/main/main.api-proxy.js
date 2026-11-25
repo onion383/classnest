@@ -101,7 +101,7 @@ function perfOn() {
 }
 function perfLog(line) {
   if (!perfOn()) return
-  try { console.log(line) } catch (_) { /* 打点失败静默 */ }
+  try { console.log(line) } catch (_) { /* best-effort: 打点失败静默 */ }
 }
 
 // 代理请求；非 /api 返回 null，交给静态文件处理。

@@ -30,7 +30,7 @@ try {
     // 这份精度会顺着 totalMs() 一路带到控制台与设置页性能面板（面板按秒呈现），不作截断。
     preStartMs = startTime - createdAt
   }
-} catch (_) { /* 信息不可用则跳过校正 */ }
+} catch (_) { /* best-effort: 信息不可用则跳过校正 */ }
 
 // 「启动完成」锚点。口径（2026-10-31 统一，日志与性能面板同一口径）：
 //   进程创建 → **占位页移除**（界面真正可见）
@@ -85,7 +85,7 @@ function settle(elapsed, name, final) {
   if (!final) return
   endFinal = true
   for (const fn of finalListeners) {
-    try { fn() } catch (_) { /* 监听器异常不影响锚点 */ }
+    try { fn() } catch (_) { /* best-effort: 监听器异常不影响锚点 */ }
   }
 }
 
@@ -120,7 +120,7 @@ function isFinal() {
 // 锚点定稿后的回调：日志落盘必须等它，否则 total 还停在候选值上。
 function onFinal(fn) {
   if (typeof fn !== 'function') return
-  if (endFinal) { try { fn() } catch (_) {} ; return }
+  if (endFinal) { try { fn() } catch (_) {} ; return } // best-effort: 结束回调自身抛错不影响其它监听器
   finalListeners.push(fn)
 }
 
@@ -196,7 +196,7 @@ function saveLog(filePath) {
         const tail = dropPartialUtf8Head(buf.subarray(buf.length - 256 * 1024))
         atomicWriteFileSync(filePath, '（历史日志已截断，仅保留最近部分）\n' + tail.toString('utf8'))
       }
-    } catch (_) { /* 首次启动文件不存在，忽略 */ }
+    } catch (_) { /* best-effort: 首次启动文件不存在，忽略 */ }
     const lines = marks.map((m, i) => {
       const gap = i === 0 ? 0 : m.elapsed - marks[i - 1].elapsed
       return `+${String(m.elapsed).padStart(5)}ms  ${m.name}  (间隔 ${gap}ms)`
@@ -209,7 +209,7 @@ function saveLog(filePath) {
       '',
     ].filter((l) => l !== null).join('\n')
     fs.appendFileSync(filePath, content)
-  } catch (_) { /* 忽略写入失败 */ }
+  } catch (_) { /* best-effort: 忽略写入失败 */ }
 }
 
 module.exports = { mark, markAt, end, endAt, endProvisional, settleProvisional, isFinal, onFinal, msFromStart, report, saveLog, getTimeline }

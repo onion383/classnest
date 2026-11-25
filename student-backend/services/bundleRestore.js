@@ -33,7 +33,7 @@ async function receiveAndVerify(file) {
 }
 
 function dropTmp(tmpDir, filePath) {
-  if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch (_) { /* 清不掉不影响结果 */ } }
+  if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch (_) { /* best-effort: 清不掉不影响结果 */ } }
   if (filePath) { try { fs.rmSync(filePath, { force: true }) } catch (_) { /* 同上 */ } }
 }
 
@@ -62,7 +62,7 @@ function rollbackDbAfterFailedRestore(slug, result) {
       fs.copyFileSync(result.bakPath, file)
     }
     for (const suffix of ['-wal', '-shm']) {
-      try { fs.rmSync(file + suffix, { force: true }) } catch (_) { /* 忽略 */ }
+      try { fs.rmSync(file + suffix, { force: true }) } catch (_) { /* best-effort: 恢复后残留的 WAL/SHM 删不掉时下步会处理 */ }
     }
     if (result && result.prevRec) {
       dbManager.registryUpsert(slug, result.prevRec.username, result.prevRec.wrapped_key, result.prevRec.encrypted)
@@ -97,7 +97,7 @@ async function applyVerifiedBundle({ tmpDir, meta, manifest, slug, username, bod
   let dbFile = null
   try {
     dbFile = (fs.readdirSync(dbDir) || []).find((n) => n.endsWith('.db') && !/-(wal|shm)$/.test(n)) || null
-  } catch (_) { /* 目录不存在 → 下面统一报错 */ }
+  } catch (_) { /* best-effort: 目录不存在 → 下面统一报错 */ }
   if (!dbFile) throw new Error('备份包里没有数据库文件')
 
   const isEncrypted = !(meta.encrypted === false || meta.encrypted === 0 || meta.encrypted === '0')

@@ -67,7 +67,7 @@ watch(
     if (!v) {
       removeDialog(self)
       if (lastFocus && typeof lastFocus.focus === 'function') {
-        try { lastFocus.focus() } catch (_) { /* 触发点已被移除 */ }
+        try { lastFocus.focus() } catch (_) { /* best-effort: 触发点已被移除 */ }
       }
       lastFocus = null
       return

@@ -92,7 +92,7 @@ function recognizeFile(imagePath) {
       { timeout: TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => {
         let text = '';
-        try { text = fs.readFileSync(outFile, 'utf-8'); } catch (_) { /* 未生成输出文件 */ }
+        try { text = fs.readFileSync(outFile, 'utf-8'); } catch (_) { /* best-effort: 未生成输出文件 */ }
         try { fs.unlinkSync(outFile); } catch (_) { /* 忽略 */ }
 
         if (err) {
@@ -133,7 +133,7 @@ async function recognizeDataUrl(dataUrl) {
   try {
     return await recognizeFile(tmp);
   } finally {
-    try { fs.unlinkSync(tmp); } catch (_) { /* 忽略 */ }
+    try { fs.unlinkSync(tmp); } catch (_) { /* best-effort: 临时文件已删/删不掉都不影响 OCR 结果 */ }
   }
 }
 

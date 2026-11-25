@@ -119,7 +119,7 @@ export function useAiConversations(ctx) {
       try {
         const { data } = await axios.get('/api/ai/conversations')
         ctx.conversationList.value = data.data || []
-      } catch (_) { /* 忽略 */ }
+      } catch (_) { /* best-effort: 会话列表读不到时保持空列表 */ }
     },
     // 加载模型列表（输入区快捷切换用）
     async loadModels() {
@@ -128,7 +128,7 @@ export function useAiConversations(ctx) {
         ctx.models.value = data.success ? data.data : []
         const active = ctx.models.value.find((m) => m.is_active)
         ctx.activeModelId.value = active ? active.id : null
-      } catch (_) { /* 忽略 */ }
+      } catch (_) { /* best-effort: 模型列表读不到时保持未选状态 */ }
     },
     // 输入区快捷切换当前模型（立即生效）
     async switchModel(id) {
@@ -235,7 +235,7 @@ export function useAiConversations(ctx) {
           ctx.stickBottom()
           ctx._fillEarlier()
         })
-      } catch (_) { /* 忽略 */ }
+      } catch (_) { /* best-effort: 加载更早消息失败时保持现有列表 */ }
     },
     // 新建会话
     async newConversation() {

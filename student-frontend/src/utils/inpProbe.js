@@ -111,7 +111,7 @@ function recordLongTask(entry) {
     longTasks.push(longTaskRow(entry, { route, target }))
     if (longTasks.length > LONG_TASK_KEEP) longTasks.splice(0, longTasks.length - LONG_TASK_KEEP)
     pendingSinceDump++
-  } catch (_) { /* 归属失败也不能影响页面 */ }
+  } catch (_) { /* best-effort: 归属失败也不能影响页面 */ }
 }
 
 function toRows(map, keyName, limit) {
@@ -149,7 +149,7 @@ function dump(reason) {
   }
   // 同步一份给主进程落盘（electron/main.inpLog.js → <数据目录>/inp.log）。
   // 探针只在 dev 安装，打包版不会走到这里，通道名也不会被使用。
-  try { window.electron?.send?.(SEND.INP_REPORT, { reason, categories, details, longTasks }) } catch (_) {}
+  try { window.electron?.send?.(SEND.INP_REPORT, { reason, categories, details, longTasks }) } catch (_) {} // best-effort: 探针上报通道不可用时无副作用
   return { reason, categories, details, longTasks }
 }
 

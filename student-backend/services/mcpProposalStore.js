@@ -45,7 +45,7 @@ function create({ kind, label, table, operation, payload, requestedBy }) {
   // 顺手裁剪「已处理」历史，保证这张表不会无限长。
   // 放在 create 而不是 settle：settle 在事务里，裁剪失败会连带把这次写入回滚；
   // 而裁剪本身是「可以不成功」的维护动作，不能影响业务。
-  try { trimDone(aiConfigStore.readMcpPrefs().proposal_keep); } catch (_) { /* 忽略 */ }
+  try { trimDone(aiConfigStore.readMcpPrefs().proposal_keep); } catch (_) { /* best-effort: 提案裁剪是可有可无的维护动作，不影响本次写入 */ }
   return proposalId;
 }
 

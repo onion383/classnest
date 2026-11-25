@@ -54,7 +54,7 @@ function startEventLoopSampling({ resolution = RESOLUTION_MS } = {}) {
 function readEventLoopStats({ reset = true } = {}) {
   const stats = statsFromHistogram(histogram)
   if (reset && histogram) {
-    try { histogram.reset() } catch (_) { /* 重置失败不影响本次读数 */ }
+    try { histogram.reset() } catch (_) { /* best-effort: 重置失败不影响本次读数 */ }
   }
   return stats
 }
@@ -67,13 +67,13 @@ function markEventLoopWindow(label) {
   if (stats.max >= WARN_MAX_MS || stats.p95 >= WARN_P95_MS) {
     try {
       console.log(`[perf] 事件循环 ${label} p50=${stats.p50}ms p95=${stats.p95}ms max=${stats.max}ms 样本=${stats.count}`)
-    } catch (_) { /* 日志失败静默 */ }
+    } catch (_) { /* best-effort: 日志失败静默 */ }
   }
   return stats
 }
 
 function stopEventLoopSampling() {
-  try { if (histogram) histogram.disable() } catch (_) { /* 忽略 */ }
+  try { if (histogram) histogram.disable() } catch (_) { /* best-effort: 采样器已停止时重复 disable 可忽略 */ }
   histogram = null
 }
 

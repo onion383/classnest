@@ -94,7 +94,7 @@ router.post('/logout', auth(), (req, res) => {
   // 必须等响应写完再销毁：响应本身还要用该会话密钥加密。
   if (channelSid) {
     res.on('finish', () => {
-      try { secureChannel.destroySession(channelSid); } catch (_) { /* 已销毁 */ }
+      try { secureChannel.destroySession(channelSid); } catch (_) { /* best-effort: 已销毁 */ }
     });
   }
   // 超级隐私模式：登出即关闭库连接并丢弃内存里的库钥匙，下次使用必须重新输入密码/恢复词
@@ -107,7 +107,7 @@ router.post('/logout', auth(), (req, res) => {
   slugScopes.clearAllForSlug(slug);
   albumThumbs.forgetAlbum(slug);
   // 扫描子进程也可能持有该库连接，一并关闭
-  try { require('../scanWorker').lockDb(slug); } catch (_) { /* 子进程未启动 */ }
+  try { require('../scanWorker').lockDb(slug); } catch (_) { /* best-effort: 子进程未启动 */ }
   res.clearCookie('token', { path: '/' });
   res.json({ ok: true });
 });
@@ -494,7 +494,7 @@ function findAccountsByPhrase(phrase) {
       if (!resolved) continue;
       const row = userStore.findByUsername(resolved.conn, rec.username);
       if (row && row.recovery_hash && verifyRestoreHash(normalized, row.recovery_hash)) hits.push(rec.username);
-    } catch (_) { /* 打不开 / 词不匹配：跳过 */ }
+    } catch (_) { /* best-effort: 打不开 / 词不匹配：跳过 */ }
   }
   return hits;
 }
@@ -507,7 +507,7 @@ function accountSlugsForRevoke(username, currentSlug) {
   let list = [];
   try {
     list = dbManager.listClasses(username).map((c) => c.slug);
-  } catch (_) { /* 登记表读不到就退回单班，不影响改密本身 */ }
+  } catch (_) { /* best-effort: 登记表读不到就退回单班，不影响改密本身 */ }
   const rest = list.filter((s) => s !== currentSlug);
   const all = [currentSlug, ...rest].filter(Boolean);
   return all.length ? all : currentSlug;

@@ -890,7 +890,7 @@ async function persistActive(action = '保存') {
   if (ok) return true
   console.error('[duty] 保存失败', activeSaver.error)
   notifyError(`${action}失败，改动未保存`)
-  try { await loadActive() } catch (_) { /* 回滚也失败时保持提示，不叠加错误 */ }
+  try { await loadActive() } catch (_) { /* best-effort: 回滚也失败时保持提示，不叠加错误 */ }
   return false
 }
 
@@ -916,7 +916,7 @@ async function persistMaster(action = '保存') {
   if (ok) return true
   console.error('[duty] 模板保存失败', masterSaver.error)
   notifyError(`${action}失败，改动未保存`)
-  try { await loadMaster() } catch (_) { /* 回滚也失败时保持提示，不叠加错误 */ }
+  try { await loadMaster() } catch (_) { /* best-effort: 回滚也失败时保持提示，不叠加错误 */ }
   return false
 }
 
@@ -950,7 +950,7 @@ async function persistSettingsSafe(extra, action) {
   } catch (e) {
     notifyError(`${action}失败，改动未保存`)
     console.error(e)
-    try { await reloadAllFromServer() } catch (_) { /* 回滚也失败时保持提示，不再叠加错误 */ }
+    try { await reloadAllFromServer() } catch (_) { /* best-effort: 回滚也失败时保持提示，不再叠加错误 */ }
   }
 }
 
@@ -1013,7 +1013,7 @@ async function saveSettings({ days, items, config }) {
   } catch (e) {
     notifyError('保存失败，改动未保存')
     console.error(e)
-    try { await reloadAllFromServer() } catch (_) { /* 回滚也失败时保持提示，不叠加错误 */ }
+    try { await reloadAllFromServer() } catch (_) { /* best-effort: 回滚也失败时保持提示，不叠加错误 */ }
   }
 }
 
@@ -1296,7 +1296,7 @@ async function loadWeight(settingsReady) {
       dutyWeights.value = w
     } else {
       // 首次加载：用 items[].difficulty 铺出初始权重矩阵（整行同权重，按 difficulty）
-      if (settingsReady) { try { await settingsReady } catch (_) { /* 设置失败：按当前（可能为空的）设置铺 */ } }
+      if (settingsReady) { try { await settingsReady } catch (_) { /* best-effort: 设置失败：按当前（可能为空的）设置铺 */ } }
       // 等设置的这段时间里可能已经切了模式：此时 items/days 已换成新模式，不能再写
       if (!weightLoadGuard.isCurrent(token)) return
       const init = {}
@@ -1316,7 +1316,7 @@ async function loadWeight(settingsReady) {
   }
 }
 async function refreshWeight() {
-  try { await loadWeight(); notifySuccess('已刷新值日项目权重表') } catch (_) { /* 已在 load 内处理 */ }
+  try { await loadWeight(); notifySuccess('已刷新值日项目权重表') } catch (_) { /* best-effort: 已在 load 内处理 */ }
 }
 // 保存权重表。
 // 原来失败只 console.error：用户既看不到提示、界面也保持已改的样子，刷新后才发现丢了。
@@ -1326,7 +1326,7 @@ async function saveWeight() {
   if (ok) return true
   console.error('[duty] 权重保存失败', weightSaver.error)
   notifyError('权重保存失败，改动未保存')
-  try { await loadWeight() } catch (_) { /* 回滚也失败时保持提示，不叠加错误 */ }
+  try { await loadWeight() } catch (_) { /* best-effort: 回滚也失败时保持提示，不叠加错误 */ }
   return false
 }
 // 一维模式下每个项目的代表权重：多天取平均（二维数据切到一维时只用于展示，不写回）
@@ -1599,7 +1599,7 @@ async function loadDutyLedger() {
     let from = ''
     try {
       from = await getSemesterStart()
-    } catch (_) { /* 后端未就绪时忽略 */ }
+    } catch (_) { /* best-effort: 后端未就绪时忽略 */ }
     const params = { mode: dutyMode.value, to }
     if (from) params.from = from
     const res = await axios.get(`${API_BASE}/duty/daily`, { params })
@@ -1732,7 +1732,7 @@ async function refreshHistory() {
     // 静默刷新：只重取数据，不动 historyLoading / 表格结构，避免重绘动画
     await fetchHistoryWeeks({ silent: true })
     notifySuccess('已刷新值日记录')
-  } catch (e) { /* 错误已在 fetchHistoryWeeks 内部处理 */ }
+  } catch (e) { /* best-effort: 错误已在 fetchHistoryWeeks 内部处理 */ }
 }
 // 补录完成后重新拉取周列表（保持当前选中周不变）
 function onBackfillChanged() { fetchHistoryWeeks() }
@@ -1779,7 +1779,7 @@ watch(activeTab, (newTab) => {
 // 启动时静默补存：把今天及之前的快照补齐（失败静默，不影响正常使用）
 async function silentBackfill() {
   try { await axios.post(`${API_BASE}/duty/snapshot/backfill`, { includeToday: true, mode: dutyMode.value }) }
-  catch (_) { /* 静默失败 */ }
+  catch (_) { /* best-effort: 静默失败 */ }
 }
 
 // P3-15：值日页首屏改走 /duty/overview（settings + 现行表 + 模板 + 权重 + 名册一次回）。

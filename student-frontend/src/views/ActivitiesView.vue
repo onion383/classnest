@@ -323,7 +323,7 @@ watch(activeTab, (val) => {
   if (val === 'countdown') next.tab = 'countdown'
   else delete next.tab
   if ((next.tab || '') === (route.query.tab || '')) return
-  router.replace({ path: route.path, query: next }).catch(() => {})
+  router.replace({ path: route.path, query: next }).catch(() => {}) // best-effort: 路由替换失败可忽略
 })
 
 // 与原 created() 等价：发起加载但不阻塞渲染（Vue 本就不等待 async created）

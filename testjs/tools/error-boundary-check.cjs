@@ -6,8 +6,11 @@
 //   1) 找出「空 catch / 静默 .catch(()=>{})」，要求同一行或上一行写 `// best-effort: 原因`；
 //   2) 统计 catch / console.error 数量，给评审一个可对比的基线。
 //
-// 默认只报告（exit 0）；加 --strict 时，存在未标注的静默捕获就 exit 1。
-// 不扫描 node_modules / release / release36 / release4 / dist / .vite / .git（见 SKIP_DIRS）。
+// 默认发现未标注的静默捕获就 exit 1（N1-24：只报告不拦的时代已过，存量清零后默认即闸门）；
+// --report-only 显式保留「只报告不拦」的报告用途；--strict 兼容既有 CI 调用（等价于默认）。
+// 不扫描 node_modules / release / release36 / release4 / dist / .vite / .git（见 SKIP_DIRS），
+// 也不扫 build.bundle.mjs 的产物 app.bundle.js（2.9MB 生成物，源码里的空 catch 在里面
+// 被原样保留，扫它等于把同一处违规数两遍，且没人会给生成物补注释）。
 // =========================================================================
 const fs = require('node:fs')
 const path = require('node:path')
@@ -19,7 +22,8 @@ const EXTS = new Set(['.js', '.cjs', '.mjs', '.vue'])
 const SKIP_DIRS = new Set(['node_modules', 'release', 'release36', 'release4', 'dist', '.vite', '.git'])
 
 const args = new Set(process.argv.slice(2))
-const strict = args.has('--strict')
+// 默认即闸门；--report-only 只报告；--strict 是历史别名，行为同默认（CI 已在用，无需特判）。
+const reportOnly = args.has('--report-only')
 
 function walk(dir, out) {
   let entries
@@ -33,6 +37,8 @@ function walk(dir, out) {
       if (SKIP_DIRS.has(ent.name)) continue
       walk(path.join(dir, ent.name), out)
     } else if (EXTS.has(path.extname(ent.name).toLowerCase())) {
+      // 打包产物：与 dist 同为生成物，不参与源码质量扫描。
+      if (ent.name === 'app.bundle.js') continue
       out.push(path.join(dir, ent.name))
     }
   }
@@ -82,8 +88,12 @@ for (const file of files) {
 
     const isEmpty = emptyBlockLines.has(i + 1) || EMPTY_CATCH_ARROW.test(line)
     if (!isEmpty) return
+    // 判 best-effort 标记必须读**原始行** lines[i]，不是抹平注释后的 codeLines[i]：
+    // line 参数来自 codeLines，注释已被抹成空格，同行标记永远匹配不到（只有上一行 prev
+    // 用原始行才生效）——结果就是同行写 `catch { /* best-effort: 原因 */ }` 仍被误报。
+    const rawLine = lines[i] || ''
     const prev = i > 0 ? lines[i - 1] : ''
-    if (HAS_MARK.test(line) || HAS_MARK.test(prev)) return
+    if (HAS_MARK.test(rawLine) || HAS_MARK.test(prev)) return
     violations.push({ file: path.relative(ROOT, file), line: i + 1, code: line.trim() })
   })
 }
@@ -92,12 +102,12 @@ console.log('错误处理边界扫描')
 console.log(`  文件：${files.length}  catch：${catchCount}  console.error：${consoleErrorCount}`)
 console.log(`  未标注的静默捕获：${violations.length}`)
 if (violations.length) {
-  const limit = strict ? violations.length : Math.min(violations.length, 30)
+  const limit = reportOnly ? Math.min(violations.length, 30) : violations.length
   for (const v of violations.slice(0, limit)) {
     console.log(`    ${v.file}:${v.line}  ${v.code}`)
   }
-  if (!strict && violations.length > limit) console.log(`    …… 其余 ${violations.length - limit} 条`)
+  if (reportOnly && violations.length > limit) console.log(`    …… 其余 ${violations.length - limit} 条`)
   console.log('\n处理方式：给 best-effort 捕获补 `// best-effort: 原因`；业务路径不要静默吞错。')
 }
 
-if (strict && violations.length) process.exit(1)
+if (!reportOnly && violations.length) process.exit(1)

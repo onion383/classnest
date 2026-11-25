@@ -55,7 +55,7 @@ async function getDriveLetters() {
   const drives = new Set()
   for (let i = 65; i <= 90; i++) {
     const drive = `${String.fromCharCode(i)}:\\`
-    try { await fsp.access(drive); drives.add(drive) } catch (_) { /* 不存在或不可达 */ }
+    try { await fsp.access(drive); drives.add(drive) } catch (_) { /* best-effort: 不存在或不可达 */ }
   }
   return drives
 }
@@ -89,7 +89,7 @@ function startUsbWatch() {
         }
       }
       knownDrives = current
-    } catch (_) { /* 单轮探测异常不影响后续轮询 */ }
+    } catch (_) { /* best-effort: 单轮探测异常不影响后续轮询 */ }
     finally { usbProbing = false }
   }, 1500)
 }

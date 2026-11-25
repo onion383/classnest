@@ -153,7 +153,7 @@ let hsFetchMarked = false
 function hsMark(name) {
   try {
     console.log(`[startup] ${name} @${Math.round(performance.timeOrigin + performance.now())}`)
-  } catch (_) { /* 打点失败绝不能影响握手 */ }
+  } catch (_) { /* best-effort: 打点失败绝不能影响握手 */ }
 }
 
 // --- 临时密钥对的预生成 ---
@@ -191,7 +191,7 @@ export function prewarmKeyPair() {
   if (!keyPairMarked) {
     keyPairMarked = true
     p.then(
-      () => { try { console.log(`[startup] 密钥对预生成 ${Math.round(performance.now() - t0)}ms @${Math.round(performance.timeOrigin + performance.now())}`) } catch (_) { /* 打点失败忽略 */ } },
+      () => { try { console.log(`[startup] 密钥对预生成 ${Math.round(performance.now() - t0)}ms @${Math.round(performance.timeOrigin + performance.now())}`) } catch (_) { /* best-effort: 打点失败忽略 */ } },
       () => { /* 生成失败：ensureSession 现生成兜底，这里不该有任何用户可见输出 */ },
     )
   }

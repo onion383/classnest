@@ -35,7 +35,7 @@ export async function saveBlobWithDialog(defaultName, blob) {
     // 后续打开文件/提示都会落在不存在的路径上（审查 v5 · V5-043）。
     if (!result.filePath) throw new Error((result && result.error) || '保存文件失败（未返回文件路径）')
     // 保存成功后用系统默认应用打开文件
-    window.electron.invoke(INVOKE.OPEN_FILE, { filePath: result.filePath }).catch(() => {})
+    window.electron.invoke(INVOKE.OPEN_FILE, { filePath: result.filePath }).catch(() => {}) // best-effort: 打开文件失败不影响保存结果
     return result.filePath
   }
   if (kind === 'canceled') return ''
@@ -58,7 +58,7 @@ export async function saveZipWithDialog(defaultName, body) {
   const kind = classify(result)
   if (kind === 'ok') {
     if (!result.filePath) throw new Error((result && result.error) || '保存文件失败（未返回文件路径）')
-    window.electron.invoke(INVOKE.OPEN_FILE, { filePath: result.filePath }).catch(() => {})
+    window.electron.invoke(INVOKE.OPEN_FILE, { filePath: result.filePath }).catch(() => {}) // best-effort: 打开文件失败不影响保存结果
     return result.filePath
   }
   if (kind === 'canceled') return ''

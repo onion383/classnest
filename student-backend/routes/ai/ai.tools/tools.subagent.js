@@ -55,7 +55,7 @@ function parseSubagentResult(text, task) {
   try {
     const obj = JSON.parse(body);
     if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
-  } catch (_) { /* 落到兜底 */ }
+  } catch (_) { /* best-effort: 落到兜底 */ }
   return { task, result: raw, basis: '', count: 0, samples: [], error: '子助手未按契约返回 JSON', needs_user_decision: [] };
 }
 
@@ -169,7 +169,7 @@ async function runOneSubagent(cfg, item, ctx, traceSink) {
     for (const tc of toolCalls) {
       sink.tool(i, subagentToolTitle(tc.name));
       let targs = {};
-      try { targs = JSON.parse(tc.arguments || '{}'); } catch (_) {}
+      try { targs = JSON.parse(tc.arguments || '{}'); } catch (_) {} // best-effort: 工具参数非法时按空对象处理，由工具自身校验
       let result;
       // 工具清单只是「告诉模型有哪些工具」，模型仍可能返回清单外的名字
       // （旧会话/换模型/被提示注入诱导）。子助手的只读边界必须在这里强制校验，

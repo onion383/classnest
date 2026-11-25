@@ -11,7 +11,7 @@ export function useScheduleMaster(ctx, { API_BASE }) {
       try {
         await ctx.loadMaster()
         if (ctx._masterLoadOk.value) ctx.notifySuccess('已刷新课程表模板')
-      } catch (e) { /* 错误已在 loadMaster 内部处理 */ }
+      } catch (e) { /* best-effort: 错误已在 loadMaster 内部处理 */ }
     },
     async loadMaster() {
       ctx._masterInFlight = (ctx._masterInFlight || 0) + 1;

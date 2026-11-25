@@ -51,7 +51,7 @@ function writeAll(list) {
     fs.writeFileSync(tmp, JSON.stringify(list, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, FILE);
   } catch (e) {
-    try { fs.rmSync(tmp, { force: true }); } catch (_) { /* 清理失败不掩盖原始错误 */ }
+    try { fs.rmSync(tmp, { force: true }); } catch (_) { /* best-effort: 清理失败不掩盖原始错误 */ }
     throw e;
   }
 }
@@ -101,7 +101,7 @@ function create({ slug, label = '', validDays = 0 } = {}) {
     writeAll(list);
   } catch (e) {
     try { dbManager.withDb(slug, () => db.prepare('DELETE FROM mcp_tokens WHERE hash = ?').run(item.hash)); }
-    catch (_) { /* 补偿也失败时留给下次清理，不能吞掉原始错误 */ }
+    catch (_) { /* best-effort: 补偿也失败时留给下次清理，不能吞掉原始错误 */ }
     throw e;
   }
   return { token, id: item.hash.slice(0, 12), slug, label: item.label, created_at: item.created_at, expires_at: item.expires_at };
@@ -157,7 +157,7 @@ function revoke(id, slug) {
       x.revoked_at = new Date().toISOString();
       changed = true;
       try { dbManager.withDb(x.slug, () => db.prepare('DELETE FROM mcp_tokens WHERE hash = ?').run(x.hash)); }
-      catch (_) { /* 班级库暂时打不开不阻断撤销：core 已 revoked，鉴权层已生效 */ }
+      catch (_) { /* best-effort: 班级库暂时打不开不阻断撤销：core 已 revoked，鉴权层已生效 */ }
     }
   }
   if (changed) writeAll(list);
@@ -177,7 +177,7 @@ function revokeBySlug(slug) {
     x.revoked_at = now;
     changed += 1;
     try { dbManager.withDb(x.slug, () => db.prepare('DELETE FROM mcp_tokens WHERE hash = ?').run(x.hash)); }
-    catch (_) { /* 班级库暂时打不开不阻断撤销：core 已 revoked，鉴权层已生效 */ }
+    catch (_) { /* best-effort: 班级库暂时打不开不阻断撤销：core 已 revoked，鉴权层已生效 */ }
   }
   if (changed) writeAll(list);
   return changed;
@@ -194,7 +194,7 @@ function remove(id, slug) {
   writeAll(all.filter((x) => x !== hit));
   // 明文行一般已在 revoke 时清掉；这里再兜一次，幂等无副作用。
   try { dbManager.withDb(hit.slug, () => db.prepare('DELETE FROM mcp_tokens WHERE hash = ?').run(hit.hash)); }
-  catch (_) { /* 班级库打不开不阻断：core 条目已删，鉴权层已彻底不认 */ }
+  catch (_) { /* best-effort: 班级库打不开不阻断：core 条目已删，鉴权层已彻底不认 */ }
   return true;
 }
 

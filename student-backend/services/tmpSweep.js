@@ -60,7 +60,7 @@ function sweepTempOrphans({
     // 正常文件只有 {id}.jpg 一个点；多于一个点的是 rename 前被强杀留下的（K01-04）。
     const thumbRoot = path.join(dataDir, 'cache', 'album-thumbs')
     let slugs = []
-    try { slugs = fs.readdirSync(thumbRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) } catch (_) { /* 未启用相册 */ }
+    try { slugs = fs.readdirSync(thumbRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) } catch (_) { /* best-effort: 未启用相册 */ }
     for (const s of slugs) {
       removed += sweepDir(path.join(thumbRoot, s), (name, isDir) => !isDir && name.split('.').length > 2, { now, maxAgeMs })
     }

@@ -61,7 +61,7 @@ function save() {
     fs.writeFileSync(tmp, JSON.stringify(cache), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, file);
   } catch (_) {
-    try { fs.rmSync(tmp, { force: true }) } catch (_) { /* 清理失败不掩盖原始错误 */ }
+    try { fs.rmSync(tmp, { force: true }) } catch (_) { /* best-effort: 清理失败不掩盖原始错误 */ }
     /* 写入失败则退化为进程内名单，重启后需重新登录 */
   }
 }

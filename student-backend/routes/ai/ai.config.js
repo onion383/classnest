@@ -161,11 +161,11 @@ router.put('/privacy', (req, res) => {
   if (req.body && req.body.table !== undefined) {
     const r = setTableLevel(req.body.table, req.body.level, { read: aiConfigStore.readPrivacy, set: aiConfigStore.setPrivacy });
     if (r.error) return res.status(400).json({ error: r.error });
-    try { aiPrivacy.invalidate(); } catch (_) { /* 缓存清理失败不阻断设置保存 */ }
+    try { aiPrivacy.invalidate(); } catch (_) { /* best-effort: 缓存清理失败不阻断设置保存 */ }
     return res.json({ success: true, data: { ...r, tables: privacyTables(r) }, message: '已保存' });
   }
   const next = aiConfigStore.setPrivacy(normalizePrivacyPatch(req.body));
-  try { aiPrivacy.invalidate(); } catch (_) { /* 缓存清理失败不阻断设置保存 */ }
+  try { aiPrivacy.invalidate(); } catch (_) { /* best-effort: 缓存清理失败不阻断设置保存 */ }
   res.json({ success: true, data: { ...next, tables: privacyTables(next) }, message: '已保存' });
 });
 

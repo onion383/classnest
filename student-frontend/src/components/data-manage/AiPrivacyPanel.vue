@@ -80,7 +80,7 @@ const switchHelp = [
 ].join('\n')
 
 onMounted(() => {
-  load().catch(() => {})
+  load().catch(() => {}) // best-effort: 隐私摘要加载失败由面板重拉兜底
   loadLogSummary()
 })
 </script>

@@ -53,9 +53,9 @@ function pruneDbBackups(filePath, keepPath) {
     const keep = keepPath ? path.basename(keepPath) : olds.sort().pop();
     for (const n of olds) {
       if (n === keep) continue;
-      try { fs.rmSync(path.join(dir, n), { force: true }); } catch (_) { /* 忽略 */ }
+      try { fs.rmSync(path.join(dir, n), { force: true }); } catch (_) { /* best-effort: 过期的旧库副本删不掉就留着，不影响本次恢复 */ }
     }
-  } catch (_) { /* 清理失败不影响恢复结果 */ }
+  } catch (_) { /* best-effort: 清理失败不影响恢复结果 */ }
 }
 
 // srcWal：旧备份包可能带着导出时没能 checkpoint 的 -wal（见 checkpointForBackup）。
@@ -80,7 +80,7 @@ function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted
   // 主进程连接由 evictConn 关；扫描子进程另持一份连接，必须先通知它关闭并丢弃钥匙，
   // 否则它可能在恢复期间继续读旧库/写 -wal，触发 SQLITE_BUSY 或数据交错（#12）。
   // 惰性 require：scanWorker 顶层依赖 dbManager，不能在此模块顶层引入（循环依赖）。
-  try { require('../scanWorker').lockDb(slug); } catch (_) { /* 子进程未启动 */ }
+  try { require('../scanWorker').lockDb(slug); } catch (_) { /* best-effort: 子进程未启动 */ }
   evictConn(slug, { force: true });
 
   // 先写临时文件并校验完整性，**通过后才覆盖现有库**：
@@ -90,7 +90,7 @@ function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted
   const tmpWal = tmpPath + '-wal';
   const cleanTmp = () => {
     for (const suffix of ['', '-wal', '-shm']) {
-      try { fs.rmSync(tmpPath + suffix, { force: true }); } catch (_) { /* 忽略 */ }
+      try { fs.rmSync(tmpPath + suffix, { force: true }); } catch (_) { /* best-effort: 临时库 sidecar 清理失败可忽略 */ }
     }
   };
   cleanTmp();
@@ -111,7 +111,7 @@ function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted
       if (encrypted && dbKey) conn.pragma(`key = '${sqlKey(dbKey)}'`);
       // 有 WAL 时先合并尾页：完整性校验、后续换文件都以「自包含的 .db」为准。
       // 否则校验只覆盖主文件页，WAL 里的最新提交既没被校验也没被保留。
-      try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* 非 WAL 模式无 WAL 可合并 */ }
+      try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* best-effort: 非 WAL 模式无 WAL 可合并 */ }
       let first;
       try {
         const r = conn.pragma('integrity_check');
@@ -127,7 +127,7 @@ function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted
         throw new Error('备份文件完整性校验未通过（文件可能损坏或不是有效的数据库）');
       }
     } finally {
-      if (conn) { try { conn.close(); } catch (_) { /* 已关闭 */ } }
+      if (conn) { try { conn.close(); } catch (_) { /* best-effort: 连接已关闭时重复关闭可忽略 */ } }
     }
     // 覆盖前留一份旧库：rename 是原子的，但「包能打开、内容却不是想要的」时用户仍需回退；
     // 与目录替换的 .bak-<stamp> 口径一致。
@@ -143,7 +143,7 @@ function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted
   }
   // 覆盖 .db 后必须清掉同名的 -wal/-shm 残留，否则旧库的日志会被新库重放导致损坏
   for (const suffix of ['-wal', '-shm']) {
-    try { fs.rmSync(filePath + suffix, { force: true }); } catch (_) { /* 忽略 */ }
+    try { fs.rmSync(filePath + suffix, { force: true }); } catch (_) { /* best-effort: 覆盖后残留的 WAL/SHM 删不掉时下步会再处理 */ }
   }
   // 覆盖前的原登记：恢复后续步骤（目录/记忆）失败时，调用方要能把库文件与登记一起回滚（K04-04）。
   const prevRec = registryFindBySlug(slug);
@@ -180,7 +180,7 @@ async function convertDbEncryption(slug, encrypt, onProgress) {
 
   const cleanSidecars = () => {
     for (const suffix of ['-wal', '-shm']) {
-      try { fs.rmSync(dbPath + suffix, { force: true }); } catch (_) { /* 忽略 */ }
+      try { fs.rmSync(dbPath + suffix, { force: true }); } catch (_) { /* best-effort: sidecar 清理失败可忽略 */ }
     }
   };
   const integrityOk = (conn) => {
@@ -192,7 +192,7 @@ async function convertDbEncryption(slug, encrypt, onProgress) {
   const openRaw = (key) => {
     const conn = new Database(dbPath);
     if (key != null) conn.pragma(`key = '${sqlKey(key)}'`);
-    try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* 非 WAL 模式无 WAL 可 checkpoint */ }
+    try { conn.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) { /* best-effort: 非 WAL 模式无 WAL 可 checkpoint */ }
     conn.pragma('journal_mode = DELETE');
     return conn;
   };
@@ -239,13 +239,13 @@ async function convertDbEncryption(slug, encrypt, onProgress) {
     else registrySetEncrypted(slug, 0); // 明文库保留原 wrapped_key 作占位
 
     // 6) 清理备份与可能残留的 WAL/SHM
-    try { fs.rmSync(backupPath, { force: true }); } catch (_) { /* 忽略 */ }
+    try { fs.rmSync(backupPath, { force: true }); } catch (_) { /* best-effort: 备份文件删除失败可忽略 */ }
     cleanSidecars();
     report('校验文件', '转换完成', 100);
     await tick();
     return { changed: true, encrypted: targetEncrypted };
   } catch (err) {
-    try { if (conn) conn.close(); } catch (_) { /* 忽略 */ }
+    try { if (conn) conn.close(); } catch (_) { /* best-effort: 出错时连接已关闭则重复关闭可忽略 */ }
     // 失败回滚：从备份还原原库文件，登记状态保持原样（备份删除失败则保留供人工处理）
     try {
       if (fs.existsSync(backupPath)) {
@@ -253,7 +253,7 @@ async function convertDbEncryption(slug, encrypt, onProgress) {
         fs.rmSync(backupPath, { force: true });
         cleanSidecars();
       }
-    } catch (_) { /* 回滚异常时保留备份文件，不掩盖原始错误 */ }
+    } catch (_) { /* best-effort: 回滚异常时保留备份文件，不掩盖原始错误 */ }
     throw err;
   }
 }

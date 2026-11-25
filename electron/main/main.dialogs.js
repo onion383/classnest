@@ -265,7 +265,7 @@ function registerDialogsIpc(opts = {}) {
     })
     if (result.canceled || !result.filePath) {
       // 用户取消：临时包没有保留价值，删掉；失败也不影响用户操作
-      try { await fsp.unlink(src) } catch (_) { /* 已被清理 */ }
+      try { await fsp.unlink(src) } catch (_) { /* best-effort: 已被清理 */ }
       return contract.canceled()
     }
     const target = result.filePath
@@ -282,7 +282,7 @@ function registerDialogsIpc(opts = {}) {
           ws.on('finish', resolve)
           rs.pipe(ws)
         })
-        try { await fsp.unlink(src) } catch (_) { /* 留到 TTL 清理 */ }
+        try { await fsp.unlink(src) } catch (_) { /* best-effort: 留到 TTL 清理 */ }
       }
       lastDialogDir = path.dirname(target)
       markFileWritten(target)
@@ -442,7 +442,7 @@ function registerDialogsIpc(opts = {}) {
 
   function setWinOpacity(win, opacity) {
     if (win && !win.isDestroyed()) {
-      try { win.setOpacity(opacity) } catch (_) { /* 忽略 */ }
+      try { win.setOpacity(opacity) } catch (_) { /* best-effort: 窗口已销毁时设置透明度失败可忽略 */ }
     }
   }
 
@@ -472,18 +472,18 @@ function registerDialogsIpc(opts = {}) {
     clearRegionWatchdog(st)
     // 正常结束也要摘掉 closed 监听，避免每次截图累积一个一次性的窗口监听
     if (st.onWindowClosed) {
-      try { st.window.removeListener('closed', st.onWindowClosed) } catch (_) { /* 已销毁 */ }
+      try { st.window.removeListener('closed', st.onWindowClosed) } catch (_) { /* best-effort: 已销毁 */ }
       st.onWindowClosed = null
     }
     const win = st.window
     if (win && !win.isDestroyed()) {
       // 先透明，再改回原尺寸/层级，最后恢复不透明：遮住尺寸变化过程
       setWinOpacity(win, 0)
-      try { win.setAlwaysOnTop(st.alwaysOnTop) } catch (_) { /* 忽略 */ }
+      try { win.setAlwaysOnTop(st.alwaysOnTop) } catch (_) { /* best-effort: 窗口状态异常时置顶设置失败可忽略 */ }
       try {
         if (st.maximized) win.maximize()
         else win.setBounds(st.bounds)
-      } catch (_) { /* 忽略 */ }
+      } catch (_) { /* best-effort: 窗口状态异常时恢复尺寸失败可忽略 */ }
       setWinOpacity(win, 1)
       win.show()
       win.focus()
@@ -533,7 +533,7 @@ function registerDialogsIpc(opts = {}) {
     st.onWindowClosed = onWindowClosed
     try {
       mainWindow.once('closed', onWindowClosed)
-    } catch (_) { /* 忽略 */ }
+    } catch (_) { /* best-effort: 窗口已销毁时注册 closed 监听失败可忽略 */ }
 
     try {
       // 1. 主窗口保持可见（截屏画面带上应用界面），只有工具箱（若可见）会进入截图，先临时透明；

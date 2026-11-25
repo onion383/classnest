@@ -77,11 +77,11 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   // 不支持时静默跳过，不影响功能）。
   const perfMark = (name) => {
     if (typeof performance === 'undefined' || !performance.mark) return
-    try { performance.mark(name) } catch (_) { /* 忽略 */ }
+    try { performance.mark(name) } catch (_) { /* best-effort: 不支持 performance.mark 时跳过 */ }
   }
   const perfMeasure = (name, startMark) => {
     if (typeof performance === 'undefined' || !performance.measure) return
-    try { performance.measure(name, startMark) } catch (_) { /* 忽略 */ }
+    try { performance.measure(name, startMark) } catch (_) { /* best-effort: 不支持 performance.measure 时跳过 */ }
   }
 
   // 关键字过滤后的行（不含排序、不含新增行插入）。

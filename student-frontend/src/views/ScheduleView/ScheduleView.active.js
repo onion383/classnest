@@ -13,7 +13,7 @@ export function useScheduleActive(ctx, { API_BASE }) {
       try {
         await ctx.loadActive()
         if (ctx._activeLoadOk.value) ctx.notifySuccess('已刷新实行课表')
-      } catch (e) { /* 错误已在 loadActive 内部处理 */ }
+      } catch (e) { /* best-effort: 错误已在 loadActive 内部处理 */ }
     },
     async loadActive() {
       ctx._activeInFlight = (ctx._activeInFlight || 0) + 1;

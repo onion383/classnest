@@ -11,7 +11,7 @@ function normColVal(v) {
   const s = String(v);
   const t = s.trim();
   if (t.startsWith('[') || t.startsWith('{')) {
-    try { const p = JSON.parse(t); if (p && typeof p === 'object') return JSON.stringify(p); } catch (_) { /* 非 JSON 文本 */ }
+    try { const p = JSON.parse(t); if (p && typeof p === 'object') return JSON.stringify(p); } catch (_) { /* best-effort: 非 JSON 文本 */ }
   }
   return s;
 }

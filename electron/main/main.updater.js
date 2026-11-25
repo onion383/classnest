@@ -253,7 +253,7 @@ async function downloadInstaller(asset, version, endpoints = resolveUpdateEndpoi
   if (!path.resolve(target).startsWith(cacheRoot)) {
     throw new Error('更新包文件名非法')
   }
-  try { fs.rmSync(target, { force: true }) } catch (_) { /* 清理旧文件失败忽略 */ }
+  try { fs.rmSync(target, { force: true }) } catch (_) { /* best-effort: 清理旧文件失败忽略 */ }
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), UPDATE_DOWNLOAD_TIMEOUT)
@@ -301,7 +301,7 @@ async function downloadInstaller(asset, version, endpoints = resolveUpdateEndpoi
     downloadedInstallerSize = expectedSize
     setUpdateState({ digestSource: trust.source, digestWarning: trust.reason })
   } catch (err) {
-    try { fs.rmSync(target, { force: true }) } catch (_) { /* 忽略 */ }
+    try { fs.rmSync(target, { force: true }) } catch (_) { /* best-effort: 校验失败时删可疑下载文件，删除失败也不复用它 */ }
     downloadedInstallerPath = null
     downloadedInstallerDigest = null
     downloadedInstallerSize = 0
@@ -355,10 +355,10 @@ function pruneUpdateCache() {
         const st = fs.statSync(p)
         if (st.isFile()) freed += st.size
         fs.rmSync(p, { recursive: true, force: true })
-      } catch (_) { /* 单个条目失败忽略 */ }
+      } catch (_) { /* best-effort: 单个条目失败忽略 */ }
     }
     if (freed > 0) console.log(`[updater] 已清理上次遗留的更新安装包，释放 ${(freed / 1048576).toFixed(1)} MB`)
-  } catch (_) { /* 清理失败不影响更新功能 */ }
+  } catch (_) { /* best-effort: 清理失败不影响更新功能 */ }
 }
 
 // 安装动作纯函数：打包环境恒「打开」；只有 dev + 显式 mock 才「定位」假包（绝不执行）。
@@ -414,14 +414,14 @@ function registerUpdateIpc(send) {
       const actual = await sha256File(resolved)
       if (!downloadedInstallerDigest || actual !== downloadedInstallerDigest) {
         // 顺手清掉可疑文件，避免下次还拿它去装
-        try { fs.rmSync(resolved, { force: true }) } catch (_) { /* 忽略 */ }
+        try { fs.rmSync(resolved, { force: true }) } catch (_) { /* best-effort: digest 不符时删可疑文件，删除失败也不安装它 */ }
         downloadedInstallerPath = null
         downloadedInstallerDigest = null
         setUpdateState({ status: 'error', error: '安装包校验失败（文件已改变），请重新下载' })
         return
       }
       if (downloadedInstallerSize > 0 && fs.statSync(resolved).size !== downloadedInstallerSize) {
-        try { fs.rmSync(resolved, { force: true }) } catch (_) { /* 忽略 */ }
+        try { fs.rmSync(resolved, { force: true }) } catch (_) { /* best-effort: 大小不符时删可疑文件，删除失败也不安装它 */ }
         downloadedInstallerPath = null
         downloadedInstallerDigest = null
         setUpdateState({ status: 'error', error: '安装包校验失败（大小不符），请重新下载' })
@@ -433,7 +433,7 @@ function registerUpdateIpc(send) {
     }
       if (resolveInstallAction({ allowLocalMock: endpoints.allowLocalMock }) === 'reveal') {
         // dev mock：假 exe 绝不执行，只在文件管理器里定位，让流程可见且零执行风险
-        try { shell.showItemInFolder(resolved) } catch (_) { /* 定位失败不影响状态 */ }
+        try { shell.showItemInFolder(resolved) } catch (_) { /* best-effort: 定位失败不影响状态 */ }
       } else {
         // 交给 Windows 正常安装向导；openPath 返回非空字符串表示失败
         const openError = await shell.openPath(resolved)

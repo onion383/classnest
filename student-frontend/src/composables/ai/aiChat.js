@@ -115,9 +115,9 @@ export function useAiChat(ctx) {
       const dropped = ctx.messages.value.slice(i)
       const ids = dropped.map((m) => m._id).filter((v) => v != null)
       if (ctx.conversationId.value && ids.length) {
-        try { await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages/delete`, { ids }) } catch (_) { /* 删除失败不阻塞重试 */ }
+        try { await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages/delete`, { ids }) } catch (_) { /* best-effort: 删除失败不阻塞重试 */ }
       } else if (ctx.conversationId.value) {
-        try { await axios.delete(`/api/ai/conversations/${ctx.conversationId.value}/messages/last-assistant`) } catch (_) { /* 删除失败不阻塞重试 */ }
+        try { await axios.delete(`/api/ai/conversations/${ctx.conversationId.value}/messages/last-assistant`) } catch (_) { /* best-effort: 删除失败不阻塞重试 */ }
       }
       ctx.messages.value.splice(i)
       ctx.messages.value.push({ role: 'assistant', loading: true, content: '', _live: true, steps: [], processOpen: true, isError: false })
@@ -198,7 +198,7 @@ export function useAiChat(ctx) {
         // 2) 按落库 id 精确删除这段消息，再清出内存
         const ids = turn.map((m) => m._id).filter((v) => v != null)
         if (ctx.conversationId.value && ids.length) {
-          try { await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages/delete`, { ids }) } catch (_) { /* 删除失败不阻塞回退 */ }
+          try { await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages/delete`, { ids }) } catch (_) { /* best-effort: 删除失败不阻塞回退 */ }
         }
         list.splice(start)
         // 3) 把这段的第一条提问放回输入框，供改改再发
@@ -277,7 +277,7 @@ export function useAiChat(ctx) {
         // 2) 按当前（重新落库后的）id 删除消息并移出内存
         const ids = snap.messages.map((m) => m._id).filter((v) => v != null)
         if (ctx.conversationId.value && ids.length) {
-          try { await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages/delete`, { ids }) } catch (_) { /* 删除失败不阻塞 */ }
+          try { await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages/delete`, { ids }) } catch (_) { /* best-effort: 删除失败不阻塞 */ }
         }
         ctx.messages.value.splice(snap.start)
         ctx.input.value = snap.firstQuestion
@@ -327,7 +327,7 @@ export function useAiChat(ctx) {
       }
       try {
         ctx.conversationId.value = await ctx.ensureConversation()
-      } catch (_) { /* 建会话失败也继续（本轮消息不落库） */ }
+      } catch (_) { /* best-effort: 建会话失败也继续（本轮消息不落库） */ }
 
       // 构建消息内容和图片列表
       let messageContent = text
@@ -564,7 +564,7 @@ export function useAiChat(ctx) {
               if (evt.code === 'conversation_missing') {
                 ctx.conversationId.value = null
                 ctx.messages.value = ctx.messages.value.filter((m) => m.role !== 'assistant' || !m.loading)
-                try { await ctx.loadConversationList() } catch (_) { /* 列表刷新失败不阻塞 */ }
+                try { await ctx.loadConversationList() } catch (_) { /* best-effort: 列表刷新失败不阻塞 */ }
               }
               last.content = (cont && last._baseContent ? last._baseContent + '\n\n' : '') + (evt.message || '请求失败')
               // 错误消息不再靠「⚠️」文案前缀区分（图标模式下那是彩色 emoji），改用显式字段
@@ -677,7 +677,7 @@ export function useAiChat(ctx) {
     // 中断当前回复：停止流式请求并保留已完成的部分，用户可继续输入、发送下一条
     interrupt() {
       if (!ctx.busy.value || !ctx.abortCtrl.value) return
-      try { ctx.abortCtrl.value.abort() } catch (_) { /* 忽略 */ }
+      try { ctx.abortCtrl.value.abort() } catch (_) { /* best-effort: 请求已结束时重复 abort 可忽略 */ }
     },
     // 惰性创建会话：首次发送时才建
     async ensureConversation() {
@@ -704,14 +704,14 @@ export function useAiChat(ctx) {
         const { data } = await axios.post(`/api/ai/conversations/${ctx.conversationId.value}/messages`, body)
         // 返回落库 id，供回退功能精确删除本轮消息
         return (data && data.id) || undefined
-      } catch (_) { /* 持久化失败不阻塞对话 */ }
+      } catch (_) { /* best-effort: 持久化失败不阻塞对话 */ }
     },
     // 覆盖更新一条已落库的消息（续写同一助手消息时用，避免每轮新插入一行）
     async updateMessage(mid, content, process) {
       if (!ctx.conversationId.value || mid == null) return
       const body = { content: content || '' }
       if (process) body.process = process
-      try { await axios.put(`/api/ai/conversations/${ctx.conversationId.value}/messages/${mid}`, body) } catch (_) { /* 持久化失败不阻塞对话 */ }
+      try { await axios.put(`/api/ai/conversations/${ctx.conversationId.value}/messages/${mid}`, body) } catch (_) { /* best-effort: 持久化失败不阻塞对话 */ }
     },
   }
 }

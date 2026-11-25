@@ -446,7 +446,7 @@ function runSearch(query) {
         const name = String(d.name || '')
         if (allTermsHit(name, terms, pm)) dimHitIds.push(d.id)
       }
-    } catch (_) {}
+    } catch (_) {} // best-effort: 单条 dim 记录查询失败时跳过该条，其余照常搜索
     const groups = []
     for (const src of SOURCES) {
       // 列名来自本文件常量白名单（dynamic 源额外并入 table_meta 里已校验过的自定义列），直接内联到 SQL
@@ -537,7 +537,7 @@ function runSearch(query) {
       if (typeof v === 'number') {
         if (!idNameMap) {
           idNameMap = {}
-          try { for (const s of db.prepare('SELECT id, 姓名 FROM students').all()) idNameMap[s.id] = s['姓名'] || '' } catch (_) {}
+          try { for (const s of db.prepare('SELECT id, 姓名 FROM students').all()) idNameMap[s.id] = s['姓名'] || '' } catch (_) {} // best-effort: 姓名映射读不到时该 id 显示空串
         }
         return idNameMap[v] || ''
       }
@@ -587,7 +587,7 @@ function runSearch(query) {
     try {
       const g = db.prepare('SELECT items FROM duty_settings WHERE id = 1').get()
       if (g) dutyItemsField = g.items
-    } catch (_) {}
+    } catch (_) {} // best-effort: 值日列名读不到时按默认列搜索
     for (const dt of DUTY_TABLES) {
       let row = null
       try { row = db.prepare(`SELECT cells FROM ${dt.table} WHERE id = 1`).get() } catch (_) { continue }
@@ -682,7 +682,7 @@ function runSearch(query) {
           })),
         })
       }
-    } catch (_) {}
+    } catch (_) {} // best-effort: 该数据源查询失败时跳过，其余源照常搜索
 
     // 班干部「任职」：按担任学生名查他任了哪些职务（职务名命中由 SOURCES 的 cadres 负责）。
     // 点结果落到该职务行（focus 同样走 cadre: 前缀）。
@@ -714,7 +714,7 @@ function runSearch(query) {
           })),
         })
       }
-    } catch (_) {}
+    } catch (_) {} // best-effort: 该数据源查询失败时跳过，其余源照常搜索
 
     // 照片文件名：命中后落到该照片所属相册（相册页只支持定位到相册，不支持定位到单张图）。
     // 排序用 id 倒序而不是 photo_date：按拍摄日期排会把所有命中行都排序一遍（几万张时 p90 明显变差），
@@ -744,7 +744,7 @@ function runSearch(query) {
           })),
         })
       }
-    } catch (_) {}
+    } catch (_) {} // best-effort: 该数据源查询失败时跳过，其余源照常搜索
 
     // 任一组在第 probeLimit 条上多取到一条 ⇒ 还有下一页。不额外跑 COUNT，
     // 否则为了一个按钮要把十几个源再全表扫一遍。

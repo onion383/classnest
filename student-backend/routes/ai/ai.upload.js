@@ -94,7 +94,7 @@ router.post('/upload', uploadSingle, async (req, res) => {
           workbook = XLSX.readFile(tempPath, { sheetRows: 5000 });
         } finally {
           for (const k of Object.getOwnPropertyNames(Object.prototype)) {
-            if (!protoSnapshot.has(k)) { try { delete Object.prototype[k]; } catch (_) {} }
+            if (!protoSnapshot.has(k)) { try { delete Object.prototype[k]; } catch (_) {} } // best-effort: 原型污染回滚时属性不可删可忽略
           }
         }
         const lines = [];
@@ -195,7 +195,7 @@ router.post('/upload', uploadSingle, async (req, res) => {
       text = `文件名：${originalname}\n\n错误：提取文本失败 (${err.message})`;
     } finally {
       // 删除临时文件
-      try { fs.unlinkSync(tempPath); } catch (_) {}
+      try { fs.unlinkSync(tempPath); } catch (_) {} // best-effort: 临时文件已删/删不掉都不影响上传结果
     }
 
     return res.json({

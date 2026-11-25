@@ -127,7 +127,7 @@ function loadConversationContext(conversationId, slug) {
     if (r.id <= upto) continue; // 已被摘要覆盖，不再逐条发送
     let content = r.content || '';
     if (typeof content === 'string' && content.startsWith('[')) {
-      try { const p = JSON.parse(content); if (Array.isArray(p)) content = p; } catch (_) { /* 解析失败按纯文本 */ }
+      try { const p = JSON.parse(content); if (Array.isArray(p)) content = p; } catch (_) { /* best-effort: 解析失败按纯文本 */ }
     }
     // 跳过没有正文的助手消息（提问轮 / 占位），避免模型收到空消息
     if (r.role === 'assistant' && !contentToText(content).trim() && !(Array.isArray(content) && content.length)) continue;
@@ -142,7 +142,7 @@ function loadConversationContext(conversationId, slug) {
       if (Array.isArray(list)) {
         list.forEach((a) => { if (a && a.name && a.text) attachments.push({ name: a.name, text: a.text, messageId: r.id }); });
       }
-    } catch (_) { /* 忽略损坏的附件记录 */ }
+    } catch (_) { /* best-effort: 忽略损坏的附件记录 */ }
   }
   return {
     summary: conv.summary || '', upto, lastPromptTokens: conv.last_prompt_tokens || 0,

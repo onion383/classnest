@@ -215,7 +215,7 @@ export function useSeatGrid(apiBase, options = {}) {
       // 保存失败时按 Ctrl+Z 会「撤销」一个根本没落库的改动（B12-06）。
       // 排到队列尾：与同格的其它提交串行，避免乱序落库（#23）。
       // 用 .catch 兜底，前面某次提交抛错不能让整条队列断掉、后续编辑永远不提交。
-      commitQueue = commitQueue.catch(() => {}).then(async () => {
+      commitQueue = commitQueue.catch(() => {}).then(async () => { // best-effort: 前面某次提交失败不阻断队列，后续编辑继续提交
         for (const [r, c] of changed) {
           const ok = await saveSingleCell(r, c, next[r]?.[c] ?? null)
           if (!ok) {
@@ -412,7 +412,7 @@ export function useSeatGrid(apiBase, options = {}) {
     seats.value = newSeats
     const ok = await save()
     if (!ok) {
-      try { await load() } catch (_) { /* 回滚也失败时保留 save 已给出的失败提示 */ }
+      try { await load() } catch (_) { /* best-effort: 回滚也失败时保留 save 已给出的失败提示 */ }
     }
     return ok
   }

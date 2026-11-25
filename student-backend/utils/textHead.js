@@ -86,7 +86,7 @@ function readTextHead(filePath, maxChars) {
       bytesRead += n
     }
   } finally {
-    try { fs.closeSync(fd) } catch (_) { /* 关闭失败不掩盖原始错误 */ }
+    try { fs.closeSync(fd) } catch (_) { /* best-effort: 关闭失败不掩盖原始错误 */ }
   }
 
   const { text, full } = decodeHead(buf.subarray(0, bytesRead), limit)

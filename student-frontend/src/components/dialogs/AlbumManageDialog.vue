@@ -226,7 +226,7 @@ async function doRemove() {
           albumPhotos.push({ id: x.id, album_id: a.id, file_path: x.file_path, file_name: x.file_name, file_size: x.file_size, mtime: x.mtime, photo_date: x.photo_date, exif_date: x.exif_date, date_src: x.date_src })
         }
       }
-    } catch (_) { /* 抓取失败不阻塞删除 */ }
+    } catch (_) { /* best-effort: 抓取失败不阻塞删除 */ }
     await axios.delete(`/api/album/${a.id}`, { headers: authHeaders() })
     // 记录「删除相册」撤销：undo 还原相册+照片索引，redo 再次删除
     recordUndoSpec({

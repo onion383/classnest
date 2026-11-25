@@ -136,14 +136,14 @@ function pruneKeyBackups(keyFile) {
       .map((n) => {
         const full = path.join(dir, n)
         let mtime = 0
-        try { mtime = fs.statSync(full).mtimeMs } catch (_) { /* 读不到按最旧处理 */ }
+        try { mtime = fs.statSync(full).mtimeMs } catch (_) { /* best-effort: 读不到按最旧处理 */ }
         return { full, mtime }
       })
       .sort((a, b) => b.mtime - a.mtime)
     for (const f of backups.slice(KEY_BACKUP_KEEP)) {
-      try { fs.unlinkSync(f.full) } catch (_) { /* 删不掉留着，下次再试 */ }
+      try { fs.unlinkSync(f.full) } catch (_) { /* best-effort: 删不掉留着，下次再试 */ }
     }
-  } catch (_) { /* 目录不可读时不影响主流程 */ }
+  } catch (_) { /* best-effort: 目录不可读时不影响主流程 */ }
 }
 
 async function resolveDbMasterKey() {

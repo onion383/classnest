@@ -76,7 +76,7 @@ async function main() {
       break;
     } catch (e) {
       failures.push(`${url}（${e && e.message}）`);
-      try { await probe.close(); } catch (_) { /* 未连接成功时 close 也可能抛 */ }
+      try { await probe.close(); } catch (_) { /* best-effort: 未连接成功时 close 也可能抛 */ }
     }
   }
   if (!client) {
@@ -117,7 +117,7 @@ async function main() {
       );
     }
     // 客户端断开 pipe 时关闭后端连接，避免悬挂的 HTTP 会话
-    server.server.onclose = () => { void client.close().catch(() => {}); };
+    server.server.onclose = () => { void client.close().catch(() => {}); }; // best-effort: 客户端断开时后端连接可能已关闭
     return server;
   });
 

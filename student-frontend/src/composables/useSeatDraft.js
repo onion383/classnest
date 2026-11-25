@@ -98,7 +98,7 @@ export function useSeatDraft() {
     const token = guard.begin()
     try {
       await axios.delete(`${API_BASE}/seats/draft`)
-    } catch (_) {}
+    } catch (_) {} // best-effort: 删除服务端草稿失败无妨，本地状态照常清
     if (!guard.isCurrent(token)) return
     draft.exists = false
     draft.seats = []

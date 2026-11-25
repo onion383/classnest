@@ -69,13 +69,13 @@ router.beforeEach(async (to, from) => {
   // 校验在后台进行，若 token 已被后端作废（如账号/数据库变更），由响应拦截器统一处理 401
   // （清 token + 提示 + 回登录页）。这样后端未就绪时首屏不再干等 /api/me 的往返。
   if (from.matched.length === 0) {
-    axios.get('/api/me').catch(() => {})
+    axios.get('/api/me').catch(() => {}) // best-effort: 首屏身份探测失败由后续路由守卫处理
   }
 
   // 已登录进入首页：提前并发拉取 Dashboard 数据，让数据与组件下载/挂载并行，减少首屏等待
   // 首屏预取：失败无所谓（Dashboard 挂载后会重新请求并提示用户），
   // 但必须接住 reject —— 否则每次后端不可达都会冒一条 unhandledrejection。
-  if (to.path === '/') ensureDashboardData().catch(() => {})
+  if (to.path === '/') ensureDashboardData().catch(() => {}) // best-effort: 预取失败无妨，Dashboard 挂载后会重请并提示
   return to.path === '/login' ? '/' : true
 })
 
@@ -105,7 +105,7 @@ export function prefetchRoutes(options = {}) {
     const loader = deferred[j++]
     Promise.resolve()
       .then(() => loader())
-      .catch(() => {})
+      .catch(() => {}) // best-effort: 模块预加载失败不阻断路由，继续走空闲调度
       .then(() => idle(nextDeferred, 8000)) // 末档更保守：等更长的真空闲，避免与交互抢资源
   }
   let i = 0
@@ -117,7 +117,7 @@ export function prefetchRoutes(options = {}) {
     const loader = loaders[i++]
     Promise.resolve()
       .then(() => loader())
-      .catch(() => {})
+      .catch(() => {}) // best-effort: 模块预加载失败不阻断路由，继续走空闲调度
       .then(() => idle(next, 2000)) // 每条加载完都让出一次空闲，避免连续解析阻塞交互
   }
   idle(next, 2000)

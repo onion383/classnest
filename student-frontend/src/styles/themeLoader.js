@@ -165,7 +165,7 @@ export function warmNightMode(theme, mode) {
     })
     .catch((err) => {
       // 预热失败不能影响正常使用：静默恢复原状即可
-      try { restore() } catch (_) {}
+      try { restore() } catch (_) {} // best-effort: 预热失败恢复原状，下面仍会 warn
       console.warn('[themeStyles] 夜间模式预热失败:', err?.message || err)
     })
 }

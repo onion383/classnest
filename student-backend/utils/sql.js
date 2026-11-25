@@ -22,7 +22,7 @@ function typeMapOf(table) {
   if (!table) return map;
   try {
     for (const f of getFields(table)) map[f.name] = f.type || '文字';
-  } catch (_) { /* 表无 table_meta 时按「文字」处理 */ }
+  } catch (_) { /* best-effort: 表无 table_meta 时按「文字」处理 */ }
   return map;
 }
 

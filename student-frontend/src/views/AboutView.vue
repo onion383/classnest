@@ -564,7 +564,7 @@ async function fetchAppVersion() {
   try {
     const v = await window.electron?.invoke(INVOKE.GET_APP_VERSION)
     if (v) currentVersion.value = v
-  } catch (_) { /* 非 Electron 环境忽略 */ }
+  } catch (_) { /* best-effort: 非 Electron 环境忽略 */ }
 }
 
 async function checkUpdate() {

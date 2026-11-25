@@ -55,7 +55,7 @@ async function resolveAppEntry(filePath) {
     const iconTarget = ext === '.lnk' ? resolveLnkTarget(filePath) : ''
     const img = await app.getFileIcon(iconTarget || filePath, { size: 'large' })
     icon = img.toDataURL()
-  } catch (_) { /* 图标提取失败则留空 */ }
+  } catch (_) { /* best-effort: 图标提取失败则留空 */ }
   return { name, path: filePath, icon }
 }
 
@@ -94,7 +94,7 @@ function registerAppsIpc(opts = {}) {
       try {
         if (!fs.existsSync(p)) continue
         out.push(await resolveAppEntry(p))
-      } catch (_) { /* 单个路径失败不影响其余项 */ }
+      } catch (_) { /* best-effort: 单个路径失败不影响其余项 */ }
     }
     return out
   })

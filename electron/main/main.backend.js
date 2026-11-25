@@ -131,7 +131,7 @@ async function rotateBackendLogIfNeeded() {
     await new Promise((resolve) => old.end(resolve))
     await rotateIfNeeded(logPath, { maxBytes: 2 * 1024 * 1024, keepBytes: 1024 * 1024 })
     await ensureBackendLogStream()
-  } catch (_) { /* 巡检失败不影响后端 */ }
+  } catch (_) { /* best-effort: 巡检失败不影响后端 */ }
 }
 
 let backendRestartCount = 0
@@ -204,7 +204,7 @@ function _bootMark(stage, forkAt) {
   try {
     const now = Date.now()
     console.log(`[boot] ${stage} @${now}${forkAt ? `（fork→${stage} ${now - forkAt}ms）` : ''}`)
-  } catch (_) { /* 打点失败静默 */ }
+  } catch (_) { /* best-effort: 打点失败静默 */ }
 }
 function _markSpawned(child, forkAt) {
   if (!_bootPerfOn() || !child || typeof child.once !== 'function') return
@@ -239,7 +239,7 @@ async function compileBackendProcess() {
   // 与主进程共用同一目录是安全的。Electron 44 内置 Node v24 支持（实测返回 <dir>/v24.22.0-x64-<hash>）。
   // 这是目前唯一「跨重启也有效」的启动优化：装在装的目录里，重启后字节码还在。
   const compileCacheDir = resolveCompileCacheDir()
-  try { fs.mkdirSync(compileCacheDir, { recursive: true }) } catch (_) { /* 建不出目录就退回不缓存，不影响启动 */ }
+  try { fs.mkdirSync(compileCacheDir, { recursive: true }) } catch (_) { /* best-effort: 建不出目录就退回不缓存，不影响启动 */ }
   _profMark('【prof】后端路径/目录准备完成')
 
   // 统一的输出/退出处理
@@ -319,11 +319,11 @@ async function compileBackendProcess() {
         spawnDev(cached)
         return
       }
-    } catch (_) { /* 无缓存，走探测 */ }
+    } catch (_) { /* best-effort: 无缓存，走探测 */ }
     execFile('node', ['-p', 'process.execPath'], { encoding: 'utf8' }, (err, out) => {
       const execPath = err ? 'node' : out.trim()
       if (!err) {
-        try { fs.writeFileSync(nodePathCache, execPath) } catch (_) { /* 写缓存失败不影响启动 */ }
+        try { fs.writeFileSync(nodePathCache, execPath) } catch (_) { /* best-effort: 写缓存失败不影响启动 */ }
       }
       spawnDev(execPath)
     })
@@ -410,7 +410,7 @@ const startBackend = createSingleFlight(async () => {
 function broadcast(payload) {
   const wins = [getMainWindow(), getWidgetWindow(), getDesktopWidgetWindow(), getMigrationWindow(), getSetupWindow()]
   for (const w of wins) {
-    try { if (w && !w.isDestroyed()) w.webContents.send(CH.FROM_MAIN, payload) } catch (_) { /* 忽略 */ }
+    try { if (w && !w.isDestroyed()) w.webContents.send(CH.FROM_MAIN, payload) } catch (_) { /* best-effort: 目标窗口已销毁时无法接收消息，跳过该窗口 */ }
   }
 }
 
@@ -635,7 +635,7 @@ async function handleBackendDown(reason) {
     if (app.isQuitting) { reconnecting = false; return }
     broadcastBackendReconnecting(true, attempt)
     setBootStatus(`后端异常，正在重新连接（${attempt}/${RECONNECT_MAX}）…`)
-    try { await stopBackendProcess() } catch (_) { /* 忽略 */ }
+    try { await stopBackendProcess() } catch (_) { /* best-effort: 停止后端进程失败时继续重连流程 */ }
     if (app.isQuitting) { reconnecting = false; return }
     backendRestartCount = 0
     startBackend()
@@ -703,7 +703,7 @@ function stopBackendProcess() {
   const proc = backendProcess
   backendProcess = null
   if (!proc) return Promise.resolve()
-  try { proc.removeListener('exit', scheduleBackendRestart) } catch (_) { /* 忽略 */ }
+  try { proc.removeListener('exit', scheduleBackendRestart) } catch (_) { /* best-effort: 监听器已移除时重复移除失败可忽略 */ }
   return new Promise((resolve) => {
     let settled = false
     const done = () => { if (settled) return; settled = true; resolve() }
@@ -729,9 +729,9 @@ function killBackendTree(proc) {
       spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' })
       return
     }
-    try { process.kill(-proc.pid, 'SIGKILL'); return } catch (_) { /* 不是组 leader */ }
-    try { proc.kill('SIGKILL') } catch (_) { /* 已退出 */ }
-  } catch (_) { /* 清理路径不抛 */ }
+    try { process.kill(-proc.pid, 'SIGKILL'); return } catch (_) { /* best-effort: 不是组 leader */ }
+    try { proc.kill('SIGKILL') } catch (_) { /* best-effort: 已退出 */ }
+  } catch (_) { /* best-effort: 清理路径不抛 */ }
 }
 
 // 等待后端就绪信号（主进程侧）：已就绪立即返回 true；否则等 backend-ready 上报，
@@ -763,7 +763,7 @@ function shutdownBackend() {
     backendProcess = null
   }
   if (backendLogStream) {
-    try { backendLogStream.end() } catch (_) {}
+    try { backendLogStream.end() } catch (_) {} // best-effort: 日志流已关闭时结束失败可忽略
     backendLogStream = null
   }
 }
@@ -788,7 +788,7 @@ function registerBackendIpc(opts = {}) {
     clearBackendFailure()
     backendRestartCount = 0
     backendReady = false
-    try { await stopBackendProcess() } catch (_) { /* 忽略 */ }
+    try { await stopBackendProcess() } catch (_) { /* best-effort: 停止后端进程失败时继续重启流程 */ }
     startBackend()
     return { ok: true }
   }))

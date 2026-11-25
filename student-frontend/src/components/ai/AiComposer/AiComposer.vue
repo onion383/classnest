@@ -665,7 +665,7 @@ function applySkill(name) {
       const caret = el.selectionStart
       emit('update:input', el.value.slice(0, t.start) + el.value.slice(caret))
       nextTick(() => {
-        try { el.focus(); el.setSelectionRange(t.start, t.start) } catch (_) { /* 忽略 */ }
+        try { el.focus(); el.setSelectionRange(t.start, t.start) } catch (_) { /* best-effort: 光标位置失效时设选区失败可忽略 */ }
       })
     }
   }

@@ -226,7 +226,7 @@ function switchTab(v) {
   scrollTop.value = 0
   if (scrollEl.value) scrollEl.value.scrollTop = 0
   // 切到已处理时补拉一次：确认动作之后列表已经变了，缓存的不作数
-  if (v === 'done') loadDone().catch(() => {})
+  if (v === 'done') loadDone().catch(() => {}) // best-effort: 列表补拉失败不影响当前视图
   nextTick(measureView)
 }
 
@@ -329,7 +329,7 @@ async function decide(id, decision) {
     if (r.data.status === 'failed') notify.error('执行失败：' + (r.data.result?.error || '未知原因'))
     else notify.success(decision === 'confirm' ? '已执行提案' : '已拒绝提案')
     // 提案已经处理完了，列表刷新失败不该把这次操作报成「处理失败」
-    await Promise.all([loadPending(), loadDone()]).catch(() => {})
+    await Promise.all([loadPending(), loadDone()]).catch(() => {}) // best-effort: 提案已处理，列表刷新失败不报成处理失败
     emit('changed')
   } catch (e) { notify.error('处理提案失败：' + (e.response?.data?.error || e.message)) }
   finally { busy.value = false }

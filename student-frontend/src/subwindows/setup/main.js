@@ -37,7 +37,7 @@ async function resolveLaunch() {
     forced = new URLSearchParams(location.search).get('screen') || ''
     const p = await window.electron?.invoke?.(INVOKE.LAUNCH_PLAN)
     if (p) plan = p
-  } catch (_) {}
+  } catch (_) {} // best-effort: 启动计划读不到时用默认方案
   if (forced === 'warning' || forced === 'welcome' || forced === 'wizard') {
     lastLaunch = { screen: forced, plan }
     return lastLaunch

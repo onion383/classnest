@@ -716,20 +716,20 @@ async function loadWarmup() {
   try {
     const w = await window.electron?.invoke(INVOKE.GET_SETUP_WARMUP)
     if (w && warmupGeneration === at) applyWarmup(w)
-  } catch (_) {}
+  } catch (_) {} // best-effort: 预热数据取不到就用空值，引导仍可走完
 }
 // ---------- 储存设置 ----------
 async function loadDirs() {
   try {
     const res = await window.electron?.invoke(INVOKE.GET_DATA_DIRECTORIES)
     if (res) dirs.value = { dataDir: res.dataDir || '' }
-  } catch (_) {}
+  } catch (_) {} // best-effort: 目录读不到时保持默认，不阻断引导
 }
 async function pickDir() {
   try {
     const res = await window.electron?.invoke(INVOKE.SELECT_FOLDER)
     if (res && res.filePaths && res.filePaths.length) return res.filePaths[0]
-  } catch (_) {}
+  } catch (_) {} // best-effort: 选目录取消/失败时返回空串
   return ''
 }
 function openDir(p) {
@@ -772,7 +772,7 @@ async function loadSemesterPrefill() {
       end: data.end_date || '',
     }
     semesterPrefilled.value = true
-  } catch (_) {
+  } catch (_) { // best-effort: 后端未就绪时留空：用户手填也能走完引导
     // 后端未就绪时留空：用户手填也能走完，不因为预填失败卡住引导
   }
 }
@@ -782,18 +782,18 @@ async function loadSemesterPrefill() {
 async function loadFeaturePrefs() {
   try {
     features.value.desktopWidget = (localStorage.getItem('desktopWidgetEnabled') ?? '0') === '1'
-  } catch (_) {}
+  } catch (_) {} // best-effort: 本地存储不可用时按未开启处理
   try {
     const res = await window.electron?.invoke(INVOKE.GET_USB_AUTO_OPEN)
     features.value.usbAutoOpen = !!res?.enabled
-  } catch (_) {}
+  } catch (_) {} // best-effort: 设置读不到时保持默认未勾选
   try {
     const { data } = await axios.get('/api/widget-settings')
     if (data && data.success) {
       features.value.toolbox = !!data.data.toolboxEnabled
       featuresLoaded.value = true
     }
-  } catch (_) {
+  } catch (_) { // best-effort: 后端未就绪/未登录：工具箱保持未勾选，完成时也不回写
     // 后端未就绪/未登录：工具箱保持未勾选，完成时也不回写（见 saveFeaturePrefs）
   }
 }
@@ -806,7 +806,7 @@ function onFeatureChange(key, value) {
 // force：本次刚建号时必须写 —— 建号前 GET 拿不到库里的值（401），
 // 不能把「没读到」当成「用户没开过」，否则引导里勾上的工具箱会在进系统后消失。
 async function saveFeaturePrefs({ force = false } = {}) {
-  try { localStorage.setItem('desktopWidgetEnabled', features.value.desktopWidget ? '1' : '0') } catch (_) {}
+  try { localStorage.setItem('desktopWidgetEnabled', features.value.desktopWidget ? '1' : '0') } catch (_) {} // best-effort: 本地存储不可用时勾选状态不持久，不影响本次
   try { await window.electron?.invoke(INVOKE.SET_USB_AUTO_OPEN, features.value.usbAutoOpen) } catch (err) {
     console.error('[setup] 保存U盘自动打开设置失败:', err)
   }
@@ -1122,7 +1122,7 @@ async function waitBackend(timeout = 15000) {
       // 每次都要白等满 15 秒。validateStatus 让任何 HTTP 响应都算「后端活着」。
       await axios.get('/api/setup/semester-prefill', { validateStatus: () => true })
       return true
-    } catch (_) {}
+    } catch (_) {} // best-effort: 预填探测失败走超时/退避重试
     if (Date.now() - start > timeout) return false
     // 优先等就绪信号：后端一就绪立即重试；信号缺失时退化为 300ms 退避
     await waitForBackendReady(300)
@@ -1151,7 +1151,7 @@ onMounted(() => {
   let hasSavedTheme = false
   try {
     hasSavedTheme = !!localStorage.getItem('app-theme')
-  } catch (_) { /* 无 localStorage 环境：按没选过处理 */ }
+  } catch (_) { /* best-effort: 无 localStorage 环境：按没选过处理 */ }
   if (!hasSavedTheme) themeStore.setTheme('glass')
 })
 onBeforeUnmount(() => {

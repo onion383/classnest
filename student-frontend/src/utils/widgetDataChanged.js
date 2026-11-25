@@ -78,7 +78,7 @@ export function createWidgetDataChangedAnnouncer(send) {
       const payload = { type: 'data-changed', domains }
       // 广播是「尽力而为」：窗口还没建好 / IPC 抖动，都不能把一次成功的写变成失败，
       // 兜底轮询会把这次漏掉的变化补上。
-      try { send(payload) } catch (_) { /* 交给 5 分钟兜底 */ }
+      try { send(payload) } catch (_) { /* best-effort: 交给 5 分钟兜底 */ }
       return payload
     },
   }

@@ -29,15 +29,15 @@ function atomicWriteFileSync(file, data, { fs: impl = fs } = {}) {
     fd = impl.openSync(tmp, 'w')
     impl.writeFileSync(fd, data)
     if (typeof impl.fsyncSync === 'function') {
-      try { impl.fsyncSync(fd) } catch (_) { /* 部分文件系统不支持 fsync，不影响原子替换 */ }
+      try { impl.fsyncSync(fd) } catch (_) { /* best-effort: 部分文件系统不支持 fsync，不影响原子替换 */ }
     }
     impl.closeSync(fd)
     fd = undefined
     impl.renameSync(tmp, file)
     return true
   } catch (err) {
-    if (fd !== undefined) { try { impl.closeSync(fd) } catch (_) { /* 已关闭 */ } }
-    try { impl.unlinkSync(tmp) } catch (_) { /* tmp 可能没建出来 */ }
+    if (fd !== undefined) { try { impl.closeSync(fd) } catch (_) { /* best-effort: fd 已关闭时重复关闭可忽略 */ } }
+    try { impl.unlinkSync(tmp) } catch (_) { /* best-effort: tmp 可能没建出来 */ }
     throw err
   }
 }
@@ -52,15 +52,15 @@ async function atomicWriteFile(file, data, { fs: impl = fs.promises } = {}) {
     fh = await impl.open(tmp, 'w')
     await fh.writeFile(data)
     if (typeof fh.sync === 'function') {
-      try { await fh.sync() } catch (_) { /* 同上 */ }
+      try { await fh.sync() } catch (_) { /* best-effort: 部分平台不支持 fsync，跳过即可 */ }
     }
     await fh.close()
     fh = null
     await impl.rename(tmp, file)
     return true
   } catch (err) {
-    if (fh) { try { await fh.close() } catch (_) { /* 已关闭 */ } }
-    try { await impl.unlink(tmp) } catch (_) { /* tmp 可能没建出来 */ }
+    if (fh) { try { await fh.close() } catch (_) { /* best-effort: 句柄已关闭时重复关闭可忽略 */ } }
+    try { await impl.unlink(tmp) } catch (_) { /* best-effort: tmp 可能没建出来 */ }
     throw err
   }
 }

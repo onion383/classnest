@@ -168,7 +168,7 @@ async function loadEnabled() {
     const r = await axios.get('/api/mcp/enabled')
     if (!enabledSeq.isCurrent(my) || enabledWrite.current() !== writeAt) return
     mcpEnabled.value = !!r.data.enabled
-  } catch (_) { /* 读不到按关闭显示，不阻断面板 */ }
+  } catch (_) { /* best-effort: 读不到按关闭显示，不阻断面板 */ }
 }
 async function loadPrefs() {
   const my = prefsSeq.begin()
@@ -178,7 +178,7 @@ async function loadPrefs() {
     if (!prefsSeq.isCurrent(my) || prefsWrite.current() !== writeAt) return
     // 严格等于 true 才算开启：后端也用同一口径，脏值当关闭
     autoConfirm.value = r.data.auto_confirm === true
-  } catch (_) { /* 读不到按关闭显示 */ }
+  } catch (_) { /* best-effort: 读不到按关闭显示 */ }
 }
 
 // 开启要过一道确认（含删除）；关闭不要——关掉永远不会造成损失，多问一次只是烦。
@@ -226,7 +226,7 @@ async function loadTokens() {
     const r = await axios.get('/api/mcp/tokens')
     if (!tokensSeq.isCurrent(my)) return
     tokens.value = r.data.tokens || []
-  } catch (_) { /* 摘要读不到就保持「还没有令牌」，点进去会重拉 */ }
+  } catch (_) { /* best-effort: 摘要读不到就保持「还没有令牌」，点进去会重拉 */ }
 }
 async function loadProposals() {
   const my = proposalsSeq.begin()
@@ -234,9 +234,9 @@ async function loadProposals() {
     const r = await axios.get('/api/mcp/proposals', { params: { status: 'pending' } })
     if (!proposalsSeq.isCurrent(my)) return
     pendingCount.value = (r.data.proposals || []).length
-  } catch (_) { /* 保留上次条数，不闪成 0 */ }
+  } catch (_) { /* best-effort: 保留上次条数，不闪成 0 */ }
 }
-function reloadPrivacy() { loadPrivacy().catch(() => {}) }
+function reloadPrivacy() { loadPrivacy().catch(() => {}) } // best-effort: 保留上次条数，不闪成 0
 function reloadAll() {
   loadTokens()
   reloadPrivacy()
@@ -245,11 +245,11 @@ function reloadAll() {
 }
 
 onMounted(() => {
-  loadEnabled().catch(() => {})
-  loadPrefs().catch(() => {})
+  loadEnabled().catch(() => {}) // best-effort: 开关/偏好加载失败时保留默认值
+  loadPrefs().catch(() => {}) // best-effort: 开关/偏好加载失败时保留默认值
   reloadAll()
   // 提案条数留在面板上轮询：弹窗按需挂载，关着时没人拉数据。
   // （下一步计划交给标题栏通知中心统一喊，届时这里可以去掉。）
-  d.interval(() => { loadProposals().catch(() => {}) }, 8000)
+  d.interval(() => { loadProposals().catch(() => {}) }, 8000) // best-effort: 轮询拉取失败不影响面板，下次tick重试
 })
 </script>

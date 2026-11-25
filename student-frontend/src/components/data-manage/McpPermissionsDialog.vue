@@ -67,7 +67,7 @@ const switchHelp = [
 
 // 每次打开重拉：可能在 AI 助手那边改过，别拿旧配置糊弄。
 watch(() => props.visible, (v) => {
-  if (v) load().catch(() => {})
+  if (v) load().catch(() => {}) // best-effort: 配置重拉失败时保留现有列表
 }, { immediate: true })
 
 function close() { emit('close') }

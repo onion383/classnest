@@ -127,7 +127,7 @@ async function loadLaunchInfo() {
       if (!launchSeq.isCurrent(my)) return
       launchInfo.value = info
     }
-  } catch (_) { /* 取不到不影响弹窗其他功能 */ }
+  } catch (_) { /* best-effort: 取不到不影响弹窗其他功能 */ }
 }
 
 // 按令牌明文生成客户端配置（每个令牌行各自调，填的就是该行令牌）。
@@ -200,7 +200,7 @@ async function onCreated() {
     await loadTokens()
     changed()
     notify.success('令牌已生成，点该行的「复制配置」即可')
-  } catch (_) { /* 创建已成功，列表刷新失败交给下次打开时重拉 */ }
+  } catch (_) { /* best-effort: 创建已成功，列表刷新失败交给下次打开时重拉 */ }
 }
 // 复制某一行的配置：先取该令牌明文，再生成填好令牌的 mcpServers 配置
 async function copyConfig(id) {

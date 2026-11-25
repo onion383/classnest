@@ -14,7 +14,7 @@ function jwtLib() {
 // CPU 全花在模块加载上）。由 app.js 的 warmupStep 在 listen 之后、首屏请求之前调一次，
 // 把它挪出关键路径。预热失败不抛：真请求会照常懒加载。
 function warmupAuth() {
-  try { jwtLib(); } catch (_) { /* 预热失败走懒加载兜底 */ }
+  try { jwtLib(); } catch (_) { /* best-effort: 预热失败走懒加载兜底 */ }
 }
 const crypto = require('crypto');
 const fs = require('fs');
@@ -35,11 +35,11 @@ function resolveSecret() {
   try {
     const existing = fs.readFileSync(secretFile, 'utf8').trim();
     if (existing) return existing;
-  } catch (_) { /* 文件不存在则生成 */ }
+  } catch (_) { /* best-effort: 文件不存在则生成 */ }
   const generated = crypto.randomBytes(48).toString('hex');
   try {
     fs.writeFileSync(secretFile, generated, { encoding: 'utf8', mode: 0o600 });
-  } catch (_) { /* 写入失败则退回进程内随机值，重启后需重新登录 */ }
+  } catch (_) { /* best-effort: 写入失败则退回进程内随机值，重启后需重新登录 */ }
   return generated;
 }
 
@@ -127,7 +127,7 @@ function verifyToken(token, { allowMedia = false } = {}) {
   if (process.env.PERF_STARTUP === '1') {
     try {
       console.log(`[boot] verifyToken: require ${_t1 - _t0}ms / verify ${_t2 - _t1}ms / sessions ${Date.now() - _t2}ms`);
-    } catch (_) { /* 静默 */ }
+    } catch (_) { /* best-effort: 启动打点日志失败不影响鉴权 */ }
   }
   if (!alive) throw new Error('会话已失效');
   // 媒体凭据只能用于媒体路径，不能拿来调业务 API
@@ -235,7 +235,7 @@ function auth(requiredRoles = []) {
         if (process.env.PERF_STARTUP === '1') {
           try {
             console.log(`[boot] auth 分段 ${req.originalUrl}: resolveAuth ${_t1 - _t0}ms / verify ${_t2 - _t1}ms / withDb ${_t3 - _t2}ms`);
-          } catch (_) { /* 静默 */ }
+          } catch (_) { /* best-effort: 启动打点日志失败不影响鉴权 */ }
         }
         dbManager.holdConnUntilResponse(slug, res);
         return next();

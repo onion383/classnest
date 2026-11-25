@@ -21,7 +21,7 @@ const slugScopes = require('../utils/slugScopes');
 // 缩略图缓存目录：统一放 DATA_DIR/album-thumbs（与数据库同层，随 userData 持久化）。
 // 打包后 __dirname 位于只读 asar 内，不能把写入目录建立在 __dirname 下。
 const THUMB_DIR = dbManager.thumbsDir;
-try { fs.mkdirSync(THUMB_DIR, { recursive: true }); } catch (_) {}
+try { fs.mkdirSync(THUMB_DIR, { recursive: true }); } catch (_) {} // best-effort: 缩略图目录建不起来时后续写入会再报错，不阻断启动
 
 // 缩略图尺寸 / 质量 / 缓存版本
 // 尺寸 512 → 256（网格格子 4 列时约 207 CSS px，125% 缩放下 ≈ 260 物理px，256 够 1:1 显示；
@@ -331,7 +331,7 @@ router.post('/merge', (req, res) => {
 
     const { newId, thumbs, removed } = run();
     // 源索引已删除，其缩略图缓存不再被引用，顺手清理（失败无所谓）
-    for (const tp of thumbs) fsp.unlink(tp).catch(() => {});
+    for (const tp of thumbs) fsp.unlink(tp).catch(() => {}); // best-effort: 源索引已删，缩略图清理失败可忽略
     res.json({ id: newId, message: `已合并 ${sourceAlbums.length} 个相册`, removed });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -378,7 +378,7 @@ function createVirtualAlbum(name, photoIds, opts = {}) {
   // 路径按库隔离推导（{THUMB_DIR}/{slug}/{photoId}.jpg）
   for (const pid of movedThumbs) {
     albumThumbs.forgetPhoto(dbManager.currentSlug(), pid);
-    fsp.unlink(albumThumbs.thumbPathFor(dbManager.currentSlug(), pid)).catch(() => {});
+    fsp.unlink(albumThumbs.thumbPathFor(dbManager.currentSlug(), pid)).catch(() => {}); // best-effort: 移动后旧缩略图清理失败可忽略
   }
   return albumId;
 }
@@ -477,7 +477,7 @@ router.get('/:id/status', (req, res) => {
   try {
     const row = readScanTask(db, albumId);
     if (row) paused = row.state === 'paused';
-  } catch (_) {}
+  } catch (_) {} // best-effort: 读扫描任务状态失败时按未完成处理
   res.json({
     scanning: !task.cancelled,
     paused,
@@ -572,7 +572,7 @@ router.post('/tasks/resume', (req, res) => {
       // 相册已不存在（被删了）→ 清掉断点，不再续
       const album = albumStore.albumKind(albumId);
       if (!album) {
-        try { persistScanClear(db, albumId); } catch (_) {}
+        try { persistScanClear(db, albumId); } catch (_) {} // best-effort: 相册已不存在，清断点失败可忽略
         continue;
       }
       // 派活给子进程，带上断点（done_path）让它从上次的位置接着扫。
@@ -584,11 +584,11 @@ router.post('/tasks/resume', (req, res) => {
         : 'incremental';
       if (album.kind === 'virtual') {
         // 库里记的是 virtual 但相册已不是虚拟的（换了类型）→ 丢弃断点，不续
-        if (mode !== 'virtual') { try { persistScanClear(db, albumId); } catch (_) {} continue; }
+        if (mode !== 'virtual') { try { persistScanClear(db, albumId); } catch (_) {} continue; } // best-effort: 类型切换丢弃断点，清失败可忽略
         dispatchVirtual(albumId, done);
       } else if (mode === 'virtual') {
         // 反过来：文件夹相册不该拿到 virtual 任务
-        try { persistScanClear(db, albumId); } catch (_) {}
+        try { persistScanClear(db, albumId); } catch (_) {} // best-effort: 文件夹相册不续 virtual 任务，清断点失败可忽略
         continue;
       } else if (mode === 'full') dispatchFull(albumId, done);
       else dispatchIncremental(albumId, done);
@@ -627,7 +627,7 @@ router.delete('/:id', async (req, res) => {
     await Promise.all(thumbs.map(r => {
       albumThumbs.forgetPhoto(slug, r.id);
       const p = albumThumbs.thumbPathFor(slug, r.id);
-      return Promise.all([fsp.unlink(p).catch(() => {}), r.thumb_path ? fsp.unlink(r.thumb_path).catch(() => {}) : null]);
+      return Promise.all([fsp.unlink(p).catch(() => {}), r.thumb_path ? fsp.unlink(r.thumb_path).catch(() => {}) : null]); // best-effort: 删索引后缩略图清理失败可忽略
     }));
     // 两条 DELETE 必须原子：各自提交时中途失败会留下「照片索引已删、相册还在」
     // 的半截状态 —— 界面上还看得到这个相册，点进去照片却全没了，且再删一次
@@ -844,7 +844,7 @@ router.post('/photos/move', (req, res) => {
     // 路径按库隔离推导（{THUMB_DIR}/{slug}/{photoId}.jpg）
     for (const pid of movedThumbs) {
       albumThumbs.forgetPhoto(dbManager.currentSlug(), pid);
-      fsp.unlink(albumThumbs.thumbPathFor(dbManager.currentSlug(), pid)).catch(() => {});
+      fsp.unlink(albumThumbs.thumbPathFor(dbManager.currentSlug(), pid)).catch(() => {}); // best-effort: 移动后旧缩略图清理失败可忽略
     }
 
     const extra = skipped ? `，${skipped} 张已存在或无需移动` : '';
@@ -1087,7 +1087,7 @@ router.get('/photo/:photoId/info', async (req, res) => {
     if (!photo) return res.status(404).json({ error: '照片不存在' });
 
     let stat = null;
-    try { stat = await fsp.stat(photo.file_path); } catch (_) { /* 源文件不在了，用库里的兜底 */ }
+    try { stat = await fsp.stat(photo.file_path); } catch (_) { /* best-effort: 源文件不在了，用库里的兜底 */ }
 
     const detail = stat ? await readExifDetail(photo.file_path) : {};
     res.json({
@@ -1256,7 +1256,7 @@ router.post('/photo/thumbs', async (req, res) => {
     // ERR_HTTP_HEADERS_SENT，把「一张图生成失败」升级成「整个请求崩掉」。
     // 前端读到 EOF 会把没拿到的格子回落单张 /thumb，由单张那条路自己处理失败。
     if (streaming) {
-      try { res.end(); } catch (_) { /* socket 已断，忽略 */ }
+      try { res.end(); } catch (_) { /* best-effort: socket 已断，忽略 */ }
       return;
     }
     res.status(500).json({ error: err.message });
@@ -1340,7 +1340,7 @@ router.delete('/photo/:photoId', async (req, res) => {
       return res.status(500).json({ error: '移入回收站失败：' + err.message });
     }
     // 清理已生成的缩略图缓存（按库隔离路径）
-    await deleteThumb(photo, dbManager.currentSlug()).catch(() => {});
+    await deleteThumb(photo, dbManager.currentSlug()).catch(() => {}); // best-effort: 移入回收站后缩略图缓存清理失败不影响索引回退
     // 文件系统与数据库双写：文件已移入回收站，若删索引失败必须把文件搬回，
     // 否则索引仍指向源文件、但文件已在回收站 —— 两边状态永久不一致。
     try {

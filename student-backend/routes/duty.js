@@ -87,7 +87,7 @@ function readDuty(modeRaw) {
       try {
         const gItems = unpackMode(g.items, mode, []);
         if (Array.isArray(gItems) && gItems.length > 0) settings.items = gItems;
-      } catch (_) { /* 解析失败则忽略 */ }
+      } catch (_) { /* best-effort: 解析失败则忽略 */ }
     }
   }
   return { cells, settings };

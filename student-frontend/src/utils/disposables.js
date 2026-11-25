@@ -140,7 +140,7 @@ export function createDisposables() {
   /** AbortController：登记后随作用域一起 abort。 */
   function abort(controller) {
     if (!controller || typeof controller.abort !== 'function') return () => {}
-    return add(() => { try { controller.abort() } catch (e) { /* 已结束 */ } })
+    return add(() => { try { controller.abort() } catch (e) { /* best-effort: 已结束 */ } })
   }
 
   /** 释放全部已登记资源。可重复调用（第二次是空操作）。 */

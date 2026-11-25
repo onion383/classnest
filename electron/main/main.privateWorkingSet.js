@@ -87,13 +87,13 @@ function query() {
   } catch (_) {
     return null
   } finally {
-    try { a.closeQuery(hQuery[0]) } catch (_) { /* 忽略 */ }
+    try { a.closeQuery(hQuery[0]) } catch (_) { /* best-effort: 查询句柄已释放时重复关闭可忽略 */ }
   }
 }
 
 parentPort.on('message', (id) => {
   let entries = null
-  try { entries = query() } catch (_) { /* 失败即回传 null，由调用方回退口径 */ }
+  try { entries = query() } catch (_) { /* best-effort: 失败即回传 null，由调用方回退口径 */ }
   parentPort.postMessage({ id, entries })
 })
 `

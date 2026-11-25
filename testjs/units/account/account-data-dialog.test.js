@@ -12,7 +12,8 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const SRC = abs('student-frontend/src')
-const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8')
+// Windows（含 CI）checkout 成 CRLF；下面的 \n 锚点先把换行归一成 LF 再匹配。
+const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8').replace(/\r\n/g, '\n')
 
 test('① 点「管理 AI 记录」只 emit view，不关掉账号数据管理弹窗', () => {
   const src = read('components/dialogs/AccountDataDialog.vue')

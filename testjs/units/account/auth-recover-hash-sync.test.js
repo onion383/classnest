@@ -35,6 +35,9 @@ assert.strictEqual(dbManager.dataDir, DATA_DIR, '隔离目录没生效，测试�
 
 function cleanSrc() {
   return fs.readFileSync(AUTH, 'utf8')
+    // 统一成 LF：Windows 上 git 的 core.autocrlf=true 会 checkout 成 CRLF，
+    // 下面的变异正则用 \n 锚点，不归一化的话在 CI（windows-latest）上匹配不到。
+    .replace(/\r\n/g, '\n')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^[ \t]*\/\/.*$/gm, '')
 }

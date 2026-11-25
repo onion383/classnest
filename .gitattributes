@@ -1,0 +1,7 @@
+# 换行符唯一口径：仓库里存 LF，checkout 到工作区也一律 LF。
+# 优先级高于各平台的 core.autocrlf（Windows CI 默认是 true），
+# 否则同一份代码在 Windows runner 上变成 CRLF，写死 \n 的测试/生成器判据会假红。
+* text=auto eol=lf
+
+# Windows 脚本保留 CRLF：PowerShell 在这类文件上按 Windows 约定处理。
+*.ps1 text eol=crlf

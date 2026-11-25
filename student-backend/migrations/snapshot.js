@@ -76,7 +76,8 @@ const EXPECTED = {
       "mcp_privacy_json": "TEXT DEFAULT '{}'",
       "mcp_enabled": "INTEGER DEFAULT 0",
       "mcp_prefs_json": "TEXT DEFAULT '{}'",
-      "log_json": "TEXT DEFAULT '{}'"
+      "log_json": "TEXT DEFAULT '{}'",
+      "retention_json": "TEXT DEFAULT '{}'"
     },
     "album_photos": {
       "id": "INTEGER",

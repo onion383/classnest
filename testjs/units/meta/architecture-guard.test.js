@@ -19,13 +19,16 @@ const path = require('path');
 const registry = require('../../../student-backend/schema/tableRegistry');
 
 function read(rel) {
-  return fs.readFileSync(abs(rel), 'utf8');
+  // Windows（含 CI）git 会把源码 checkout 成 CRLF；下面的逐行注释剥离用 \n 分行，
+  // 不归一化会让行尾残留 \r → 注释剥不掉 → channels.js 注释里的示例被误判成真实调用。
+  return fs.readFileSync(abs(rel), 'utf8').replace(/\r\n/g, '\n');
 }
 
 // 去掉行注释：注释里举例写 `['students', ...]` 不该被判成违规代码。
 // 不处理块注释 —— 本项目业务代码里没有跨行块注释，加上反而容易误伤。
 function stripLineComments(src) {
   return src
+    .replace(/\r\n/g, '\n')
     .split('\n')
     .map((l) => l.replace(/\/\/.*$/, ''))
     .join('\n');

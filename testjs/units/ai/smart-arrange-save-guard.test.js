@@ -82,7 +82,9 @@ test('行为：saveSeats 返回 false 时不登记撤销、不弹成功（真执
 
 test('变异反证：真源码删掉失败分支后，错误路径会登记撤销并提示成功', async () => {
   const { calls, invoke } = runApply((s) => {
-    const out = s.replace('    if (!ok) return\n', '')
+    // 用 \r?\n 兼容 CRLF：Windows（含 CI）git 会把源码 checkout 成 CRLF，
+    // 写死 '\n' 会让变异在 CI 上匹配不到、反证假红。
+    const out = s.replace(/    if \(!ok\) return\r?\n/, '')
     if (out === s) throw new Error('变异没匹配到失败分支')
     return out
   })

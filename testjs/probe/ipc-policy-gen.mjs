@@ -155,7 +155,9 @@ const text = JSON.stringify(out, null, 2) + '\n'
 if (CHECK_ONLY) {
   let cur = ''
   try { cur = fs.readFileSync(target, 'utf8') } catch (_) { /* 缺文件按漂移处理 */ }
-  if (cur !== text) {
+  // Windows CI checkout 会按 core.autocrlf 把生成物的 LF 转成 CRLF；
+  // 对账的是「内容同源」而非工作区字节，比较前统一成 LF。
+  if (cur.replace(/\r\n/g, '\n') !== text) {
     console.error('electron/ipc-policy.json 与生成器不一致，请运行 node testjs/probe/ipc-policy-gen.mjs 重新生成')
     process.exit(1)
   }

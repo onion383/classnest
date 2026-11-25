@@ -104,7 +104,9 @@ if (isCli) {
   const text = renderChannels(readChannelsJson())
   if (check) {
     const current = fs.existsSync(OUT_PATH) ? fs.readFileSync(OUT_PATH, 'utf8') : ''
-    if (current !== text) {
+    // Windows CI checkout 会按 core.autocrlf 把生成物的 LF 转成 CRLF；
+    // 对账的是「内容同源」而非工作区字节，比较前统一成 LF。
+    if (current.replace(/\r\n/g, '\n') !== text) {
       console.error('channels.js 与 ipc-channels.json 不同源，请运行 npm run channels:gen')
       process.exit(1)
     }

@@ -103,7 +103,8 @@ test('变异反证：把 entry 回调的兜底 catch 改成重新抛出后，同
     const fs = require('node:fs');
     const path = require('node:path');
     const abs = ${JSON.stringify(abs('student-backend/services/backupArchive.js'))};
-    const src = fs.readFileSync(abs, 'utf8');
+    // Windows（含 CI）checkout 成 CRLF，marker 写死 LF；先归一化再定位变异点。
+    const src = fs.readFileSync(abs, 'utf8').replace(/\\r\\n/g, '\\n');
     const marker = '        } catch (err) {\\n          fail(err)\\n        }';
     if (!src.includes(marker)) { console.error('MARKER_NOT_FOUND'); process.exit(7); }
     const mutated = src.replace(marker, '        } catch (err) {\\n          throw err\\n        }');

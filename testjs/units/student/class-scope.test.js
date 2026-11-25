@@ -23,7 +23,8 @@ const assert = require('node:assert/strict')
 // 只剥整行注释：注释里大量出现 reload / requestAnimationFrame 等字样，
 // 用块注释正则会连注释一起删，让「删掉正常代码」的变异假绿。
 function codeOnly(src) {
-  return src.split('\n').filter((l) => {
+  // Windows（含 CI）checkout 成 CRLF；下面 \s switch-only\n 这类 LF 锚点靠归一化兜底。
+  return src.replace(/\r\n/g, '\n').split('\n').filter((l) => {
     const t = l.trim()
     return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'))
   }).join('\n')

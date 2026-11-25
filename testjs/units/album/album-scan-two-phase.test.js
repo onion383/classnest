@@ -77,7 +77,9 @@ test('进度从子进程一路带到前端（两阶段各自 0→100%，不报�
     '主进程收到 progress 必须保存 phase')
   const route = read(ROUTE)
   assert.match(route, /phase: task\.phase \|\| 'process',/, '/status 必须返回 phase')
-  assert.match(route, /phase: task\.phase \|\| 'process',\n\s*startedAt/, '/tasks 必须返回 phase')
+  // 用 \r?\n 兼容 CRLF：Windows 上 git 的 core.autocrlf=true 会把源码转成 CRLF，
+  // 写死 \n 会让这条判据在 CI（windows-latest）上假红，本地 LF 工作区却是绿的。
+  assert.match(route, /phase: task\.phase \|\| 'process',\r?\n\s*startedAt/, '/tasks 必须返回 phase')
 })
 
 test('前端把阶段名显示出来（否则进度条 100%→0% 看着像任务重跑）', () => {

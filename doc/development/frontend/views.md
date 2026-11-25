@@ -147,7 +147,7 @@ classnest/
 ### AlbumView
 - 双视图：时间轴（按日期分组的虚拟滚动网格，[`usePhotoTimeline`](../../../student-frontend/src/composables/usePhotoTimeline.js) + [`useThumbBatch`](../../../student-frontend/src/composables/useThumbBatch.js)）与相册卡片。
 - 时间轴长按 400ms 进多选，工具栏「移动到相册（N）」开 `MoveAlbumDialog`；年份尺 `AlbumYearRuler`；导出索引 `ExportAlbumIndex`。
-- 注意：8 列/4 列判定与 FLIP 动画规则见 [优化计划.md](../../开发文档/优化计划.md)（不入库）。
+- 注意：8 列/4 列判定与 FLIP 动画规则见本地文档《优化计划.md》（不入库）。
 
 ### GroupManageView
 - 维度 Tab + 小组/成员 CRUD；智能分组 `SmartGroupDialog`；写回走 `POST /dimensions/:dimId/apply-grouping`，撤销走 `/api/undo`。
@@ -174,7 +174,7 @@ classnest/
 - **表头先行**：页面挂载即渲染表头（`DynamicTable` 的 `fields` / `GridView` 的 `colHeaders` 有前端默认值），行数据就绪后填入。
 - **高度与滚动**：都有 `minTableHeight`（空表不塌陷）与 `maxHeight`（默认 400 / 560px），超出后容器内滚动 + 表头吸顶；弹窗调用方传 `maxHeight=0` 关闭。
 - **空态**：仅列表型表格用 `EmptySnapshot`；网格页与加载中不显示空态。
-- **不做虚拟滚动**：`GridView` 的 rowspan 与拖拽依赖完整 DOM（结论见 [优化计划.md](../../开发文档/优化计划.md) D1.1）。
+- **不做虚拟滚动**：`GridView` 的 rowspan 与拖拽依赖完整 DOM（结论见本地文档《优化计划.md》D1.1，不入库）。
 
 ### 页面 ↔ 后端路由
 

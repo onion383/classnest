@@ -7,7 +7,7 @@ const _bootT0 = Date.now();
 // 2-21：PERF_STARTUP=1 时额外带上绝对 epoch，供主进程把「fork 发起 / 子进程 spawn」与这里的
 // 「入口 / 监听成功」按同一时钟相减，拆开「进程创建」和「Node 引导 + bundle 加载」两段空档。
 const _bootEpoch = () => (process.env.PERF_STARTUP === '1' ? ` @${Date.now()}` : '');
-const _boot = (name) => { try { console.log(`[boot] +${Date.now() - _bootT0}ms ${name}${_bootEpoch()}`); } catch (_) { /* 日志失败不影响启动 */ } };
+const _boot = (name) => { try { console.log(`[boot] +${Date.now() - _bootT0}ms ${name}${_bootEpoch()}`); } catch (_) { /* best-effort: 日志失败不影响启动 */ } };
 _boot('后端进程入口');
 
 // 2-17 归因：PERF_STARTUP=1 时记录 ≥10ms 的 GC 停顿，判断后端启动期事件循环
@@ -18,12 +18,12 @@ if (process.env.PERF_STARTUP === '1') {
     const obs = new PerformanceObserver((list) => {
       for (const e of list.getEntries()) {
         if (e.duration >= 10) {
-          try { console.log(`[boot] GC kind=${e.kind} ${e.duration.toFixed(1)}ms @${Date.now()}`); } catch (_) { /* 静默 */ }
+          try { console.log(`[boot] GC kind=${e.kind} ${e.duration.toFixed(1)}ms @${Date.now()}`); } catch (_) { /* best-effort: GC 打点失败不影响启动 */ }
         }
       }
     });
     obs.observe({ entryTypes: ['gc'] });
-  } catch (_) { /* 观察器不可用不影响启动 */ }
+  } catch (_) { /* best-effort: 观察器不可用不影响启动 */ }
 }
 
 const express = require('express');
@@ -41,8 +41,9 @@ const { createDynamicTableRouter } = require('./routes/dynamicTable');
 const { db } = require('./db');
 const dbManager = require('./dbManager/dbManager');
 const secureChannel = require('./services/secureChannel');
-const { deleteRow } = require('./services/tableService');
-const { studentRelations, purgeStudentRelations } = require('./services/studentRelations');
+const { deleteStudentCascade } = require('./services/studentCascadeDelete');
+const { errorResponse } = require('./services/errorResponse');
+const { studentRelations } = require('./services/studentRelations');
 const { resolveNames } = require('./services/provisionalStudents');
 const { autoSemester } = require('./utils/semester');
 
@@ -67,9 +68,9 @@ if (process.env.PERF_STARTUP === '1') {
         // 预检（OPTIONS）与真实 GET 是两段：记录各自完成时刻，才能分清「预检响应被事件循环拖住」
         // 与「真实请求到达后排队」。只在显式开关下输出，默认零日志。
         res.on('finish', () => {
-          try { console.log(`[boot] dashboard 完成 ${req.method} ${Date.now()}`); } catch (_) { /* 静默 */ }
+          try { console.log(`[boot] dashboard 完成 ${req.method} ${Date.now()}`); } catch (_) { /* best-effort: 打点失败不影响请求处理 */ }
         });
-      } catch (_) { /* 打点失败静默 */ }
+      } catch (_) { /* best-effort: 外层打点失败不影响中间件链 */ }
     }
     next();
   });
@@ -104,7 +105,8 @@ app.use((req, res, next) => {
   if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return next();
   return res.status(403).json({ error: '非法访问' });
 });
-// 备份包内含整库 base64 数据，体积可能达数十 MB，需放大请求体上限以避免 413。
+// JSON 请求体上限：实际吃这个上限的是 /api/data/zip 的 base64 表格条目（收据原件走磁盘路径流式读，不占 body）；
+// 备份包恢复走 multipart + multer（4GB 上限，见 routes/account.js backupUploadMw），与本上限无关。
 // 但 /mcp 必须跳过：它的鉴权是路由中间件（mcp.server.authMcp），若全局解析器先跑，
 // 请求体（最大 200MB）会先被完整读进内存、解析失败还会回 400，未授权的本机进程即可借此打爆进程。
 // 所以 /mcp 交给路由自己「先鉴权、再用 1mb 上限解析」（见 mcp.server）。
@@ -132,7 +134,7 @@ if (secureChannel.hasMaster()) {
       const result = secureChannel.performHandshake(pub);
       if (process.env.PERF_STARTUP === '1') {
         const dt = Date.now() - _hsT0;
-        try { console.log(`[boot] 握手处理 ${dt}ms @${Date.now()}`); } catch (_) { /* 静默 */ }
+        try { console.log(`[boot] 握手处理 ${dt}ms @${Date.now()}`); } catch (_) { /* best-effort: 握手打点失败不影响响应 */ }
       }
       res.json(result);
     } catch (err) {
@@ -248,31 +250,19 @@ app.use('/api/students', auth(['teacher']), createDynamicTableRouter('students',
 
     });
 
-    // 一并删除学生 + 勾选的关联记录（body.relations：{ leave/score/seat/duty/group/cadre }）。
-    // 返回被删的请假/加分整行，便于前端登记撤销。
+    // 一并删除学生 + 全部关联（六类：请假/加分/座位/值日/小组/班干部）。
+    // 一律全删：不接 body.relations 的部分勾选 —— CASCADE 会绕过勾选多删，
+    // 而撤销快照只记应用层删的，勾选「保留」的行会静默丢失且撤不回来。
+    // 返回被删的整行快照与同事务登记的 undoId。
     router.post('/:id/delete-with-relations', (req, res) => {
       try {
         const id = Number(req.params.id);
-        const student = db.prepare('SELECT * FROM students WHERE id = ?').get(id);
-        if (!student) return res.status(404).json({ error: '学生不存在' });
-        const rel = (req.body && req.body.relations) || {};
-        let removed = null;
-        db.transaction(() => {
-          // 把学生整行也放进 removed：撤销要重建这个学生，不能只靠前端传回的前端行
-          // （前端行可能是列表里的投影，缺列）。七处清理结果合成一条可撤销快照。
-          removed = {
-            student,
-            ...purgeStudentRelations(student, {
-              leave: !!rel.leave, score: !!rel.score, seat: !!rel.seat, duty: !!rel.duty,
-              group: !!rel.group, cadre: !!rel.cadre,
-            }),
-          };
-          // 关联已按用户勾选 purge 完，显式放行「删学生」的关联守卫：
-          // 用户可能故意保留某些关联（撤销要能整条还原），这是他的选择，不是漏清。
-          deleteRow('students', id, { allowStudentOrphans: true });
-        })();
-        res.json({ message: '已删除学生及其关联记录', removed });
+        // 七处清理 + 删学生 + 撤销登记同事务（Q2-01）：登记失败连数据一起回滚，
+        // 不再靠前端第二次 POST /api/undo 补登记（那道窗口崩溃后无栈可撤）。
+        const { removed, undoId } = deleteStudentCascade(id);
+        res.json({ message: '已删除学生及其关联记录', removed, undoId });
       } catch (err) {
+        if (err.code === 'NOT_FOUND') return res.status(404).json({ error: '学生不存在' });
         res.status(400).json({ error: err.message });
       }
     });
@@ -342,7 +332,7 @@ function startServer(port, attempt = 0) {
       try {
         const n = require('./services/tmpSweep').sweepTempOrphans({ dataDir: dbManager.dataDir });
         if (n) console.log(`[tmp] 已清理 ${n} 个过期临时条目`);
-      } catch (_) { /* 清理失败不影响启动 */ }
+      } catch (_) { /* best-effort: 临时文件清理失败不影响启动 */ }
     });
 
     // 2-17 归因：区分「TCP 连接到达」与「请求进入 Express」。
@@ -352,13 +342,13 @@ function startServer(port, attempt = 0) {
       const loop = monitorEventLoopDelay({ resolution: 10 });
       loop.enable();
       server.on('connection', () => {
-        try { console.log(`[boot] 连接到达 ${Date.now()}`); } catch (_) { /* 静默 */ }
+        try { console.log(`[boot] 连接到达 ${Date.now()}`); } catch (_) { /* best-effort: 连接打点失败不影响连接 */ }
       });
       setTimeout(() => {
         try {
           console.log(`[boot] 后端事件循环 p50=${(loop.percentile(50) / 1e6).toFixed(1)}ms p95=${(loop.percentile(95) / 1e6).toFixed(1)}ms max=${(loop.max / 1e6).toFixed(1)}ms`);
           loop.disable();
-        } catch (_) { /* 静默 */ }
+        } catch (_) { /* best-effort: 事件循环采样失败不影响运行 */ }
       }, 1500);
       // 阻塞窗口定位：5ms 心跳，凡是「本该 5ms 却隔了 ≥20ms」就说明事件循环被同步工作占住。
       // 与链步骤打点对照，可以判断 110ms 空档是落在某个 require 步骤内，还是在两次步骤之间。
@@ -375,7 +365,7 @@ function startServer(port, attempt = 0) {
           // 接近 dt = 一直在跑（耗时在未被计时的原生/驱动层，如 DLL 加载、文件扫描）。
           try {
             console.log(`[boot] 循环停顿 ${dt}ms cpu=${((cpu.user + cpu.system) / 1000).toFixed(1)}ms 结束于 ${now}`);
-          } catch (_) { /* 静默 */ }
+          } catch (_) { /* best-effort: 停顿打点失败不影响心跳 */ }
         }
       }, 5);
       setTimeout(() => clearInterval(_hb), 3000);
@@ -383,7 +373,7 @@ function startServer(port, attempt = 0) {
 
     // 就绪上报：通过 fork 的 IPC 通道告知主进程「端口已监听」，由主进程转发给各渲染窗口。
     // 前端据此在就绪瞬间发起首个请求，不再靠固定退避重试去「撞」端口。
-    try { if (process.send) process.send({ type: 'backend-ready', port }) } catch (_) { /* 非 fork 场景忽略 */ }
+    try { if (process.send) process.send({ type: 'backend-ready', port }) } catch (_) { /* best-effort: 非 fork 场景无 IPC 通道，忽略 */ }
 
     // 就绪信号后立即后台暖机：把「require sqlite 原生模块 + 打开 index/default 库并 initSchema」
     // 的一次性冷启动成本放到首个用户请求到达前悄悄完成，避免登录/首屏请求干等 cold start 而转圈。
@@ -400,13 +390,13 @@ function startServer(port, attempt = 0) {
       // 却直接决定第一个请求能不能立刻返回，也就是首屏数据什么时候到，因此单独计时。
       const _warmT0 = Date.now();
       if (!installWarmup) {
-        try { dbManager.warmup(); } catch (_) { /* 暖机失败不影响正常懒加载路径 */ }
+        try { dbManager.warmup(); } catch (_) { /* best-effort: 暖机失败不影响正常懒加载路径 */ }
       }
       // 鉴权模块预热：jsonwebtoken 首次 require 实测 79ms，原先落在首个请求的
       // verifyToken 里 —— 那次同步加载会把同时到达的首屏请求一起挡住（87~133ms 停顿）。
       // 放在这里：listen 已就绪（就绪信号不受影响）、首屏请求还没到，正好错开。
-      try { warmupAuth(); } catch (_) { /* 暖机失败走懒加载兜底 */ }
-      try { console.log(`[boot] +${Date.now() - _bootT0}ms 数据库 warmup 完成（本段 ${Date.now() - _warmT0}ms）`); } catch (_) { /* 忽略 */ }
+      try { warmupAuth(); } catch (_) { /* best-effort: 鉴权预热失败走懒加载兜底 */ }
+      try { console.log(`[boot] +${Date.now() - _bootT0}ms 数据库 warmup 完成（本段 ${Date.now() - _warmT0}ms）`); } catch (_) { /* best-effort: 打点失败不影响启动 */ }
       // 首屏第一笔同步开销提前（2026-11-14 打包版归因）：第一个请求进 auth 的 withDb 时
       // 才第一次开账号库，「KDF + openFile」实测 41~58ms；better-sqlite3 是同步的，这一笔
       // 会把同时到达的另外 4 个首屏请求一起挡在「连接到达」之后（dashboard 因此白等约 50ms）。
@@ -415,9 +405,9 @@ function startServer(port, attempt = 0) {
       // 与上面分开计时：上面那条日志的「本段」口径（含 sqlite 模块加载 + index 库 + 鉴权）保持不变。
       const _wuT0 = Date.now();
       if (!installWarmup) {
-        try { dbManager.warmupMostRecent(); } catch (_) { /* 预热失败静默，首屏请求照旧自己冷开 */ }
+        try { dbManager.warmupMostRecent(); } catch (_) { /* best-effort: 账号库预热失败，首屏请求照旧冷开 */ }
       }
-      try { console.log(`[boot] +${Date.now() - _bootT0}ms 账号库预热完成（本段 ${Date.now() - _wuT0}ms）`); } catch (_) { /* 忽略 */ }
+      try { console.log(`[boot] +${Date.now() - _bootT0}ms 账号库预热完成（本段 ${Date.now() - _wuT0}ms）`); } catch (_) { /* best-effort: 打点失败不影响启动 */ }
     };
 
     // 非关键路由懒加载：服务器就绪后再逐个注册，不阻塞就绪信号。
@@ -524,7 +514,7 @@ function startServer(port, attempt = 0) {
                 });
               }
               if (errors.length > 0) {
-                req.files.forEach(f => { try { fs.unlinkSync(f.path); } catch (_) { /* 已被清理 */ } });
+                req.files.forEach(f => { try { fs.unlinkSync(f.path); } catch (_) { /* best-effort: 上传校验失败后清理临时文件，已被清理则忽略 */ } });
                 return res.status(400).json({ error: errors.join('；') });
               }
               res.json({ files });
@@ -579,23 +569,8 @@ function startServer(port, attempt = 0) {
     const errorHandlerStep = (force) => {
       if (errorHandlerInstalled && !force) return;
       errorHandlerInstalled = true;
-      app.use((err, req, res, next) => {
-        // 响应头已发出（如流式下载写到一半）：交回 Express 默认处理，
-        // 此时已无法改状态码，硬写会抛 ERR_HTTP_HEADERS_SENT 掩盖原始错误。
-        if (res.headersSent) return next(err);
-        const status = Number((err && (err.status || err.statusCode)) || 0) || 500;
-        // 全量现场只进本地日志：这是用户自己机器上的单用户工具，控制台是唯一的诊断入口。
-        console.error('[express-error]', req.method, req.originalUrl, '->', status, err);
-        // 响应体形状必须保持 { error: string }：前端大量代码读 err.response.data.error。
-        // 错误分层（N3-09）：4xx 是业务可读错误，message 原样返回（「班级库不存在」这类）；
-        // 5xx 一律通用文案，SQL 语句 / 文件路径 / 模块名只进上面的本地日志。
-        // 需要把 5xx 的原始原因给前端时，显式给 err.expose = true。
-        const isClientError = status >= 400 && status < 500;
-        const message = isClientError || (err && err.expose === true)
-          ? ((err && err.message) || '请求无效')
-          : '服务器内部错误，请查看日志后重试';
-        res.status(status).json({ error: message });
-      });
+      // 错误处理抽到 services/errorResponse.js（N1-31：判据真跑函数，不读内联源码正则）。
+      app.use(errorResponse);
     };
 
     // 队列完成打点：排在链的最后一环，执行时「懒加载路由已全部注册、兜底已装好」。
@@ -603,7 +578,7 @@ function startServer(port, attempt = 0) {
     // 旧口径下它≈首个请求最早能被完整处理的时刻；现在请求可以提前插队，
     // 这个数字只表示「后台 require 链自己跑完要多久」，不再是请求的等待上限。
     const finishStep = () => {
-      try { console.log(`[boot] +${Date.now() - _bootT0}ms 懒加载路由全部注册完成（队列 ${Date.now() - _deferT0 - _delayAcc}ms）`); } catch (_) { /* 忽略 */ }
+      try { console.log(`[boot] +${Date.now() - _bootT0}ms 懒加载路由全部注册完成（队列 ${Date.now() - _deferT0 - _delayAcc}ms）`); } catch (_) { /* best-effort: 打点失败不影响路由注册完成 */ }
     };
 
     // ===== 让路链启动 =====
@@ -656,20 +631,20 @@ function startServer(port, attempt = 0) {
         if (delayMs <= 0) return runStep();
         _delayAcc += delayMs;
         if (process.env.PERF_STARTUP === '1') {
-          try { console.log(`[boot] 让路链延后 ${delayMs}ms（首屏优先，之后注册 data / fee-records）`); } catch (_) { /* 静默 */ }
+          try { console.log(`[boot] 让路链延后 ${delayMs}ms（首屏优先，之后注册 data / fee-records）`); } catch (_) { /* best-effort: 让路链打点失败不影响注册 */ }
         }
         setTimeout(runStep, delayMs);
         return;
       }
       const _stepT0 = Date.now();
       if (process.env.PERF_STARTUP === '1') {
-        try { console.log(`[boot] 链步骤 ${stepIdx - 1} 开始 @${_stepT0}`); } catch (_) { /* 静默 */ }
+        try { console.log(`[boot] 链步骤 ${stepIdx - 1} 开始 @${_stepT0}`); } catch (_) { /* best-effort: 让路链打点失败不影响注册 */ }
       }
       try { step(); } catch (err) { console.error('[defer] 让路链某步失败:', err); }
       if (process.env.PERF_STARTUP === '1') {
         const dt = Date.now() - _stepT0;
         if (dt >= 10) {
-          try { console.log(`[boot] 链步骤 ${stepIdx - 1} ${dt}ms @${Date.now()}`); } catch (_) { /* 静默 */ }
+          try { console.log(`[boot] 链步骤 ${stepIdx - 1} ${dt}ms @${Date.now()}`); } catch (_) { /* best-effort: 链步骤打点失败不影响注册 */ }
         }
       }
       if (stepIdx < steps.length) setImmediate(runStep);
@@ -688,7 +663,7 @@ function startServer(port, attempt = 0) {
     if (err.code === 'EADDRINUSE' && attempt < MAX_PORT_TRIES) {
       // 关掉这次失败的 server 再顺延：不 close 会残留一个带 error 监听器的实例。
       console.log(`端口 ${port} 被占用，顺延到 ${port + 1} 重试（${attempt + 1}/${MAX_PORT_TRIES}）`);
-      try { server.close(); } catch (_) { /* 未进入 listening，close 可能抛 ERR_SERVER_NOT_RUNNING */ }
+      try { server.close(); } catch (_) { /* best-effort: 未进入 listening 时 close 会抛 ERR_SERVER_NOT_RUNNING，忽略 */ }
       startServer(port + 1, attempt + 1);
       return;
     }
@@ -708,7 +683,7 @@ function installExitHooks() {
   // exit 事件是同步的，挂在那里的 shutdown 只是把 IPC 排进管道，进程退出后不保证送达（K01-01）。
   process.on('SIGTERM', () => {
     const finish = () => {
-      try { require('./scanWorker').shutdown(); } catch (_) { /* 模块未加载过就算了 */ }
+      try { require('./scanWorker').shutdown(); } catch (_) { /* best-effort: scanWorker 模块未加载过就无需 shutdown */ }
       process.exit(0);
     };
     if (!currentServer) return finish();
@@ -720,7 +695,7 @@ function installExitHooks() {
   //（Windows 上更是彻底没人管），变成一个孤儿进程继续扫库写库 —— 磁盘 IO 与 CPU 全被它占着，
   // 而前端已经显示「后端已关闭」。所以退出前发一条 shutdown 让它自己收工退出。
   process.on('exit', () => {
-    try { require('./scanWorker').shutdown(); } catch (_) { /* 模块未加载过就算了 */ }
+    try { require('./scanWorker').shutdown(); } catch (_) { /* best-effort: scanWorker 模块未加载过就无需 shutdown */ }
   });
 }
 
@@ -731,7 +706,7 @@ process.on('message', (msg) => {
   if (!msg) return;
   // 性能面板：内存自报（process.memoryUsage()，单位字节，由主进程换算）
   if (msg.type === 'mem-query') {
-    try { if (process.send) process.send({ type: 'mem-report', mem: process.memoryUsage() }) } catch (_) { /* 通道断开忽略 */ }
+    try { if (process.send) process.send({ type: 'mem-report', mem: process.memoryUsage() }) } catch (_) { /* best-effort: IPC 通道已断开时无法上报，忽略 */ }
     return;
   }
   // 性能面板：手动 GC（需以 --expose-gc 启动才有 global.gc）
@@ -740,11 +715,11 @@ process.on('message', (msg) => {
     try {
       if (typeof global.gc === 'function') { global.gc(); ok = true; }
     } catch (_) { ok = false; }
-    try { if (process.send) process.send({ type: 'gc-report', ok }) } catch (_) { /* 通道断开忽略 */ }
+    try { if (process.send) process.send({ type: 'gc-report', ok }) } catch (_) { /* best-effort: IPC 通道断开时无法上报，忽略 */ }
     return;
   }
   if (msg.type !== 'ping') return;
-  try { if (process.send) process.send({ type: 'pong', t: msg.t, pid: process.pid }) } catch (_) { /* 通道断开忽略 */ }
+  try { if (process.send) process.send({ type: 'pong', t: msg.t, pid: process.pid }) } catch (_) { /* best-effort: IPC 通道断开时无法上报，忽略 */ }
 });
 
 installExitHooks();

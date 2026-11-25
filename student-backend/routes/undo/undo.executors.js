@@ -632,7 +632,7 @@ const executors = {
         }
         throw err;
       }
-      await deleteThumb(photo, dbManager.currentSlug()).catch(() => {})
+      await deleteThumb(photo, dbManager.currentSlug()).catch(() => {}) // best-effort: 索引已删，缩略图清理失败可忽略
     },
     describe(p, mode) {
       const name = p.photo ? (p.photo.file_name || `#${p.photo.id}`) : ''
@@ -655,7 +655,7 @@ const executors = {
     async redo({ album, photos }) {
       const slug = dbManager.currentSlug();
       // 缩略图先删（FS 副作用留在这里）；索引与相册行一起删（store 内一个事务）
-      for (const ph of photos || []) await deleteThumb(ph, slug).catch(() => {})
+      for (const ph of photos || []) await deleteThumb(ph, slug).catch(() => {}) // best-effort: 索引与相册行已删，缩略图清理失败可忽略
       undoStore.deleteAlbumWithPhotos(album.id)
     },
     describe(p, mode) {
@@ -676,7 +676,7 @@ const executors = {
     async undo({ album }) {
       const photos = undoStore.albumPhotosBrief(album.id)
       const slug = dbManager.currentSlug();
-      for (const ph of photos) await deleteThumb(ph, slug).catch(() => {})
+      for (const ph of photos) await deleteThumb(ph, slug).catch(() => {}) // best-effort: 索引与相册行已删，缩略图清理失败可忽略
       // 撤销「添加相册」：照片索引与相册行一起删，避免只删了一半导致孤儿索引。
       undoStore.deleteAlbumWithPhotos(album.id)
       const albumRouter = require('../album')

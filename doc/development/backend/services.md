@@ -32,6 +32,7 @@ classnest/
 │   │   ├── cadreStore.js  # cadres / cadre_members：树形层级、排序、级联删除、按名查重
 │   │   ├── countdownStore.js  # countdowns：列表、删除、导入批量插入
 │   │   ├── createdRows.js  # 导入结果回读
+│   │   ├── importBatch.js  # 批量导入幂等（F07-04）：入参指纹 + import_batches 查/记，同事务
 │   │   ├── credentialChange.js  # 凭证变更动作层
 │   │   ├── dashboardAgg.js  # 首屏聚合的 SQL 出口：首页只取需要的列/聚合（学生 id + 姓名、班费余额/本月收支/…
 │   │   ├── dutyCells.js
@@ -57,6 +58,7 @@ classnest/
 │   │   ├── provisionalStudents.js  # 临时学生建档
 │   │   ├── receiptTrash.js  # 收据文件移进 dataDir/receipt-trash/。收据扩到视频后，删除只改数据库数…
 │   │   ├── recoveryKey.js  # 恢复密钥
+│   │   ├── retentionStore.js  # ai_settings.retention_json：四类数据（AI 消息 / 历史快照 /…
 │   │   ├── sanitize.js  # 数据清洗
 │   │   ├── scoreStore.js  # score_records：全量/分页列表、学生定位、导入、首页摘要
 │   │   ├── searchLimits.js  # 全局搜索分页
@@ -70,6 +72,8 @@ classnest/
 │   │   ├── slotStore.js  # 槽位存储
 │   │   ├── studentLookup.js  # 在 students 里认人的单源实现：按 id / 学号 / 姓名带出学生，列清单由调用方…
 │   │   ├── studentRelations.js  # 学生引用维护
+│   │   ├── studentCascadeDelete.js  # 级联删除+撤销同事务（v8 Q2-01）：登记失败连数据一起回滚
+│   │   ├── errorResponse.js  # 全局 Express 错误处理（N3-09）：4xx 原文 / 5xx 脱敏，从 app.js 抽出供行为测试真跑
 │   │   ├── studentRename.js  # 学生改名级联
 │   │   ├── tableService.js  # 表格服务
 │   │   ├── thumbPurge.js  # 清理缩略图文件（只删文件，不碰索引；逐文件容错，回报删除数与字节数）
@@ -134,6 +138,13 @@ classnest/
 - **导出**：`readRowsByIds(tableName, ids)`（表名由路由以字面量传入，`ids` 走参数绑定）。
 - **调用方**：`routes/leaves.js`、`routes/scores.js`、`routes/activities.js`、`routes/countdowns.js`、`services/tableService.js` 的 `importRows`。
 
+#### [`services/importBatch.js`](../../../student-backend/services/importBatch.js) · 批量导入幂等（F07-04）
+- **定位**：同一份表重复导入不产生重复记录。不按内容去重（同学生同天同项目加两次分合法），按「是不是同一份文件」——对入参算稳定指纹，命中就回原结果不新建。
+- **指纹**：`fingerprintOf({ fields, rows, mode, studentIds })`，sha256 + 键递归排序的稳定序列化；任一项变了就是另一份导入。
+- **存储**：独立表 `import_batches`（fingerprint 主键 / created_json / created_at），不动主表——老库 `CREATE IF NOT EXISTS` 即可，无 ALTER / 数据迁移。`recordBatch` 用 `ON CONFLICT DO UPDATE` 覆盖，force 新建后指向最新那批。
+- **导出**：`stableStringify`、`fingerprintOf`（纯函数）、`findBatch`、`recordBatch`（需与写记录同事务，由路由保证）。
+- **调用方**：`routes/scores.js` 的 `POST /api/scores/import`。
+
 #### [`routes/historyRoutes.js`](../../../student-backend/routes/historyRoutes.js) · 历史快照路由工厂
 - **定位**：周历史快照的四个同构接口 `factory`（工厂函数：传配置进去，返回组装好的路由），供 duty、schedule 复用。
 - **导出**：`registerHistoryRoutes(router, { table, includeId, parseSnapshot, stringifySnapshot })`（注册历史路由；表名 / 是否带 id / 快照解析 / 快照序列化）。
@@ -195,6 +206,19 @@ classnest/
 - **定位**：学生删除/改名时的引用维护（分组、座位、值日、分数、班干部、请假等）。
 - **导出**：`studentRelations`、`purgeStudentRelations`、`restoreSeatCells`、`clearSeatCells`、`restoreDutySlots`、`clearDutySlots`。
 - **调用方**：动态表删行、账号改名。
+
+#### [`services/studentCascadeDelete.js`](../../../student-backend/services/studentCascadeDelete.js) · 级联删除与撤销同事务（v8 · 5-2 / Q2-01）
+- **定位**：删学生 + 七处关联清理 + 撤销登记收进**同一个 `db.transaction`**（与 MCP `confirm()` 同事务登记同构）。登记失败连数据一起回滚，不留「已删、无栈可撤」的半截状态。
+- **导出**：`deleteStudentCascade(id)` → `{ removed, undoId }`；`removed` 是七处快照（学生整行 + 六类关联），`undoId` 随 HTTP 响应回前端消费。
+- **一律全删**：六类关联固定全选，不接部分勾选。新库有 `ON DELETE CASCADE`，若应用层留了勾选的行，数据库会绕过勾选把它们删掉，而快照只记应用层删的 —— 撤销救不回来。全删后 purge 快照与 CASCADE 删的是同一批，CASCADE 退成应用层漏清时的兜底。
+- **调用方**：`app.js` 的 `POST /:id/delete-with-relations`（不读 `body.relations`）。前端不再发第二次 `POST /api/undo`（原 `recordStudentCascadeDelete` 已删），也不再有「仅删学生、保留关联」入口。
+- **必须在 `withDb` 上下文调用**：本服务用全局 `db` Proxy（按当前请求 ALS 绑定连接），`undoStore.push` 内部嵌套事务在同一连接上退化为 SAVEPOINT。
+
+#### [`services/errorResponse.js`](../../../student-backend/services/errorResponse.js) · 全局错误处理（v8 · N3-09 / N1-31）
+- **定位**：Express 错误分层——4xx 保留业务 message、5xx 只回通用文案，原始现场（SQL / 路径 / 模块名）只进本地 `console.error`；`err.expose === true` 是 5xx 回传原始原因的唯一例外；响应头已发出时交回 `next(err)`。
+- **导出**：`errorResponse(err, req, res, next)`。
+- **调用方**：`app.js` 让路链末尾 `app.use(errorResponse)`（注册两次，覆盖 late loaders）。
+- **为何独立成模块**：从 `app.js` 内联抽出，让判据能**真跑函数**（喂假 req/res 断言响应体）而不是读内联源码正则——N1-31 的纯静态测试改造实例。
 
 #### [`services/studentRename.js`](../../../student-backend/services/studentRename.js) · 学生改名级联
 - **定位**：学生姓名变更的级联更新（跨表改引用）。
@@ -264,7 +288,8 @@ classnest/
 
 #### [`services/backupArchive.js`](../../../student-backend/services/backupArchive.js) · 备份包 v3 写包
 - **定位**：整库备份包（ZIP：库 + 用户文件 + 清单）的**写包**实现（v6 · N2-02）。只写包，不碰还原。
-- **导出**：`writeBundle`、`extractAndVerify`、`replaceDir`、`META_ENTRY` / `MANIFEST_ENTRY` 等。
+- **导出**：`writeBundle`、`extractAndVerify`、`replaceDir`、`META_ENTRY` / `MANIFEST_ENTRY`、`ZIP64_LIMITS` 等。
+- **ZIP64（>4GB）**：写侧 `services/zipStream.js` 在条目/整包超 32 位时自动切 ZIP64（本地头 extra + 24 字节描述符 + EOCD64）；本模块的 `ZIP64_LIMITS` 统一解包闸（单条目 64GB / 总量 512GB）与上传上限（见 `routes/account.js` 的 multer），三处同源，避免「写得出来、恢复不了」。压缩炸弹防护靠「按实际写入字节算 + 超限中断」机制，不靠具体数字。
 - **包内结构**：`bundle.json`（包身份：slug / 用户名 / 是否加密 / 库钥匙）+ 各目录真实文件 + `manifest.json`（每项 `{path,size,sha256}` + `totalBytes` + `omitted`）。
 - **注意事项**：条目名一律过 `sanitizeEntryName`；`album-thumbs`（缩略图）是派生数据不入包，但**必须写进 `omitted`**，否则用户会以为备份漏了东西；`bundle.json` 放在第一个条目且 store 不压缩，前端 `zipPeek` 才能只读 64KB 判断要不要口令。
 

@@ -146,20 +146,9 @@ export function recordRowUpdate(key, oldRow, newRow, origin = '') {
   return recordUndo({ key, type: 'row_update', label: `${name}`, payload, origin })
 }
 
-// 删除学生（级联）：后端 delete-with-relations 一次动了七处（学生 / 请假 / 加减分 /
-// 小组 / 班干部 / 座位 / 值日），必须整包登记成**一条**命令。
-// 拆成多条的话，用户按 Ctrl+Z 只回来学生本身，关联还要再撤六次，中途放弃就留下半个人。
-// removed 即后端响应里的快照（含 student 整行），原样存进 payload 供撤销重建。
-export function recordStudentCascadeDelete(removed) {
-  const student = removed && removed.student
-  if (!student) return Promise.resolve(null)
-  return recordUndo({
-    key: 'students',
-    type: 'student_cascade_delete',
-    label: `删除学生「${student['姓名'] || `#${student.id}`}」及关联记录`,
-    payload: removed,
-  })
-}
+// 删除学生（级联）的撤销登记已移到后端，与七处清理同事务完成（V8 · 5-2 / Q2-01）：
+// delete-with-relations 在事务内直接 INSERT undo_history 并把 undoId 随响应返回。
+// 前端不再有 recordStudentCascadeDelete —— 保留它会在崩溃窗口留下「已删、无栈可撤」。
 
 // ==================== 行顺序 / 批量行操作 ====================
 // 这三种命令覆盖「一次动作改多行」的写路径（拖拽排序、勾选批量删除、Excel 导入）。
@@ -286,7 +275,7 @@ export function refreshUndoStatus(force = false) {
       undoState.undoLabel = data.undoLabel || ''
       undoState.redoLabel = data.redoLabel || ''
     })
-    .catch(() => { /* 静默：状态查询失败不打断用户 */ })
+    .catch(() => { /* best-effort: 静默：状态查询失败不打断用户 */ })
 }
 
 // 执行撤销/重做：供标题栏按钮与快捷键共用。redo=false 撤销，redo=true 重做。

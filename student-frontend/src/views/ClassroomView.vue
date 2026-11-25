@@ -173,7 +173,7 @@ import ProvisionalStudentsDialog from '../components/dialogs/ProvisionalStudents
 import DynamicTable from '../components/tables/DynamicTable/DynamicTable.vue'
 import Tabs from '../components/base/Tabs.vue'
 import { useTableCRUD } from '../composables/useTableCRUD.js'
-import { useUndoShortcut, recordRowDelete, recordRowInsert, recordRowUpdate, recordStudentCascadeDelete } from '../composables/useUndo.js'
+import { useUndoShortcut, recordRowDelete, recordRowInsert, recordRowUpdate } from '../composables/useUndo.js'
 import { undoById } from '../api/undo'
 import { useNotification } from '../composables/useNotification.js'
 import { applyRouteRowFocus, createRowFocusHost } from '../composables/useRowFocus.js'
@@ -495,7 +495,7 @@ async function deleteStudent(id) {
   if (rel.group) parts.push(`${rel.group} 处小组成员`)
   if (rel.cadre) parts.push(`${rel.cadre} 个班干部职务`)
   const who = student ? `「${student['姓名']}」` : '该学生'
-  const msg = `${who}还有 ${parts.join('、')}。\n\n「一并删除」会同时删除这些关联记录；\n「仅删学生」保留它们（可能成为指向不存在学生的孤儿数据）；\n「取消」不做任何操作。`
+  const msg = `删除${who}将同时删除 ${parts.join('、')}。`
 
   showConfirm(msg, async () => {
     try {
@@ -504,10 +504,10 @@ async function deleteStudent(id) {
         relations: { leave: true, score: true, seat: true, duty: true, group: true, cadre: true }
       })
       await finish()
-      // 级联删除也要可撤销：后端把七处（学生/请假/加减分/小组/班干部/座位/值日）
-      // 的快照整包返回，登记成**一条**命令 —— 否则 Ctrl+Z 只回来学生，关联还得再撤六次。
+      // 级联删除的撤销登记已由后端在业务事务内完成（Q2-01）：response 带 undoId。
+      // 前端不再发第二次 POST /api/undo —— 那道窗口崩溃会留下「七处已删、无栈可撤」。
       const removed = res.data?.removed
-      const undoId = await recordStudentCascadeDelete(removed)
+      const undoId = res.data?.undoId
       const name = removed?.student?.['姓名'] || '该学生'
       if (undoId) {
         notifyUndo(`已删除学生「${name}」及关联记录`, async () => {
@@ -520,28 +520,6 @@ async function deleteStudent(id) {
       }
     } catch (err) {
       showAlert(err.response?.data?.error || '删除失败')
-    }
-  }, null, {
-    extraText: '仅删学生',
-    onExtra: async () => {
-      try {
-        dynamicTable.value?.beginRowsAnimWindow()
-        await axios.delete(`${API_BASE}/students/${id}`)
-        await finish()
-        // 「仅删学生」原先不登记撤销 —— 删完只能重新录入。学生整行就在手边，直接登记。
-        const undoId = student ? await recordRowDelete('students', student) : null
-        if (undoId) {
-          notifyUndo(`已删除学生「${student['姓名']}」（保留关联记录）`, async () => {
-            dynamicTable.value?.beginRowsAnimWindow()
-            await undoById(undoId)
-            await finish()
-          })
-        } else {
-          notifySuccess('已删除学生（保留关联记录）')
-        }
-      } catch (err) {
-        showAlert(err.response?.data?.error || '删除失败')
-      }
     }
   })
 }

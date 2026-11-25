@@ -208,10 +208,13 @@ test('validate：缺 student 整行直接拒绝，避免执行时只删一半', 
 // ③ 接线：后端把 student 放回 removed；前端登记成一条命令并接撤销按钮
 // ---------------------------------------------------------------------------
 
-test('接线：后端 delete-with-relations 返回带 student 的快照，执行器已注册', () => {
-  const app = read('student-backend/app.js')
-  assert.match(app, /removed\s*=\s*\{\s*[\r\n\s]*student,/, 'removed 必须包含 student 整行')
-  assert.match(app, /purgeStudentRelations\(student/)
+test('接线：后端级联删除服务返回带 student 的快照，执行器已注册', () => {
+  // Q2-01 后快照构造从 app.js 路由搬进同事务服务，断言对象跟着移到服务文件。
+  const svc = read('student-backend/services/studentCascadeDelete.js')
+  assert.match(svc, /removed\s*=\s*\{\s*[\r\n\s]*student,/, 'removed 必须包含 student 整行')
+  assert.match(svc, /purgeStudentRelations\(student/)
+  // @pin student-backend/app.js#deleteStudentCascade
+  assert.match(read('student-backend/app.js'), /deleteStudentCascade/, '路由走同事务服务')
 
   const ex = read('student-backend/routes/undo/undo.executors.js')
   assert.match(ex, /student_cascade_delete:/)
@@ -221,13 +224,19 @@ test('接线：后端 delete-with-relations 返回带 student 的快照，执行
   assert.match(ex, /clearDutySlots\(student\)/)
 })
 
-test('接线：前端把级联删除登记成一条命令，「仅删学生」也补上撤销', () => {
-  const useUndo = read('student-frontend/src/composables/useUndo.js')
-  assert.match(useUndo, /export function recordStudentCascadeDelete/)
-  assert.match(useUndo, /type:\s*'student_cascade_delete'/)
-
+test('接线：前端消费后端同事务登记的 undoId，删学生只走全删一条路', () => {
+  // Q2-01 后级联删除的撤销由后端在业务事务内登记，前端不再发第二次 POST /api/undo。
+  // @pin student-frontend/src/views/ClassroomView.vue#undoById
   const view = read('student-frontend/src/views/ClassroomView.vue')
-  assert.match(view, /recordStudentCascadeDelete\(removed\)/, '级联删除要走统一登记入口')
+  assert.match(view, /res\.data\?\.undoId/, '级联删除消费后端返回的 undoId')
+  assert.doesNotMatch(view, /recordStudentCascadeDelete/, '不得再发第二次登记请求')
   assert.match(view, /notifyUndo\(`已删除学生「\$\{name\}」及关联记录`/)
-  assert.match(view, /仅删学生[\s\S]*?recordRowDelete\('students', student\)/, '「仅删学生」不再无撤销')
+  // 一律全删：不再提供「仅删学生、保留关联」这条会留孤儿的分支
+  assert.doesNotMatch(view, /仅删学生/, '不得保留仅删学生的入口')
+  // @pin student-frontend/src/views/ClassroomView.vue#deleteStudent
+  assert.doesNotMatch(view, /extraText:/, '删除确认框不得有第三个动作按钮')
+  assert.match(view, /relations:\s*\{\s*leave:\s*true,\s*score:\s*true,\s*seat:\s*true,\s*duty:\s*true,\s*group:\s*true,\s*cadre:\s*true\s*\}/, '六类关联全选')
+  // @pin student-backend/services/studentCascadeDelete.js#deleteStudentCascade
+  const svc = read('student-backend/services/studentCascadeDelete.js')
+  assert.match(svc, /type:\s*'student_cascade_delete'/, '后端登记成一条命令')
 })

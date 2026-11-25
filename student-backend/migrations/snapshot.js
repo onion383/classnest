@@ -189,6 +189,11 @@ const EXPECTED = {
       "gender": "INTEGER DEFAULT 0",
       "sort_order": "INTEGER DEFAULT 0"
     },
+    "import_batches": {
+      "fingerprint": "TEXT",
+      "created_json": "TEXT NOT NULL",
+      "created_at": "TEXT NOT NULL"
+    },
     "leave_records": {
       "id": "INTEGER",
       "position": "INTEGER DEFAULT 1",

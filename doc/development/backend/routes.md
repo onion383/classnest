@@ -59,6 +59,7 @@ classnest/
     │   ├── groupManage.js  # /api/group-manage
     │   ├── historyRoutes.js
     │   ├── leaves.js  # /api/leaves
+    │   ├── retention.js
     │   ├── schedule.js  # /api/schedule
     │   ├── scores.js  # /api/scores
     │   ├── search.js  # /api/search
@@ -204,6 +205,7 @@ flowchart TD
 
 #### [`routes/scores.js`](../../../student-backend/routes/scores.js)（`/api/scores`） · 加减分路由
 `GET /`、`POST /`、`PUT /:id`、`POST /import`（Excel 导入，`mode` 为 `personal` / `group`，避免个人与小组加错类型）、`DELETE /:id`；个人/小组目标由 `source`（`personal` / `group`）区分。
+`POST /import` 幂等（F07-04）：按入参指纹认「同一份表」，重导回 `alreadyImported: true` + 原 `created`、不新建（`services/importBatch.js` + `import_batches` 表）；`force: true` 是「仍然新建」的出口，前端据此给带动作按钮的提示。
 
 #### [`routes/groupManage.js`](../../../student-backend/routes/groupManage.js)（`/api/group-manage`） · 分组管理路由
 `GET /bootstrap`（维度+小组+成员一次取回）、`GET /:dimId`、维度 CRUD（`POST /dimensions`、`PUT/DELETE /dimensions/:id`、`POST /dimensions/move`）、小组 CRUD（`POST /dimensions/:dimId/groups`、`PUT /groups/rename-batch`（批量改名，整批一个事务、任一 id 不存在整体回滚）、`PUT/DELETE /groups/:id`）、成员（`POST /groups/:groupId/members`、`PUT/DELETE /group-members/:id`、`POST /group-members/move`）、智能分组写回 `POST /dimensions/:dimId/apply-grouping`、Excel 导入 `POST /dimensions/:dimId/import`（`小组` + `姓名` + `备注`，同名小组复用、重复姓名跳过）。
@@ -387,6 +389,8 @@ flowchart TD
 | PUT | `/` | 改保留档位（`7d`/`30d`/`180d`/`forever`）；`applyNow=true` 时按新档位立即清一次超期数据 |
 | GET | `/list` | `?kind=messages\|history\|albumTrash\|receiptTrash&limit=50`，最近明细给「查看」 |
 | POST | `/clear` | `{ kind }`：手动清除，前端必须二次确认；`kind` 走 `KINDS` 白名单，不接受任意字符串 |
+| GET | `/trash-file` | `?kind=albumTrash\|receiptTrash&path=…` 读回收站文件缩略/预览，路径限 `trashDir` 内、不跟随符号链接 |
+| POST | `/restore-receipt` | 从收据回收站还原单据；只认受信任的回收站目录，防路径穿越 |
 
 ---
 

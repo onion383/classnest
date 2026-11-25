@@ -30,6 +30,18 @@ function migrateScore(conn) {
   // 列表分页（v6 · 2-23）：GET /api/scores 的排序键是 `加分时间 DESC, id DESC`，
   // 没这个索引时每一页都要把整表排一遍（分页只省了传输和渲染，省不了排序）。
   conn.exec(`CREATE INDEX IF NOT EXISTS idx_score_time ON score_records (加分时间 DESC, id DESC);`);
+
+  // 成绩导入幂等（F07-04）：同一份表重复导入不产生重复记录。
+  // 用独立表而非给 score_records 加列——本项目无历史包袱、schema 按最终形态建表，
+  // 新表对老库是 CREATE IF NOT EXISTS 空操作、零风险，主表与 insertMany 完全不动。
+  // fingerprint = 导入入参的稳定 hash；created_json = 那次导入新建的行 id（回读给撤销登记用）。
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS import_batches (
+      fingerprint TEXT PRIMARY KEY,
+      created_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
 }
 
 module.exports = { migrateScore };

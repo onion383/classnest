@@ -6,6 +6,7 @@ const { sanitizeField, normNumber } = require('../services/sanitize');
 const { readRowsByIds } = require('../services/createdRows');
 const { resolveOne, resolvePickedForImport } = require('../services/provisionalStudents');
 const scoreStore = require('../services/scoreStore');
+const { fingerprintOf, findBatch, recordBatch } = require('../services/importBatch');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['姓名', '学号', '类型', '项目', '分值', '原因', '加分时间', 'source', 'group_name', '成员数'];
@@ -168,9 +169,24 @@ router.delete('/:id', (req, res) => {
 // 入参沿用 ImportExcel 的 { fields, rows, mode }；mode 为 personal/group，避免导错对象类型。
 router.post('/import', (req, res) => {
   try {
-    const { fields, rows, mode, studentIds } = req.body || {};
+    const { fields, rows, mode, studentIds, force } = req.body || {};
     if (!Array.isArray(fields) || !Array.isArray(rows)) {
       return res.status(400).json({ error: '缺少有效的字段或数据' });
+    }
+
+    // F07-04 幂等：按入参指纹认"同一份表"。不按内容去重——同学生同天同项目加两次分是合法的。
+    // force=true 是用户明确要再导一次的出口，跳过查重但在末尾覆盖批次记录。
+    const fingerprint = fingerprintOf({ fields, rows, mode, studentIds });
+    if (!force) {
+      const existing = findBatch(fingerprint);
+      if (existing) {
+        return res.json({
+          message: '这份表已导入过，未重复新建',
+          alreadyImported: true,
+          count: existing.length,
+          created: readRowsByIds('score_records', existing),
+        });
+      }
     }
 
     // 按表头名取单元格；Excel 文件列顺序可以任意调整
@@ -268,6 +284,9 @@ router.post('/import', (req, res) => {
       });
 
       const ids = scoreStore.insertMany(list);
+      // 批次登记与写记录同事务：任一步失败一起回滚，不留"记了批次却没写记录"的脏状态。
+      // 用 INSERT ... ON CONFLICT DO UPDATE 覆盖，force 新建后批次指向最新那批。
+      recordBatch(fingerprint, ids);
       return { count: list.length, ids };
     });
 

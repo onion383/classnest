@@ -22,7 +22,7 @@ const PHYSICAL = {
   core: ['students', 'table_meta', 'users'],
   fee: ['fee_records'],
   leave: ['leave_records'],
-  score: ['score_records'],
+  score: ['score_records', 'import_batches'],
   cadre: ['cadres', 'cadre_members'],
   group: ['group_dimensions', 'groups', 'group_members'],
   duty: ['duty_slots'],

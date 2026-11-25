@@ -393,8 +393,8 @@ async function loadToday() {
   try {
     const res = await axios.get(`${API}/scores`, { params: { date: todayStart.value } })
     todayAll.value = (res.data && res.data.data) || []
-  } catch (_) {
-    // 今日卡片属次要信息：失败不清空已有值，也不打断主列表加载
+  } catch (_) { // best-effort: 今日卡片属次要信息，失败不清空也不打断主列表
+
   }
 }
 
@@ -484,11 +484,23 @@ watch(todayStart, () => { void loadToday() })
 async function refreshStats() {
   if (await loadAll()) useNotification().success('已刷新 加分统计 数据')
 }
-async function onImportData({ fields, rows, studentIds }) {
+async function onImportData({ fields, rows, studentIds }, force = false) {
   importDialogVisible.value = false
+  const payload = { fields, rows, studentIds, mode: scoreMode.value, force }
   try {
-    const res = await axios.post(`${API}/scores/import`, { fields, rows, studentIds, mode: scoreMode.value })
-    useNotification().success(res.data.message || '导入成功')
+    const res = await axios.post(`${API}/scores/import`, payload)
+    const notify = useNotification()
+    if (res.data?.alreadyImported) {
+      // 同一份表导过：不新建、不登记撤销（那会撤掉上次的数据），只给再导一次的出口。
+      notify.show({
+        type: 'info',
+        message: `这份表已导入过 ${res.data.count} 条，未重复新建`,
+        duration: 8000,
+        action: { label: '仍然新建', onClick: () => onImportData({ fields, rows, studentIds }, true) },
+      })
+      return
+    }
+    notify.success(res.data.message || '导入成功')
     await loadAll()
     // 后端回传本次真正新建的行：一次导入只记一条撤销
     recordRowsBatchInsert('score_records', res.data?.created)

@@ -130,11 +130,17 @@ function isUnsafeName(raw) {
  * 资源闸（N2-06）：恶意构造的备份包可以靠「高压缩比条目」在解压阶段撑爆磁盘，
  * 或塞几十万个小条目耗 CPU。这里限条目数与解压后的累计字节（按**实际写入**字节算，
  * 不信任 ZIP 头里声明的 uncompressedSize），超限即中断并让调用方拿到 400。
- * 上限与 ZIP32 的 4GB 硬限对齐：打包侧本来就写不出更大的包。
+ * 上限在 ZIP64 后放宽：写侧 zipStream 已支持 >4GB 的包（照片多的账号很常见），
+ * 读侧闸必须同步放宽，否则「写得出来、恢复不了」。防护靠的是「按实际写入字节算 +
+ * 超限中断」这个机制，不是具体数字——数字只决定能扛多大的正常备份。
  */
 const MAX_ENTRIES = 20000
-const MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
-const MAX_ENTRY_BYTES = 4 * 1024 * 1024 * 1024
+const ZIP64_LIMITS = {
+  maxEntryBytes: 64 * 1024 * 1024 * 1024,   // 单个条目 64GB（照片/视频不可能更大）
+  maxTotalBytes: 512 * 1024 * 1024 * 1024,  // 解压总量 512GB（覆盖多年备份，仍挡压缩炸弹）
+  uploadBytes: 512 * 1024 * 1024 * 1024,     // 上传包体上限（与解包总量对齐）
+}
+const { maxEntryBytes: MAX_ENTRY_BYTES, maxTotalBytes: MAX_TOTAL_BYTES } = ZIP64_LIMITS
 
 function extractZip(zipPath, destDir) {
   const root = path.resolve(destDir)
@@ -266,9 +272,9 @@ function pruneDirBackups(destDir) {
     const olds = fs.readdirSync(parent).filter((n) => n.startsWith(prefix)).sort()
     const drop = olds.slice(0, Math.max(0, olds.length - 2))
     for (const n of drop) {
-      try { fs.rmSync(path.join(parent, n), { recursive: true, force: true }) } catch (_) { /* 占用中留给下次 */ }
+      try { fs.rmSync(path.join(parent, n), { recursive: true, force: true }) } catch (_) { /* best-effort: 占用中留给下次 */ }
     }
-  } catch (_) { /* 目录不可读时不阻断恢复 */ }
+  } catch (_) { /* best-effort: 目录不可读时不阻断恢复 */ }
 }
 
 function replaceDir(srcDir, destDir, stamp) {
@@ -309,4 +315,4 @@ function mergeDir(srcDir, destDir) {
   return count
 }
 
-module.exports = { writeBundle, listFiles, RECONSTRUCTIBLE, extractZip, extractAndVerify, verifyManifest, replaceDir, mergeDir, isUnsafeName, META_ENTRY, MANIFEST_ENTRY }
+module.exports = { writeBundle, listFiles, RECONSTRUCTIBLE, extractZip, extractAndVerify, verifyManifest, replaceDir, mergeDir, isUnsafeName, META_ENTRY, MANIFEST_ENTRY, ZIP64_LIMITS }

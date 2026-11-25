@@ -24,7 +24,7 @@ const sessions = require('../services/sessions');
 const { revokeAccountSessions, rotateAccountSessions } = require('../services/credentialChange');
 const { renameUsernameWithCompensation } = require('../services/accountRename');
 // 备份包 v3（ZIP）：库 + 用户文件 + 清单，流式写 / 解包校验
-const { writeBundle } = require('../services/backupArchive');
+const { writeBundle, ZIP64_LIMITS } = require('../services/backupArchive');
 const { localDateStr } = require('../utils/date');
 // v3 包的落盘（写库 + 替换目录 + 清列缓存）只有一份，两个恢复入口共用
 const { receiveAndVerify, applyVerifiedBundle, dropTmp } = require('../services/bundleRestore');
@@ -38,9 +38,9 @@ function backupUploadMw() {
     const path = require('path');
     const dir = path.join(os.tmpdir(), 'classnest-restore');
     require('fs').mkdirSync(dir, { recursive: true });
-    // 上限与打包侧 ZIP32 的 4GB 硬限对齐：更大的包本来就写不出来，
-    // 放行到 8GB 只会让用户白传一趟再在导出阶段失败（N2-06）。
-    _backupUpload = multer({ dest: dir, limits: { fileSize: 4 * 1024 * 1024 * 1024 } });
+    // 写侧已支持 ZIP64（>4GB 的备份包很常见）。上限与解包侧闸值统一从 ZIP64_LIMITS 派生，
+    // 避免写侧放宽、上传/解包还卡在 4GB 造成「导出成功、恢复失败」（N2-06 的防护机制保留）。
+    _backupUpload = multer({ dest: dir, limits: { fileSize: ZIP64_LIMITS.uploadBytes } });
   }
   return _backupUpload.single('file');
 }
@@ -164,7 +164,7 @@ router.post('/export-zip', auth(), async (req, res) => {
   } catch (err) {
     // 已经开始写响应体了：只能中断连接，让客户端看到「下载不完整」而不是一个坏包
     console.error('[backup] 导出 v3 失败:', err && err.message);
-    try { res.destroy(); } catch (_) { /* 已断开 */ }
+    try { res.destroy(); } catch (_) { /* best-effort: 已断开 */ }
   }
 });
 
@@ -256,7 +256,7 @@ router.post('/db-encryption', auth(), async (req, res) => {
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('X-Accel-Buffering', 'no');
-  const write = (obj) => { try { res.write(JSON.stringify(obj) + '\n'); } catch (_) { /* 连接已断，忽略 */ } };
+  const write = (obj) => { try { res.write(JSON.stringify(obj) + '\n'); } catch (_) { /* best-effort: 连接已断，忽略 */ } };
   try {
     // 超级隐私模式：明文/加密转换会重写 wrapped_key（主密钥包裹），等于关闭保护
     if (dbManager.isProtected(req.user.username)) {
@@ -397,7 +397,7 @@ function accountSlugsForRevoke(user) {
   let list = [];
   try {
     list = dbManager.listClasses(user.username).map((c) => c.slug);
-  } catch (_) { /* 登记表读不到就退回单班，不影响改密本身 */ }
+  } catch (_) { /* best-effort: 登记表读不到就退回单班，不影响改密本身 */ }
   const rest = list.filter((s) => s !== cur);
   const all = [cur, ...rest].filter(Boolean);
   return all.length ? all : cur;
@@ -779,7 +779,7 @@ router.post('/security-level', auth(), async (req, res) => {
     // 凭证与账号表哈希的切换前快照：后续库加密/隐私步骤失败时要能回滚（K01-13）
     const prevPassword = user.password;
     let prevAcc = null;
-    try { prevAcc = dbManager.accountFindByUsername(username); } catch (_) { /* 账号表暂不可读 */ }
+    try { prevAcc = dbManager.accountFindByUsername(username); } catch (_) { /* best-effort: 账号表暂不可读 */ }
     let pwdChanged = false;
     if (!needsCurrent && (target === 'password' || target === 'privacy')) {
       if (String(newPassword).length < 6) return res.status(400).json({ error: '新密码长度至少 6 位' });

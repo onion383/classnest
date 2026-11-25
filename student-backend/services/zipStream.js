@@ -12,7 +12,10 @@
 //     解压端要靠它校验口令，所以 CRC 必须在本地头里。做法是先读一遍算 CRC（文件条目），
 //     再把 CRC/尺寸写进本地头；文件条目用 store 而不是 deflate —— 两者都要预读一遍，
 //     而 store 让「压缩后尺寸」直接等于文件大小，不必为拿尺寸再压一遍。
-//   · **ZIP32 上限 4GB**：超过就明确抛错（不带 Zip64），不能让用户拿到一个写坏的包。
+//   · **统一 ZIP64**：所有条目恒写 ZIP64（extra field 0x0001 + 24 字节数据描述符 + ZIP64 EOCD），
+//     不按尺寸在 ZIP32/ZIP64 间切换——切换要靠 statSync 预知尺寸，文件在写入期间变动会让本地头 /
+//     描述符 / 中央目录三处的 zip64 决定错配，写出尺寸撒谎的包。读侧 yauzl 原生支持；代价是小包
+//     多几十字节、不再兼容很老的解压器（Win10+ / 7-Zip / macOS / yauzl 都支持 ZIP64）。
 //   · 文件名一律过 sanitizeEntryName（Zip Slip 的唯一净化点）。
 //
 // 为什么要 createZipWriter（增量）而不只是 writeZip：备份包的 manifest 必须
@@ -29,6 +32,18 @@ const { crc32Start, crc32Update, crc32End, createZipCrypto, sanitizeEntryName } 
 
 const MAX32 = 0xffffffff
 const CHUNK = 256 * 1024
+
+// ---- ZIP64 辅助（APPNOTE 6.3.10 §4.5.3 / §4.3.9.2 / §4.3.14-16）----
+// extra field 0x0001：header id + size + 按固定顺序的 64 位值。
+// local header 必须同时带 raw/comp（§4.5.3）；central 只带对应字段为哨兵的值。
+function zip64Extra(values) {
+  const body = Buffer.alloc(8 * values.length)
+  values.forEach((v, i) => body.writeBigUInt64LE(BigInt(v), i * 8))
+  const head = Buffer.alloc(4)
+  head.writeUInt16LE(0x0001, 0) // ZIP64 extended information extra field
+  head.writeUInt16LE(body.length, 2)
+  return Buffer.concat([head, body])
+}
 
 function dosDateTime(d) {
   const year = Math.max(d.getFullYear(), 1980)
@@ -68,49 +83,60 @@ function createZipWriter(writable, opts = {}) {
   let count = 0
   let closed = false
 
+  // 中央目录恒写 ZIP64：三个字段都写哨兵，extra 按固定顺序带全 64 位真值（§4.5.3）。
+  // 全带（而非只带溢位项）更简单且合规——reader 忽略用不到的项。
   function addCentral({ nameBytes, flags, method, crc, compSize, rawSize, localOffset }) {
+    const extra = zip64Extra([rawSize, compSize, localOffset])
     const cd = Buffer.alloc(46)
     cd.writeUInt32LE(0x02014b50, 0)
-    cd.writeUInt16LE(20, 4)
-    cd.writeUInt16LE(20, 6)
+    cd.writeUInt16LE(45, 4) // version made by / needed 4.5
+    cd.writeUInt16LE(45, 6)
     cd.writeUInt16LE(flags, 8)
     cd.writeUInt16LE(method, 10)
     cd.writeUInt16LE(now.time, 12)
     cd.writeUInt16LE(now.date, 14)
     cd.writeUInt32LE(crc, 16)
-    cd.writeUInt32LE(compSize, 20)
-    cd.writeUInt32LE(rawSize, 24)
+    cd.writeUInt32LE(MAX32, 20) // compressed size = 哨兵
+    cd.writeUInt32LE(MAX32, 24) // uncompressed size = 哨兵
     cd.writeUInt16LE(nameBytes.length, 28)
-    cd.writeUInt16LE(0, 30) // 扩展区
-    cd.writeUInt16LE(0, 32) // 注释
-    cd.writeUInt16LE(0, 34) // 起始磁盘
-    cd.writeUInt16LE(0, 36) // 内部属性
-    cd.writeUInt32LE(0, 38) // 外部属性
-    cd.writeUInt32LE(localOffset, 42)
-    central.push(Buffer.concat([cd, nameBytes]))
+    cd.writeUInt16LE(extra.length, 30)
+    cd.writeUInt16LE(0, 32)
+    cd.writeUInt16LE(0, 34)
+    cd.writeUInt16LE(0, 36)
+    cd.writeUInt32LE(0, 38)
+    cd.writeUInt32LE(MAX32, 42) // local header offset = 哨兵
+    central.push(Buffer.concat([cd, nameBytes, extra]))
   }
 
-  function localHeader({ nameBytes, flags, method, crc, compSize, rawSize }) {
+  // 本地头恒写 ZIP64：size 字段恒为哨兵，真值走 extra（流式 bit3 写占位 0，加密条目写真值）。
+  function localHeader({ nameBytes, flags, method, crc, extra }) {
     const local = Buffer.alloc(30)
     local.writeUInt32LE(0x04034b50, 0)
-    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(45, 4) // version needed 4.5
     local.writeUInt16LE(flags, 6)
     local.writeUInt16LE(method, 8)
     local.writeUInt16LE(now.time, 10)
     local.writeUInt16LE(now.date, 12)
     local.writeUInt32LE(crc, 14)
-    local.writeUInt32LE(compSize, 18)
-    local.writeUInt32LE(rawSize, 22)
+    local.writeUInt32LE(MAX32, 18) // compressed size = 哨兵
+    local.writeUInt32LE(MAX32, 22) // uncompressed size = 哨兵
     local.writeUInt16LE(nameBytes.length, 26)
-    local.writeUInt16LE(0, 28)
+    local.writeUInt16LE(extra.length, 28) // 20 字节 ZIP64 extra（id+size+两个 8 字节）
     return local
   }
 
-  // 明文：本地头先写 0，数据流完再补 16 字节数据描述符（bit3）
+  // 明文：本地头先写哨兵 + 20 字节占位 extra，数据流完再补 24 字节数据描述符（bit3）。
+  // 尺寸不预知——恒用 64 位字段，文件在写入期间变大也不会格式错配（统一 ZIP64 的收益）。
   async function addStreamed(entry, name, nameBytes, localOffset, method) {
     const flags = 0x0800 | 0x0008
-    await writeChunk(writable, Buffer.concat([localHeader({ nameBytes, flags, method, crc: 0, compSize: 0, rawSize: 0 }), nameBytes]))
-    offset += 30 + nameBytes.length
+    const zip64LocalExtra = Buffer.alloc(20) // id+size+两个 8 字节占位(0)，真值走描述符
+    zip64LocalExtra.writeUInt16LE(0x0001, 0)
+    zip64LocalExtra.writeUInt16LE(16, 2)
+    await writeChunk(writable, Buffer.concat([
+      localHeader({ nameBytes, flags, method, crc: 0, extra: zip64LocalExtra }),
+      nameBytes, zip64LocalExtra,
+    ]))
+    offset += 30 + nameBytes.length + zip64LocalExtra.length
 
     const hasher = entry.hash ? crypto.createHash('sha256') : null
     let crc = crc32Start()
@@ -119,7 +145,6 @@ function createZipWriter(writable, opts = {}) {
       for await (const chunk of sourceOf(entry)) {
         crc = crc32Update(crc, chunk)
         rawSize += chunk.length
-        if (rawSize > MAX32) throw new Error(`条目「${name}」超过 4GB，ZIP32 不支持（需要 Zip64）`)
         hasher?.update(chunk)
         yield chunk
       }
@@ -146,12 +171,11 @@ function createZipWriter(writable, opts = {}) {
     }
 
     const crcValue = crc32End(crc)
-    if (compSize > MAX32) throw new Error(`条目「${name}」压缩后超过 4GB，ZIP32 不支持（需要 Zip64）`)
-    const desc = Buffer.alloc(16)
-    desc.writeUInt32LE(0x08074b50, 0) // 描述符签名（部分解压器靠它识别）
+    const desc = Buffer.alloc(24) // 签名 + CRC(4) + compSize(8) + rawSize(8)（§4.3.9.2）
+    desc.writeUInt32LE(0x08074b50, 0)
     desc.writeUInt32LE(crcValue, 4)
-    desc.writeUInt32LE(compSize, 8)
-    desc.writeUInt32LE(rawSize, 12)
+    desc.writeBigUInt64LE(BigInt(compSize), 8)
+    desc.writeBigUInt64LE(BigInt(rawSize), 16)
     await writeChunk(writable, desc)
     offset += desc.length
 
@@ -169,7 +193,6 @@ function createZipWriter(writable, opts = {}) {
       for await (const chunk of fs.createReadStream(entry.path, { highWaterMark: CHUNK })) {
         crc = crc32Update(crc, chunk)
         size += chunk.length
-        if (size > MAX32) throw new Error(`条目「${name}」超过 4GB，ZIP32 不支持（需要 Zip64）`)
         hasher?.update(chunk)
       }
       // 收据 / 视频本身已是压缩格式，deflate 基本不缩小；store 让尺寸在写头时已知
@@ -190,8 +213,13 @@ function createZipWriter(writable, opts = {}) {
   async function addEncrypted(entry, name, nameBytes, localOffset) {
     const plan = await planEncrypted(entry, name)
     const flags = 0x0800 | 0x0001 // bit11 UTF-8 文件名 / bit0 加密
-    await writeChunk(writable, Buffer.concat([localHeader({ nameBytes, flags, method: plan.method, crc: plan.crc, compSize: plan.compSize, rawSize: plan.rawSize }), nameBytes]))
-    offset += 30 + nameBytes.length
+    // 加密条目不用 bit3：本地头 size 是哨兵，ZIP64 extra 带 64 位真值（不是占位 0）。
+    const extra = zip64Extra([plan.rawSize, plan.compSize])
+    await writeChunk(writable, Buffer.concat([
+      localHeader({ nameBytes, flags, method: plan.method, crc: plan.crc, extra }),
+      nameBytes, extra,
+    ]))
+    offset += 30 + nameBytes.length + extra.length
 
     // 一个 key 流只对一个文件有效（PKZIP 规范），每个条目都从密码重新派生
     const cipher = createZipCrypto(password)
@@ -232,21 +260,37 @@ function createZipWriter(writable, opts = {}) {
   async function close() {
     if (closed) return { entries: count, bytes: offset }
     const centralBuf = Buffer.concat(central)
-    if (offset + centralBuf.length > MAX32) {
-      throw new Error('备份包超过 4GB，ZIP32 不支持（需要 Zip64）')
-    }
-    const end = Buffer.alloc(22)
+    // 恒写 ZIP64 EOCD：紧跟中央目录，其自身文件偏移 = offset + centralBuf.length（§4.3.14-15）
+    const zip64EocdOffset = offset + centralBuf.length
+    const z64 = Buffer.alloc(56)
+    z64.writeUInt32LE(0x06064b50, 0)
+    z64.writeBigUInt64LE(44n, 4) // record size = 固定 56 - 前 12 字节
+    z64.writeUInt16LE(45, 12)    // version made by / needed 4.5
+    z64.writeUInt16LE(45, 14)
+    z64.writeUInt32LE(0, 16)     // number of this disk
+    z64.writeUInt32LE(0, 20)     // disk with start of central dir
+    z64.writeBigUInt64LE(BigInt(count), 24) // entries on this disk
+    z64.writeBigUInt64LE(BigInt(count), 32) // total entries
+    z64.writeBigUInt64LE(BigInt(centralBuf.length), 40)
+    z64.writeBigUInt64LE(BigInt(offset), 48) // central dir offset
+    const loc = Buffer.alloc(20)
+    loc.writeUInt32LE(0x07064b50, 0)
+    loc.writeUInt32LE(0, 4)
+    loc.writeBigUInt64LE(BigInt(zip64EocdOffset), 8)
+    loc.writeUInt32LE(1, 16) // total disks
+    const end = Buffer.alloc(22) // 经典 EOCD，字段写哨兵（§4.3.16）
     end.writeUInt32LE(0x06054b50, 0)
-    end.writeUInt16LE(0, 4)
-    end.writeUInt16LE(0, 6)
-    end.writeUInt16LE(count, 8)
-    end.writeUInt16LE(count, 10)
-    end.writeUInt32LE(centralBuf.length, 12)
-    end.writeUInt32LE(offset, 16)
+    end.writeUInt16LE(0xffff, 4)
+    end.writeUInt16LE(0xffff, 6)
+    end.writeUInt16LE(0xffff, 8)
+    end.writeUInt16LE(0xffff, 10)
+    end.writeUInt32LE(MAX32, 12)
+    end.writeUInt32LE(MAX32, 16)
     end.writeUInt16LE(0, 20)
-    await writeChunk(writable, Buffer.concat([centralBuf, end]))
+    const tail = Buffer.concat([z64, loc, end])
+    await writeChunk(writable, Buffer.concat([centralBuf, tail]))
     closed = true
-    return { entries: count, bytes: offset + centralBuf.length + end.length }
+    return { entries: count, bytes: offset + centralBuf.length + tail.length }
   }
 
   return { add, close }

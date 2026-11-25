@@ -142,6 +142,15 @@ function firstLocalHeader(buf, name) {
       rawSize: buf.readUInt32LE(pos + 22),
       bodyStart: pos + 30 + nameLen + extraLen,
     }
+    // 统一 ZIP64 后本地头 size 字段恒为哨兵 0xffffffff，真值在 extra 0x0001 的两个 8 字节里。
+    if (head.compSize === 0xffffffff && head.rawSize === 0xffffffff && extraLen >= 20) {
+      const ex = pos + 30 + nameLen
+      if (buf.readUInt16LE(ex) === 0x0001) {
+        // §4.5.3：local header 的 extra 里顺序是 Original(raw) 先、Compressed 后。
+        head.rawSize = Number(buf.readBigUInt64LE(ex + 4))
+        head.compSize = Number(buf.readBigUInt64LE(ex + 12))
+      }
+    }
     if (!name || entryName === name) return head
     // 加密条目的正文前面还有 12 字节加密头，它不计入 compSize
     pos = head.bodyStart + (head.flags & 0x0001 ? 12 : 0) + head.compSize

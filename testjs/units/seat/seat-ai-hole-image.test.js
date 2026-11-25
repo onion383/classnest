@@ -16,6 +16,7 @@ const { abs } = require('#testjs/paths')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const { createBackendDb } = require('#testjs/units/_db-express-fixture.cjs')
+const { loadMutated } = require('#testjs/units/_mechanism.cjs')
 
 const IMAGE_SRC = 'student-backend/routes/ai/ai.tools/tools.executors/executors.image.js'
 
@@ -87,10 +88,16 @@ test('接线：图片执行器按 SEAT_CELL.HOLE 输出「空位」（不是只�
   assert.ok(r.ok, r.why)
 })
 
-test('变异反证：删掉 HOLE 分支后，接线判据必须失败', () => {
-  const src = fs.readFileSync(abs(IMAGE_SRC), 'utf8')
-  assert.equal(wiringGuard(src).ok, true, '基线必须通过，否则反证无意义')
-  const mutated = src.replace(/\s*\/\/ 空位格（types=2）[\s\S]*?if \(t === SEAT_CELL\.HOLE\) \{ line\.push\('空位'\); continue; \}\r?\n/, '\n')
-  assert.ok(mutated !== src, '变异没匹配到 HOLE 分支')
-  assert.equal(wiringGuard(mutated).ok, false, '判据假绿：删掉 HOLE 分支仍判 PASS')
+test('变异反证：真模块删掉 HOLE 分支后，座位图行为必须退化', () => {
+  seed()
+  assert.equal(seatImage().rows[0][3], '空位', '基线必须通过，否则反证无意义')
+  // N1-28：变异真实模块后调它的真函数，不再只改本地源码串再跑正则。
+  const mutated = loadMutated(IMAGE_SRC, (s) => {
+    const out = s.replace("if (t === SEAT_CELL.HOLE) { line.push('空位'); continue; }", '/* MUTATED */')
+    if (out === s) throw new Error('变异没匹配到 HOLE 分支')
+    return out
+  })
+  const img = mutated.buildExportImage({ targets: 'seat' })
+  const val = img.spec.items[0].rows[0][3]
+  assert.notEqual(val, '空位', `判据假绿：删掉 HOLE 分支后仍输出「空位」，实际 ${JSON.stringify(val)}`)
 })

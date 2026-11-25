@@ -113,8 +113,19 @@ test('变异反证 M2：拆掉 defer 退化成同步调用必须被抓', () => {
 
 test('变异反证 M3：静默窗口短于侧栏过渡必须被抓', () => {
   const src = read()
-  const mutated = src.replace('const RESIZE_IDLE_MS = 180;', 'const RESIZE_IDLE_MS = 40;')
+  // N1-52：只锚「常量名 + 赋值」并替换数值，不再写死 180——
+  // 源码合法地把静默窗口从 180 调到 200 时，整串替换会落空导致本反证自身误红。
+  const mutated = src.replace(/(const RESIZE_IDLE_MS = )\d+(;)/, '$140$2')
   assert.notEqual(mutated, src, 'M3 必须命中源码')
+  assert.throws(() => assertQuietWindow(mutated), /必须 ≥ 侧栏过渡 150ms/)
+})
+
+test('N1-52 自证：常量值合法调整后，M3 变异仍能命中（不误伤）', () => {
+  // 模拟源码把 180 调成 240（仍 ≥150，完全合法）：变异必须照样把它压到 40 并判红。
+  const bumped = read().replace(/(const RESIZE_IDLE_MS = )\d+(;)/, '$1240$2')
+  assert.notEqual(bumped, read(), '前置：模拟改值必须生效')
+  const mutated = bumped.replace(/(const RESIZE_IDLE_MS = )\d+(;)/, '$140$2')
+  assert.notEqual(mutated, bumped, '改值后变异仍必须命中，不能因写死 180 而落空')
   assert.throws(() => assertQuietWindow(mutated), /必须 ≥ 侧栏过渡 150ms/)
 })
 

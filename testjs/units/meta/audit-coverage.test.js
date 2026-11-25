@@ -198,7 +198,6 @@ test('首轮：所有已知缺口都被判为 GAP，已声明的通道为 PASS',
     ['auth.session_idle_ttl', (c) => c.file.endsWith('sessions.js')],
     ['privacy.write_scope', (c) => c.file.endsWith('privacy.shared.js')],
     ['dev.subwindow_identity', (c) => c.file.endsWith('main.dev-loader.js')],
-    ['updater.spawn_error', (c) => c.file.endsWith('main.updater.js')],
     ['lifecycle.resource_disposal', (c) => c.file.endsWith('Demo.vue')],
     ['ipc.policy_declared', (c) => c.entry.includes('unknown-channel')],
   ]
@@ -396,7 +395,6 @@ async function load(key) {
     ['auth.session_idle_ttl', (c) => c.file.endsWith('sessions.js')],
     ['privacy.write_scope', (c) => c.file.endsWith('privacy.shared.js')],
     ['dev.subwindow_identity', (c) => c.file.endsWith('main.dev-loader.js')],
-    ['updater.spawn_error', (c) => c.file.endsWith('main.updater.js')],
     ['lifecycle.resource_disposal', (c) => c.file.endsWith('Demo.vue')],
     ['ipc.policy_declared', (c) => c.entry.includes('unknown-channel')],
   ]

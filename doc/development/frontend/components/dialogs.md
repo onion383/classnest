@@ -17,6 +17,7 @@ classnest/
                 │   └── SmartArrangementDialog.vue  # 智能排表
                 ├── SmartGroupDialog/
                 │   └── SmartGroupDialog.vue  # 智能分组
+                ├── AccountDataDialog.vue  # 账号数据管理
                 ├── AddActivityDialog.vue  # 新增/编辑活动
                 ├── AddClassDialog.vue  # 新增班级
                 ├── AddCountdownDialog.vue  # 新增/编辑倒计时
@@ -32,13 +33,11 @@ classnest/
                 ├── ClassInfoDialog.vue  # 班级信息
                 ├── CreateTokenDialog.vue  # 令牌选项
                 ├── DeduplicateDialog.vue  # 去重
-                ├── DuplicateNameDialog.vue  # 导入时同名学生逐行选人
+                ├── DuplicateNameDialog.vue  # 导入同名选人
                 ├── DutyBackfillDialog.vue  # 值日回填
                 ├── DutyRecordSettingsDialog.vue  # 值日记录设置
                 ├── DutySettingsDialog.vue  # 值日设置
                 ├── DutyWeightAlgorithmDialog.vue  # 值日权重算法
-                ├── ScheduleRecordDialog.vue  # 课表记录管理（周列表 + 删除）
-                ├── SnapshotPickerDialog.vue  # 查看快照的选择弹窗（座位/值日/课表）
                 ├── LocalRecoverDialog.vue  # 已登录时忘记密码（本机恢复）
                 ├── MoveAlbumDialog.vue  # 移动照片到相册
                 ├── NewAlbumDialog.vue  # 新建相册
@@ -47,11 +46,14 @@ classnest/
                 ├── ProvisionalStudentsDialog.vue  # 临时学生
                 ├── ReceiptDialog.vue  # 管理收据
                 ├── RecoveryKeyDialog.vue  # 恢复词展示与抄写确认
+                ├── ScheduleRecordDialog.vue  # 课表记录管理
                 ├── SeatBackfillDialog.vue  # 座位回填
                 ├── SeatRecordSettingsDialog.vue  # 座位记录设置
                 ├── SeatSettingsDialog.vue  # 座位设置
                 ├── SettingsDialog.vue  # 课程表设置
+                ├── SnapshotPickerDialog.vue  # 查看快照选择
                 ├── TodoCenterDialog.vue  # 待处理中心
+                ├── TrashPreviewDialog.vue  # 回收站文件预览
                 └── WeightAlgorithmDialog.vue  # 座位权重算法
 ```
 <!-- doc-tree:end -->
@@ -271,6 +273,10 @@ classnest/
 ### [TodoCenterDialog.vue](../../../../student-frontend/src/components/dialogs/TodoCenterDialog.vue) · 待处理中心
 - **定位**：标题栏待办胶囊点开后的通知中心，汇总销假与临时学生两类待办。
 - **内部实现**：数据来自 `useTodoCenter`，点条目跳转到对应页面处理。
+
+### [TrashPreviewDialog.vue](../../../../student-frontend/src/components/dialogs/TrashPreviewDialog.vue) · 回收站文件预览
+- **定位**：账号数据管理「查看回收站明细」点「查看」后弹出的文件预览。
+- **内部实现**：走 `GET /api/retention/trash-file` 取缩略/预览，关闭或换对象时用 `URL.revokeObjectURL` 撤旧 URL（下载另走磁盘中转，不在下载后立即撤销）。
 
 ---
 

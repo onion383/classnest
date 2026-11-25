@@ -12,6 +12,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 
 // 按后端 manifest 解析依赖，不假设 node_modules 就装在仓库里（T05-02）
 const { createRequire } = require('node:module')
@@ -82,4 +83,30 @@ test('自证脚本能跑通（造 freelist + 加密态两类样本）', () => {
   assert.equal(r.ok, true)
   assert.ok(r.plain.pages > 0)
   assert.equal(r.encrypted.encrypted, true)
+})
+
+test('依赖解析：依赖只装在上层 node_modules 时探针仍能加载（不硬编码路径）', () => {
+  // 把探针复制到一个「后端目录下没有 node_modules、依赖只在上层」的临时工程。
+  // 老写法 require(<root>/student-backend/node_modules/xxx) 会当场 Cannot find module；
+  // 按 manifest 解析才能沿目录向上找到依赖。这里只验模块加载，桩模块不实现 SQLite。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'db-size-resolve-'))
+  try {
+    for (const p of ['testjs/probe', 'student-backend', 'node_modules/better-sqlite3-multiple-ciphers']) {
+      fs.mkdirSync(path.join(dir, p), { recursive: true })
+    }
+    fs.writeFileSync(path.join(dir, 'student-backend/package.json'), '{"name":"stub-backend","version":"1.0.0"}\n')
+    fs.writeFileSync(path.join(dir, 'node_modules/better-sqlite3-multiple-ciphers/package.json'),
+      '{"name":"better-sqlite3-multiple-ciphers","version":"0.0.0","main":"index.js"}\n')
+    fs.writeFileSync(path.join(dir, 'node_modules/better-sqlite3-multiple-ciphers/index.js'),
+      'module.exports = class { }\n')
+    const probe = path.join(dir, 'testjs/probe/db-size-probe.cjs')
+    fs.copyFileSync(abs('testjs/probe/db-size-probe.cjs'), probe)
+
+    const r = spawnSync(process.execPath, [probe], { encoding: 'utf8' })
+    const out = `${r.stdout || ''}${r.stderr || ''}`
+    assert.match(out, /用法：node/, `探针应成功加载并打印用法，实际：${out}`)
+    assert.doesNotMatch(out, /Cannot find module/, '依赖解析不应写死 student-backend/node_modules')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })

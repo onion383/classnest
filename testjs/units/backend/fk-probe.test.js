@@ -19,6 +19,8 @@ const backendRequire = createRequire(abs('student-backend/package.json'))
 const Database = backendRequire('better-sqlite3-multiple-ciphers')
 const { initSchema } = require('../../../student-backend/schema/schema')
 const { FK_DECLARATIONS } = require('../../../student-backend/schema/foreignKeySpec')
+// N1-37：总数从契约清单派生，不再手写第二份（清单增减时这些数字不会自动同步）。
+const FK_TOTAL = FK_DECLARATIONS.length
 const { probeForeignKeys, hasFkFor, describeForeignKeys } = require('../../../student-backend/schema/foreignKeyProbe')
 
 function fresh() {
@@ -37,11 +39,11 @@ test('新库：10 条全部命中，判定为受外键保护', () => {
   const db = fresh()
   try {
     const r = probeForeignKeys(db)
-    assert.equal(r.total, 10)
-    assert.equal(r.count, 10)
+    assert.equal(r.total, FK_TOTAL)
+    assert.equal(r.count, FK_TOTAL)
     assert.equal(r.complete, true)
     assert.deepEqual(r.missing, [])
-    assert.equal(describeForeignKeys(r), '10/10')
+    assert.equal(describeForeignKeys(r), `${FK_TOTAL}/${FK_TOTAL}`)
     assert.ok(hasFkFor(db, 'score_records', 'student_id'))
   } finally { db.close() }
 })
@@ -54,9 +56,9 @@ test('老库场景：缺的那条会被单独指出来，不是一律报完整',
 
     const r = probeForeignKeys(db)
     assert.equal(r.complete, false, '老表没有外键，探测必须报不完整')
-    assert.equal(r.count, 9, '只缺一条，不能连坐其余 9 条')
+    assert.equal(r.count, FK_TOTAL - 1, '只缺一条，不能连坐其余声明')
     assert.deepEqual(r.missing.map((m) => `${m.table}.${m.column}`), ['score_records.student_id'])
-    assert.equal(describeForeignKeys(r), '9/10')
+    assert.equal(describeForeignKeys(r), `${FK_TOTAL - 1}/${FK_TOTAL}`)
 
     // 其余 9 条仍在 —— 证明判定是按条比对，不是「有一处不齐就整体作废」
     assert.ok(hasFkFor(db, 'leave_records', 'student_id'))
@@ -92,7 +94,7 @@ test('同一连接只探一次：重复调用返回同一个结果对象', () =>
     // 冻结断言用「赋值后值不变」而不是 throws：非严格模式下给冻结对象赋值是静默失败，
     // 期待抛 TypeError 的写法会假红（本条就是这么被抓出来的）。
     a.count = 99
-    assert.equal(a.count, 10, '结果必须冻结，避免调用方误改共享结论')
+    assert.equal(a.count, FK_TOTAL, '结果必须冻结，避免调用方误改共享结论')
   } finally { db.close() }
 })
 

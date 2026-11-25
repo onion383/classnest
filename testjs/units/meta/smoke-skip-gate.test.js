@@ -56,3 +56,25 @@ test('runner：--require-pass 解析与 SKIP 判失败的判定逻辑真实有�
   // 失败项本身也必须让退出码为 1（SKIP 判定不能顺带放过 FAIL）
   assert.equal(resolveSmokeExit([{ file: 'x.cjs', code: 1 }], []).exit, 1, '有失败项必须退出 1')
 })
+
+test('CI：两条打包通道都在 electron-builder 前重建后端 bundle', () => {
+  // app.bundle.js 是 git 忽略的生成物，生产优先跑它。CI 为传 --publish never 把
+  // electron:build 展开写了，若漏掉 build:backend 就会用工作区残留的旧 bundle，
+  // 后端源码修复进不了正式包。钉住两条通道都必须显式重建，且在打包之前。
+  const ci = fs.readFileSync(CI, 'utf8')
+  const steps = [
+    { name: '打包正式版（前端', end: '打包 Vue 3.6 预览版' },
+    { name: '打包 Vue 3.6 预览版', end: '校验安装包并生成 SHA-256' },
+  ]
+  for (const { name, end } of steps) {
+    const from = ci.indexOf(name)
+    assert.ok(from >= 0, `CI 缺少打包步骤：${name}`)
+    const to = ci.indexOf(end, from)
+    const step = ci.slice(from, to > from ? to : from + 1200)
+    assert.match(step, /npm run build:backend/, `${name} 必须重建后端 bundle（否则用旧产物）`)
+    const atBuild = step.indexOf('npm run build:backend')
+    // 只认命令行 npx electron-builder，步骤标题里也含这个词（"前端 → ... → electron-builder"）
+    const atPack = step.indexOf('npx electron-builder')
+    assert.ok(atBuild >= 0 && atPack > atBuild, `${name} 的 build:backend 必须在 electron-builder 之前`)
+  }
+})

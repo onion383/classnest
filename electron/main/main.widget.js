@@ -77,7 +77,7 @@ function setWidgetIgnoreMouse(win, ignore) {
   widgetIgnoreMouseMap.set(win, !!ignore)
   try {
     win.setIgnoreMouseEvents(!!ignore, { forward: true })
-  } catch (_) { /* 忽略 */ }
+  } catch (_) { /* best-effort: 不支持鼠标事件透传的平台忽略即可 */ }
 }
 
 // ===== 工具箱浮窗状态 =====
@@ -196,8 +196,8 @@ function createWidgetWindow() {
 // 重新启用时按需重建并恢复上次位置；重建后浮窗自身会重新拉取状态，无需外部还原。
 function hideWidgetWindow() {
   if (!widgetWindow || widgetWindow.isDestroyed()) return
-  try { lastWidgetBounds = widgetWindow.getBounds() } catch (_) { /* 忽略 */ }
-  try { widgetWindow.destroy() } catch (_) { /* 忽略 */ }
+  try { lastWidgetBounds = widgetWindow.getBounds() } catch (_) { /* best-effort: 窗口已销毁时取边界失败可忽略 */ }
+  try { widgetWindow.destroy() } catch (_) { /* best-effort: 窗口已销毁时销毁失败可忽略 */ }
   widgetWindow = null
 }
 
@@ -205,7 +205,7 @@ function showWidgetWindow() {
   if (!widgetWindow || widgetWindow.isDestroyed()) {
     createWidgetWindow()
     if (lastWidgetBounds && widgetWindow && !widgetWindow.isDestroyed()) {
-      try { widgetWindow.setPosition(lastWidgetBounds.x, lastWidgetBounds.y) } catch (_) { /* 忽略 */ }
+      try { widgetWindow.setPosition(lastWidgetBounds.x, lastWidgetBounds.y) } catch (_) { /* best-effort: 恢复位置时窗口状态异常可忽略 */ }
     }
   }
   if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.show()
@@ -390,8 +390,8 @@ function createDesktopWidgetWindow() {
     if (desktopWidgetWindow !== win || win.isDestroyed()) return
     try {
       win.reload()
-    } catch (_) {
-      /* 忽略 */
+    } catch (_) { // best-effort: 窗口已销毁时重载失败可忽略
+
     }
   })
   win.webContents.on('did-finish-load', () => scheduleDesktopShowFallback())
@@ -480,8 +480,8 @@ function navigateMainWhenReady(mainWindow, page) {
   let timer = null
   const cleanup = () => {
     if (timer) { clearTimeout(timer); timer = null }
-    try { wc.removeListener('did-finish-load', send) } catch (_) { /* 已销毁 */ }
-    try { wc.removeListener('destroyed', onDestroyed) } catch (_) { /* 已销毁 */ }
+    try { wc.removeListener('did-finish-load', send) } catch (_) { /* best-effort: 已销毁 */ }
+    try { wc.removeListener('destroyed', onDestroyed) } catch (_) { /* best-effort: 已销毁 */ }
   }
   const send = () => {
     if (done || wc.isDestroyed()) return
@@ -615,8 +615,8 @@ function registerWidgetIpc(opts = {}) {
         const b = win.getContentBounds()
         writeJsonFile(desktopPosFile(), { x: Math.round(b.x), y: Math.round(b.y) })
         logWidget('[widget] drag end pos=' + Math.round(b.x) + ',' + Math.round(b.y))
-      } catch (_) {
-        /* 忽略 */
+      } catch (_) { // best-effort: 拖拽结束位置落盘失败不影响窗口拖动
+
       }
     }
     desktopDragBounds = null
@@ -644,7 +644,7 @@ function registerWidgetIpc(opts = {}) {
       currentWidgetSize = [actualW, actualH]
 
       // 回执：告知渲染层窗口尺寸已生效，便于其「先改尺寸、再显示内容」，避免固定延时造成的空窗
-      try { widgetWindow.webContents.send(CH.FROM_MAIN, { type: 'widget-resized', width: actualW, height: actualH }) } catch (_) { /* 忽略 */ }
+      try { widgetWindow.webContents.send(CH.FROM_MAIN, { type: 'widget-resized', width: actualW, height: actualH }) } catch (_) { /* best-effort: 回执窗口已销毁时无法接收尺寸消息 */ }
 
       // 边界保护：保证「视觉内容」（去掉阴影边距后的部分）不越出屏幕。
       // 因视觉内容相对窗口左上角偏移 M，窗口本身允许向外溢出 M。

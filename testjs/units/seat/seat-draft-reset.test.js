@@ -13,11 +13,18 @@ const test = require('node:test')
 const { abs } = require('#testjs/paths')
 const assert = require('node:assert/strict')
 const { pathToFileURL } = require('node:url')
+const path = require('node:path')
 
 const DRAFT = pathToFileURL(abs('student-frontend/src/composables/useSeatDraft.js')).href
 const SCOPED = pathToFileURL(abs('student-frontend/src/utils/userScopedCache.js')).href
-// 必须用 useSeatDraft 解析到的**同一个** axios 实例（axios 是 ESM 包，CJS require 会是另一份）
-const AXIOS = pathToFileURL(abs('student-frontend/node_modules/axios/index.js')).href
+// 必须用 useSeatDraft 解析到的**同一个** axios 实例（axios 是 ESM 包，CJS require 会是另一份）。
+// N1-48：按前端 package.json 解析实际安装位置与 ESM 入口，不硬编码 node_modules/axios/index.js。
+const { createRequire } = require('node:module')
+const frontRequire = createRequire(abs('student-frontend/package.json'))
+const axiosDir = path.dirname(frontRequire.resolve('axios/package.json'))
+const axiosPkg = JSON.parse(require('node:fs').readFileSync(path.join(axiosDir, 'package.json'), 'utf8'))
+const axiosEntry = axiosPkg.exports['.'].default.default // 条件 default → ESM 入口
+const AXIOS = pathToFileURL(path.join(axiosDir, axiosEntry)).href
 
 const draftBody = {
   exists: true, rows: 3, cols: 4, mode: 'single',

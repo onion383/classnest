@@ -12,6 +12,7 @@ const { abs } = require('#testjs/paths')
 const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
+const { loadMutated } = require('#testjs/units/_mechanism.cjs')
 
 const sc = require(abs('student-backend/services/secureChannel.js'))
 const MASTER = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
@@ -94,12 +95,22 @@ test('接线：缺 proof 分支按写方法 + sessionId 判定，nonce 去重仍
   assert.ok(r.ok, `接线判据未通过：${JSON.stringify(r.checks)}`)
 })
 
-test('变异反证：把缺 proof 分支改回无条件放行后，行为判据必须失败', () => {
-  const src = proofSrc()
-  assert.equal(wiringGuard(src).ok, true, '基线必须通过，否则反证无意义')
-  const fn = src.slice(src.indexOf('function requestAuthProof'), src.indexOf('function cleanupSessions'))
-  const mutatedFn = fn.replace(/if \(req\.sessionId && writeMethod\) return fail\([^;]*;/, '/*MUTATED*/')
-  assert.ok(mutatedFn !== fn, '变异没匹配到强制判定')
-  const mutatedSrc = src.replace(fn, mutatedFn)
-  assert.equal(wiringGuard(mutatedSrc).ok, false, '判据假绿：缺 proof 无条件放行仍判 PASS')
+test('变异反证：真模块里删掉强制判定后，缺 proof 的写请求必须被放行（证明守卫有效）', () => {
+  const req = () => ({ method: 'POST', headers: {}, sessionId: 's-mutate' })
+  const base = fakeRes()
+  sc.requestAuthProof(req(), base.res, () => {})
+  assert.deepEqual(base.calls.status, [401], '基线必须通过，否则反证无意义')
+
+  // N1-28：变异真实模块并调用它的真函数，不再只在本地字符串副本上跑判据。
+  const mutated = loadMutated('student-backend/services/secureChannel.js', (s) => {
+    const out = s.replace("if (req.sessionId && writeMethod) return fail(401, { error: '写请求缺少安全凭据' });", '/* MUTATED */')
+    if (out === s) throw new Error('变异没匹配到强制判定')
+    return out
+  })
+  mutated.initMaster(MASTER)
+  const after = fakeRes()
+  let passed = 0
+  mutated.requestAuthProof(req(), after.res, () => { passed += 1 })
+  assert.deepEqual(after.calls.status, [], '变异后守卫失效，应直接 next()')
+  assert.equal(passed, 1, '缺 proof 的写请求被无条件放行，证明这条守卫不是摆设')
 })

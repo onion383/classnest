@@ -14,9 +14,9 @@
 //      `{ once: true }` / `{ signal }` 之一覆盖；
 //   ③ 豁免只给「应用/窗口级单例」，且每个豁免项都必须仍然需要豁免（防止过期白名单）。
 //
-// 边界（T06-05）：本守卫是**计数型**覆盖，不按「同事件名 add/remove」逐条配对 ——
-//   它能防「完全没清理」，防不住「清错事件 / 两个 interval 只清一个」。要收得更紧，
-//   需把 audit 改成按 {target,event,once,signal} 键集合对账（中期项，未做）。
+// 边界（N1-30 已收口）：旧的 audit() 是**计数型**，防不住「清错事件 / 两个 interval 只清一个」。
+//   现新增 auditKeys() 按 {target,event} 与定时器变量名做集合对账；全仓实测无 once/signal
+//   修饰的全局监听、add/remove 事件名与定时器变量名都逐键成对，收紧后零误报。
 // =========================================================================
 const test = require('node:test')
 const { abs } = require('#testjs/paths')
@@ -58,6 +58,27 @@ function audit(src) {
     listeners: globalAdds,
     uncoveredListeners: Math.max(0, globalAdds - covered),
   }
+}
+
+// N1-30：按「键」对账，不按数量。计数型的漏洞是 add('click') 配 remove('resize')
+//   也算覆盖——数量相等但清错了对象。这里把每处 add / remove 抽成 target|event 键，
+//   断言 add 键集合是 remove 键集合的子集；定时器同理按赋值的变量名配对。
+function auditKeys(src) {
+  const listenerKey = (m) => m[1] + '|' + m[2]
+  const adds = new Set([...src.matchAll(/(window|document(?:\.body)?)\.addEventListener\(\s*['"`]([^'"`]+)['"`]/g)].map(listenerKey))
+  const rems = new Set([...src.matchAll(/(window|document(?:\.body)?)\.removeEventListener\(\s*['"`]([^'"`]+)['"`]/g)].map(listenerKey))
+  // once / signal 的全局监听无需显式移除。捕获组与 adds 保持同构（target, event），
+  // 否则 map(listenerKey) 会把「整段语句」当事件名，正好漏掉要豁免的键。
+  const onceSignal = new Set([...src.matchAll(/(window|document(?:\.body)?)\.addEventListener\(\s*['"`]([^'"`]+)['"`][^;]{0,200}?\{[^}]*(?:once:\s*true|signal)/g)].map(listenerKey))
+  const uncoveredListeners = [...adds].filter(k => !rems.has(k) && !onceSignal.has(k))
+
+  const setVars = new Set([...src.matchAll(/(?:const|let|var)?\s*([\w.]+)\s*=\s*setInterval\(/g)].map(m => m[1]))
+  const clearVars = new Set([...src.matchAll(/clearInterval\(\s*([\w.]+)\s*\)/g)].map(m => m[1]))
+  // d.interval(...) 已由 disposables 登记，不需要成对 clear
+  const registered = count(src, /\.interval\(/g) > 0
+  const uncoveredTimers = registered ? [] : [...setVars].filter(v => !clearVars.has(v))
+
+  return { listeners: adds.size, uncoveredListeners, timers: setVars.size, uncoveredTimers }
 }
 
 function walk(dir, out = []) {
@@ -103,6 +124,45 @@ test('豁免表不过期：每一项都存在，且当前确实需要豁免', ()
       `豁免项「${key}」现在已经被覆盖，必须从白名单删除`,
     )
   }
+})
+
+test('N1-30 键对账：全局监听与定时器按 key 配对，全仓零未覆盖', () => {
+  const bad = []
+  for (const file of walk(SRC)) {
+    const key = rel(file)
+    if (WHITELIST[key]) continue
+    const r = auditKeys(fs.readFileSync(file, 'utf8'))
+    if (r.uncoveredListeners.length || r.uncoveredTimers.length) {
+      bad.push(`${key}（监听未配对 ${r.uncoveredListeners.join(',')} / 定时器未配对 ${r.uncoveredTimers.join(',')}）`)
+    }
+  }
+  assert.deepEqual(bad, [], `以下文件有清错事件的资源：${bad.join('；')}`)
+})
+
+test('N1-30 键对账自证：数量相等但清错事件/清错变量必须判红', () => {
+  // 旧计数型会误判为已覆盖：1 add + 1 remove、1 set + 1 clear，但键不同
+  const swapped = 'window.addEventListener("click", fn)\n' +
+    'window.removeEventListener("resize", fn)\n' +
+    'const timer = setInterval(tick, 1000)\nclearInterval(otherTimer)'
+  const old = audit(swapped)
+  assert.equal(old.uncoveredListeners, 0, '计数型对「清错事件」确实假绿（证明旧判据不足）')
+  assert.equal(old.uncoveredTimers, 0)
+  const strict = auditKeys(swapped)
+  assert.deepEqual(strict.uncoveredListeners, ['window|click'], '键对账必须抓到 click 没清')
+  assert.deepEqual(strict.uncoveredTimers, ['timer'], '键对账必须抓到 timer 没清')
+
+  const good = 'window.addEventListener("click", fn); window.removeEventListener("click", fn)\n' +
+    'const timer = setInterval(tick, 1000); clearInterval(timer)'
+  const g = auditKeys(good)
+  assert.deepEqual(g.uncoveredListeners, [])
+  assert.deepEqual(g.uncoveredTimers, [])
+
+  // once 监听无需移除：键必须被正确豁免（捕获组同构，不能把整段语句当事件名）
+  const once = 'document.addEventListener("transitionend", fn, { once: true })'
+  assert.deepEqual(auditKeys(once).uncoveredListeners, [], 'once 监听应被豁免')
+
+  const signal = 'window.addEventListener("focus", fn, { signal: ac.signal })'
+  assert.deepEqual(auditKeys(signal).uncoveredListeners, [], 'signal 监听应被豁免')
 })
 
 test('守卫自证：故意注入的裸监听 / 裸定时器必须被判红', () => {

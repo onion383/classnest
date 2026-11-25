@@ -14,11 +14,18 @@
 const test = require('node:test')
 const { abs, read } = require('#testjs/paths')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const { loadMutated } = require('#testjs/units/_mechanism.cjs')
 
+const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'restore-lock-'))
+process.on('exit', () => { try { fs.rmSync(WORK, { recursive: true, force: true }) } catch (_) {} })
 
 // 行为用例要 require worker.scan.js，它顶层依赖 dbManager；dbManager 在构造期要求主密钥。
 // 这里只 require 不打开任何库，给一个测试值即可（真实密钥语义不在本文件范围）。
 process.env.DB_MASTER_KEY = process.env.DB_MASTER_KEY || 'classnest-unit-test-master-key-0001'
+process.env.DATA_DIR = process.env.DATA_DIR || WORK
 
 const RESTORE = 'student-backend/dbManager/dbManager.backup.js'
 const SNAPSHOT = 'student-backend/routes/ai/ai.dataRoutes.js'
@@ -50,11 +57,33 @@ test('snapshot/restore：lockDb 在 evictConn 之前', () => {
   assert.match(h, /require\('\.\.\/\.\.\/scanWorker'\)\.lockDb\(slug\)/, '应惰性 require scanWorker')
 })
 
-test('变异反证：去掉 lockDb 后判据必须失败', () => {
-  const src = read(RESTORE)
-  const mutated = src.replace(/\s*try \{ require\('\.\.\/scanWorker'\)\.lockDb\(slug\); \} catch \(_\) \{[^\n]*\}/, '')
-  assert.ok(mutated !== src, '变异没匹配到 lockDb 调用')
-  assert.throws(() => lockBeforeEvict(mutated), /缺少 lockDb/, '变异后判据应判失败')
+test('变异反证：真模块去掉 lockDb 后，恢复流程不再通知子进程', () => {
+  const workerPath = require.resolve(abs('student-backend/scanWorker.js'))
+  const saved = require.cache[workerPath]
+  const locked = []
+  require.cache[workerPath] = {
+    id: workerPath, filename: workerPath, loaded: true,
+    exports: { lockDb: (slug) => locked.push(slug) },
+  }
+  const args = { slug: '@aaaaaaaaaaaa', username: 'u', data: 'not-a-db', encrypted: false }
+  try {
+    const real = require(abs(RESTORE))
+    try { real.restoreBundle(args) } catch (_) { /* 无效包会在后面被拒，不影响 lock 调用 */ }
+    assert.deepEqual(locked, [args.slug], '基线必须先通知子进程')
+
+    locked.length = 0
+    // N1-28：变异真实模块后调它的真函数，不再只改本地源码串再跑正则。
+    const mutated = loadMutated(RESTORE, (s) => {
+      const out = s.replace("try { require('../scanWorker').lockDb(slug); } catch (_) { /* best-effort: 子进程未启动 */ }", '/* MUTATED */')
+      if (out === s) throw new Error('变异没匹配到 lockDb 调用')
+      return out
+    })
+    try { mutated.restoreBundle(args) } catch (_) { /* 同上 */ }
+    assert.deepEqual(locked, [], '守卫失效：覆盖库文件前不再通知扫描子进程')
+  } finally {
+    if (saved) require.cache[workerPath] = saved
+    else delete require.cache[workerPath]
+  }
 })
 
 // 行为层（T07-05）：上面三条只能证明「主进程发了 lock 消息」，

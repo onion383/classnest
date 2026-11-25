@@ -1128,8 +1128,8 @@ async function applyPhotoFocus() {
     }
     // 直接打开这张图：locate 返回的列与网格照片同源，查看器和左右翻页都能用
     viewPhoto(p)
-  } catch (_) {
-    // 照片刚被删 / 接口失败：安静地留在相册页，别用报错打断跳转
+  } catch (_) { // best-effort: 照片刚被删 / 接口失败：安静地留在相册页，别用报错打断跳转
+
   } finally {
     // 定位只做一次：清掉 query，回退/刷新/切回不再重复弹查看器
     const q = { ...route.query }
@@ -1275,7 +1275,7 @@ async function scanWatchTick() {
   const activeRunning = running.some(t => t.albumId === activeAlbumId.value)
   // 本册在扫 → 本轮刷新；本册刚从「在扫」转「扫完」→ 补拉收尾
   if (activeRunning || (scanWatchActiveRunning && !activeRunning)) {
-    await loadAlbums(false).catch(() => {})
+    await loadAlbums(false).catch(() => {}) // best-effort: 本册列表补拉失败不影响刷新流程
     if (scanWatchStopped) return // 这第二个 await 之后同样要重新判断
   }
   scanWatchActiveRunning = activeRunning

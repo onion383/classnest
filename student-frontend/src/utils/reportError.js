@@ -61,8 +61,8 @@ export function reportError(err, options = {}) {
 
   try {
     useNotification().error(text)
-  } catch (_) {
-    // best-effort: 通知系统自身不可用时不能再抛，否则「错误处理」本身成了错误源
+  } catch (_) { // best-effort: 通知系统自身不可用时不能再抛，否则错误处理本身成错误源
+
   }
   return true
 }

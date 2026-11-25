@@ -31,7 +31,7 @@ classnest/
         │   ├── useDashboardData.js  # 首页聚合
         │   ├── useDialogEscape.js  # 手写弹窗的 Esc 关闭
         │   ├── useElasticScroll.js  # 橡皮筋滚动
-        │   ├── useModalFocus.js  # 全屏查看器（未套 DialogShell）的焦点管理
+        │   ├── useModalFocus.js  # 全屏查看器的焦点管理
         │   ├── useNotification.js  # 全局通知
         │   ├── useOverdueLeaveBadge.js  # 标题栏「需销假」待办计数：请假中且已过结束时间的记录数
         │   ├── usePhotoTimeline.js  # 时间轴虚拟滚动

@@ -421,8 +421,8 @@ function onPointerDown(e) {
   // 不捕获的话触摸一离开元素就只剩 pointercancel，线直接断掉。
   try {
     drawCanvas.value.setPointerCapture(e.pointerId)
-  } catch (_) {
-    // 指针已失效（极短触碰），忽略即可，后续靠 pointercancel 收尾
+  } catch (_) { // best-effort: 指针已失效时忽略，后续靠 pointercancel 收尾
+
   }
 
   if (st.isEraser) {
@@ -527,7 +527,7 @@ async function startSave() {
       if (settingsRes.data.success) {
         saveDir = settingsRes.data.data.noteSavePath
       }
-    } catch (_) { /* 读取设置失败则使用默认路径 */ }
+    } catch (_) { /* best-effort: 读取设置失败则使用默认路径 */ }
 
     // 直接传 Uint8Array：IPC 走结构化克隆的二进制路径（内存紧凑），
     // 避免 Array.from 将每个字节装箱成 Number（全屏 PNG 会膨胀 8~16 倍）。

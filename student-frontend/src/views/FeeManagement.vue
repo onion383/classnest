@@ -597,8 +597,8 @@ async function onReceiptChange({ items, removed }) {
     if (removed.length) {
       try {
         await axios.post(`${API_BASE}/fee-records/receipt-trash`, { paths: removed })
-      } catch (_) {
-        // 文件没移走只是磁盘残留，不影响数据正确性
+      } catch (_) { // best-effort: 文件没移走只是磁盘残留，不影响数据正确性
+
       }
     }
   } catch (err) {

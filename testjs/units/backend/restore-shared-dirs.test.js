@@ -13,6 +13,7 @@ const os = require('node:os')
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { createRequire } = require('node:module')
+const { loadMutated } = require('#testjs/units/_mechanism.cjs')
 
 const backendRequire = createRequire(abs('student-backend/package.json'))
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'banji-restore-shared-'))
@@ -118,12 +119,19 @@ test('applyVerifiedBundle 对共享目录走 merge、对 per-slug 走 replace（
   assert.ok(r.ok, r.why)
 })
 
-test('变异反证：把共享目录的 mergeDir 换成 replaceDir，接线判据必须失败', () => {
-  const real = fs.readFileSync(abs('student-backend/services/bundleRestore.js'), 'utf8')
-  assert.equal(wiringGuard(real).ok, true, '基线必须通过，否则反证无意义')
-  const mutated = real.replace(/mergeDir\(src, it\.dest\)/, 'replaceDir(src, it.dest, stamp)')
-  assert.notEqual(mutated, real, '变异没匹配到 mergeDir 调用')
-  assert.equal(wiringGuard(mutated).ok, false, '判据假绿：共享目录退化为 replace 仍判 PASS')
+test('变异反证：真模块里把 uploads 改成覆盖语义，dirPlanOf 行为必须变', () => {
+  const slug = '@aaaaaaaaaaaa'
+  const realPlan = Object.fromEntries(dirPlanOf(slug).map((p) => [p.prefix, p]))
+  assert.equal(realPlan.uploads.merge, true, '基线必须通过，否则反证无意义')
+  // N1-28：不再只改本地字符串副本，而是变异真实模块后调真函数。
+  const mutated = loadMutated('student-backend/services/bundleRestore.js', (s) => {
+    const out = s.replace("{ prefix: 'uploads', dest: dbManager.uploadsDir, merge: true }",
+      "{ prefix: 'uploads', dest: dbManager.uploadsDir, merge: false }")
+    if (out === s) throw new Error('变异没匹配到 uploads 的 merge 标记')
+    return out
+  })
+  const mutatedPlan = Object.fromEntries(mutated.dirPlanOf(slug).map((p) => [p.prefix, p]))
+  assert.equal(mutatedPlan.uploads.merge, false, '判据假绿：共享目录改覆盖后行为仍不变')
 })
 
 // ————————————————————————— ③ 变异反证 —————————————————————————

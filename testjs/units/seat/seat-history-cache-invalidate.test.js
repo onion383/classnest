@@ -39,30 +39,35 @@ test('补录弹窗：提交周记录后 emit(changed)', () => {
     '提交成功后必须通知父页（写操作在前，通知在后）')
 })
 
-// 判据抽成函数（T07-02）：正例与变异反证共用，变异体回喂同一入口
-function onHistoryChangedGuard(body) {
-  const inv = body.indexOf('invalidateSeatDaily()')
-  const weeks = body.indexOf('fetchHistoryWeeks()')
-  return { ok: inv >= 0 && weeks >= 0 && inv < weeks, inv, weeks }
+// N1-28：从真实源码抽函数、注入桩依赖真跑；变异直接改文件源码后走同一入口。
+function runOnHistoryChanged(transform = (s) => s) {
+  const source = transform(read(VIEW))
+  const decl = extractFunctionDecl(source, 'onHistoryChanged')
+  const calls = []
+  const deps = {
+    invalidateSeatDaily: () => calls.push('invalidate'),
+    fetchHistoryWeeks: () => calls.push('weeks'),
+  }
+  const names = Object.keys(deps)
+  const fn = new Function(...names, `return ${decl}`)(...names.map((k) => deps[k]))
+  return { calls, invoke: () => fn() }
 }
 
-test('座位页：两个弹窗的 changed 都指向 onHistoryChanged，且先作废账本/指数缓存', () => {
+test('座位页：两个弹窗都绑 onHistoryChanged，且真执行时先作废缓存再刷新', () => {
   const src = read(VIEW)
   const bindings = (src.match(/@changed="onHistoryChanged"/g) || []).length
   assert.equal(bindings, 2, '补录与管理周记录两个弹窗都要绑 onHistoryChanged')
-  const body = extractFunctionDecl(src, 'onHistoryChanged')
-  const r = onHistoryChangedGuard(body)
-  assert.ok(r.inv >= 0, 'onHistoryChanged 必须作废每日快照缓存，否则账本/指数仍是旧数字')
-  assert.ok(r.weeks >= 0, '仍要刷新周列表')
-  assert.ok(r.inv < r.weeks, '先作废缓存再刷新列表（顺序无关正确性，但保持读写口径一致）')
+  const { calls, invoke } = runOnHistoryChanged()
+  invoke()
+  assert.deepEqual(calls, ['invalidate', 'weeks'], '必须先作废每日快照缓存，再刷新周列表')
 })
 
-test('变异反证：去掉 invalidateSeatDaily 调用后，判据必须失败', () => {
-  const src = read(VIEW)
-  const body = extractFunctionDecl(src, 'onHistoryChanged')
-  assert.equal(onHistoryChangedGuard(body).ok, true, '基线必须通过，否则反证无意义')
-  const mutated = body.replace(/\s*invalidateSeatDaily\(\)\r?\n/, '')
-  // @pin student-frontend/src/views/SeatView.vue#onHistoryChanged
-  assert.ok(mutated !== body, '变异没匹配到 invalidateSeatDaily()')
-  assert.equal(onHistoryChangedGuard(mutated).ok, false, '判据假绿：去掉缓存作废仍判 PASS')
+test('变异反证：真源码删掉缓存作废后，刷新周列表但缓存不再失效', () => {
+  const { calls, invoke } = runOnHistoryChanged((s) => {
+    const out = s.replace(/(function onHistoryChanged\(\) \{\r?\n)  invalidateSeatDaily\(\)\r?\n/, '$1')
+    if (out === s) throw new Error('变异没匹配到 invalidateSeatDaily()')
+    return out
+  })
+  invoke()
+  assert.deepEqual(calls, ['weeks'], '守卫失效：账本/指数会继续命中旧缓存')
 })

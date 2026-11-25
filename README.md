@@ -150,6 +150,7 @@ npm run dev:new            # 3.6 通道只起 Vite
 | `npm run build:win:inno`                               | 只编译安装包（需先有 unpacked 产物）；跟 `-- release36 --vue36` 出 3.6 预览包 |
 | `npm test`                                             | units + behavior + probe（约 2.4s）                    |
 | `npm run test:units` / `test:behavior` / `test:probe`  | 单独跑某一层                                              |
+| `npm run test:impact`                                  | 按改动选相关测试跑（日常验证用，提交前再跑 `npm test`）                  |
 | `npm run smoke`                                        | 链路冒烟（约 1min，发版前）                                    |
 | `npm run test:all`                                     | 快测 + 冒烟                                             |
 | `npm run seed`                                         | 灌测试数据（需后端在跑）                                        |
@@ -161,6 +162,7 @@ npm run dev:new            # 3.6 通道只起 Vite
 | `npm run docs:sync`                                    | 按源码现算值同步文档里的数量类计数（只改数字，改完仍需 `docs:verify`）        |
 | `npm run check:coverage` | 生成「入口 × 不变量」覆盖矩阵并校验：PASS / GAP / UNKNOWN 明细，缺口返回非零 |
 | `npm run check:coverage:report` | 只生成覆盖矩阵报告，不做缺口校验 |
+| `npm run check:guards` / `check:guards:update` | 守卫台账：@pin 锚点存活 + 基线闸门（`npm test` 第一步已跑校验） |
 | `npm run inp`                                          | 交互延迟（INP）测量；需 `INP_DEBUG=1` 启动应用                    |
 
 ## 构建与打包

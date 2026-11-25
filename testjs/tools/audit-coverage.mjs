@@ -337,11 +337,11 @@ function evidence(entry, line, note) {
 // 判据是「用户是否会被告知成功但其实没写」——不谎报成功即可，状态码不必是 404。
 // 加条目必须同时写理由；「改了更好」的不要加，去改代码。
 const NOT_FOUND_404_REVIEWED = Object.freeze({
-  'route:student-backend/routes/ai/ai.conversations.js:134:delete:/conversations/:id/messages/last-assistant':
+  'route:student-backend/routes/ai/ai.conversations.js:149:delete:/conversations/:id/messages/last-assistant':
     '幂等契约：返回 { success:true, removed:false }，removed 已如实表示没删到（重试前清理用）',
-  'route:student-backend/routes/dynamicTable.js:48:put:/:id':
+  'route:student-backend/routes/dynamicTable.js:54:put:/:id':
     'updateRow 内部 throw「记录不存在」，路由回 400 —— 不谎报成功，只是状态码口径不同',
-  'route:student-backend/routes/dynamicTable.js:61:delete:/:id':
+  'route:student-backend/routes/dynamicTable.js:67:delete:/:id':
     'deleteRow 内部 throw「记录不存在」，同上',
   'route:student-backend/routes/undo/undo.js:232:delete:/:id':
     '幂等删除：撤销记录只从列表里点，重复删除无副作用，前端也不提示「删除成功」',
@@ -904,20 +904,9 @@ const INVARIANTS = [
       return { status: STATUS.GAP, ...evidence(e, line, 'loadUrlWithRetry 只探测 HTTP 200，未校验页面身份') }
     },
   },
-  {
-    id: 'updater.spawn_error',
-    title: '安装器 spawn 失败必须异步兜底',
-    applies: (ctx, e) => e.kind === 'electron-file' && /main\.updater\.js$/.test(e.file),
-    check(ctx, e) {
-      const line = ctx.findLine(e.file, /\bspawn\s*\(/)
-      if (!line) return { status: STATUS.UNKNOWN, ...evidence(e, 1, '未找到 spawn 调用') }
-      const window = sliceCode(ctx, { ...e, line }, 30)
-      if (/\.once\(\s*['"]error['"]|\.on\(\s*['"]error['"]/.test(window)) {
-        return { status: STATUS.PASS, ...evidence(e, line, 'spawn 后监听 error') }
-      }
-      return { status: STATUS.GAP, ...evidence(e, line, 'spawn 只有同步 try/catch，没有异步 error 监听') }
-    },
-  },
+  // updater.spawn_error 已移除：批次 52 把静默 spawn(/SILENT) 改为 shell.openPath 交给 Windows 安装向导，
+  // 这条针对 spawn 的不变量失去适用对象（恒 UNKNOWN）。openPath 失败的用户可见兜底由
+  // testjs/units/desktop/updater-manual-install.test.js「openPath 失败：报错但应用不退出」守着。
   {
     id: 'undo.idempotency',
     title: '撤销方向回写必须 CAS',

@@ -33,8 +33,8 @@ function moveReceiptsToTrash(list, uploadsDir, trashDir) {
       const stamp = Date.now() + '-' + Math.round(Math.random() * 1e6)
       fs.renameSync(abs, path.join(trashDir, `${stamp}-${name}`))
       moved += 1
-    } catch (_) {
-      // 单个文件移动失败（被占用等）不影响其它文件，也不该让保存失败
+    } catch (_) { // best-effort: 单文件被占用移不走不影响其它文件，也不该让保存失败
+
     }
   }
   return moved

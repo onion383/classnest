@@ -18,6 +18,7 @@ const { abs } = require('#testjs/paths')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const {
   analyze, walk, keyName, memberPath, findFunction, scriptBlocks,
 } = require('#testjs/source-scan')
@@ -77,6 +78,30 @@ test('captureHide.js 是「藏/还原」的唯一实现', () => {
     })
   })
   assert.ok(doubleRaf, '必须等两帧再返回（合成器提交 + DWM 更新）')
+})
+
+test('captureHide 行为：真隐藏 → 两帧 → 宏任务 → 真恢复（不靠源码计数）', async () => {
+  const prevDoc = globalThis.document
+  const prevRaf = globalThis.requestAnimationFrame
+  const style = { visibility: 'visible' }
+  const frames = []
+  globalThis.document = { documentElement: { style } }
+  globalThis.requestAnimationFrame = (cb) => { frames.push(cb); return frames.length }
+  try {
+    const mod = await import(pathToFileURL(abs('student-frontend/src/subwindows/widget/captureHide.js')).href)
+    const done = mod.hideForCapture()
+    assert.equal(style.visibility, 'hidden', '调用后必须立刻藏好，不能等 IPC 回来')
+    assert.equal(frames.length, 1, '第一帧应先排上')
+    frames.shift()()
+    assert.equal(frames.length, 1, '第一帧里必须再排一帧（合成器提交 + DWM 更新）')
+    frames.shift()()
+    await done
+    mod.restoreAfterCapture()
+    assert.equal(style.visibility, '', '截屏结束必须恢复，否则窗口看起来消失了')
+  } finally {
+    globalThis.document = prevDoc
+    globalThis.requestAnimationFrame = prevRaf
+  }
 })
 
 test('浮窗里所有截屏调用方都自己藏、并传 hideWidget:false', () => {

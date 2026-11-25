@@ -98,7 +98,7 @@ export function useSettingsData(ctx) {
         ctx.semesterStart.value = cur ? (cur.start_date || '') : ''
         ctx.semesterEnd.value = cur ? (cur.end_date || '') : ''
         ctx.semesterDateErrorText.value = ''
-      } catch (_) { /* 后端未就绪时静默忽略 */ }
+      } catch (_) { /* best-effort: 后端未就绪时静默忽略 */ }
     },
     // 选择学期：同时切换为当前学期（课程表、座位补存范围、座位指数结算都按它走）
     async onSelectSemester(id) {
@@ -227,7 +227,7 @@ export function useSettingsData(ctx) {
       try {
         const { data } = await listUndo()
         ctx.undoGroups.value = (data.groups || []).map(g => ({ ...g, entries: foldUndoEntries(g.records) }))
-      } catch { } finally {
+      } catch { } finally { // best-effort: 撤销分组读不到时按空列表展示，loading 仍会结束
         ctx.undoLoading.value = false
       }
       // 列表先铺开，再单独算「当前这张表」的失效 —— 没算完也不挡渲染，
@@ -507,7 +507,7 @@ export function useSettingsData(ctx) {
         // 否则每次正常登出都会在登录页弹一条「登录已过期」。
         markLoggingOut()
         // 通知后端吊销本次会话：原 token 立即失效（先发请求再清本地，token 已清会 401）
-        try { await axios.post(AUTH_API.logout) } catch (_) {}
+        try { await axios.post(AUTH_API.logout) } catch (_) {} // best-effort: 后端吊销失败无妨，本地 token 已清即视为登出
         clearAuth()
         clearMediaToken()
         ctx.router.push('/login')
@@ -582,8 +582,8 @@ export function useSettingsData(ctx) {
             xuefeng: d.xuefeng ?? '',
           }
         }
-      } catch (_) {
-        // 拉不到就让弹窗显示空表单，用户填写后保存即可
+      } catch (_) { // best-effort: 拉不到就让弹窗显示空表单，用户填写后保存即可
+
       }
     },
     // 保存班级信息（班名/口号/班风/学风）

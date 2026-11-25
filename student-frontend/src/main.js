@@ -73,7 +73,7 @@ setupApiClient({
   },
   onUnreachable: () => {
     // 没拿到任何响应 = 后端可能已不可达。让主进程立刻探测一次，不必等下一个心跳周期。
-    window.electron?.invoke?.(INVOKE.PROBE_BACKEND).catch(() => {})
+    window.electron?.invoke?.(INVOKE.PROBE_BACKEND).catch(() => {}) // best-effort: 探测失败由下一个心跳周期兜底
   },
   writeRetryGuard: (config) => {
     // 读请求本身幂等，重试没有副作用；只有写请求在重连期间不能自动重发
@@ -164,7 +164,7 @@ const landingPreload = getToken()
   : import('./views/Login.vue')
 // 归因（2-18）：chunk 早就下完了（协议层日志 0.1ms），但组件的模块求值晚得多，
 // 这条点出「落地页模块真正被求值」的时刻，用来判断那段等待到底在等谁。
-landingPreload.then(() => mark('落地页 chunk 已求值')).catch(() => {})
+landingPreload.then(() => mark('落地页 chunk 已求值')).catch(() => {}) // best-effort: 落地页打点失败不影响应用启动
 
 // ===== Vue 应用初始化 =====
 const app = createApp(App)
@@ -245,8 +245,8 @@ app.config.errorHandler = (err, instance, info) => {
     lastVueErrorToast = now
     try {
       useNotification().error(`操作失败：${(err && err.message) || err}`)
-    } catch (_) {
-      // best-effort: 通知系统自身不可用时不能再抛，否则错误边界循环报错
+    } catch (_) { // best-effort: 通知系统自身不可用时不能再抛，否则错误边界循环报错
+
     }
   }
 }
@@ -385,7 +385,7 @@ if (splashEl) {
       retryBtn.disabled = true
       quitBtn.disabled = true
       retryBtn.textContent = '重启中…'
-      try { await window.electron?.invoke(INVOKE.RESTART_BACKEND) } catch (_) {}
+      try { await window.electron?.invoke(INVOKE.RESTART_BACKEND) } catch (_) {} // best-effort: 重启后端失败仍走整页重载兜底
       // 后端已重新 fork：整页重载重走一遍启动流程（若仍起不来会再次显示本提示）
       setTimeout(() => location.reload(), 400)
     }
@@ -435,8 +435,8 @@ if (splashEl) {
     else if (msg.type === 'backend-failed') setBackendFailed(msg.failed)
   })
   // 兜住「先就绪/先失败、后加载」的竞态
-  window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) markBackendOk() }).catch(() => {})
-  window.electron?.invoke(INVOKE.BACKEND_FAILURE).then((f) => { if (f) setBackendFailed(true) }).catch(() => {})
+  window.electron?.invoke(INVOKE.BACKEND_STATUS).then((ok) => { if (ok) markBackendOk() }).catch(() => {}) // best-effort: 就绪状态查询失败，由事件监听接管
+  window.electron?.invoke(INVOKE.BACKEND_FAILURE).then((f) => { if (f) setBackendFailed(true) }).catch(() => {}) // best-effort: 失败状态查询失败，由事件监听接管
 
   // 轮询兜底：实时事件 + 启动时单次查询都可能漏。
   // 实测（2026-10-31，安装后首次启动）后端冷启动 8356ms 才就绪，主进程时间线里明明有
@@ -455,7 +455,7 @@ if (splashEl) {
       backendPollTicks++
       window.electron.invoke(INVOKE.BACKEND_STATUS)
         .then((ok) => { if (ok) markBackendOk() })
-        .catch(() => { /* 查询失败：下一拍再试，最多 25 拍 */ })
+        .catch(() => { /* best-effort: 查询失败：下一拍再试，最多 25 拍 */ })
     }, BACKEND_POLL_MS)
   }
 
@@ -475,13 +475,13 @@ if (splashEl) {
   const splashMark = (name) => {
     try {
       console.log(`[startup] ${name} @${Math.round(performance.timeOrigin + performance.now())}`)
-    } catch (_) { /* 打点失败绝不能影响启动 */ }
+    } catch (_) { /* best-effort: 打点失败绝不能影响启动 */ }
   }
 
   // 首屏内容就绪 = 首次导航完成 + 样式已应用 + （旧方案下，落地业务首页时）首页数据已到。
   // 新方案只等路由与样式：首页数据不再阻塞占位移除，未到的部分由 DashboardView 骨架屏先顶上，
   // 避免占位页长时间挡在整窗前。ensureDashboardData 各请求均有 .catch() 兜底，不会永久卡住。
-  const whenSplashReady = router.isReady().catch(() => {}).then(() => {
+  const whenSplashReady = router.isReady().catch(() => {}).then(() => { // best-effort: 路由未就绪时按空路由继续，首页数据各有兜底
     splashMark('路由就绪')
     const onHome = router.currentRoute.value.path === '/' && getToken()
     const waitData = onHome && !fastStartup

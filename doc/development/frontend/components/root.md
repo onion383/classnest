@@ -24,7 +24,8 @@ classnest/
 │           └── routePrefetch.js
 └── testjs/
     └── units/
-        └── frontend.test.js
+        └── ui/
+            └── frontend.test.js
 ```
 <!-- doc-tree:end -->
 
@@ -76,7 +77,7 @@ classnest/
 - **对外接口**：`props: data(必填)`（`{type, labels, values, ...}`）；无 emits。
 - **内部实现**：类型白名单回退 `bar`；数值非法归 0；`chartHit` 计算命中扇区/柱；提示框定位不走响应式（避免每帧重排）；配色读主题变量。
 - **使用方**：`AiChatMessages`（图表工具结果）。
-- 注意：解析与命中算法有单测（[`testjs/units/frontend.test.js`](../../../../testjs/units/frontend.test.js)），改算法先跑单测。
+- 注意：解析与命中算法有单测（[`testjs/units/ui/frontend.test.js`](../../../../testjs/units/ui/frontend.test.js)），改算法先跑单测。
 
 ---
 

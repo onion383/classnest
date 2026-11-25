@@ -132,8 +132,10 @@ test('接线：设置与权重各有一张守卫，且并发入口把设置 prom
 })
 
 test('变异反证：去掉「等设置」后空矩阵必现', async () => {
+  // 锚点用正则、不钉注释原文：catch 块里的说明注释会被 best-effort 规范前缀改写，
+  // 把整行当字符串锚点会在只改注释时假红（判据应该盯行为，不盯说明文字）。
   const mutated = src.replace(
-    'if (settingsReady) { try { await settingsReady } catch (_) { /* 设置失败：按当前（可能为空的）设置铺 */ } }',
+    /if \(settingsReady\) \{ try \{ await settingsReady \} catch \(_\) \{ \/\*[\s\S]*?\*\/ \} \}/,
     '',
   )
   assert.ok(mutated !== src, '变异没匹配到等待设置的语句')

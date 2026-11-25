@@ -83,7 +83,7 @@ export function useThumbBatch(getVisibleIds, options = {}) {
 
   function revokeAll() {
     for (const u of liveUrls) {
-      try { URL.revokeObjectURL(u) } catch (_) {}
+      try { URL.revokeObjectURL(u) } catch (_) {} // best-effort: 已释放的 objectURL 重复释放失败可忽略
     }
     liveUrls.clear()
     urls.value = new Map()
@@ -106,7 +106,7 @@ export function useThumbBatch(getVisibleIds, options = {}) {
     if (!plan.dropBlobs.length && !plan.dropMarkers.length) return
     const next = new Map(urls.value)
     for (const d of plan.dropBlobs) {
-      try { URL.revokeObjectURL(d.u) } catch (_) {}
+      try { URL.revokeObjectURL(d.u) } catch (_) {} // best-effort: 已释放的 objectURL 重复释放失败可忽略
       liveUrls.delete(d.u)
       next.delete(d.id)
       lastUsed.delete(d.id)
@@ -233,8 +233,8 @@ export function useThumbBatch(getVisibleIds, options = {}) {
           }
         }
         urls.value = next
-      } catch (_) {
-        // 建 objectURL 之类的本地异常：同样不写状态，留给下次重试
+      } catch (_) { // best-effort: 建 objectURL 之类的本地异常：同样不写状态，留给下次重试
+
       } finally {
         // 无论成功、失败、提前 return 还是异常，inflight 都必须清干净 ——
         // 漏掉一个 id 就等于它在这辈子都不会再进批量。

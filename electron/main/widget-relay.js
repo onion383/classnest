@@ -14,8 +14,8 @@ function relayToWidgetWindows(data, windows) {
     try {
       w.webContents.send(CH.FROM_MAIN, data)
       sent += 1
-    } catch (_) {
-      // 某个窗口正在关闭 / 渲染层崩了：不能让它挡住其它窗口收到消息
+    } catch (_) { // best-effort: 个别窗口正在关闭时跳过，不挡住其它窗口收消息
+
     }
   }
   return sent

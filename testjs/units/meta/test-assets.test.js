@@ -182,6 +182,46 @@ test('[行为] B13-05 扫描器能抓到多行空 catch，且不把 .catch( 计�
 })
 
 // ---------------------------------------------------------------------------
+// N1-24 行为判据：扫描器发现未标注静默捕获时，默认档必须非零退出。
+// 只测正则会说"抓得到"，但抓得到却 exit 0 等于没拦（工具摆设）——必须真跑子进程看退出码。
+// 做法：把工具复制进临时目录、把 ROOT 指向该目录，造一个未标注空 catch 的样本文件真跑。
+// ---------------------------------------------------------------------------
+test('[行为] N1-24 边界扫描器默认拦违规，--report-only 只报告不拦', () => {
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const toolSrc = read('testjs/tools/error-boundary-check.cjs')
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'err-boundary-'))
+  try {
+    fs.mkdirSync(path.join(tmp, 'electron'))
+    fs.writeFileSync(path.join(tmp, 'electron', 'sample.js'),
+      'function f(){ try { g() } catch (e) {} }\n', 'utf8')
+    // 把 ROOT 从真实仓库换成临时根：其余判定逻辑原样跑。
+    const patched = toolSrc.replace(
+      "const ROOT = path.join(__dirname, '..', '..')",
+      'const ROOT = __dirname')
+    assert.notStrictEqual(patched, toolSrc, '必须命中 ROOT 定义（锚点失效即假绿）')
+    const toolPath = path.join(tmp, 'error-boundary-check.cjs')
+    fs.writeFileSync(toolPath, patched, 'utf8')
+
+    const run = (...flags) => spawnSync(process.execPath, [toolPath, ...flags],
+      { encoding: 'utf8', timeout: 10000 })
+    const def = run()
+    assert.strictEqual(def.status, 1,
+      '默认档发现未标注空 catch 必须 exit 1，不能只报告放行')
+    assert.match(def.stdout, /未标注的静默捕获：1/, '必须真的扫到那处违规')
+
+    const report = run('--report-only')
+    assert.strictEqual(report.status, 0, '--report-only 是显式报告档，不拦')
+
+    const legacy = run('--strict')
+    assert.strictEqual(legacy.status, 1, '--strict 是历史别名，行为同默认必须拦')
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
 // 新增：后端路由测试的样板不许继续扩散
 //
 // 21 个历史测试文件各自抄了一遍「env 兜底 → 内存库 → 替换 db.js 的 Proxy →

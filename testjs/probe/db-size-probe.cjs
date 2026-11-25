@@ -20,7 +20,10 @@ const os = require('node:os')
 const path = require('node:path')
 
 const ROOT = path.resolve(__dirname, '../..')
-const Database = require(path.join(ROOT, 'student-backend/node_modules/better-sqlite3-multiple-ciphers'))
+// 按后端 manifest 解析真实依赖，不写死 node_modules 的位置（N1-48 / T05-02）：
+// 依赖可能装在上层目录（pnpm/提升安装、CI 自定义路径），硬编码路径会假报缺依赖。
+const { createRequire } = require('node:module')
+const Database = createRequire(path.join(ROOT, 'student-backend/package.json'))('better-sqlite3-multiple-ciphers')
 
 const MB = 1048576
 const round = (n, digits = 2) => Number.isFinite(n) ? Math.round(n * 10 ** digits) / 10 ** digits : 0

@@ -107,3 +107,59 @@ test('恢复态白名单里的登出路径与后端真实路由一致', () => {
   assert.ok(backendAuthPaths().has(logoutPaths[0]),
     `白名单 ${logoutPaths[0]} 不是后端真实路径（改动前前后端同时写错，这条放行从未生效）`)
 })
+
+// =========================================================================
+// G10（v8 · 5-4）：前端全部静态 API 路径 vs 后端真实挂载。
+// 上面只守了 2 条认证端点；这里守「前端调了一个后端完全没挂的 /api 前缀」。
+// 清单对账而非真跑 404：真跑需鉴权/数据/写库，不适合通用守卫。
+// 局限：前缀匹配抓不到同一 router 内的具体路由拼写错，由业务行为测试守。
+// =========================================================================
+
+/** 前端静态 /api 路径全集（源码 literal，不含 ${} 动态段） */
+function frontendStaticApiPaths() {
+  const out = new Set()
+  for (const file of walk(FRONT_SRC)) {
+    const code = read(file)
+    for (const m of code.matchAll(/['"`](\/api\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*)['"`]/g)) {
+      out.add(m[1])
+    }
+  }
+  return out
+}
+
+/** 后端已知路径源：app.use 前缀 + app.<verb> 直挂 + auth router 具体路由 */
+function backendMountedPaths() {
+  const app = read(path.join(BACKEND, 'app.js'))
+  const auth = read(path.join(BACKEND, 'routes', 'auth.js'))
+  const known = new Set()
+  // app.use('/api/xxx', …) — 排除裸 '/api'（它只挂 auth 具体路由，不是通配）
+  for (const m of app.matchAll(/app\.use\(\s*'((\/api)[^']*)'/g)) {
+    if (m[1] !== '/api') known.add(m[1])
+  }
+  // app.get('/api/xxx', …) 直挂（setup/semester-prefill 这类免登录端点）
+  for (const m of app.matchAll(/app\.(?:get|post|put|patch|delete)\(\s*'((\/api)[^']*)'/g)) {
+    known.add(m[1])
+  }
+  for (const m of auth.matchAll(/router\.(?:get|post|put|patch|delete)\(\s*'([^']+)'/g)) {
+    known.add('/api' + m[1])
+  }
+  return known
+}
+
+test('G10：前端每个静态 API 路径都落在后端真实挂载下（无幽灵端点）', () => {
+  const paths = frontendStaticApiPaths()
+  const known = backendMountedPaths()
+  assert.ok(paths.size >= 80, `前端静态路径解析异常（只拿到 ${paths.size} 条，源文件结构变了？）`)
+  assert.ok(known.size >= 30, `后端挂载解析异常（只拿到 ${known.size} 条，app.js 结构变了？）`)
+  const orphans = [...paths].filter((p) => ![...known].some((k) => p === k || p.startsWith(k + '/')))
+  assert.deepEqual(orphans, [],
+    `前端调用了后端未挂载的 /api 路径：\n${orphans.join('\n')}\n（后端已知：${[...known].sort().join(', ')}）`)
+})
+
+test('G10：挂载前缀从 app.js 现读（含直挂与 auth router），不写死', () => {
+  const known = backendMountedPaths()
+  assert.ok(known.has('/api/students'), '应解析到 app.use("/api/students", …)')
+  assert.ok(known.has('/api/setup/semester-prefill'), '应解析到 app.get 直挂路由')
+  assert.ok(known.has('/api/logout'), '应解析到 auth router 的 /api/logout')
+  assert.ok(!known.has('/api'), '裸 /api 不应算万能前缀（否则幽灵端点检测恒绿）')
+})

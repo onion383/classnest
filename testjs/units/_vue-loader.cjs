@@ -13,19 +13,30 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { createRequire } = require('node:module')
 
-const FRONTEND = path.resolve(__dirname, '../..', 'student-frontend')
-const VUE_DIR = path.join(FRONTEND, 'node_modules', 'vue')
+const FRONTEND_PKG = path.resolve(__dirname, '../..', 'student-frontend/package.json')
+// N1-48：不再硬编码 node_modules 目录。按前端 package.json 的依赖解析 vue 的
+// 实际安装位置（hoist / 自定义 node_modules 路径 / pnpm 链接都能找到）。
+// 解析失败时给出「先装前端依赖」的可操作提示，而不是 ERR_MODULE_NOT_FOUND 在收集用例前炸掉整文件。
+function resolveVueDir() {
+  try {
+    return path.dirname(createRequire(FRONTEND_PKG).resolve('vue/package.json'))
+  } catch (e) {
+    throw new Error('解析前端依赖 vue 失败：请先在 student-frontend/ 执行 npm install（' + e.message + '）')
+  }
+}
 
 function vueEsmEntry() {
-  const pkg = JSON.parse(fs.readFileSync(path.join(VUE_DIR, 'package.json'), 'utf8'))
+  const vueDir = resolveVueDir()
+  const pkg = JSON.parse(fs.readFileSync(path.join(vueDir, 'package.json'), 'utf8'))
   const cond = pkg.exports && pkg.exports['.']
   const imp = cond && cond.import
   const rel = typeof imp === 'string'
     ? imp
     : (imp && (imp.node || imp.default || imp.browser))
   if (!rel) throw new Error('vue/package.json 的 exports["."].import 解析不出入口')
-  return pathToFileURL(path.join(VUE_DIR, rel)).href
+  return pathToFileURL(path.join(vueDir, rel)).href
 }
 
 function loadVue() {

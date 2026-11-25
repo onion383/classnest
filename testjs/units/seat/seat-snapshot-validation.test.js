@@ -15,7 +15,7 @@
 // =========================================================================
 const test = require('node:test')
 const { abs } = require('#testjs/paths')
-const { extractFunctionDecl } = require('#testjs/units/_mechanism.cjs')
+const { extractFunctionDecl, loadMutated } = require('#testjs/units/_mechanism.cjs')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const { createBackendDb } = require('#testjs/units/_db-express-fixture.cjs')
@@ -123,11 +123,15 @@ test('接线：saveManualSnapshot 复用座位写入口的三件套校验', () =
 
 // ————————————————————————— ④ 变异反证 —————————————————————————
 
-test('变异反证：去掉形状校验后，行为判据必须失败', () => {
-  const src = fs.readFileSync(abs(SRC), 'utf8')
-  const h = extractFunctionDecl(src, 'saveManualSnapshot')
-  assert.equal(wiringGuard(h).ok, true, '基线必须通过，否则反证无意义')
-  const mutated = h.replace(/validateSeatSize\(rows, cols\)/, 'null').replace(/parseTypesForWrite\(types, rows, cols\)/, '{ skip: true }')
-  assert.ok(mutated !== h, '变异没匹配到校验调用')
-  assert.equal(wiringGuard(mutated).ok, false, '判据假绿：去掉尺寸校验后仍判 PASS')
+test('变异反证：真模块去掉格型尺寸校验后，错位 types 不再被拒（证明守卫有效）', () => {
+  const bad = { snap_date: '2026-11-11', ...BASE, types: [[0, 1], [0, 0], [0, 0]] }
+  assert.equal(seatSnapshot.saveManualSnapshot(bad).ok, false, '基线必须通过，否则反证无意义')
+  // N1-28：变异真实模块后调真函数，不再只在本地函数串上跑正则。
+  const mutated = loadMutated(SRC, (s) => {
+    const out = s.replace('if (parsedTypes.error) return { ok: false, error: parsedTypes.error };', '/* MUTATED */')
+    if (out === s) throw new Error('变异没匹配到格型尺寸校验分支')
+    return out
+  })
+  const r = mutated.saveManualSnapshot(bad)
+  assert.notEqual(r.ok, false, `判据假绿：去掉格型尺寸校验后仍拒错位 types（${r.error}）`)
 })

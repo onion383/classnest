@@ -36,8 +36,8 @@ classnest/
             │   ├── SettingsView.appearance.js
             │   ├── SettingsView.data.js
             │   ├── SettingsView.search.js
-            │   ├── undoNotices.js  # 更改审查四个入口的结果文案（纯函数）
-            │   └── SettingsView.vue  # /settings
+            │   ├── SettingsView.vue  # /settings
+            │   └── undoNotices.js
             ├── AboutView.vue  # /about
             ├── ActivitiesCountdownTab.vue  # ActivitiesView
             ├── ActivitiesDailyTab.vue  # ActivitiesView
@@ -130,7 +130,7 @@ classnest/
 - 注册流程：有密码账号先出草稿，抄写恢复密钥前 3 词确认后才建库（见 [backend/README.md](../backend/README.md) 鉴权小节）。
 
 ### SettingsView（目录）
-- 组成：[`SettingsView.vue`](../../../student-frontend/src/views/SettingsView/SettingsView.vue) + [`SettingsView.appearance.js`](../../../student-frontend/src/views/SettingsView/SettingsView.appearance.js) / [`SettingsView.data.js`](../../../student-frontend/src/views/SettingsView/SettingsView.data.js) / [`SettingsView.search.js`](../../../student-frontend/src/views/SettingsView/SettingsView.search.js)。
+- 组成：[`SettingsView.vue`](../../../student-frontend/src/views/SettingsView/SettingsView.vue) + [`SettingsView.appearance.js`](../../../student-frontend/src/views/SettingsView/SettingsView.appearance.js) / [`SettingsView.data.js`](../../../student-frontend/src/views/SettingsView/SettingsView.data.js) / [`SettingsView.search.js`](../../../student-frontend/src/views/SettingsView/SettingsView.search.js) / [`undoNotices.js`](../../../student-frontend/src/views/SettingsView/undoNotices.js)。
 - 职责：账号信息与安全等级（切到超级隐私时复用 `RecoveryKeyDialog` 展示恢复词；明文 / 无密码两档不显示密码框与「修改密码」）、撤销记录、主题（`ThemePickerDialog`）、工具箱与桌面组件开关、保存路径、数据目录、性能面板、数据库加密/导出、数据管理弹窗。
 
 ### ScheduleView（目录）

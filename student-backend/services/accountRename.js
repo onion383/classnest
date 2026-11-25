@@ -64,9 +64,9 @@ function renameUsernameWithCompensation({ registry, slug, newName, fallbackOldNa
         // 失败时不能报「已补偿」，否则调用方以为两边已恢复一致（审查 v5 · V5-024）。
         compensated = Number(registry.rename(slug, oldName)) > 0;
       }
-    } catch (_) {
-      // 回滚本身也失败：registry 与 users 已经对不上，只能靠人工/下次改名修正。
-      // 不掩盖原始错误 —— 它才是用户真正要看到的。
+    } catch (_) { // best-effort: 回滚失败不掩盖原始错误，留人工/下次改名修正
+
+
     }
     return { ok: false, reason: 'users-update-failed', compensated, oldName, error: err };
   }

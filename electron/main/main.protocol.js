@@ -70,7 +70,7 @@ async function dirSizeBytes(dir) {
     try {
       if (e.isDirectory()) total += await dirSizeBytes(p)
       else total += (await fs.promises.stat(p)).size
-    } catch (_) { /* 单条失败忽略 */ }
+    } catch (_) { /* best-effort: 单条失败忽略 */ }
   }
   return total
 }
@@ -88,7 +88,7 @@ function pruneOversizeCodeCache(dir) {
           const size = e.isDirectory() ? await dirSizeBytes(p) : st.size
           total += size
           items.push({ p, size, mtime: st.mtimeMs })
-        } catch (_) { /* 忽略单项 */ }
+        } catch (_) { /* best-effort: 忽略单项 */ }
       }
       if (total <= CC_MAX_BYTES) return
       const target = CC_MAX_BYTES * CC_TARGET_RATIO
@@ -96,26 +96,26 @@ function pruneOversizeCodeCache(dir) {
       let cur = total
       for (const it of items) {
         if (cur <= target) break
-        await fs.promises.rm(it.p, { recursive: true, force: true }).catch(() => {})
+        await fs.promises.rm(it.p, { recursive: true, force: true }).catch(() => {}) // best-effort: 单个缓存项删不掉就跳过，继续清理其余的
         cur -= it.size
       }
       console.log(`[main] 渲染代码缓存超限，已清理至约 ${Math.round(cur / 1048576)}MB`)
     })
-    .catch(() => {})
+    .catch(() => {}) // best-effort: 缓存清理失败不影响启动
 }
 
 function pruneStaleCodeCache(dir) {
   const marker = path.join(dir, '.cc-version')
   const cur = app.getVersion()
   let prev = ''
-  try { prev = fs.readFileSync(marker, 'utf8').trim() } catch (_) {}
+  try { prev = fs.readFileSync(marker, 'utf8').trim() } catch (_) {} // best-effort: 版本标记读不到时按新安装处理
   if (prev === cur) return
   fs.promises.readdir(dir, { withFileTypes: true })
     .then((entries) => Promise.all(entries
       .filter((e) => e.name !== '.cc-version')
-      .map((e) => fs.promises.rm(path.join(dir, e.name), { recursive: true, force: true }).catch(() => {}))))
-    .then(() => atomicWriteFile(marker, cur, { fs: fs.promises }).catch(() => {}))
-    .catch(() => {})
+      .map((e) => fs.promises.rm(path.join(dir, e.name), { recursive: true, force: true }).catch(() => {})))) // best-effort: 单个缓存项删不掉就跳过，继续清理其余的
+    .then(() => atomicWriteFile(marker, cur, { fs: fs.promises }).catch(() => {})) // best-effort: 版本标记写入失败可忽略
+    .catch(() => {}) // best-effort: 编译缓存清理失败不影响启动
 }
 
 function setupRendererCodeCache() {
@@ -123,7 +123,7 @@ function setupRendererCodeCache() {
   // 只进 stdout，不进启动时间线（避免污染用户可见的耗时明细）；不打点时 _p 是空函数。
   const _t0 = Date.now()
   const _p = process.env.PERF_STARTUP === '1'
-    ? (name) => { try { console.log(`[perf] 代码缓存 ${name} ${Date.now() - _t0}ms`) } catch (_) { /* 打点失败忽略 */ } }
+    ? (name) => { try { console.log(`[perf] 代码缓存 ${name} ${Date.now() - _t0}ms`) } catch (_) { /* best-effort: 打点失败忽略 */ } }
     : () => {}
   try {
     const dir = path.join(app.getPath('userData'), 'renderer-code-cache')
@@ -147,7 +147,7 @@ function setupAppProtocol() {
   // 分段打点（仅 PERF_STARTUP=1）：打包版「协议注册」稳定 20~29ms，逐段拆开看归属。
   const _t0 = Date.now()
   const _p = process.env.PERF_STARTUP === '1'
-    ? (name) => { try { console.log(`[perf] 协议注册 ${name} ${Date.now() - _t0}ms`) } catch (_) { /* 打点失败忽略 */ } }
+    ? (name) => { try { console.log(`[perf] 协议注册 ${name} ${Date.now() - _t0}ms`) } catch (_) { /* best-effort: 打点失败忽略 */ } }
     : () => {}
   const distDir = path.join(__dirname, '../../student-frontend/dist')
   const root = path.normalize(distDir)
@@ -157,8 +157,8 @@ function setupAppProtocol() {
   let htmlEntries = new Set()
   try {
     htmlEntries = new Set(fs.readdirSync(distDir).filter((f) => f.endsWith('.html')))
-  } catch (_) {
-    // dist 缺失时不阻断启动，后续请求走 index.html 回退
+  } catch (_) { // best-effort: dist 缺失时不阻断启动，后续请求走 index.html 回退
+
   }
   _p('readdirSync 入口枚举完成')
 
@@ -317,9 +317,9 @@ function setupAppProtocol() {
     } finally {
       try {
         let p = '?'
-        try { p = new URL(req.url).pathname } catch (_) { /* 非法 URL 就记 ? */ }
+        try { p = new URL(req.url).pathname } catch (_) { /* best-effort: 非法 URL 就记 ? */ }
         console.log(`[perf] 协议 ${p} ${(performance.now() - t0).toFixed(1)}ms`)
-      } catch (_) { /* 打点失败绝不能影响响应本身 */ }
+      } catch (_) { /* best-effort: 打点失败绝不能影响响应本身 */ }
     }
   })
   _p('protocol.handle 注册完成')

@@ -142,7 +142,10 @@ function printReport(dir) {
   console.log('')
   console.log('生产依赖可解析性：')
   for (const d of deps) console.log(`  ${d.ok ? 'OK  ' : 'MISS'} ${d.name}${d.ok ? '' : '（打包后会在 require 时失败）'}`)
-  return { total, rows, deps }
+  const backendBundle = backendBundleBytes()
+  console.log('')
+  console.log(`后端 bundle：${backendBundle === null ? '未构建（先跑 npm run build:backend）' : fmtBytes(backendBundle) + ' B'}`)
+  return { total, rows, deps, backendBundle }
 }
 
 function selftest() {
@@ -194,4 +197,11 @@ function main() {
 
 if (require.main === module) main()
 
-module.exports = { fmtBytes, bucketOf, summarize, walk, checkProdDeps, findPackageDir }
+// P1-21：后端 bundle 体积也可测量。它是 git-ignored 的生成物（CI 打包前由 build:backend
+// 重建），存在就返回字节数，不存在返回 null —— 不把它当缺失依赖判红（探针可在构建前跑）。
+function backendBundleBytes() {
+  const f = path.join(__dirname, '..', '..', 'student-backend', 'app.bundle.js')
+  try { return fs.statSync(f).size } catch (e) { if (e.code === 'ENOENT') return null; throw e }
+}
+
+module.exports = { fmtBytes, bucketOf, summarize, walk, checkProdDeps, findPackageDir, backendBundleBytes }

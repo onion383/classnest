@@ -16,10 +16,10 @@ export function prefetchRoute(router, rawPath) {
       const record = matched[matched.length - 1]
       const loader = record && record.components && record.components.default
       if (typeof loader === 'function') {
-        loader().catch(() => { /* 预取失败可忽略，点击时仍会正常加载 */ })
+        loader().catch(() => { /* best-effort: 预取失败可忽略，点击时仍会正常加载 */ })
       }
-    } catch (e) {
-      /* 忽略解析异常 */
+    } catch (e) { // best-effort: 预取解析异常可忽略，点击时仍会正常加载
+
     }
   }, 80)
 }

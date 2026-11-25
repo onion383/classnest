@@ -12,7 +12,9 @@ const test = require('node:test')
 const { abs } = require('#testjs/paths')
 const assert = require('node:assert/strict')
 
-const { ref } = require(abs('student-frontend/node_modules/vue'))
+// N1-48：按前端 package.json 解析依赖实际位置，不硬编码 node_modules 目录。
+const { createRequire } = require('node:module')
+const { ref } = createRequire(abs('student-frontend/package.json'))('vue')
 const { usePhotoTimeline } = require('../../../student-frontend/src/composables/usePhotoTimeline.js')
 
 const {

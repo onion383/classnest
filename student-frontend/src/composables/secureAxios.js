@@ -47,8 +47,8 @@ export function setupSecureAxios(axios) {
         config.data = await encryptBody(d, config.__perf)
         config.headers = config.headers || {}
         config.headers['Content-Type'] = 'application/json'
-      } catch (_) {
-        // 加密失败（如握手异常）时不阻断请求，回落到明文直通，保证功能可用
+      } catch (_) { // best-effort: 加密失败（如握手异常）时不阻断请求，回落到明文直通，保证功能可用
+
       }
       return config
     } finally {
@@ -59,20 +59,20 @@ export function setupSecureAxios(axios) {
         config.__perf.sendAt = perfNow()
         // 首屏归因（v6 · 2-13）：与后端「dashboard 到达」epoch 相减，判断这段空档
         // 是渲染层派发/网络，还是后端事件循环排队。
-        try { console.log(`[startup] 首屏发送开始 @${config.__perf.sendAt}`) } catch (_) { /* 打点失败静默 */ }
+        try { console.log(`[startup] 首屏发送开始 @${config.__perf.sendAt}`) } catch (_) { /* best-effort: 打点失败静默 */ }
         // 预检返回后 GET 迟迟不发（2-14）：在发送当下排一个宏任务与一帧，
         // 它们若被拖到 100ms 后才执行，说明主线程忙；若 0~5ms 就执行，说明是浏览器预检调度。
         try {
           const t = perfNow()
           setTimeout(() => {
-            try { console.log(`[startup] 派发后宏任务 ${perfNow() - t}ms @${perfNow()}`) } catch (_) { /* 静默 */ }
+            try { console.log(`[startup] 派发后宏任务 ${perfNow() - t}ms @${perfNow()}`) } catch (_) { /* best-effort: 启动打点失败不影响业务逻辑 */ }
           }, 0)
           if (typeof requestAnimationFrame === 'function') {
             requestAnimationFrame(() => {
-              try { console.log(`[startup] 派发后帧 ${perfNow() - t}ms @${perfNow()}`) } catch (_) { /* 静默 */ }
+              try { console.log(`[startup] 派发后帧 ${perfNow() - t}ms @${perfNow()}`) } catch (_) { /* best-effort: 启动打点失败不影响业务逻辑 */ }
             })
           }
-        } catch (_) { /* 打点失败静默 */ }
+        } catch (_) { /* best-effort: 打点失败静默 */ }
       }
     }
   })
@@ -110,7 +110,7 @@ export function setupSecureAxios(axios) {
           try {
             const sep = String(cfg.url || '').includes('?') ? '&' : '?'
             cfg.url = String(cfg.url || '') + sep + '_r=' + Date.now()
-          } catch (_) { /* url 不可写时退回原样重试 */ }
+          } catch (_) { /* best-effort: url 不可写时退回原样重试 */ }
           if (cfg.__origData) {
             try {
               cfg.__retrySecure = true
@@ -122,7 +122,7 @@ export function setupSecureAxios(axios) {
           }
           try {
             return axios(cfg)
-          } catch (_) { /* 重发失败：按原响应对待 */ }
+          } catch (_) { /* best-effort: 重发失败：按原响应对待 */ }
         }
       } finally {
         endDecrypt()
@@ -166,7 +166,7 @@ export function setupSecureAxios(axios) {
       }
       try {
         return axios(cfg)
-      } catch (_) { /* 重发失败：按原错误返回 */ }
+      } catch (_) { /* best-effort: 重发失败：按原错误返回 */ }
     }
     if (retry === 'auth') {
       cfg.__retryAuth = true
@@ -175,7 +175,7 @@ export function setupSecureAxios(axios) {
       resetAuthBinding()
       try {
         return axios(cfg)
-      } catch (_) { /* 重发失败：按原错误返回 */ }
+      } catch (_) { /* best-effort: 重发失败：按原错误返回 */ }
     }
     // 会话过期：后端 15 分钟 TTL 清掉了信道会话、或后端重启 → 回 401 且 body 为 { d:'session-expired' }。
     // **任何方法都要清会话重试一次**：旧实现要求请求带 body（cfg.__origData），于是 GET 请求
@@ -201,7 +201,7 @@ export function setupSecureAxios(axios) {
       }
       try {
         return axios(cfg)
-      } catch (_) { /* 重新握手仍失败：按原错误返回，由调用方兜底 */ }
+      } catch (_) { /* best-effort: 重新握手仍失败：按原错误返回，由调用方兜底 */ }
     }
     // 错误响应（4xx/5xx）在加密会话下同样被后端包成 { d: 'iv.tag.ct' }，
     // 这里也尝试解密，否则调用方拿到的 err.response.data 是密文，
@@ -210,8 +210,8 @@ export function setupSecureAxios(axios) {
     if (d && typeof d === 'object' && typeof d.d === 'string') {
       try {
         err.response.data = await decryptBody(d.d, cfg && cfg.__perf)
-      } catch (_) {
-        // 非法/过期密文（如 { d:'session-expired' }）保持原样，由调用方兜底
+      } catch (_) { // best-effort: 非法/过期密文（如 { d:'session-expired' }）保持原样，由调用方兜底
+
       }
     }
     return Promise.reject(err)

@@ -12,7 +12,7 @@ const test = require('node:test')
 const { abs } = require('#testjs/paths')
 const assert = require('node:assert/strict')
 
-const { fmtBytes, bucketOf, summarize, checkProdDeps } = require(abs('testjs/probe/pkg-size-probe.cjs'))
+const { fmtBytes, bucketOf, summarize, checkProdDeps, backendBundleBytes } = require(abs('testjs/probe/pkg-size-probe.cjs'))
 
 test('字节格式化：B / KB / MB 边界', () => {
   assert.equal(fmtBytes(0), '0 B')
@@ -57,5 +57,17 @@ test('生产依赖清单覆盖后端 manifest（T02-02）', () => {
   const names = checkProdDeps().map((d) => d.name)
   for (const name of Object.keys(backend.dependencies || {})) {
     assert.ok(names.includes(name), `checkProdDeps 漏掉了后端生产依赖：${name}（打包后启动即崩）`)
+  }
+})
+
+test('P1-21：后端 bundle 体积可测量（未构建返回 null 而非报错）', () => {
+  const fs = require('node:fs')
+  const n = backendBundleBytes()
+  const bundle = abs('student-backend/app.bundle.js')
+  if (fs.existsSync(bundle)) {
+    assert.equal(typeof n, 'number', 'bundle 存在时必须返回字节数')
+    assert.ok(n > 0 && n === fs.statSync(bundle).size, '字节数必须与磁盘文件一致')
+  } else {
+    assert.equal(n, null, 'bundle 不存在时返回 null，不把缺构建当缺失依赖判红')
   }
 })

@@ -58,8 +58,8 @@ export function useAccessLog(source) {
       if (!seq.isCurrent(my)) return
       summary.value = r.data.summary || { ...EMPTY_SUMMARY }
       if (r.data.config) config.value = { ...DEFAULT_CONFIG, ...r.data.config }
-    } catch (_) {
-      // 摘要读不到就保持「暂无记录」，不阻断面板其余部分（点开弹窗会重拉并报错）
+    } catch (_) { // best-effort: 摘要读不到保持暂无记录，点开弹窗会重拉
+
     }
   }
 

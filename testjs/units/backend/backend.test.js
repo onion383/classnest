@@ -31,17 +31,14 @@ const store = require('../../../student-backend/services/slotStore')
 // 原先这三个数组是 DDL 之外的第二份副本，新增/删除表只需改 DDL，测试清单不动也照样绿。
 const REG = require('../../../student-backend/schema/tableRegistry')
 
-// 「合并表」是业务语义（多行槽位并进物理表），保留为语义特例；
-// 但它的每个名字都必须真的在注册表里，防止注册表删表后这里还留着幽灵断言。
-const MERGED_TABLES = ['schedule_slots', 'duty_slots', 'seat_slots', 'domain_history']
+// 「合并表」是业务语义（多行槽位并进物理表）：逻辑槽位落的那几张物理表 + 历史明细表。
+// 名字从注册表派生，不再抄第二份；注册表增删表时这份断言跟着变，不会留幽灵名字。
+const MERGED_TABLES = [...new Set([...Object.values(REG.LOGICAL), ...REG.PHYSICAL.history])]
 // 逻辑表（slotStore 的 key）+ 三张历史只读视图，全部由注册表导出
 const LOGICAL_VIEWS = [...REG.ALL_LOGICAL, ...REG.HISTORY_VIEWS]
-// 已下线、不得再以物理表存在的旧对象（注册表不收录历史包袱，只能作为「必须不存在」的反向断言）
-const DROPPED_TABLES = [
-  'schedule', 'master_schedule', 'schedule_settings', 'schedule_history',
-  'duty_settings', 'duty_layout', 'duty_template', 'duty_weight', 'duty_draft', 'duty_history',
-  'seat_layout', 'seat_template', 'seat_weight', 'seat_draft', 'seat_history',
-]
+// 只剩一个注册表从不收录的旧名字需要单独挡住；其余「旧单例表」不是逻辑表就是历史视图，
+// 下面的表/视图双向全等断言已经保证它们不会以物理表身份复活，不需要再抄一份名单。
+const LEGACY_PHYSICAL_ONLY = ['schedule_settings']
 
 function fresh() {
   const conn = new Database(':memory:')
@@ -88,9 +85,9 @@ test('建表：四个合并表存在，旧单例表全部退化为只读视图',
   assert.deepEqual(actualTables, [...REG.ALL_PHYSICAL].sort(), '物理表必须与 tableRegistry.ALL_PHYSICAL 完全一致')
   LOGICAL_VIEWS.forEach((v) => assert.ok(views.has(v), `缺少逻辑视图 ${v}`))
   assert.deepEqual([...views].sort(), [...LOGICAL_VIEWS].sort(), '视图必须与注册表的逻辑表 + 历史视图完全一致')
-  DROPPED_TABLES.forEach((t) => {
+  LEGACY_PHYSICAL_ONLY.forEach((t) => {
+    assert.ok(!REG.isKnownName(t), `${t} 已进注册表，请从 LEGACY_PHYSICAL_ONLY 移除`)
     assert.ok(!tables.has(t), `旧表 ${t} 仍以物理表存在`)
-    // 只要求「不再以物理表存在」：这些名字多数仍作为逻辑槽位 / 历史视图合法存在
   })
   conn.close()
 })

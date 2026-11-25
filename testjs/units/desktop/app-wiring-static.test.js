@@ -102,8 +102,11 @@ test('[静态] 后端落库走 receiptKind，前端 viewMode 兼容细分类型'
 
 // ---------- student-delete-guard ----------
 test('接线：一并删除的调用点显式放行，通用入口不带', () => {
-  const app = read('student-backend/app.js')
-  assert.match(app, /deleteRow\('students', id, \{ allowStudentOrphans: true \}\)/, 'delete-with-relations 必须显式放行（否则 purge 完也删不掉）')
+  // Q2-01 后级联删除逻辑从 app.js 路由搬进同事务服务，断言对象跟着移。
+  const svc = read('student-backend/services/studentCascadeDelete.js')
+  assert.match(svc, /deleteRow\('students', id, \{ allowStudentOrphans: true \}\)/, 'delete-with-relations 必须显式放行（否则 purge 完也删不掉）')
+  // @pin student-backend/app.js#deleteStudentCascade
+  assert.match(read('student-backend/app.js'), /deleteStudentCascade/, '路由仍走级联服务')
   const dyn = read('student-backend/routes/dynamicTable.js')
   assert.match(dyn, /deleteRow\(tableName, req\.params\.id, \{ minCount \}\)/, '通用 DELETE 不许传放行标记 —— 那就是留孤儿的入口')
 })

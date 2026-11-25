@@ -75,8 +75,10 @@ classnest/
     ├── smoke/
     │   └── unzip-safe-test.cjs
     └── units/
-        ├── pathGuard.test.js
-        └── updateIntegrity.test.js
+        ├── desktop/
+        │   └── updateIntegrity.test.js
+        └── security/
+            └── pathGuard.test.js
 ```
 <!-- doc-tree:end -->
 
@@ -303,7 +305,7 @@ sequenceDiagram
 | --- | --- |
 | 窗口安全配置 | [`main.web-prefs.js`](../../../electron/main/main.web-prefs.js)（窗口安全选项集中配置） |
 | IPC 白名单 | [`preload.js`](../../../electron/preload.js)（预加载脚本）、[`ipc-channels.json`](../../../electron/ipc-channels.json)（IPC 通道清单）、[`ipc-policy.json`](../../../electron/ipc-policy.json)（IPC 授权表：通道 → 允许的窗口角色） |
-| 路径/URL 判定（含单测） | [`main.path-guard.js`](../../../electron/main/main.path-guard.js)（路径 / URL 判定）、[`testjs/units/pathGuard.test.js`](../../../testjs/units/pathGuard.test.js)（对应单元测试） |
+| 路径/URL 判定（含单测） | [`main.path-guard.js`](../../../electron/main/main.path-guard.js)（路径 / URL 判定）、[`testjs/units/security/pathGuard.test.js`](../../../testjs/units/security/pathGuard.test.js)（对应单元测试） |
 | 网页隔离 | [`main.webview-guard.js`](../../../electron/main/main.webview-guard.js)（网页隔离守卫） |
 | 协议与目录穿越防护 | [`main.protocol.js`](../../../electron/main/main.protocol.js)（自定义协议注册与目录穿越防护） |
 | 鉴权中间件 | [`middleware/auth.js`](../../../student-backend/middleware/auth.js)（接口鉴权中间件） |
@@ -314,7 +316,7 @@ sequenceDiagram
 | 恢复密钥 | [`services/recoveryKey.js`](../../../student-backend/services/recoveryKey.js)（恢复密钥处理） |
 | AI 表白名单/提案 | [`ai.constants.js`](../../../student-backend/routes/ai/ai.constants.js)（AI 读写表白名单）、[`executors.proposal.js`](../../../student-backend/routes/ai/ai.tools/tools.executors/executors.proposal.js)（写入提案执行器） |
 | AI 子代理白名单 | [`ai.subagent-tools.js`](../../../student-backend/routes/ai/ai.subagent-tools.js)（子代理只读工具白名单） |
-| 更新完整性 | [`main.update-integrity.js`](../../../electron/main/main.update-integrity.js)（更新包完整性校验）、[`testjs/units/updateIntegrity.test.js`](../../../testjs/units/updateIntegrity.test.js)（对应单元测试） |
+| 更新完整性 | [`main.update-integrity.js`](../../../electron/main/main.update-integrity.js)（更新包完整性校验）、[`testjs/units/desktop/updateIntegrity.test.js`](../../../testjs/units/desktop/updateIntegrity.test.js)（对应单元测试） |
 | 解压防护 | [`services/unzipSafe.js`](../../../student-backend/services/unzipSafe.js)（安全解压）、[`testjs/smoke/unzip-safe-test.cjs`](../../../testjs/smoke/unzip-safe-test.cjs)（解压防护冒烟脚本） |
 
 ---

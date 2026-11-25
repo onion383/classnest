@@ -160,6 +160,39 @@ test('单遍合并与改造前两份遍历逐学生一致（随机 5 组）', as
   }
 })
 
+test('单热点：权重只给一个格子时，分值必须且只能落到该格学生（不依赖复刻 oracle）', async () => {
+  const { aggregateSeatDaily } = await import(MODULE)
+  const ROWS = 4
+  const COLS = 5
+  const day = '2026-11-10'
+  for (let r = 0; r < ROWS; r += 1) {
+    for (let c = 0; c < COLS; c += 1) {
+      const weights = Array.from({ length: ROWS }, () => Array(COLS).fill(0))
+      weights[r][c] = 1
+      const seats = Array.from({ length: ROWS }, () => Array(COLS).fill(null))
+      seats[r][c] = 101
+      const got = aggregateSeatDaily({
+        days: [{ snap_date: day, seats }],
+        weights,
+        ledgerTo: day, indexTo: day,
+        studentName: (id) => (id === 101 ? '张三' : ''),
+      })
+      assert.deepEqual(got.ledger, { 101: 1 }, `账本漏算/串位：格 (${r},${c})`)
+      assert.deepEqual(got.acc, { 'id:101': 1 }, `指数漏算/串位：格 (${r},${c})`)
+    }
+  }
+  // 字符串格只进指数、不进账本（老快照没有学号时的口径）
+  const weights = [[0, 1]]
+  const got = aggregateSeatDaily({
+    days: [{ snap_date: day, seats: [[null, '临时生']] }],
+    weights,
+    ledgerTo: day, indexTo: day,
+    studentName: (id) => (id === 101 ? '张三' : ''),
+  })
+  assert.deepEqual(got.ledger, {}, '姓名格不应进账本')
+  assert.deepEqual(got.acc, { 'name:临时生': 1 })
+})
+
 test('上限独立：并集多拉的「今日」与「所选周之后」不会串到对端口径', async () => {
   const { aggregateSeatDaily } = await import(MODULE)
   const weights = [[1, 2]]

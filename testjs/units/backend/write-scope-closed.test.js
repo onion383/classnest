@@ -79,6 +79,22 @@ test('写闸门单例：MCP 与 AI 两侧都接了 closed 来源', () => {
   assert.equal(hits.length, 2, `应有两个单例接 closed（AI + MCP），实际 ${hits.length}`)
 })
 
+// ————————————————————————— ② 默认 canWrite 覆盖两份写清单（Q4-01 缺口①残余） —————————————————————————
+
+test('写闸门默认口径：WRITE/JSON_WRITE 每表可写，清单外表不可写', () => {
+  // 生产单例 writeScope 不传 supportsWrite，走默认 canWrite = WRITE_TABLES || JSON_WRITE_TABLES。
+  // 现有用例全注入自己的 supportsWrite，这条真实路径从没被测——从清单删表会静默让 AI 拒写而不红。
+  const { makeWriteScope } = require(path.join(ROOT, WS))
+  const ws = makeWriteScope({ readReadonly: () => [], readClosed: () => [] })
+  // 期望值不能从 ai.constants 取——那和被被测模块同源，删表时两边一起变会假绿。
+  // 钉住业务上必须可写的关键表（覆盖行式与整块两类），删任一个都应让 AI 拒写而红。
+  const MUST_WRITE = ['students', 'score_records', 'cadres', 'leave_records', 'seat_layout', 'duty_settings', 'widget_settings']
+  for (const t of MUST_WRITE) {
+    assert.equal(ws.isTableWritable(t), true, `业务关键表「${t}」默认应可写（AI 写入白名单漏了它）`)
+  }
+  assert.equal(ws.isTableWritable('totally_unknown_table___'), false, '清单外幽灵表默认不可写')
+})
+
 // ————————————————————————— ③ 变异反证 —————————————————————————
 
 test('变异反证：抹掉写闸门的 closed 合并后，判据必须失败', () => {

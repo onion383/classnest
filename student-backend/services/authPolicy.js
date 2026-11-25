@@ -55,9 +55,9 @@ function load() {
 function save() {
   try {
     fs.writeFileSync(FILE(), JSON.stringify(cache), { encoding: 'utf8', mode: 0o600 });
-  } catch (_) {
-    // 写失败只影响「重启后还能记住这个设置」，不影响本次登录：
-    // 内存里 cache 已经更新，本次进程内行为正确。
+  } catch (_) { // best-effort: 写盘失败只影响重启记忆，内存已更新本次正确
+
+
   }
 }
 
@@ -125,7 +125,7 @@ function daysForSlug(slug) {
   try {
     const rec = dbManager.registryFindBySlug(String(slug));
     if (rec && rec.username) return daysFor(rec.username);
-  } catch (_) { /* index.db 不可用时按默认策略处理 */ }
+  } catch (_) { /* best-effort: index.db 不可用时按默认策略处理 */ }
   return DEFAULT_DAYS;
 }
 

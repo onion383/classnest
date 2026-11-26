@@ -148,6 +148,7 @@ npm run dev:new            # 3.6 通道只起 Vite
 | `npm run electron:build`                               | 前端 → electron-builder（`--dir`）→ Inno，产物在 `release/` |
 | `npm run electron:buildnew`                            | 同上，走 3.6 通道，产物在 `release36/`                        |
 | `npm run build:win:inno`                               | 只编译安装包（需先有 unpacked 产物）；跟 `-- release36 --vue36` 出 3.6 预览包 |
+| `npm run ci:staged`                                    | 提交前一键验证：隔离 worktree 跑 CI 全套闸门，全绿才可提交（`--full` 加 build+冒烟） |
 | `npm test`                                             | units + behavior + probe（约 2.4s）                    |
 | `npm run test:units` / `test:behavior` / `test:probe`  | 单独跑某一层                                              |
 | `npm run test:impact`                                  | 按改动选相关测试跑（日常验证用，提交前再跑 `npm test`）                  |

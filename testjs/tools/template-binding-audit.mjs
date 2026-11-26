@@ -7,7 +7,24 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const srcRoot = path.resolve('student-frontend/src')
-const vueDir = path.resolve(process.argv[2] ?? 'student-frontend/vue36/node_modules/vue')
+// 审计只需要一个 Vue 3.x 编译器（3.5 / 3.6 产物一致，见文件头注释）。
+// 默认优先 vue36（本地有就用通道版），但 vue36 是 gitignore 的可选目录、CI test job 不装它
+// —— 缺了就 fallback 到主线 student-frontend/node_modules/vue（CI 必装）。
+// 之前写死 vue36 导致 CI 上 ERR_MODULE_NOT_FOUND、npm test 每次必红。
+// 显式传参（node xxx.mjs <vue目录>）仍然最高优先。
+function pickVueDir() {
+  if (process.argv[2]) return path.resolve(process.argv[2])
+  const candidates = [
+    'student-frontend/vue36/node_modules/vue',
+    'student-frontend/node_modules/vue',
+  ]
+  for (const rel of candidates) {
+    const dir = path.resolve(rel)
+    if (fs.existsSync(path.join(dir, 'compiler-sfc', 'index.mjs'))) return dir
+  }
+  throw new Error(`找不到 Vue compiler-sfc（试过：${candidates.join('、')}）`)
+}
+const vueDir = pickVueDir()
 const sfc = await import(pathToFileURL(path.join(vueDir, 'compiler-sfc', 'index.mjs')).href)
 const { parse, compileScript, compileTemplate } = sfc
 

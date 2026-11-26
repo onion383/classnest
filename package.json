@@ -48,7 +48,8 @@
     "lint": "eslint student-frontend/src student-frontend/*.js student-backend electron",
     "test:behavior": "node testjs/run-behavior.js",
     "test": "node testjs/run-all.js --fast",
-    "test:all": "node testjs/run-all.js"
+    "test:all": "node testjs/run-all.js",
+    "ci:staged": "node testjs/tools/ci-staged.cjs"
   },
   "dependencies": {
     "koffi": "^3.3.3"

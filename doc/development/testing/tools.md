@@ -12,6 +12,7 @@ classnest/
     │   ├── album-sql-args.js  # 相册 SQL 参数构造核对
     │   ├── audit-coverage.mjs  # 覆盖矩阵生成器：按「入口 × 不变量」扫描守卫证据，输出 PASS / GAP / UNKN…
     │   ├── bundle-diff.mjs  # 构建产物体积差异
+    │   ├── ci-staged.cjs  # 提交前一键验证：建隔离 worktree 应用暂存 patch，跑全套 CI 闸门，全绿才提交
     │   ├── closeServer.cjs  # 关闭 HTTP server 并等它真正收尾：server.close() 只是「不再接受新…
     │   ├── code_stats.ps1  # 代码与文档量统计（生成 ；文档统计 doc/ + 仓库根目录 Markdown，根目录不含 …
     │   ├── comment-audit.js  # 注释保真审计：比对拆分前后注释，只读不改
@@ -113,6 +114,7 @@ classnest/
 | [`vapor-verify.mjs`](../../../testjs/tools/vapor-verify.mjs) | 校验产物里 `__vapor: true`（拼错标记只会静默失效） | 直接运行 |
 | [`guard-ledger.cjs`](../../../testjs/tools/guard-ledger.cjs) | 守卫台账：源码断言要写 `// @pin 源码路径#符号名`；锚点死了说明断言已无法失败 → 逼删；基线只降不升（`--update` 拒绝变差） | `npm run check:guards` |
 | [`pin-spread.cjs`](../../../testjs/tools/pin-spread.cjs) | 批量给存量源码断言补 `@pin` 锚点（只认声明符号，数据变量不收）；`--json` 输出候选 | 直接运行 / `--json` |
+| [`ci-staged.cjs`](../../../testjs/tools/ci-staged.cjs) | 提交前验证：建 detach worktree → 应用暂存 patch（= 提交后的 HEAD）→ junction 链接 node_modules → 跑 CI test job 全套闸门（版本号/lint/boundaries/ipc/channels/schema/docs/coverage/guards/快测，`--full` 加 build+冒烟）→ 清理；全绿才提交，避免「本地绿、CI 红」 | `npm run ci:staged` / `-- --full` / `-- --keep`（失败保留副本） |
 
 ---
 

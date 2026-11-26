@@ -110,3 +110,19 @@ test('接线：一并删除的调用点显式放行，通用入口不带', () =>
   const dyn = read('student-backend/routes/dynamicTable.js')
   assert.match(dyn, /deleteRow\(tableName, req\.params\.id, \{ minCount \}\)/, '通用 DELETE 不许传放行标记 —— 那就是留孤儿的入口')
 })
+
+// ---------- Electron 缓存的统计与清理 ----------
+test('接线：磁盘统计带 Electron 缓存，清理通道只授权主窗口', () => {
+  const perf = read('electron/main/main.perf.js')
+  const vue = read('student-frontend/src/views/SettingsView/SettingsView.vue')
+  const app = read('student-frontend/src/views/SettingsView/SettingsView.appearance.js')
+  const policy = JSON.parse(require('node:fs').readFileSync(
+    require('#testjs/paths').abs('electron/ipc-policy.json'), 'utf8',
+  ))
+  assert.ok(perf.includes('cacheDirs: await cacheDirPaths'), '统计必须带上 Electron 缓存')
+  assert.match(perf, /CH\.PERF_CACHE_CLEAR/, '主进程要注册清理通道')
+  assert.match(vue, /key: 'cache'/, '设置页要有 Electron 缓存分类')
+  assert.match(vue, /seg\.key === 'cache'/, '缓存分类要有清理按钮')
+  assert.match(app, /INVOKE\.PERF_CACHE_CLEAR/, '按钮要调用清理通道')
+  assert.deepEqual(policy['perf-cache-clear'], ['main'], '只允许主窗口调用')
+})

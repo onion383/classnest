@@ -82,6 +82,7 @@
     "perf-startup",
     "perf-disk-usage",
     "perf-logs-clear",
+    "perf-cache-clear",
     "get-app-version",
     "get-mcp-launch-info",
     "update-check",

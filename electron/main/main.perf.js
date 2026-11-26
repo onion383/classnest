@@ -19,7 +19,7 @@ const { CH, IPC } = require('./channels')
 const { resolveLogsDir } = require('./main.config')
 const fsp = require('node:fs/promises')
 const { getPrivateWorkingSetKB } = require('./main.privateWorkingSet')
-const { scanDiskUsage, logFilePaths } = require('./main.disk-usage')
+const { scanDiskUsage, logFilePaths, cacheDirPaths, clearCacheDirs } = require('./main.disk-usage')
 const { clearLogFile } = require('./main.logRotator')
 const { ok, fail, safeReject } = require('./main.ipc-contract')
 const startupTimer = require('./main.startup-timer')
@@ -436,6 +436,7 @@ function registerPerfIpc(opts = {}) {
         // v2 布局下 backend.log/startup.log/inp.log 都在 <数据根>/logs/；
         // desktop-layer.log 仍属应用级日志，留在 userData 根。扫描端按目录去重。
         logDirs: [resolveLogsDir(), app.getPath('userData')],
+        cacheDirs: await cacheDirPaths(app.getPath('userData')),
         slug,
       })
       return ok({ ...usage, at: Date.now() })
@@ -472,6 +473,18 @@ function registerPerfIpc(opts = {}) {
         }
       }
       return ok({ clearedBytes, files: clearedFiles, at: Date.now() })
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // 「Electron 缓存」行的「清理」：只删白名单里的可再生缓存目录，保留 Local Storage / Preferences。
+  // 与主进程启动时的代码缓存清理不冲突：这里删完重建空目录，下次启动照常重新生成。
+  IPC.handle(CH.PERF_CACHE_CLEAR, async () => {
+    try {
+      const dirs = await cacheDirPaths(app.getPath('userData'))
+      const { clearedBytes, dirs: clearedDirs } = await clearCacheDirs(dirs)
+      return ok({ clearedBytes, dirs: clearedDirs, at: Date.now() })
     } catch (err) {
       return fail(err)
     }

@@ -43,6 +43,7 @@ const ALLOW = new Map([
   ['SECURE_HANDSHAKE', '内部 try/catch 后 return fail'],
   ['PERF_DISK_USAGE', '内部 try/catch 后 return fail'],
   ['PERF_LOGS_CLEAR', '内部逐文件 try/catch，整体再兜一层'],
+  ['PERF_CACHE_CLEAR', '内部逐目录 try/catch，整体再兜一层'],
 ])
 
 test('所有 IPC.handle 处理器要么走 safe/safeReject，要么在例外白名单里', () => {

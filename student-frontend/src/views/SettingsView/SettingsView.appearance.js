@@ -534,6 +534,34 @@ export function useSettingsAppearance(ctx) {
         '清理',
       )
     },
+    // 「清理」Electron 缓存：只删白名单里的可再生缓存目录，保留登录态与主题。
+    clearCache() {
+      if (ctx.busyCache.value || ctx.busyDisk.value) return
+      const bytes = (ctx.diskUsage.value && ctx.diskUsage.value.cache) || 0
+      if (!bytes) return
+      // 弹窗不报预估数：缓存目录被持续读写，面板数字是 20s 前的旧值，
+      // 为算准它而强制重算会让弹窗卡一下，不值当。清理完报实际释放即可。
+      ctx.showConfirm(
+        '确定清空 Electron 缓存吗？\n'
+        + '只删可再生的界面渲染与代码编译缓存；登录态、主题、数据与照片都不受影响，下次启动会稍慢。',
+        async () => {
+          ctx.busyCache.value = true
+          try {
+            const res = await window.electron?.invoke(INVOKE.PERF_CACHE_CLEAR)
+            if (!res || res.outcome !== 'ok') {
+              throw new Error((res && res.error) || '主进程未返回结果')
+            }
+            ctx.notifySuccess(`已清空 ${res.dirs || 0} 个缓存目录，释放 ${ctx.fmtBytes(res.clearedBytes || 0)}`)
+          } catch (err) {
+            ctx.notifyError('清理缓存失败：' + (err.message || '未知错误'))
+          } finally {
+            ctx.busyCache.value = false
+            await ctx.loadDiskUsage(true)
+          }
+        },
+        '清理',
+      )
+    },
     // 轮询开关：进入页面（含从 KeepAlive 恢复）开始，离开即停，避免常驻采样
     _startPerfPolling() {
       if (ctx._perfTimer.value) return

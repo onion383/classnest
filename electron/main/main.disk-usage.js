@@ -8,6 +8,7 @@
 //   uploads        上传文件   —— uploads / album-trash / receipt-trash（多账号共享的用户文件）
 //   thumbs         图片微缩图 —— 缩略图目录（album-thumbs，所有账号合计）
 //   logs           日志       —— backend.log / inp.log / startup.log / desktop-layer.log
+//   cache          Electron 缓存 —— userData 下可再生的 Chromium 缓存 + 代码编译缓存
 //   other          其他       —— index.db、快照、AI 记忆等剩余部分
 //
 // 不 require('electron')：主进程入口只传目录进来，这样本模块能被 node 直接单测。
@@ -26,6 +27,39 @@ const THUMBS_DIRNAME = 'album-thumbs'
 const UPLOAD_DIRNAMES = new Set(['uploads', 'album-trash', 'receipt-trash'])
 // 日志出口（见 main.logRotator.js）：只认固定文件名，别的 .log 不替他做主
 const LOG_FILENAMES = new Set(['backend.log', 'inp.log', 'startup.log', 'desktop-layer.log'])
+
+// 可再生的 Electron 缓存目录（userData 根下，白名单）。统计与清理共用这一份，
+// 避免「统计算了但清理删不到」或反过来「清理删了统计不认」。
+// 刻意不含 Local Storage / Preferences / Local State —— 登录态与主题存在那里，
+// 删了要重新登录、配置归零，不能当缓存清。
+const CACHE_DIRNAMES = new Set([
+  'Cache',
+  'Code Cache',
+  'GPUCache',
+  'GPUPersistentCache',
+  'DawnGraphiteCache',
+  'DawnWebGPUCache',
+  'GrShaderCache',
+  'ShaderCache',
+  'Network',
+  'blob_storage',
+  'node-compile-cache',
+  'renderer-code-cache',
+])
+
+// 缓存目录绝对路径清单（只列存在的目录）：统计与「清理缓存」共用。
+async function cacheDirPaths(userDataDir, io = fsp) {
+  if (!userDataDir) return []
+  const root = path.resolve(userDataDir)
+  const out = []
+  for (const name of CACHE_DIRNAMES) {
+    const p = path.join(root, name)
+    try {
+      if ((await io.stat(p)).isDirectory()) out.push(p)
+    } catch (_) { /* 不存在按无缓存处理 */ }
+  }
+  return out
+}
 
 // 单个目录里文件的 stat 并发度：Windows 上单次 stat 约 0.1ms，
 // 缩略图目录动辄几千个 jpg，串行 await 要几百 ms（实测整次统计 1s），分批并发可压到 1/5 以内。
@@ -122,7 +156,7 @@ function resetAppSizeCache() {
   appSizeCache = { dir: '', bytes: 0 }
 }
 
-async function scanDiskUsage({ appDir, dataDir, thumbsDir, logDirs, slug } = {}) {
+async function scanDiskUsage({ appDir, dataDir, thumbsDir, logDirs, cacheDirs, slug } = {}) {
   if (!dataDir) throw new Error('scanDiskUsage 需要 dataDir')
 
   const out = {
@@ -132,6 +166,7 @@ async function scanDiskUsage({ appDir, dataDir, thumbsDir, logDirs, slug } = {})
     uploads: 0,
     thumbs: 0,
     logs: 0,
+    cache: 0,
     other: 0,
     total: 0,
   }
@@ -187,16 +222,49 @@ async function scanDiskUsage({ appDir, dataDir, thumbsDir, logDirs, slug } = {})
     out.logs += await logBytesIn(resolved)
   }
 
-  out.total = out.app + out.currentAccount + out.otherAccounts + out.uploads + out.thumbs + out.logs + out.other
+  // Electron 缓存目录在 userData 根（不在 dataDir 四层里），单独扫。
+  if (Array.isArray(cacheDirs)) {
+    const parts = await Promise.all(cacheDirs.map((d) => dirSize(d)))
+    for (const bytes of parts) out.cache += bytes
+  }
+
+  out.total = out.app + out.currentAccount + out.otherAccounts + out.uploads + out.thumbs + out.logs + out.cache + out.other
   return out
+}
+
+// 清空缓存目录内容（保留目录本身）：rm 掉里面所有条目后重建空目录。
+// 单个目录失败不影响其余；报数用清理前后的实际体积差 —— 并发写入导致没清干净时不虚报。
+// 注意只删白名单内的目录，绝不碰 Local Storage / Preferences。
+async function clearCacheDirs(cacheDirs, io = fsp) {
+  let clearedBytes = 0
+  let clearedDirs = 0
+  for (const dir of Array.isArray(cacheDirs) ? cacheDirs : []) {
+    let before = 0
+    try { before = await dirSize(dir) } catch (_) { before = 0 }
+    if (before <= 0) continue
+    try {
+      await io.rm(dir, { recursive: true, force: true })
+      await io.mkdir(dir, { recursive: true })
+    } catch (_) { continue } // 单条失败（占用/权限）跳过，不中断整次清理
+    let after = 0
+    try { after = await dirSize(dir) } catch (_) { after = 0 }
+    if (before > after) {
+      clearedBytes += before - after
+      clearedDirs += 1
+    }
+  }
+  return { clearedBytes, dirs: clearedDirs }
 }
 
 module.exports = {
   scanDiskUsage,
+  clearCacheDirs,
   classifyEntry,
   dirSize,
   resetAppSizeCache,
   logFilePaths,
+  cacheDirPaths,
+  CACHE_DIRNAMES,
   ACCOUNT_DB_RE,
   THUMBS_DIRNAME,
 }

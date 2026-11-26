@@ -860,6 +860,13 @@
                   title="清空后端、启动、INP、桌面挂件四个日志文件（只截断不删文件）；不影响任何数据和照片，运行期的日志会继续照常写入"
                 >{{ busyLogs ? '清理中' : '清理' }}</button>
                 <button
+                  v-if="seg.key === 'cache'"
+                  @click.stop="clearCache"
+                  :disabled="busyCache || busyDisk"
+                  class="flex-shrink-0 whitespace-nowrap text-xs px-1.5 py-0.5 rounded border border-border bg-bg hover:bg-surface-hover text-text-secondary hover:text-text transition-theme disabled:opacity-50"
+                  title="删除可再生的 Electron 缓存（界面渲染与代码编译缓存）；登录态、主题、数据与照片都不受影响，下次启动会稍慢"
+                >{{ busyCache ? '清理中' : '清理' }}</button>
+                <button
                   v-if="seg.key === 'currentAccount'"
                   @click.stop="vacuumDb"
                   :disabled="busyVacuum || busyDisk"
@@ -1395,6 +1402,7 @@ const busyVacuum = ref(false)
 const vacuumDialog = ref(false)
 // 「清理日志」进行中：四个日志文件逐个截断，期间按钮禁用避免重复点
 const busyLogs = ref(false)
+const busyCache = ref(false)
 // 整理进度文案：ConfirmDialog 是 whitespace-pre-line，换行必须用 \n 而不是 <br>
 const vacuumProgressText = '耗时与库大小成正比（约 3 秒/GB）。\n期间请勿操作，数据与照片不会丢失，完成后会自动刷新占用。'
 const busyGc = ref(false)
@@ -1588,6 +1596,7 @@ const DISK_CATEGORIES = [
   { key: 'uploads', label: '上传文件（各账号共享）', color: '#14b8a6' },
   { key: 'thumbs', label: '图片微缩图', color: '#a855f7' },
   { key: 'logs', label: '日志', color: '#64748b' },
+  { key: 'cache', label: 'Electron 缓存', color: '#ec4899' },
   { key: 'other', label: '其他', color: '#94a3b8' },
 ]
 // 空间管理：当前选中的分类（null = 未选中），点彩条或图例走同一入口，再点一次取消
@@ -1631,7 +1640,7 @@ const ctx = {
   securityDialog, privacyPhrase, undoGroups, undoSourceFilter, filteredUndoGroups, undoActiveKey, busyUndo, undoLoading, selectedThemeId, mergeNotifications,
   bgImageUrl, bgImageFileName, perfProcs, perfTopRatio, perfAlive, perfTotal, perfAvg, perfMax,
   perfFront, perfBackend, perfOther, perfStartupTotal, fastStartup, busyGc, busyRestartBackend, busyRestartWidget,
-  busyRestartAll, _perfTimer, diskUsage, diskUsageError, busyDisk, busyPurgeThumbs, busySweepThumbs, busyVacuum, vacuumDialog, busyLogs,
+  busyRestartAll, _perfTimer, diskUsage, diskUsageError, busyDisk, busyPurgeThumbs, busySweepThumbs, busyVacuum, vacuumDialog, busyLogs, busyCache,
   selectedDiskKey, diskTip, diskTipSuppressed,
   // storeToRefs（也是 ref）
   currentTheme, bgMaskOpacity, glassOpacity, iconStyle, topbarColor, animationsEnabled, pendingMode,
@@ -1668,7 +1677,7 @@ const {
   onMergeNotificationsChange, onPrivacyPhraseSaved, onRollcallExcludeAbsentChange, onRollcallIncludeProvisionalChange, onSecurityLevelChange, onLoginPolicyChange, onSelectMode, onSelectSemester,
   onSettingsSearchBlur, onSettingsSearchFocus, onThemeSelect, onToolboxChange, onTopbarColorChange,
   onUsbAutoOpenChange, openAddSemester, openClassDialog, openDeleteAccount, openDeleteClass, openDir, openModal, openRenameSemester,
-  purgeThumbs, sweepThumbs, vacuumDb, cancelVacuumWait, clearLogs,
+  purgeThumbs, sweepThumbs, vacuumDb, cancelVacuumWait, clearLogs, clearCache,
   recycleAll, redoEntry, requestDeleteSemester, restartAll, restartBackend, restartFrontend,
   restartWidget, renameClassFromSettings, saveClassInfoFromSettings, saveSemesterName, saveSemesterSettings, selectDiskSegment, selectFolder, showDiskTip,
   sourceBadgeClass, sourceLabel, switchClassFromSettings, createClassFromSettings, undoableCount, undoMember, undoRow, undoActionLabel,

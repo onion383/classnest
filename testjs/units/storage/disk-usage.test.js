@@ -14,9 +14,10 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
+const { abs } = require('#testjs/paths')
 const {
   scanDiskUsage, classifyEntry, logFilePaths, resetAppSizeCache,
-} = require('../../../electron/main/main.disk-usage')
+} = require(abs('electron/main/main.disk-usage'))
 
 const SLUG = '@1310e52f7763'
 
@@ -193,3 +194,54 @@ test('scanDiskUsage：软件本体体积进程内只扫一次（缓存命中后�
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+// ---------- C. Electron 缓存：统计与清理共用白名单 ----------
+test('CACHE_DIRNAMES 只含可再生缓存，不含 Local Storage / Preferences（变异反证）', async () => {
+  const { CACHE_DIRNAMES } = require('../../../electron/main/main.disk-usage')
+  for (const n of ['Cache', 'GPUCache', 'node-compile-cache', 'renderer-code-cache']) {
+    assert.ok(CACHE_DIRNAMES.has(n), `${n} 应算缓存`)
+  }
+  for (const n of ['Local Storage', 'Session Storage', 'Preferences', 'Local State', 'data']) {
+    assert.ok(!CACHE_DIRNAMES.has(n), `${n} 绝不能当缓存清掉`)
+  }
+})
+
+test('cacheDirPaths 只列存在的缓存目录，不列白名单外的目录', async () => {
+  const { cacheDirPaths } = require('../../../electron/main/main.disk-usage')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-paths-'))
+  fs.mkdirSync(path.join(root, 'Cache'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'Local Storage'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'Preferences'), '{}')
+  const dirs = await cacheDirPaths(root)
+  assert.deepEqual(dirs.map((d) => path.basename(d)), ['Cache'])
+})
+
+test('clearCacheDirs 真删内容并重建空目录，按实际体积差报数', async () => {
+  const { clearCacheDirs, dirSize } = require('../../../electron/main/main.disk-usage')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-clear-'))
+  const target = path.join(root, 'Cache')
+  fs.mkdirSync(path.join(target, 'nested'), { recursive: true })
+  fs.writeFileSync(path.join(target, 'a.bin'), Buffer.alloc(2000))
+  fs.writeFileSync(path.join(target, 'nested', 'b.bin'), Buffer.alloc(3000))
+  const before = await dirSize(target)
+  assert.equal(before, 5000)
+  const res = await clearCacheDirs([target])
+  assert.equal(res.clearedBytes, 5000)
+  assert.equal(res.dirs, 1)
+  assert.equal(await dirSize(target), 0, '目录本身要留着，内容清空')
+  assert.ok(fs.existsSync(target), '空目录必须重建')
+})
+
+test('clearCacheDirs 单条失败跳过，不中断其余', async () => {
+  const { clearCacheDirs, dirSize } = require('../../../electron/main/main.disk-usage')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-clear-fail-'))
+  const good = path.join(root, 'Cache')
+  const missing = path.join(root, 'GPUCache')
+  fs.mkdirSync(good, { recursive: true })
+  fs.writeFileSync(path.join(good, 'a.bin'), Buffer.alloc(1000))
+  const res = await clearCacheDirs([missing, good])
+  assert.equal(res.clearedBytes, 1000)
+  assert.equal(res.dirs, 1)
+  assert.equal(await dirSize(good), 0)
+})
+

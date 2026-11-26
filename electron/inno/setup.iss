@@ -237,9 +237,11 @@ var
   CustomPage: TWizardPage;
   LogoImage: TBitmapImage;
   TitleLabel: TNewStaticText;
+#ifdef Vue36
   { Vue 3.6 预览通道专属的两行提示；非该通道时不创建，HintH / HintGap 为 0，布局与原来一致 }
   Vue36Hint1: TNewStaticText;
   Vue36Hint2: TNewStaticText;
+#endif
   PathLabel: TNewStaticText;
   FieldBg: TBitmapImage;
   PathEdit: TNewEdit;

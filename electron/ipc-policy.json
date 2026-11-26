@@ -264,6 +264,9 @@
   "perf-logs-clear": [
     "main"
   ],
+  "perf-cache-clear": [
+    "main"
+  ],
   "get-app-version": [
     "main"
   ],

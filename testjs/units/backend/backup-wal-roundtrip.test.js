@@ -72,7 +72,7 @@ test('① 导出前 checkpoint 把 WAL 尾页并回主库，只拷主库不丢�
   }
 })
 
-test('② checkpoint 失败退回三件套时，恢复侧落位并回放 WAL，最近提交不丢', () => {
+test('② checkpoint 失败退回三件套时，恢复侧落位并回放 WAL，最近提交不丢', async () => {
   // 造一个「主库 + 带尾页的 -wal」源包。源库必须是完整 schema 的真库
   // （恢复后 initSchema 要在其上做迁移，空壳库会因缺列失败），所以另建一个
   // 完整账号库，常开写入尾页后不 checkpoint，拿它的 .db + -wal 当源包。
@@ -91,7 +91,7 @@ test('② checkpoint 失败退回三件套时，恢复侧落位并回放 WAL，�
   // 恢复：恢复侧落位 srcWal 并 checkpoint 回放（backup.js:101/114）
   // 注意不能在别处先打开 backupDb 去「偷看」——额外连接退出时会触发 WAL checkpoint，
   // 反而把尾页并回主库，让本测试退化成「只拷主库也能过」。直接把主库+WAL 交给恢复侧。
-  dbManager.restoreBundle({
+  await dbManager.restoreBundle({
     slug, username: 'backup-wal',
     srcPath: backupDb, srcWal: backupDb + '-wal',
     dbKey: null, encrypted: false,

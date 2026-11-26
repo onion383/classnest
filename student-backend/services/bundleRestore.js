@@ -121,7 +121,7 @@ async function applyVerifiedBundle({ tmpDir, meta, manifest, slug, username, bod
   // 100MB 级库上白占约 230MB 堆（133MB 字符串 + 100MB Buffer）—— 2-11 要消的就是这段。
   // 旧包可能带着导出时未合并的 WAL：一并交给 restoreBundle 落位并重放，
   // 否则「包里最新提交」会在换库时被丢弃（v8 · N2-01）。
-  const result = dbManager.restoreBundle({
+  const result = await dbManager.restoreBundle({
     slug, username,
     srcPath: path.join(dbDir, dbFile),
     srcWal: path.join(dbDir, `${dbFile}-wal`),

@@ -40,7 +40,7 @@ test.after(() => {
   try { fs.rmSync(DATA_DIR, { recursive: true, force: true }) } catch (_) {}
 })
 
-test('反例：非法备份数据被拒，且原库数据仍然完好', () => {
+test('反例：非法备份数据被拒，且原库数据仍然完好', async () => {
   // 先往原库里写一条可核对的数据（evictConn 会做 WAL checkpoint，文件字节本身会变，
   // 所以用「数据是否还在」而不是文件哈希来判断有没有被覆盖）
   dbManager.withDb(slug, () => {
@@ -49,7 +49,7 @@ test('反例：非法备份数据被拒，且原库数据仍然完好', () => {
     c.prepare('INSERT INTO __restore_probe (id) VALUES (1)').run()
   })
   const bad = Buffer.from('this is not a sqlite database').toString('base64')
-  assert.throws(
+  await assert.rejects(
     () => dbManager.restoreBundle({ slug, username: 'restore-test', data: bad, dbKey: null, encrypted: false }),
     /完整性校验未通过/
   )
@@ -58,7 +58,7 @@ test('反例：非法备份数据被拒，且原库数据仍然完好', () => {
   assert.strictEqual(n, 1, '校验失败时绝不能覆盖原库（原数据必须还在）')
 })
 
-test('正例：合法明文库可以恢复成功', () => {
+test('正例：合法明文库可以恢复成功', async () => {
   // createTeacher 建的库默认是加密的，测试里拿不到明文钥匙；
   // 这里单独造一个合法的**明文** SQLite 文件作为备份内容，走 encrypted:false 路径。
   const Database = require(path.join(BACKEND, 'node_modules', 'better-sqlite3-multiple-ciphers'))
@@ -69,7 +69,7 @@ test('正例：合法明文库可以恢复成功', () => {
   const good = fs.readFileSync(sample).toString('base64')
 
   const file = dbFile()
-  const r = dbManager.restoreBundle({ slug, username: 'restore-test', data: good, dbKey: null, encrypted: false })
+  const r = await dbManager.restoreBundle({ slug, username: 'restore-test', data: good, dbKey: null, encrypted: false })
   assert.strictEqual(r.slug, slug)
   assert.ok(fs.existsSync(file), '恢复后库文件应存在')
   // 恢复后的内容应真的是那份备份（明文库能被直接打开）
@@ -82,7 +82,7 @@ test('正例：合法明文库可以恢复成功', () => {
   }
 })
 
-test('srcPath 反例：指向非 SQLite 文件同样被完整性校验挡住，原库不动', () => {
+test('srcPath 反例：指向非 SQLite 文件同样被完整性校验挡住，原库不动', async () => {
   dbManager.withDb(slug, () => {
     const c = dbManager.current()
     c.exec('CREATE TABLE IF NOT EXISTS __src_probe (id INTEGER)')
@@ -90,7 +90,7 @@ test('srcPath 反例：指向非 SQLite 文件同样被完整性校验挡住，�
   })
   const badFile = path.join(DATA_DIR, 'bad-src.db')
   fs.writeFileSync(badFile, 'this is not a sqlite database')
-  assert.throws(
+  await assert.rejects(
     () => dbManager.restoreBundle({ slug, username: 'restore-test', srcPath: badFile, dbKey: null, encrypted: false }),
     /完整性校验未通过/
   )
@@ -99,7 +99,7 @@ test('srcPath 反例：指向非 SQLite 文件同样被完整性校验挡住，�
   assert.strictEqual(n, 1, '校验失败时绝不能覆盖原库（srcPath 路径与 base64 路径同一道闸门）')
 })
 
-test('srcPath 正例：直接复制磁盘文件恢复，不经过 base64', () => {
+test('srcPath 正例：直接复制磁盘文件恢复，不经过 base64', async () => {
   // 2-11：v3 ZIP 解包出来的库就在磁盘上，走 srcPath 免得整库进 JS 堆
   const Database = require(path.join(BACKEND, 'node_modules', 'better-sqlite3-multiple-ciphers'))
   const sample = path.join(DATA_DIR, 'sample-src.db')
@@ -107,7 +107,7 @@ test('srcPath 正例：直接复制磁盘文件恢复，不经过 base64', () =>
   c.exec('CREATE TABLE t2 (id INTEGER PRIMARY KEY); INSERT INTO t2 (id) VALUES (42);')
   c.close()
 
-  const r = dbManager.restoreBundle({ slug, username: 'restore-test', srcPath: sample, dbKey: null, encrypted: false })
+  const r = await dbManager.restoreBundle({ slug, username: 'restore-test', srcPath: sample, dbKey: null, encrypted: false })
   assert.strictEqual(r.slug, slug)
   const check = new Database(dbFile())
   try {

@@ -50,6 +50,11 @@ let restartWindow = [];
 //（继续扫库写库、占磁盘 IO，而前端已显示「后端已关闭」）。
 let expectExit = false;
 
+// 锁库回执：slug → { resolve }。等 worker 的 { type:'locked' } 消息才放行恢复流程。
+// 超时也算失败（resolve ok:false），由恢复方决定中止——绝不带着活着的扫描覆盖文件。
+const lockWaits = new Map();
+const LOCK_ACK_TIMEOUT_MS = 12000;
+
 // 任务键必须包含 slug：各库的 albumId 独立自增，两班同号相册用裸 id 建键会互串。
 // 复合键单点定义在 utils/scanTaskKey，主进程与 worker 共用，避免两处各写一遍分叉。
 const { scanTaskKey: taskKey } = require('./utils/scanTaskKey');
@@ -128,6 +133,16 @@ function onWorkerMessage(msg) {
   switch (msg.type) {
     case 'ready':
       break;
+    case 'locked': {
+      // 锁库回执：把该 slug 的等待者全部放行，ok 为 false 时恢复方会中止覆盖。
+      const wait = lockWaits.get(msg.slug);
+      if (wait) {
+        lockWaits.delete(msg.slug);
+        clearTimeout(wait.timer);
+        wait.resolve({ ok: msg.ok !== false, reason: msg.reason || '' });
+      }
+      break;
+    }
     case 'progress': {
       // 进度真源本来就是库表 album_scan_tasks（/status 读表），这里只更新一个内存计数
       // 供 /status 与 /tasks 快速展示用；不必每次都发事件到渲染进程（前端自己会轮询 /status）。
@@ -404,10 +419,44 @@ function killNow() {
   active.clear();
 }
 
-// 登出时通知子进程关闭该库的连接并丢弃钥匙（隐私模式下钥匙不能留驻）
+// 锁库：通知子进程停掉该库在飞扫描、关连接丢钥匙，**等它回执**才继续。
+// 返回 Promise<{ok:boolean, reason?:string}>：
+//   · 子进程没启动 → 没有在飞扫描，直接 ok:true（恢复/登出照旧能走）；
+//   · 收到 locked 回执 → 按回执 ok；
+//   · 超时 / 发送失败 / 子进程中途退出 → ok:false，恢复方据此中止覆盖文件。
+// 登出路径不关心回执，照旧调用即可（fire-and-forget 仍是合法的 Promise 用法）。
 function lockDb(slug) {
-  if (!slug || !child) return;
-  try { child.send({ cmd: 'lock', slug }); } catch (_) { /* best-effort: 子进程已退出 */ }
+  if (!slug || !child) return Promise.resolve({ ok: true, reason: 'worker-not-started' });
+  // 同一库并发锁（快照还原 + 账号恢复同时来）只发一次，共享同一个回执。
+  const existing = lockWaits.get(slug);
+  if (existing) return existing.promise;
+
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  const wait = { resolve, timer: null };
+  lockWaits.set(slug, wait);
+  wait.timer = setTimeout(() => {
+    if (lockWaits.get(slug) !== wait) return;
+    lockWaits.delete(slug);
+    resolve({ ok: false, reason: 'lock-ack-timeout' });
+  }, LOCK_ACK_TIMEOUT_MS);
+
+  const settleFail = (reason) => {
+    if (lockWaits.get(slug) !== wait) return;
+    lockWaits.delete(slug);
+    clearTimeout(wait.timer);
+    resolve({ ok: false, reason });
+  };
+  const proc = child;
+  const onGone = () => settleFail('worker-exited');
+  proc.once('exit', onGone);
+  // 回执到达后摘掉这个临时监听，免得后续正常退出误判（exit 时 wait 已不在表里，settleFail 会空转，
+  // 但监听本身也是资源，能摘就摘）。
+  const origResolve = wait.resolve;
+  wait.resolve = (v) => { proc.removeListener('exit', onGone); origResolve(v); };
+  try { child.send({ cmd: 'lock', slug }); }
+  catch (_) { settleFail('lock-send-failed'); }
+  return promise;
 }
 
 module.exports = {

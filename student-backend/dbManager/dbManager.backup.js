@@ -61,7 +61,7 @@ function pruneDbBackups(filePath, keepPath) {
 // srcWal：旧备份包可能带着导出时没能 checkpoint 的 -wal（见 checkpointForBackup）。
 // 恢复侧必须履约「同一组文件名放回去」的契约 —— 把 WAL 落位后由 SQLite 重放，
 // 而不是像以前那样只挑 .db、再把唯一能补回尾页的 WAL 直接删掉（v8 · N2-01）。
-function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted = true }) {
+async function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted = true }) {
   if (!slug || !username || (typeof srcPath !== 'string' && typeof data !== 'string')) {
     throw new Error('备份数据不完整');
   }
@@ -80,7 +80,14 @@ function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, encrypted
   // 主进程连接由 evictConn 关；扫描子进程另持一份连接，必须先通知它关闭并丢弃钥匙，
   // 否则它可能在恢复期间继续读旧库/写 -wal，触发 SQLITE_BUSY 或数据交错（#12）。
   // 惰性 require：scanWorker 顶层依赖 dbManager，不能在此模块顶层引入（循环依赖）。
-  try { require('../scanWorker').lockDb(slug); } catch (_) { /* best-effort: 子进程未启动 */ }
+  // 必须 await 回执：只「发了消息」不等于子进程真停了，在飞扫描仍会写旧库（V9-K01-01）。
+  // ok:false（超时 / 子进程退出）时中止恢复，绝不带着活着的扫描覆盖文件。
+  let lockResult = { ok: true, reason: 'worker-not-started' };
+  try { lockResult = await require('../scanWorker').lockDb(slug); }
+  catch (_) { /* 子进程未启动 / 模块加载失败：没有在飞扫描，照旧恢复 */ }
+  if (lockResult && lockResult.ok === false) {
+    throw new Error(`扫描子进程未确认停止，恢复已中止（${lockResult.reason || '无回执'}）`);
+  }
   evictConn(slug, { force: true });
 
   // 先写临时文件并校验完整性，**通过后才覆盖现有库**：

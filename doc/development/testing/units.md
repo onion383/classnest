@@ -347,7 +347,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），352 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），353 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
 - **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
@@ -538,6 +538,7 @@ classnest/
 | [`thumb-sweep.test.js`](../../../testjs/units/album/thumb-sweep.test.js) | 「回收孤儿微缩图」：默认只读（只报数一个不删），`apply=true` 只删「确定没人引用」的 jpg —— 库能打开时按 `album_photos.id` 集合比对，无主账号目录与旧扁平残留单独判定，库打不开的 slug 整目录跳过 | 临时目录 |
 | [`retention.test.js`](../../../testjs/units/backend/retention.test.js) | 账号数据管理保留策略：默认五类全永久、坏配置不意外开删、写策略只记偏好不删数据；回收站两类走目录 `mtime`（夹具临时 `DATA_DIR`）：预览只读、确定只清超期、不碰另一类、清空保留目录且符号链接不跟随不删除 | 内存库 + 临时目录；10 条用例 |
 | [`conversation-shell-retention.test.js`](../../../testjs/units/backend/conversation-shell-retention.test.js) | AI 会话空壳纳入保留期（V9 · 5-6）：默认 forever 且写入路径 `autoClean` 不删；占用统计/明细只数无消息空壳；`deleteAll` 与 `applyNow` 都只清空壳，`ON DELETE CASCADE` 不会带走用户消息；变异反证真改源码抹掉 `SHELL_ONLY`，证明 4 个会话连 2 条消息一起被删正是所防的数据丢失 | 真库行为 + 真变异反证 |
+| [`scan-worker-lock-ack.test.js`](../../../testjs/units/backend/scan-worker-lock-ack.test.js) | 锁库回执的真 IPC 往返（V9 · 2-3）：真 fork `worker.scan.js`，验 `lock → locked` 往返与非法 slug 拒绝；变异反证真改 worker 源码让它不发回执，等待方必须超时失败（防「消息发了但子进程没处理」） | 真子进程 IPC + 变异反证 |
 | [`undo-retention.test.js`](../../../testjs/units/backend/undo-retention.test.js) | 撤销记录「每 key 50 条」上限：`pushRecord` 的 `MAX_PER_KEY` 一旦被改掉或加进动态 key，`undo_history` 就会无限增长，而「撤销不需要分页」的结论完全建立在这个上限上 | 内存库 |
 | [`viewer-pan.test.js`](../../../testjs/units/ui/viewer-pan.test.js) | 查看器「放大之后能拖动平移」：`translate` 必须在 `rotate` / `scale` 之前（写在后面位移会被倍率再乘一遍）；平移量夹在可露出余量内，缩小/转正/改窗口都要重新夹；旋转 90/270 时宽高互换 | 纯函数 + 前端 ESM |
 | [`vite-outdir-empty.test.js`](../../../testjs/units/desktop/vite-outdir-empty.test.js) | 构建输出目录的「小批量清空」：Vite 自带的 `emptyOutDir` 是一次递归删除，`dist/assets` 上百文件时会撞上宿主环境的删目录失败；改为分批删并保留非构建产物 | 临时目录 |

@@ -320,7 +320,7 @@ router.post('/apply-batch', (req, res) => {
 
 // POST /api/ai/snapshot/restore —— 还原到指定快照（覆盖整库，须老师在界面二次确认后才调用）
 //   顺序：先断开该库连接（含缓存）→ 覆盖 .db → 清 -wal/-shm 残留 → 重新打开。
-router.post('/snapshot/restore', (req, res) => {
+router.post('/snapshot/restore', async (req, res) => {
   try {
     const slug = currentSlug(req);
     const name = String((req.body && req.body.snapshot) || '').trim().replace(/\.db$/, '');
@@ -333,8 +333,14 @@ router.post('/snapshot/restore', (req, res) => {
     // evictConn 默认会跳过「仍有请求在用」的连接，这里必须强制关：
     // 本请求自己就持有计数，默认行为会静默跳过 → 文件覆盖了但连接还指着旧句柄，
     // 表现为「回滚成功但界面没变」。（这条是 B05-04 加守卫后冒烟立即抓出来的）
-    // 同样要先通知扫描子进程关掉该库连接，否则它可能在覆盖文件期间读写旧库（#12）。
-    try { require('../../scanWorker').lockDb(slug); } catch (_) { /* best-effort: 子进程未启动 */ }
+    // 同样要先通知扫描子进程停手并关掉该库连接，否则它可能在覆盖文件期间读写旧库（#12）。
+    // 必须 await 回执：发消息不等于停干净，在飞扫描仍会写旧库（V9-K01-01）。
+    let lockResult = { ok: true, reason: 'worker-not-started' };
+    try { lockResult = await require('../../scanWorker').lockDb(slug); }
+    catch (_) { /* 子进程未启动 / 模块加载失败：没有在飞扫描，照旧还原 */ }
+    if (lockResult && lockResult.ok === false) {
+      throw new Error(`扫描子进程未确认停止，还原已中止（${lockResult.reason || '无回执'}）`);
+    }
     dbManager.evictConn(slug, { force: true });
     fs.copyFileSync(src, target);
     for (const suffix of ['-wal', '-shm']) {

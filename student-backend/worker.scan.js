@@ -14,6 +14,7 @@
 //           { cmd:'stop',   slug, albumId, token }
 //           { cmd:'resume', tasks:[{slug,albumId,token,mode,resumeFrom}] }
 //           { cmd:'demand', slug, ids:[photoId,...] }  // 主进程配额闸放不下的补图需求
+//           { cmd:'lock',    slug }  // 恢复/登出前停该库在飞扫描+关连接，回 locked 回执
 //           { cmd:'shutdown' }
 //   子 → 主  { type:'ready' }
 //           { type:'progress', slug, albumId, scanned, total }
@@ -21,6 +22,7 @@
 //           { type:'demand-done', slug, count }
 //           { type:'done',    slug, albumId }
 //           { type:'error',   slug, albumId, message }
+//           { type:'locked',  slug, ok, reason }  // 锁库回执：停手+关连接后才回，恢复方据此放行
 //
 // 状态真源在库表 album_scan_tasks（跨进程共享），IPC 只承载「派活/报活」，
 // 这样即便 IPC 短暂不可用，暂停/停止/断点也不会丢（主进程改 state，子进程在检查点读表）。
@@ -79,6 +81,11 @@ function flushThumbs(slug) {
 
 // 任务键与主进程共用单点定义（utils/scanTaskKey），避免两处各写一遍分叉。
 const { scanTaskKey: taskKey } = require('./utils/scanTaskKey');
+
+// 锁库时等在飞扫描收工的上限：扫描通常秒级，超时就回执 ok:false 让恢复方中止，
+// 绝不带着活着的扫描覆盖库文件。间隔 20ms 对秒级操作可忽略。
+const LOCK_IDLE_TIMEOUT_MS = 10000;
+const LOCK_IDLE_POLL_MS = 20;
 
 // taskKey → task（本地标志，用于快速响应 stop 指令）
 const running = new Map();
@@ -216,7 +223,41 @@ function applyLock(slug, deps = { openConns, keyCache, thumbReport, slugScopes }
   deps.slugScopes.clearAllForSlug(slug);
 }
 
-module.exports = { applyLock };
+// 锁库前的「先停手」：把该库所有在飞扫描标记取消，让检查点尽快收工。
+// 必须在 applyLock 关连接**之前**做——否则扫描还在跑时连接被关，
+// 后续检查点写库会撞 SQLITE_BUSY / 半截事务（V9-K01-01 / RC-JOIN）。
+// 抽成纯函数直接跑真逻辑，不靠「消息名出现」的正则判据。
+function cancelRunningForSlug(slug, deps = { running, pendingStops }) {
+  let cancelled = 0;
+  for (const [key, task] of deps.running) {
+    // key 含 slug 前缀（utils/scanTaskKey：slug|albumId），只动本库
+    if (!String(key).startsWith(`${slug}|`)) continue;
+    task.cancelled = true;
+    task.paused = false;   // 暂停中也要立刻醒过来收工，不然永远停在 waitWhilePaused
+    cancelled++;
+  }
+  return cancelled;
+}
+
+// 等该库在飞任务全部从 running 表退出。返回 boolean（超时也算失败，调用方据此回 ok:false）。
+// 用轮询而非事件：runScan 在多个检查点收工，没有统一的完成事件；20ms 间隔对扫描这种秒级操作可忽略。
+function waitRunningIdle(slug, deps = { running }, timeoutMs = LOCK_IDLE_TIMEOUT_MS, sleepMs = LOCK_IDLE_POLL_MS) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      let busy = false;
+      for (const key of deps.running.keys()) {
+        if (String(key).startsWith(`${slug}|`)) { busy = true; break; }
+      }
+      if (!busy) return resolve(true);
+      if (Date.now() >= deadline) return resolve(false);
+      setTimeout(check, sleepMs);
+    };
+    check();
+  });
+}
+
+module.exports = { applyLock, cancelRunningForSlug, waitRunningIdle };
 
 process.on('message', async (msg) => {
   if (!msg || !msg.cmd) return;
@@ -274,8 +315,23 @@ process.on('message', async (msg) => {
       break;
     }
     case 'lock': {
-      // 主进程登出：关闭该库连接并丢掉钥匙，之后本进程不再持有可读句柄
-      applyLock(msg.slug);
+      if (!isValidSlug(msg.slug)) {
+        send({ type: 'locked', slug: '', ok: false, reason: '非法的库标识' });
+        break;
+      }
+      // 恢复前的锁库：先停该库在飞扫描 → 等真停了 → 才关连接丢钥匙 → 回执。
+      // 光 applyLock 关连接不够：扫描任务还在检查点写库，会撞 SQLITE_BUSY / 半截事务。
+      // 回执带 ok，主进程据此决定能否继续覆盖文件（V9-K01-01）。
+      const slug = msg.slug;
+      cancelRunningForSlug(slug);
+      const idle = await waitRunningIdle(slug);
+      try {
+        applyLock(slug);
+        send({ type: 'locked', slug, ok: idle });
+        if (!idle) send({ type: 'error', slug, albumId: 0, message: '锁库超时：在飞扫描未在限定时间内停止' });
+      } catch (err) {
+        send({ type: 'locked', slug, ok: false, reason: err && err.message });
+      }
       break;
     }
     case 'shutdown':

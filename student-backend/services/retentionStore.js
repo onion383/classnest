@@ -8,8 +8,11 @@
 // 这样测试版发布后，未点清除前一条数据都不会少。
 //
 // 两类出口：
-//   · SQL 表：ai_messages / domain_history（按 created_at 判超期）；
+//   · SQL 表：ai_messages / domain_history / ai_conversations（按 created_at 判超期）；
 //   · 文件目录：album-trash / receipt-trash（按 mtime 判超期，见下方 collectFiles）。
+// 会话壳（conversations）只清「没有消息的空壳」：ai_messages 外键 CASCADE 到
+// ai_conversations，若按会话删掉有消息的会话，会把用户想留的消息一起带走
+// （messages 档位可能是 forever）。空壳来自消息被清后遗留的会话行。
 // 回收站是撤销删除的还原源，所以**不接写入路径自动清理**——只按用户在弹窗点
 // 「确定 / 删除全部」时清。清空后旧撤销会失败（undo.executors 已有兜底）。
 // =========================================================================
@@ -19,12 +22,25 @@ const { db } = require('../db')
 const { safeJson, packJson } = require('../utils/json')
 const dbManager = require('../dbManager/dbManager')
 
-const SQL_KINDS = ['messages', 'history']
+// kind → SQL 表名（受信任常量，绝不接受前端传表名）。
+// conversations 映射到 ai_conversations，但删除额外限定「空壳」，见 sqlWhere。
+const SQL_TABLES = { messages: 'ai_messages', history: 'domain_history', conversations: 'ai_conversations' }
+const SQL_KINDS = Object.keys(SQL_TABLES)
 const FILE_KINDS = ['albumTrash', 'receiptTrash']
 const KINDS = [...SQL_KINDS, ...FILE_KINDS]
-// 策略只是显示/偏好；'forever' 是唯一默认值。
+// 策略只是显示/偏好；'forever' 是唯一默认值。新加的 conversations 同样是 forever。
 const POLICIES = ['forever', '7d', '30d', '180d']
-const DEFAULTS = { messages: 'forever', history: 'forever', albumTrash: 'forever', receiptTrash: 'forever' }
+const DEFAULTS = {
+  messages: 'forever', history: 'forever', conversations: 'forever',
+  albumTrash: 'forever', receiptTrash: 'forever'
+}
+
+// 会话删除的额外条件：只认没有消息的空壳，避免 CASCADE 带走用户消息。
+// 必须是常量 SQL 片段拼接，不接任何用户输入。
+const SHELL_ONLY = ' AND NOT EXISTS (SELECT 1 FROM ai_messages m WHERE m.conversation_id = ai_conversations.id)'
+function sqlWhere(kind) {
+  return kind === 'conversations' ? SHELL_ONLY : ''
+}
 
 // 目录只从 dbManager 的受信任常量取，绝不接受前端传来的路径。
 function fileDir(kind) {
@@ -38,6 +54,9 @@ function fileDir(kind) {
 // 若被放了链接，绝不能顺着它删到 dataDir 外面去。
 function collectFiles(dir, cutoffMs = null) {
   const found = []
+  // key 必须相对回收站「根」而非当前遍历目录 d：相册回收站按 slug 分桶，
+  // 进入 <slug> 子目录后 relative(d,p) 只剩文件名，找不回 slug 前缀 → 预览恒 404（V9-K04-01）。
+  const root = dir
   const walk = (d) => {
     let entries
     try { entries = fs.readdirSync(d, { withFileTypes: true }) } catch (_) { return }
@@ -50,7 +69,7 @@ function collectFiles(dir, cutoffMs = null) {
         if (!st.isFile()) continue // 符号链接等不收
         if (cutoffMs != null && st.mtimeMs >= cutoffMs) continue
         // key = 相对回收站根的路径（相册按 slug 分桶，单靠 name 会重名）
-        const key = path.relative(d, p).split(path.sep).join('/')
+        const key = path.relative(root, p).split(path.sep).join('/')
         found.push({ path: p, key, name: entry.name, bytes: st.size, mtime: st.mtimeMs })
       }
     }
@@ -107,10 +126,12 @@ function cutoffFor(days) {
 
 function removeFiles(files) {
   let deleted = 0
+  let failed = 0
   for (const f of files) {
-    try { fs.unlinkSync(f.path); deleted++ } catch (_) { /* best-effort: 占用等：不影响其它文件 */ }
+    try { fs.unlinkSync(f.path); deleted++ }
+    catch (_) { failed++ /* best-effort: 单文件占用不影响其它文件，但失败数要回传，不能假装全清成功 */ }
   }
-  return deleted
+  return { deleted, failed }
 }
 
 function readPolicy() {
@@ -144,9 +165,16 @@ function stats() {
     SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(payload)), 0) AS bytes
     FROM domain_history
   `).get()
+  // 会话只统计空壳：显示的数量要和「能清掉多少」一致，不能把有消息的会话算进去吓人。
+  const shells = db.prepare(`
+    SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(title) + LENGTH(summary)), 0) AS bytes
+    FROM ai_conversations
+    WHERE 1 = 1 ${SHELL_ONLY}
+  `).get()
   const out = {
     messages: { count: messages.n, bytes: messages.bytes },
     history: { count: history.n, bytes: history.bytes },
+    conversations: { count: shells.n, bytes: shells.bytes },
   }
   for (const k of FILE_KINDS) {
     const files = collectFiles(fileDir(k))
@@ -173,6 +201,14 @@ function list(kind, limit = 50) {
       FROM domain_history ORDER BY id DESC LIMIT ?
     `).all(n)
   }
+  if (kind === 'conversations') {
+    return db.prepare(`
+      SELECT id, title, LENGTH(title) + LENGTH(summary) AS bytes,
+             created_at AS createdAt, updated_at AS updatedAt
+      FROM ai_conversations WHERE 1 = 1 ${SHELL_ONLY}
+      ORDER BY id DESC LIMIT ?
+    `).all(n)
+  }
   if (FILE_KINDS.includes(kind)) {
     return collectFiles(fileDir(kind))
       .sort((a, b) => b.mtime - a.mtime)
@@ -184,10 +220,15 @@ function list(kind, limit = 50) {
 
 // 删除某类全部记录。只由「删除全部」按钮触发，调用方必须二次确认。
 function deleteAll(kind) {
-  if (kind === 'messages') return { deleted: db.prepare('DELETE FROM ai_messages').run().changes }
-  if (kind === 'history') return { deleted: db.prepare('DELETE FROM domain_history').run().changes }
-  if (FILE_KINDS.includes(kind)) return { deleted: removeFiles(collectFiles(fileDir(kind))) }
-  return { deleted: 0 }
+  if (Object.prototype.hasOwnProperty.call(SQL_TABLES, kind)) {
+    // 会话走 SHELL_ONLY，只清空壳；有消息的会话保持原样，消息不会被 CASCADE 带走。
+    return { deleted: db.prepare(`DELETE FROM ${SQL_TABLES[kind]} WHERE 1 = 1 ${sqlWhere(kind)}`).run().changes }
+  }
+  if (FILE_KINDS.includes(kind)) {
+    const r = removeFiles(collectFiles(fileDir(kind)))
+    return { deleted: r.deleted, failed: r.failed }
+  }
+  return { deleted: 0, failed: 0 }
 }
 
 // 预览：按给定策略（不一定已保存）算每类会删掉多少行，纯读不写。
@@ -201,24 +242,39 @@ function preview(patch) {
       out[k] = collectFiles(fileDir(k), Date.now() - days * 86400000).length
       continue
     }
-    const table = k === 'messages' ? 'ai_messages' : 'domain_history'
-    out[k] = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE created_at < ?`).get(cutoffFor(days)).n
+    out[k] = db.prepare(
+      `SELECT COUNT(*) AS n FROM ${SQL_TABLES[k]} WHERE created_at < ? ${sqlWhere(k)}`
+    ).get(cutoffFor(days)).n
   }
   return out
 }
 
 // 按给定策略立即清一次（点「确定」且用户确认删除后调用）。
+// 两类 SQL 删除必须在同一事务：以前逐条 DELETE 各自提交，中途失败会留下
+// 「ai_messages 清了、domain_history 没清」的半截状态，而 UI 以为全清完了（V9-K04-03）。
+// 文件类没有事务可包，逐文件 best-effort，失败数累计到 out.failed（顶层，不改各类 deleted 数字契约）。
 function applyNow(patch) {
-  const out = {}
+  const out = { failed: 0 }
+  const sqlWork = []
+  const fileWork = []
   for (const k of KINDS) {
     const days = daysFromPolicy(patch && patch[k])
     if (days == null) { out[k] = 0; continue }
     if (FILE_KINDS.includes(k)) {
-      out[k] = removeFiles(collectFiles(fileDir(k), Date.now() - days * 86400000))
-      continue
+      fileWork.push({ k, cutoff: Date.now() - days * 86400000 })
+    } else {
+      sqlWork.push({ k, table: SQL_TABLES[k], where: sqlWhere(k), cutoff: cutoffFor(days) })
     }
-    const table = k === 'messages' ? 'ai_messages' : 'domain_history'
-    out[k] = db.prepare(`DELETE FROM ${table} WHERE created_at < ?`).run(cutoffFor(days)).changes
+  }
+  db.transaction(() => {
+    for (const w of sqlWork) {
+      out[w.k] = db.prepare(`DELETE FROM ${w.table} WHERE created_at < ? ${w.where}`).run(w.cutoff).changes
+    }
+  })()
+  for (const w of fileWork) {
+    const r = removeFiles(collectFiles(fileDir(w.k), w.cutoff))
+    out[w.k] = r.deleted
+    out.failed += r.failed
   }
   return out
 }
@@ -254,10 +310,12 @@ function restoreReceipt(key) {
 // 'forever' 直接返回、不删任何东西；文件类没有写入路径钩子（撤销还原源）。
 function autoClean(kind) {
   const days = daysFromPolicy(readPolicy()[kind])
-  if (days == null || FILE_KINDS.includes(kind)) return { deleted: 0, days: null }
-  const table = kind === 'messages' ? 'ai_messages' : kind === 'history' ? 'domain_history' : null
+  // 会话空壳不接写入路径自动清理：用户明确「AI 数据不要自己清理」，
+  // 它只能在账号数据管理弹窗里由用户点「确定 / 删除全部」触发。
+  if (days == null || FILE_KINDS.includes(kind) || kind === 'conversations') return { deleted: 0, days: null }
+  const table = SQL_TABLES[kind]
   if (!table) return { deleted: 0, days: null }
-  return { deleted: db.prepare(`DELETE FROM ${table} WHERE created_at < ?`).run(cutoffFor(days)).changes, days }
+  return { deleted: db.prepare(`DELETE FROM ${table} WHERE created_at < ? ${sqlWhere(kind)}`).run(cutoffFor(days)).changes, days }
 }
 
 module.exports = {

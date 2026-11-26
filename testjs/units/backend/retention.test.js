@@ -2,7 +2,7 @@
 // retention.test.js —— 账号数据管理（AI 聊天记录 / 历史快照）
 //
 // 核心判据：**默认永久，系统绝不自己删数据**。
-//   1. 空库读策略 = messages/history 都 forever；
+//   1. 空库读策略 = 五类都 forever（含 V9-5-6 新加的 conversations）；
 //   2. 坏 JSON / 非法策略值一律退回 forever（不因为脏配置意外开删）；
 //   3. 策略写入只接受白名单值，只记偏好、不触发任何删除；
 //   4. deleteAll() 只由显式调用触发；autoClean() 默认永久时空操作，选档位后清超期行；
@@ -30,10 +30,11 @@ function seed() {
   return c
 }
 
-test('默认策略：两类都是永久（反证锚点）', () => {
+test('默认策略：五类都是永久（反证锚点）', () => {
   fx.reset()
   assert.deepEqual(retention.readPolicy(), {
-    messages: 'forever', history: 'forever', albumTrash: 'forever', receiptTrash: 'forever',
+    messages: 'forever', history: 'forever', conversations: 'forever',
+    albumTrash: 'forever', receiptTrash: 'forever',
   })
 })
 
@@ -41,7 +42,8 @@ test('坏配置/非法值一律退回永久，绝不意外开启自动删', () =
   const c = fx.reset()
   c.prepare("UPDATE ai_settings SET retention_json = ? WHERE id = 1").run('{oops')
   assert.deepEqual(retention.readPolicy(), {
-    messages: 'forever', history: 'forever', albumTrash: 'forever', receiptTrash: 'forever',
+    messages: 'forever', history: 'forever', conversations: 'forever',
+    albumTrash: 'forever', receiptTrash: 'forever',
   })
   c.prepare("UPDATE ai_settings SET retention_json = ? WHERE id = 1").run('{"messages":"1d","history":"forever"}')
   assert.equal(retention.readPolicy().messages, 'forever', '白名单外的值必须退回永久')
@@ -89,6 +91,21 @@ test('预览只读不删；applyNow 按新档位立即清超期', () => {
   const done = retention.applyNow({ messages: '7d', history: 'forever' })
   assert.equal(done.messages, 1)
   assert.equal(c.prepare('SELECT COUNT(*) AS n FROM ai_messages').get().n, before - 1)
+})
+
+test('applyNow 两类 SQL 删除同事务（V9-K04-03 防半截清理）', () => {
+  const c = seed()
+  const src = fs.readFileSync(path.join(__dirname, '../../../student-backend/services/retentionStore.js'), 'utf8')
+  const body = src.slice(src.indexOf('function applyNow'), src.indexOf('// 恢复收据'))
+  // @pin student-backend/services/retentionStore.js#applyNow
+  assert.match(body, /db\.transaction\(\s*\(\)\s*=>\s*\{/, 'applyNow 必须把 SQL 删除包进一个事务')
+  // 行为：两类都设超期时同批清掉，且 failed 字段总是回传
+  const done = retention.applyNow({ messages: '7d', history: '7d' })
+  assert.equal(done.messages, 1)
+  assert.equal(done.history, 1)
+  assert.equal(done.failed, 0, '失败数必须回传，不能吞掉')
+  assert.equal(c.prepare('SELECT COUNT(*) AS n FROM ai_messages').get().n, 1)
+  assert.equal(c.prepare('SELECT COUNT(*) AS n FROM domain_history').get().n, 1)
 })
 
 test('自动清理：默认永久时空操作；设了 7 天只删超期行', () => {
@@ -210,6 +227,35 @@ test('预览定位：只认相对 key，../ 与绝对路径与符号链接全拒
     assert.equal(retention.findTrashFile('receiptTrash', linkName), null, '符号链接拒绝')
     fs.rmSync(link, { force: true })
   }
+})
+
+test('V9-K04-01 相册回收站按 slug 分桶：list 的 key 必须带前缀且能定位', () => {
+  const dbm = require('../../../student-backend/dbManager/dbManager')
+  const dir = dbm.trashDir // albumTrash 走 dbManager.trashDir，receiptTrash 才走 receiptTrashDir
+  // 清场后造两个 slug 桶，各放一个同名文件
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) fs.rmSync(path.join(dir, e.name), { recursive: true, force: true })
+    else if (e.isFile()) fs.rmSync(path.join(dir, e.name), { force: true })
+  }
+  for (const slug of ['class-a', 'class-b']) {
+    const bucket = path.join(dir, slug)
+    fs.mkdirSync(bucket, { recursive: true })
+    fs.writeFileSync(path.join(bucket, '12_照片.jpg'), slug)
+  }
+  const listed = retention.list('albumTrash')
+  const keys = listed.map(x => x.key).sort()
+  assert.deepEqual(keys, ['class-a/12_照片.jpg', 'class-b/12_照片.jpg'], 'key 必须带 slug 前缀，不能只剩文件名')
+  for (const item of listed) {
+    assert.ok(retention.findTrashFile('albumTrash', item.key), `key=${item.key} 必须能定位到真实文件`)
+  }
+})
+
+test('V9-K03-02 回收站预览 MIME：svg 不内联返回', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../../student-backend/routes/retention.js'), 'utf8')
+  const mimeBlock = src.slice(src.indexOf('const MIME = {'), src.indexOf('function mimeOf'))
+  assert.doesNotMatch(mimeBlock, /svg\s*:/, '回收站内容不可信，MIME 白名单不得含 image/svg+xml')
+  // @pin student-backend/routes/retention.js#mimeOf
+  assert.match(src, /application\/octet-stream/, '未知扩展必须回落二进制下载而非内联')
 })
 
 test('收据恢复：搬回 uploads 还原原名；同名冲突拒绝；坏归档名拒绝', () => {

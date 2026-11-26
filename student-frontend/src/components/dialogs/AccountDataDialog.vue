@@ -5,7 +5,7 @@
         <div class="flex items-center gap-1.5">
           <h3 class="text-lg font-bold text-text">账号数据管理</h3>
           <AppHelp
-            text="默认永久保存：程序不会自动清理。选好档位后点「确定」才生效；若已有数据超期会先提示。「删除全部」是手动立即清空，需二次确认。清空回收站后，对应删除不能再撤销还原。"
+            text="默认永久保存：程序不会自动清理。选好档位后点「确定」才生效；若已有数据超期会先提示。「删除全部」是手动立即清空，需二次确认。AI 会话只清无消息的空壳，不会连带删聊天记录。清空回收站后，对应删除不能再撤销还原。"
             aria-label="账号数据管理说明"
             :size="13"
           />
@@ -37,6 +37,26 @@
             >管理</button>
             <button
               @click="askDelete('messages', 'AI 聊天记录')"
+              class="flex-shrink-0 text-sm px-4 py-1.5 rounded border border-border bg-surface hover:bg-surface-hover text-danger transition-theme"
+            >删除全部</button>
+          </div>
+
+          <!-- AI 会话空壳：消息被清后遗留的无消息会话，只清空壳（删会话会 CASCADE 删消息） -->
+          <div class="flex items-center gap-3 rounded-lg border border-border bg-bg px-3 py-2.5">
+            <div class="min-w-0 flex-1">
+              <div class="text-sm font-medium text-text">AI 会话空壳</div>
+              <div class="text-xs text-text-muted">{{ fmtBytes(stats.conversations.bytes) }} · {{ stats.conversations.count }} 个</div>
+            </div>
+            <AppSelect
+              aria-label="AI 会话空壳保留期"
+              :model-value="draft.conversations"
+              :options="POLICY_OPTIONS"
+              compact
+              class="w-20 flex-shrink-0"
+              @change="(v) => draft.conversations = v"
+            />
+            <button
+              @click="askDelete('conversations', 'AI 会话空壳')"
               class="flex-shrink-0 text-sm px-4 py-1.5 rounded border border-border bg-surface hover:bg-surface-hover text-danger transition-theme"
             >删除全部</button>
           </div>
@@ -167,16 +187,23 @@ const POLICY_OPTIONS = [
   { value: '180d', label: '半年' },
   { value: 'forever', label: '永久' },
 ]
-const ALL_KINDS = ['messages', 'history', 'albumTrash', 'receiptTrash']
+const ALL_KINDS = ['messages', 'conversations', 'history', 'albumTrash', 'receiptTrash']
 const loading = ref(false)
 const error = ref('')
 const stats = reactive({
-  messages: { bytes: 0, count: 0 }, history: { bytes: 0, count: 0 },
+  messages: { bytes: 0, count: 0 }, conversations: { bytes: 0, count: 0 },
+  history: { bytes: 0, count: 0 },
   albumTrash: { bytes: 0, count: 0 }, receiptTrash: { bytes: 0, count: 0 },
 })
-const policy = reactive({ messages: 'forever', history: 'forever', albumTrash: 'forever', receiptTrash: 'forever' })
+const policy = reactive({
+  messages: 'forever', conversations: 'forever', history: 'forever',
+  albumTrash: 'forever', receiptTrash: 'forever'
+})
 // 用户选择先落在 draft，点「确定」才提交；「取消」还原成 policy。
-const draft = reactive({ messages: 'forever', history: 'forever', albumTrash: 'forever', receiptTrash: 'forever' })
+const draft = reactive({
+  messages: 'forever', conversations: 'forever', history: 'forever',
+  albumTrash: 'forever', receiptTrash: 'forever'
+})
 const dirty = computed(() => ALL_KINDS.some(k => draft[k] !== policy[k]))
 const confirm = reactive({ open: false, title: '', message: '', confirmText: '确定', disabled: false, kind: '', mode: '' })
 // 删除全部的 5 秒冷静期：与危险区同款「确定键先置灰 + 倒计时」。

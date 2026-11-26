@@ -1,7 +1,8 @@
 // =========================================================================
 // 账号数据管理路由（设置页「空间管理 → 管理」弹窗）
 // 默认永久保留；本路由的 clear 只由用户显式点击触发，无任何自动清理。
-// 四类：messages / history（SQL 表）+ albumTrash / receiptTrash（文件目录）。
+// 五类：messages / history / conversations（SQL 表）+ albumTrash / receiptTrash（文件目录）。
+// conversations 只清空壳（无消息的会话），避免 CASCADE 删掉用户消息。
 // =========================================================================
 const express = require('express')
 const fs = require('fs')
@@ -13,7 +14,9 @@ const retention = require('../services/retentionStore')
 // 绝不按 HTML 之类可被浏览器执行/解析的类型返回（回收站内容不可信）。
 const MIME = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
-  webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml',
+  webp: 'image/webp', bmp: 'image/bmp',
+  // svg 故意不列：回收站内容不可信，内联返回可执行 SVG 会 XSS（V9-K03-02）。
+  // 缺项由 mimeOf 回落 application/octet-stream，浏览器当附件下载而非内联执行。
   pdf: 'application/pdf', txt: 'text/plain', md: 'text/plain', json: 'application/json',
   doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -24,7 +27,7 @@ function mimeOf(name) {
   return MIME[path.extname(String(name || '')).slice(1).toLowerCase()] || 'application/octet-stream'
 }
 
-// 总览：四类占用 + 当前策略
+// 总览：五类占用 + 当前策略
 router.get('/', (req, res) => {
   res.json({ ok: true, policy: retention.readPolicy(), stats: retention.stats() })
 })
@@ -47,7 +50,7 @@ router.put('/', (req, res) => {
   res.json({ ok: true, policy: next, deleted, stats: retention.stats() })
 })
 
-// 查看明细：?kind=messages|history|albumTrash|receiptTrash&limit=50
+// 查看明细：?kind=messages|history|conversations|albumTrash|receiptTrash&limit=50
 router.get('/list', (req, res) => {
   const kind = String(req.query.kind || '')
   if (!retention.KINDS.includes(kind)) return res.status(400).json({ error: '未知的数据类型' })
@@ -77,7 +80,7 @@ router.post('/restore-receipt', (req, res) => {
   res.json({ ok: true, name: r.name, stats: retention.stats() })
 })
 
-// 删除全部：{ kind: 四类之一 }。前端必须二次确认。
+// 删除全部：{ kind: 五类之一 }。前端必须二次确认。
 router.post('/clear', (req, res) => {
   const kind = String((req.body || {}).kind || '')
   if (!retention.KINDS.includes(kind)) return res.status(400).json({ error: '未知的数据类型' })

@@ -312,6 +312,7 @@ classnest/
         │   ├── schedule-cells-validation.test.js  # 课表接口拒绝畸形 cells（4-1 / #60）
         │   ├── schedule-import-save.test.js  # 课表 Excel 导入必须调到真的保存方法（v7 §5-7 / #25）
         │   ├── score-aggregate-identity.test.js  # 成绩统计按身份聚合，不按姓名（v7 §5-4 / #20）
+        │   ├── student-list-paging.test.js  # 学生名单首屏分页（V9 · 5-5）：limit/offset、全量补齐、hasMore 变异反证
         │   ├── student-formal-filter.test.js  # 学生管理只列正式学生（?formal=1）
         │   ├── student-lookup.test.js  # 学生「认人」的单源实现（services/studentLookup.js）
         │   ├── student-provisional-visibility.test.js  # 临时学生在「点名器 / AI 找人 / AI 聚合」里可见
@@ -346,7 +347,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），347 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），352 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
 - **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
@@ -527,6 +528,7 @@ classnest/
 | [`packaged-csp.test.js`](../../../testjs/units/desktop/packaged-csp.test.js) | 打包版 CSP 与构建产物内联脚本的对账：入口 CSS 的 `onload`、启动页脚本、PDF 字体子集化的 `wasm-unsafe-eval` 三类 hash 必须同时留在 `script-src`，且 style 标签要的 `unsafe-hashes` 不能删；改 CSP 就要重算 hash | 真实构建产物 + 源码对账 |
 | [`ports-config.test.js`](../../../testjs/units/desktop/ports-config.test.js) | 端口单一口径的变异反证：`config/ports.json` 改一处，主进程代理 / 后端 fork / Vite 代理 / CSP / 渲染层媒体地址同时跟着变；环境变量覆盖与 `BACKEND_PORT > PORT` 优先级在子进程里重读配置验证；另测运行期顺延后 getter 与代理目标同步变化、dev 就绪判据能命中真实 `index.html` | 子进程重载配置 + 源码接线判据 |
 | [`score-paging.test.js`](../../../testjs/units/student/score-paging.test.js) | 成绩列表分页与首页聚合：列表按页取、统计页签仍走全量（它要汇总而不是逐条）；首页摘要与旧 `computed` 逐项一致；分页只对列表 opt-in | 内存库 + 真 router |
+| [`student-list-paging.test.js`](../../../testjs/units/student/student-list-paging.test.js) | 学生名单首屏分页（V9 · 5-5）：首屏 `limit=50` 且保留 `formal=1`，滚到底 offset 递增；导出/定位的全量请求不带 limit、补过全量后刷新不缩回第一页；`hasMore` 边界与全量模式恒 false；三条变异反证真改源码执行 | 纯函数真执行 + 变异反证 |
 | [`score-provisional.test.js`](../../../testjs/units/student/score-provisional.test.js) | 加分记录里的名册外姓名：允许直接写名字，由后端走与值日/座位/分组同一套 `provisionalStudents`（建 `is_provisional=1` 并回填 `student_id`）；转正只改状态位，引用不断 | 内存库 + 真 router |
 | [`score-import-idempotency.test.js`](../../../testjs/units/student/score-import-idempotency.test.js) | 成绩导入幂等（F07-04）：同一份表重导 `alreadyImported` 不新建、回原结果供撤销；`force=true` 强制新建并更新批次；内容不同算另一份表；批次与写记录同事务（中途失败不留半条）；指纹稳定 hash（键序无关、内容变即变）；前端提示分支不登记撤销 + 「仍然新建」出口 | 内存库 + 真 router + 前端接线判据 |
 | [`semester-crud.test.js`](../../../testjs/units/student/semester-crud.test.js) | 学期 CRUD 与「当前学期」镜像（档 C · M12-B4）：新增即当前且当前唯一、列表把空日期排最后、切换互斥、删当前自动补选、**只传 `semester_start` 不能清空 `end_date`**（结束日期是快照补存的上界）、老库无 `is_current` 时回退最新；另含两条 SQL 出口判据 | 内存库 + 真 router |
@@ -534,7 +536,8 @@ classnest/
 | [`text-head.test.js`](../../../testjs/units/storage/text-head.test.js) | AI 附件只读头部（v6 性能专题 · 2-12）：大文件只读 `maxChars*4` 字节（`bytesRead` 可证）、末尾不完整多字节序列被裁掉不产生 U+FFFD、空文件与纯 ASCII 边界、接线锁上传解析走 `readTextHead` | 临时文件 |
 | [`thumb-purge.test.js`](../../../testjs/units/album/thumb-purge.test.js) | 「清理图片微缩图」：只删缩略图文件，索引（`album_photos` 行、`thumb_path`、`thumb_v`）一概不动；按库目录与旧扁平结构都要清；不存在的文件跳过不报错 | 临时目录 |
 | [`thumb-sweep.test.js`](../../../testjs/units/album/thumb-sweep.test.js) | 「回收孤儿微缩图」：默认只读（只报数一个不删），`apply=true` 只删「确定没人引用」的 jpg —— 库能打开时按 `album_photos.id` 集合比对，无主账号目录与旧扁平残留单独判定，库打不开的 slug 整目录跳过 | 临时目录 |
-| [`retention.test.js`](../../../testjs/units/backend/retention.test.js) | 账号数据管理保留策略：默认四类全永久、坏配置不意外开删、写策略只记偏好不删数据；回收站两类走目录 `mtime`（夹具临时 `DATA_DIR`）：预览只读、确定只清超期、不碰另一类、清空保留目录且符号链接不跟随不删除 | 内存库 + 临时目录；10 条用例 |
+| [`retention.test.js`](../../../testjs/units/backend/retention.test.js) | 账号数据管理保留策略：默认五类全永久、坏配置不意外开删、写策略只记偏好不删数据；回收站两类走目录 `mtime`（夹具临时 `DATA_DIR`）：预览只读、确定只清超期、不碰另一类、清空保留目录且符号链接不跟随不删除 | 内存库 + 临时目录；10 条用例 |
+| [`conversation-shell-retention.test.js`](../../../testjs/units/backend/conversation-shell-retention.test.js) | AI 会话空壳纳入保留期（V9 · 5-6）：默认 forever 且写入路径 `autoClean` 不删；占用统计/明细只数无消息空壳；`deleteAll` 与 `applyNow` 都只清空壳，`ON DELETE CASCADE` 不会带走用户消息；变异反证真改源码抹掉 `SHELL_ONLY`，证明 4 个会话连 2 条消息一起被删正是所防的数据丢失 | 真库行为 + 真变异反证 |
 | [`undo-retention.test.js`](../../../testjs/units/backend/undo-retention.test.js) | 撤销记录「每 key 50 条」上限：`pushRecord` 的 `MAX_PER_KEY` 一旦被改掉或加进动态 key，`undo_history` 就会无限增长，而「撤销不需要分页」的结论完全建立在这个上限上 | 内存库 |
 | [`viewer-pan.test.js`](../../../testjs/units/ui/viewer-pan.test.js) | 查看器「放大之后能拖动平移」：`translate` 必须在 `rotate` / `scale` 之前（写在后面位移会被倍率再乘一遍）；平移量夹在可露出余量内，缩小/转正/改窗口都要重新夹；旋转 90/270 时宽高互换 | 纯函数 + 前端 ESM |
 | [`vite-outdir-empty.test.js`](../../../testjs/units/desktop/vite-outdir-empty.test.js) | 构建输出目录的「小批量清空」：Vite 自带的 `emptyOutDir` 是一次递归删除，`dist/assets` 上百文件时会撞上宿主环境的删目录失败；改为分批删并保留非构建产物 | 临时目录 |
@@ -578,5 +581,10 @@ classnest/
 - **分层不要混写**：纯算法留在本层；组件行为语义放 [behavior.md](./behavior.md)，HTTP ↔ 前后端链路放 [smoke.md](./smoke.md)。
 - **不碰真实数据**：本层只用内存库、连接桩与纯函数；需要启动真实后端或真实 `DATA_DIR`（数据目录）的用例不属于这一层。
 - **`_vue-loader.cjs` 不是用例**：它是加载 `.vue` 单文件组件的辅助（编译模板后交给 ESM 动态 `import()`），供需要真跑组件脚本的用例复用；新增这类辅助仍沿用 `_` 前缀。
+
+---
+| [`mcp-error-redaction.test.js`](../../../testjs/units/ai/mcp-error-redaction.test.js) | MCP 外部错误文案统一脱敏（V9-K02-01）：server 与 stdio 转发器共用 `publicToolError`，SQL / 路径不进响应 | 真跑共享函数 + 接线判据 |
+| [`mcp-pending-guard.test.js`](../../../testjs/units/ai/mcp-pending-guard.test.js) | MCP 提案积压原子守卫（V9-I-05/06）：create 内同步计数，并发都过闸门时仍能拦住第 31 条 | 真库 + 行为 |
+| [`student-candidate-filter.test.js`](../../../testjs/units/ui/student-candidate-filter.test.js) | 学生候选下拉统一口径（V9-I-11/12）：归一化 + 拼音，四处下拉共用 `studentCandidateHit` | 真跑共享函数 + 接线判据 |
 
 ---

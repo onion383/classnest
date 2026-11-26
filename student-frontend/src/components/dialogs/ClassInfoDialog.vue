@@ -349,13 +349,13 @@ function submit() {
   transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
 }
 .rename-btn:hover {
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
   border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
   background-color: var(--color-surface-hover);
 }
 /* 编辑态：按钮变成「确认」，用主色描边 + 淡底标出当前处于编辑中 */
 .rename-btn--on {
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
   border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
   background-color: color-mix(in srgb, var(--color-primary) 12%, transparent);
 }

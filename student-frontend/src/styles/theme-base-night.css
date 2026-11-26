@@ -31,6 +31,21 @@
   --color-info: #60a5fa;
   --color-info-hover: #93c5fd;
 
+  /* 语义色 / 主色作为「文字」时的 AAA 档（深底 ≥ 7:1）。
+     只给 .text-* 一类文字用途用，实心按钮的底色仍走各自的夜间配方。 */
+  --color-primary-ink: #60a5fa;
+  --color-success-ink: #4ade80;
+  --color-warning-ink: #fbbf24;
+  --color-danger-ink: #f87171;
+  --color-info-ink: #60a5fa;
+
+  /* 豁免档（通知条等装饰色块）：沿用夜间原有的高饱和色 */
+  --color-primary-vivid: #60a5fa;
+  --color-success-vivid: #4ade80;
+  --color-warning-vivid: #fbbf24;
+  --color-danger-vivid: #f87171;
+  --color-info-vivid: #60a5fa;
+
   --color-bg: #0b1220;
   --color-surface: #111c2e;
   --color-surface-hover: #1a2740;
@@ -38,9 +53,9 @@
   --color-sidebar-hover: #111c2e;
   --color-sidebar-active: #1d4ed8;
 
-  --color-text: #e5edf7;
-  --color-text-secondary: #a9b7c9;
-  --color-text-muted: #718096;
+  --color-text: #eaf0f8;
+  --color-text-secondary: #c6d0db;
+  --color-text-muted: #abb4c1;
   --color-text-inverse: #ffffff;
 
   --color-border: #22304a;
@@ -91,7 +106,7 @@
 :root[data-theme="base"][data-mode="night"] .window-title-bar {
   background: #0b1220;
   border-bottom-color: #22304a;
-  color: #94a3b8;
+  color: #abb4c1;
 }
 :root[data-theme="base"][data-mode="night"] .window-controls .win-btn:hover {
   background: #1a2740;
@@ -127,7 +142,7 @@
   border-color: rgba(255, 255, 255, 0.06);
 }
 :root[data-theme="base"][data-mode="night"] .sidebar-group-title {
-  color: #64748b;
+  color: #abb4c1;
 }
 :root[data-theme="base"][data-mode="night"] .nav-item {
   color: #bfdbfe;
@@ -183,7 +198,7 @@
 
 /* ---------- 夜间：标签页 / 二级切换 ---------- */
 :root[data-theme="base"][data-mode="night"] .tab-btn {
-  color: #94a3b8;
+  color: #abb4c1;
 }
 :root[data-theme="base"][data-mode="night"] .tab-btn:hover {
   background: #1a2740;
@@ -223,11 +238,11 @@
 :root[data-theme="base"][data-mode="night"] button.bg-warning.text-text-inverse,
 :root[data-theme="base"][data-mode="night"] button.bg-warning-hover.text-text-inverse {
   background: #78350f;
-  color: #fcd34d;
+  color: #fef3c7;
 }
 :root[data-theme="base"][data-mode="night"] button.bg-warning.text-text-inverse:hover {
   background: #92400e;
-  color: #fde68a;
+  color: #ffffff;
 }
 /* ---------- 夜间：通用 info / danger 按钮（表格内「修改 / 删除」等）----------
    base 夜间 --color-info(#60a5fa) / --color-danger(#f87171) 都是高亮实色 + 白字，
@@ -365,15 +380,15 @@
   border-color: #2a4a78;
 }
 :root[data-theme="base"][data-mode="night"] .snapshot-empty-text {
-  color: #94a3b8;
+  color: #abb4c1;
 }
 :root[data-theme="base"][data-mode="night"] .dt-empty-text,
 :root[data-theme="base"][data-mode="night"] .grid-empty-text {
-  color: #64748b;
+  color: #abb4c1;
 }
 :root[data-theme="base"][data-mode="night"] .dt-empty-icon,
 :root[data-theme="base"][data-mode="night"] .grid-empty-icon {
-  color: #64748b;
+  color: #abb4c1;
 }
 :root[data-theme="base"][data-mode="night"] .dt-empty-btn,
 :root[data-theme="base"][data-mode="night"] .grid-empty-btn,
@@ -500,16 +515,16 @@
   color: #c3ccdd;
 }
 :root[data-theme="base"][data-mode="night"] .class-info-card .line-label {
-  color: #8f9cb3;
+  color: #abb4c1;
 }
 :root[data-theme="base"][data-mode="night"] .class-info-card .class-placeholder,
 :root[data-theme="base"][data-mode="night"] .class-info-card .countdown-empty {
-  color: #718096;
+  color: #abb4c1;
 }
 :root[data-theme="base"][data-mode="night"] .class-info-card .cd-bottom {
   color: #a9b7c9;
 }
 :root[data-theme="base"][data-mode="night"] .class-info-card .cd-item-name,
 :root[data-theme="base"][data-mode="night"] .class-info-card .cd-num {
-  color: #60a5fa;
+  color: #7fb7fb;
 }

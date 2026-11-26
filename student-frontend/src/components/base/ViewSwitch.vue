@@ -193,6 +193,6 @@ onUnmounted(() => {
 /* glass 下「添加职务」等按钮被主题规则改成淡底 + 深绿字（见 theme-glass.css），
    选中项文字同步为深绿，否则白字会与该底色糊在一起、与隔壁按钮观感不一致 */
 :root:is([data-theme="glass"]) .view-switch-btn.on {
-  color: #166534;
+  color: #14532d;
 }
 </style>

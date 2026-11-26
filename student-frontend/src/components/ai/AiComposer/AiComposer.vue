@@ -407,7 +407,7 @@
 /* 联网搜索开启：用主题色标识已开启状态 */
 .comp-search.is-on {
   background: color-mix(in srgb, var(--color-primary) 16%, transparent);
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
 }
 .comp-search.is-on:hover {
   background: color-mix(in srgb, var(--color-primary) 26%, transparent);
@@ -444,7 +444,7 @@
   border-radius: var(--radius-control);
   border: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-primary) 12%, transparent);
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
   font-size: 12px;
   line-height: 1.5;
 }

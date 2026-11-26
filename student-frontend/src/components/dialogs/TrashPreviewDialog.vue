@@ -390,7 +390,7 @@ onBeforeUnmount(revoke)
 .rc-md-body :deep(ul),
 .rc-md-body :deep(ol) { margin: 0 0 10px; padding-left: 22px; list-style: revert; }
 .rc-md-body :deep(li) { margin: 2px 0; }
-.rc-md-body :deep(a) { color: #2563eb; text-decoration: underline; }
+.rc-md-body :deep(a) { color: var(--color-primary); text-decoration: underline; }
 .rc-md-body :deep(code) { background: rgba(0, 0, 0, 0.06); padding: 1px 4px; border-radius: 4px; font-size: 13px; }
 .rc-md-body :deep(pre) { background: rgba(0, 0, 0, 0.05); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
 .rc-md-body :deep(blockquote) { margin: 0 0 10px; padding-left: 12px; border-left: 3px solid #d1d5db; color: #4b5563; }

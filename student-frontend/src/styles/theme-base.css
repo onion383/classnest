@@ -85,8 +85,8 @@
   --color-sidebar-active: #17352b;
 
   --color-text: #17211d;
-  --color-text-secondary: #55635c;
-  --color-text-muted: #8a968f;
+  --color-text-secondary: #364050;
+  --color-text-muted: #455368;
   --color-text-inverse: #ffffff;
 
   --color-border: #dbe4df;
@@ -476,11 +476,11 @@
   opacity: 0.9;
 }
 :root[data-theme="base"] .snapshot-empty-text {
-  color: #7b8881;
+  color: #455368;
 }
 :root[data-theme="base"] .dt-empty-text,
 :root[data-theme="base"] .grid-empty-text {
-  color: #7b8881;
+  color: #455368;
 }
 :root[data-theme="base"] .dt-empty-icon,
 :root[data-theme="base"] .grid-empty-icon {
@@ -490,7 +490,7 @@
 :root[data-theme="base"] .dt-empty-btn,
 :root[data-theme="base"] .grid-empty-btn,
 :root[data-theme="base"] .empty-action-btn {
-  color: #0a5c48;
+  color: #094f3e;
   background: #e3f2ec;
   border: 1px solid #bfe0d2;
   box-shadow: none;

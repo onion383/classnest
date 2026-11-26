@@ -43,6 +43,16 @@
   --color-primary-active: #3b82f6;
   --color-primary-light: rgba(96, 165, 250, 0.18);
 
+  /* 语义色作为文字时与主题色保持一致（不做额外加深/提亮） */
+  --color-primary-ink: #60a5fa;
+  --color-success-ink: #22c55e;
+  --color-warning-ink: #f59e0b;
+  --color-danger-ink: #ef4444;
+  --color-info-ink: #3b82f6;
+
+  /* 豁免档（通知条等装饰色块）：旧夜间主色（其余继承 theme.css 默认 vivid） */
+  --color-primary-vivid: #60a5fa;
+
   --color-bg: #182238;
   --color-surface: rgba(46, 64, 100, 0.92);
   --color-surface-hover: rgba(55, 76, 118, 0.95);
@@ -50,9 +60,9 @@
   --color-sidebar-hover: var(--alpha-white-08);
   --color-sidebar-active: rgba(96, 165, 250, 0.22);
 
-  --color-text: #e6ecf5;
-  --color-text-secondary: #a7b4c9;
-  --color-text-muted: #7f8ea6;
+  --color-text: #fafcfd;
+  --color-text-secondary: #e8ebf1;
+  --color-text-muted: #e3e7ec;
   --color-text-inverse: #ffffff;
 
   --color-border: var(--alpha-white-08);
@@ -198,10 +208,10 @@
 :root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 > div::before {
   background: linear-gradient(180deg, var(--alpha-white-03) 0%, var(--alpha-white-01) 50%, var(--alpha-white-02) 100%);
 }
-:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-success { color: #4ade80 !important; }
-:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-info { color: #7cb3fb !important; }
-:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-danger { color: #f87171 !important; }
-:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-text-secondary { color: #94a3b8 !important; }
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-success { color: var(--color-success-ink) !important; }
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-info { color: var(--color-info-ink) !important; }
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-danger { color: var(--color-danger-ink) !important; }
+:root[data-mode="night"][data-theme="glass"] .grid.grid-cols-3 .text-text-secondary { color: var(--color-text-secondary) !important; }
 
 /* A6. 表格 */
 :root[data-mode="night"][data-theme="glass"] .table-scroll-wrapper {
@@ -744,21 +754,21 @@
   color: #e6ecf5;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .class-line {
-  color: #c3ccdd;
+  color: #e3e7ec;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .line-label {
-  color: #8f9cb3;
+  color: #e3e7ec;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .class-placeholder,
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .countdown-empty {
-  color: #6f7d95;
+  color: #e3e7ec;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-bottom {
-  color: #a7b4c9;
+  color: #e3e7ec;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-item-name,
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-num {
-  color: #60a5fa;
+  color: #d7eafe;
 }
 
 /* C3. 退出确认弹窗（ShutdownMenuDialog）

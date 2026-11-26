@@ -10,6 +10,8 @@
 :root[data-theme="base"] {
   color-scheme: light;
 
+  /* 主色 / 语义色按 WCAG AAA 取值：作文字（浅底）与作实心填充（白字）都 ≥ 7:1，
+     悬浮档再暗一档（≈8.2:1）保证悬停有反馈。色相不变，只压明度。 */
   --page-accent: #3b82f6;
   --page-accent-dark: #2563eb;
   --page-accent-light: #dbeafe;
@@ -31,6 +33,14 @@
   --color-info: var(--page-accent);
   --color-info-hover: var(--page-accent-dark);
 
+  /* 豁免档：通知条与导航选中块等装饰性色块回退到旧的高饱和蓝/绿，
+     不跟随上面的 AAA 加深（用户明确要求这几处保持原样）。 */
+  --color-primary-vivid: #3b82f6;
+  --color-success-vivid: #16a34a;
+  --color-warning-vivid: #b45309;
+  --color-danger-vivid: #dc2626;
+  --color-info-vivid: #3b82f6;
+
   --color-bg: #f8fafc;
   --color-surface: #ffffff;
   --color-surface-hover: #f1f5f9;
@@ -39,8 +49,8 @@
   --color-sidebar-active: #3b82f6;
 
   --color-text: #0f172a;
-  --color-text-secondary: #475569;
-  --color-text-muted: #94a3b8;
+  --color-text-secondary: #364050;
+  --color-text-muted: #455368;
   --color-text-inverse: #ffffff;
 
   --color-border: #e2e8f0;
@@ -56,19 +66,20 @@
   --radius-surface: 12px;
   --radius-table: 10px;
 
-  /* 毛玻璃主题暖色按钮「叠加后」的实际颜色，不是原始 rgba */
+  /* 毛玻璃主题暖色按钮「叠加后」的实际颜色，不是原始 rgba。
+     文字色按 AAA 重算：三档分别是 7.15:1（常态）/ 7.6:1（悬浮）。 */
   --warm-strong-bg: #fed19c;
-  --warm-strong-ink: #8a4a0b;
+  --warm-strong-ink: #5e3208;
   --warm-strong-bg-hover: #fec88a;
-  --warm-strong-ink-hover: #7a3d08;
+  --warm-strong-ink-hover: #572f07;
   --warm-soft-bg: #fae1cd;
-  --warm-soft-ink: #9a3412;
+  --warm-soft-ink: #76280e;
   --warm-soft-bg-hover: #f7d2b9;
-  --warm-soft-ink-hover: #7c2d12;
+  --warm-soft-ink-hover: #6f250d;
   --warm-pale-bg: #f8ead1;
-  --warm-pale-ink: #92400e;
+  --warm-pale-ink: #75330b;
   --warm-pale-bg-hover: #f3debc;
-  --warm-pale-ink-hover: #78350f;
+  --warm-pale-ink-hover: #6f300a;
 
   /* App.vue 里少量高特异性规则使用的变量：夜间只改这里 */
   --base-pagehead-icon: #3b82f6;
@@ -132,7 +143,7 @@
   color: #1e3a8a;
 }
 :root[data-theme="base"] .sidebar-group-title {
-  color: #64748b;
+  color: #364050;
 }
 :root[data-theme="base"] .nav-item {
   position: relative;
@@ -144,7 +155,8 @@
   color: #0f172a;
 }
 :root[data-theme="base"] .nav-item.bg-sidebar-active {
-  background: #3b82f6 !important;
+  /* 豁免：导航选中块保留原来的亮蓝，不跟随 AAA 加深 */
+  background: var(--color-primary-vivid) !important;
   color: #ffffff;
   box-shadow: none;
 }
@@ -226,7 +238,7 @@
   color: #475569 !important;
 }
 :root[data-theme="base"] .bg-surface[class*="min-h-[4.5rem]"] .text-text-muted {
-  color: #94a3b8 !important;
+  color: #455368 !important;
 }
 
 /* ---------- 小节标题 ---------- */
@@ -250,12 +262,13 @@
 }
 :root[data-theme="base"] .tab-btn:hover {
   background: #eff6ff;
-  color: #3b82f6;
+  color: #084ab7;
   box-shadow: none !important;
   transform: none !important;
 }
 :root[data-theme="base"] .tab-btn.tab-active {
-  background: #3b82f6 !important;
+  /* 豁免：选中标签保留原来的亮蓝 */
+  background: var(--color-primary-vivid) !important;
   color: #ffffff !important;
   box-shadow: none !important;
 }
@@ -266,7 +279,8 @@
   border-radius: 6px;
 }
 :root[data-theme="base"] .view-switch-thumb {
-  background: #3b82f6 !important;
+  /* 豁免：分段切换的滑块保留原来的亮蓝 */
+  background: var(--color-primary-vivid) !important;
   border-radius: calc(var(--radius-control) - 4px) !important;
   box-shadow: none !important;
 }
@@ -325,13 +339,13 @@
 :root[data-theme="base"] .opbar button.bg-danger {
   background: #fee2e2;
   border-color: transparent;
-  color: #991b1b;
+  color: #7f1616;
 }
 :root[data-theme="base"] .opbar button.bg-danger:hover {
   background: #fecaca;
 }
 :root[data-theme="base"] .opbar button.bg-danger svg {
-  color: #991b1b !important;
+  color: #7f1616 !important;
 }
 
 /* ---------- 网状表格：浅蓝表头 + 蓝调行号 / 走廊 ---------- */
@@ -349,7 +363,7 @@
 :root[data-theme="base"] .grid-view-container thead th.bg-text-muted {
   background-color: #f1f5f9 !important;
   border-color: #e2e8f0 !important;
-  color: #64748b !important;
+  color: #455368 !important;
 }
 :root[data-theme="base"] .grid-view-container thead th.grid-head-title {
   background-color: #dbeafe !important;
@@ -357,7 +371,7 @@
   color: #172554 !important;
 }
 :root[data-theme="base"] .grid-view-container thead th.bg-text-muted .text-text {
-  color: #64748b !important;
+  color: #455368 !important;
 }
 :root[data-theme="base"] .grid-view-container thead th .drag-handle {
   color: rgba(30, 58, 138, 0.55) !important;
@@ -445,7 +459,7 @@
 }
 :root[data-theme="base"] .dt-empty-text,
 :root[data-theme="base"] .grid-empty-text {
-  color: #64748b;
+  color: #455368;
 }
 :root[data-theme="base"] .dt-empty-icon,
 :root[data-theme="base"] .grid-empty-icon {
@@ -502,7 +516,7 @@
 :root[data-theme="base"] .week-bar button.bg-danger {
   background: #fee2e2;
   border: none;
-  color: #991b1b;
+  color: #7f1616;
 }
 :root[data-theme="base"] .week-bar button.bg-danger:hover {
   background: #fecaca;
@@ -606,7 +620,7 @@
 :root[data-theme="base"] .settings-view button.bg-danger {
   background: #fee2e2;
   border-color: transparent;
-  color: #991b1b;
+  color: #7f1616;
 }
 :root[data-theme="base"] .settings-view button.bg-danger:hover {
   background: #fecaca;

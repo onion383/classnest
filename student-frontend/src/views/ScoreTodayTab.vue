@@ -2,25 +2,25 @@
   <div>
     <!-- 数据看板 -->
     <div class="grid grid-cols-4 gap-4 mb-6">
-      <div class="bg-surface shadow-md rounded-xl border border-border p-4">
+      <div class="bg-success/10 rounded-xl border border-border p-4">
         <div class="flex items-center gap-1.5 text-sm text-text-secondary">
           <span class="w-2 h-2 rounded-full bg-success inline-block"></span> {{ ctx.addPeopleLabel }}
         </div>
         <div class="text-2xl font-bold text-success">{{ ctx.todayAddPeople }} 人</div>
       </div>
-      <div class="bg-surface shadow-md rounded-xl border border-border p-4">
+      <div class="bg-info/10 rounded-xl border border-border p-4">
         <div class="flex items-center gap-1.5 text-sm text-text-secondary">
-          <span class="w-2 h-2 rounded-full bg-success inline-block"></span> 加分项目
+          <span class="w-2 h-2 rounded-full bg-info inline-block"></span> 加分项目
         </div>
-        <div class="text-2xl font-bold text-success">{{ ctx.todayAddItems }} 项</div>
+        <div class="text-2xl font-bold text-info">{{ ctx.todayAddItems }} 项</div>
       </div>
-      <div class="bg-surface shadow-md rounded-xl border border-border p-4">
+      <div class="bg-warning/10 rounded-xl border border-border p-4">
         <div class="flex items-center gap-1.5 text-sm text-text-secondary">
-          <span class="w-2 h-2 rounded-full bg-danger inline-block"></span> {{ ctx.subPeopleLabel }}
+          <span class="w-2 h-2 rounded-full bg-warning inline-block"></span> {{ ctx.subPeopleLabel }}
         </div>
-        <div class="text-2xl font-bold text-danger">{{ ctx.todaySubPeople }} 人</div>
+        <div class="text-2xl font-bold text-warning">{{ ctx.todaySubPeople }} 人</div>
       </div>
-      <div class="bg-surface shadow-md rounded-xl border border-border p-4">
+      <div class="bg-danger/10 rounded-xl border border-border p-4">
         <div class="flex items-center gap-1.5 text-sm text-text-secondary">
           <span class="w-2 h-2 rounded-full bg-danger inline-block"></span> 扣分项目
         </div>

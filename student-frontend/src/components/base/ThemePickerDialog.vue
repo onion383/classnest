@@ -141,7 +141,7 @@ function onAnimationsChange(value) {
   color: var(--color-text-secondary);
 }
 .theme-card.is-active .theme-name {
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
   font-weight: 600;
 }
 

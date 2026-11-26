@@ -660,7 +660,7 @@
             <div v-for="row in perfRows" :key="row.key" class="flex items-center gap-3">
               <span class="w-32 flex-shrink-0 truncate text-sm text-text-secondary" :title="row.name">{{ row.name }}</span>
               <div class="flex-1 h-2.5 rounded-full bg-bg border border-border overflow-hidden">
-                <div class="h-full rounded-full bg-primary" :style="{ width: barPct(row.memKB) + '%', transition: 'width 480ms cubic-bezier(0.4, 0, 0.2, 1), background-color 250ms' }"></div>
+                <div class="h-full rounded-full perf-bar" :style="{ width: barPct(row.memKB) + '%', transition: 'width 480ms cubic-bezier(0.4, 0, 0.2, 1), background-color 250ms' }"></div>
               </div>
               <span class="w-20 flex-shrink-0 text-right text-sm text-text" style="font-variant-numeric: tabular-nums;">{{ fmtMem(row.memKB) }}</span>
             </div>
@@ -1811,6 +1811,11 @@ onBeforeUnmount(() => {
 }
 .glass-switch:hover {
   background-color: rgba(255, 255, 255, 0.64);
+}
+
+/* 内存占用进度条：与开关同属「豁免 AAA 加深」的装饰性蓝色，走 vivid 档 */
+.perf-bar {
+  background-color: var(--color-primary-vivid, var(--color-primary));
 }
 
 /* 设置项搜索跳转锚点：滚动到标题时留出上边距，避免紧贴内容区顶端 */

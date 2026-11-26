@@ -241,6 +241,20 @@
   --color-info: #7c93ff;
   --color-info-hover: #6a82f5;
 
+  /* 语义色作为文字时与主题色保持一致（不做额外加深/提亮） */
+  --color-primary-ink: #7c93ff;
+  --color-success-ink: #3ecb84;
+  --color-warning-ink: #e0a13a;
+  --color-danger-ink: #f07171;
+  --color-info-ink: #7c93ff;
+
+  /* 豁免档（通知条等装饰色块）：沿用夜间原有的高饱和色 */
+  --color-primary-vivid: #7c93ff;
+  --color-success-vivid: #3ecb84;
+  --color-warning-vivid: #e0a13a;
+  --color-danger-vivid: #f07171;
+  --color-info-vivid: #7c93ff;
+
   --color-bg: #1b2036;
   --color-surface: var(--g2-glass);
   --color-surface-hover: var(--g2-glass-strong);
@@ -248,9 +262,9 @@
   --color-sidebar-hover: var(--alpha-white-08);
   --color-sidebar-active: rgba(124, 147, 255, 0.2);
 
-  --color-text: #e7eaf6;
-  --color-text-secondary: #a9b1c9;
-  --color-text-muted: #9aa4bd;
+  --color-text: #fcfdfe;
+  --color-text-secondary: #ebedf2;
+  --color-text-muted: #c9cedb;
   --color-text-inverse: #ffffff;
 
   --color-border: var(--g2-hair);
@@ -311,10 +325,10 @@
 }
 :root[data-mode="night"][data-theme="glass2"] .bg-sidebar a,
 :root[data-mode="night"][data-theme="glass2"] .bg-sidebar nav a {
-  color: #b7c0d8;
+  color: #ebedf2;
 }
 :root[data-mode="night"][data-theme="glass2"] .sidebar-group-title {
-  color: #96a0b9;
+  color: #c9cedb;
 }
 :root[data-mode="night"][data-topbar-color="light"][data-theme="glass2"] .bg-sidebar {
   background-color: rgba(38, 45, 72, 0.60) !important;
@@ -519,21 +533,21 @@
   color: #e6ecf5;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .class-line {
-  color: #c3ccdd;
+  color: #e3e7ec;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .line-label {
-  color: #8f9cb3;
+  color: #e3e7ec;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .class-placeholder,
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .countdown-empty {
-  color: #6f7d95;
+  color: #e3e7ec;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-bottom {
-  color: #a7b4c9;
+  color: #e3e7ec;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-item-name,
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .class-info-card .cd-num {
-  color: #60a5fa;
+  color: #d7eafe;
 }
 
 /* C3. 退出确认弹窗（ShutdownMenuDialog）
@@ -641,7 +655,7 @@
    深色底上暗红几乎看不清。禁用项则叠了 --color-text-muted + opacity-50，
    对比更低。这里把 danger 提到浅红、禁用项提亮并抬高不透明度。 */
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .more-menu-popup .more-menu-item.text-danger {
-  color: #fca5a5 !important;
+  color: var(--color-danger-ink) !important;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .more-menu-popup .more-menu-item:disabled {
   color: #cbd5e1 !important;

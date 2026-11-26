@@ -1323,7 +1323,7 @@ onBeforeUnmount(() => {
   height: 21px;
 }
 .mode-card.is-active .mode-card-icon {
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
 }
 /* 选中时图标由「线条」变「实心」：只填这几块面，不换描边颜色，也不给方框加蓝边 */
 .mode-card-icon svg .ic-fill {
@@ -1354,7 +1354,7 @@ onBeforeUnmount(() => {
   margin-top: 4px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
 }
 .mode-card-note {
   margin-top: 16px;
@@ -1608,7 +1608,7 @@ onBeforeUnmount(() => {
   font-weight: 500;
   color: var(--color-text);
 }
-.req { color: var(--color-danger); font-style: normal; }
+.req { color: var(--color-danger-ink, var(--color-danger)); font-style: normal; }
 .f-input {
   flex: 1;
   min-width: 0;
@@ -1650,12 +1650,12 @@ onBeforeUnmount(() => {
 .f-error {
   margin: 0 0 0 104px;
   font-size: 13px;
-  color: var(--color-danger);
+  color: var(--color-danger-ink, var(--color-danger));
 }
 .f-ok {
   margin: 0 0 0 104px;
   font-size: 13px;
-  color: var(--color-success);
+  color: var(--color-success-ink, var(--color-success));
 }
 
 /* ===== 夜间配色微调（仅引导窗口，不影响主界面） ===== */
@@ -1675,7 +1675,7 @@ onBeforeUnmount(() => {
 }
 /* 低版本系统提示：红字与白底按钮跟随深色 */
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .ow-msg {
-  color: #fca5a5;
+  color: #fee1e1;
 }
 :root[data-mode="night"]:is([data-theme="glass"], [data-theme="glass2"]) .ow-ghost {
   border-color: rgba(147, 197, 253, 0.35);
@@ -1797,7 +1797,7 @@ onBeforeUnmount(() => {
   color: var(--color-text-secondary);
 }
 .theme-card.is-active .theme-name {
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
   font-weight: 600;
 }
 
@@ -1861,7 +1861,7 @@ onBeforeUnmount(() => {
 .done-title {
   font-size: 16px;
   font-weight: 600;
-  color: var(--color-success);
+  color: var(--color-success-ink, var(--color-success));
 }
 .done-edit {
   padding: 3px 10px;
@@ -1904,7 +1904,7 @@ onBeforeUnmount(() => {
 }
 .perf-chip.is-done,
 .perf-chip.is-done .perf-chip-num {
-  color: var(--color-success);
+  color: var(--color-success-ink, var(--color-success));
 }
 .perf-dot {
   width: 7px;

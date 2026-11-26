@@ -60,7 +60,9 @@
   --g2-accent-ring: rgba(91, 124, 250, 0.34);
   --g2-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
-  /* ---- 映射到全站主题变量 ---- */
+  /* ---- 映射到全站主题变量 ----
+     主色 / 语义色按 AAA 取：作文字与作实心填充（白字）都 ≥ 7:1，
+     悬浮再暗一档；色相保持长春花蓝。 */
   --color-primary: #4a65e8;
   --color-primary-hover: #4058d8;
   --color-primary-active: #364cc2;
@@ -76,6 +78,14 @@
   --color-info: #4a65e8;
   --color-info-hover: #4058d8;
 
+  /* 豁免档：通知条与操作栏按钮回退到旧的高饱和长春花蓝/琥珀，
+     不跟随 AAA 加深（用户明确指出这几处过艳）。 */
+  --color-primary-vivid: #4a65e8;
+  --color-success-vivid: #14874a;
+  --color-warning-vivid: #c2740a;
+  --color-danger-vivid: #d63a3a;
+  --color-info-vivid: #4a65e8;
+
   --color-bg: #eef1f8;
   --color-surface: var(--g2-glass);
   --color-surface-hover: var(--g2-glass-strong);
@@ -84,9 +94,9 @@
   --color-sidebar-active: var(--alpha-white-92);
 
   --color-text: #191f2e;
-  --color-text-secondary: #545e78;
-  /* 弱化文字在浅玻璃上必须保住 4.5:1：#8a93a8 实测只有 2.8:1，压到 #657089 */
-  --color-text-muted: #657089;
+  --color-text-secondary: #373d4f;
+  /* 弱化文字按 AAA 取 7.1:1（门槛已从 4.5:1 上调） */
+  --color-text-muted: #495062;
   --color-text-inverse: #ffffff;
 
   --color-border: var(--g2-hair);
@@ -312,7 +322,7 @@
   color: #5f6980 !important;
 }
 :root[data-theme="glass2"] .sidebar-group-title {
-  color: #5f6980;
+  color: #495062;
 }
 /* hover：浅色底压一层更亮的玻璃 */
 :root[data-topbar-color="light"][data-theme="glass2"] .bg-sidebar-hover,
@@ -402,6 +412,19 @@
 :root[data-theme="glass2"] button.tab-active.bg-info.text-text-inverse,
 :root[data-theme="glass2"] button.tab-active.bg-info.text-text-inverse:hover {
   box-shadow: var(--g2-hl), 0 6px 18px rgba(91, 124, 250, 0.32);
+}
+/* 豁免：操作栏（.opbar）的实心按钮回退到旧的高饱和蓝 / 琥珀。
+   AAA 加深后的深蓝、深棕在一排按钮里显得过艳，用户明确要求这几处保持原样。
+   只作用于 .opbar，不影响表格操作列、弹窗等其它按钮；夜间层的同名规则
+   特异性更高且后加载，会把这几个按钮重新压回夜间玻璃底。 */
+:root[data-theme="glass2"] .opbar button.bg-primary,
+:root[data-theme="glass2"] .opbar button.bg-info {
+  background-color: var(--color-primary-vivid) !important;
+  color: #fff !important;
+}
+:root[data-theme="glass2"] .opbar button.bg-warning {
+  background-color: var(--color-warning-vivid) !important;
+  color: #fff !important;
 }
 :root[data-theme="glass2"] button:not(.win-btn):not(:disabled):active {
   transform: translateY(1px);
@@ -948,7 +971,7 @@
 }
 :root:is([data-theme="glass2"]) .dt-empty-text,
 :root:is([data-theme="glass2"]) .grid-empty-text {
-  color: #a9b8dc;
+  color: #495062;
 }
 :root:is([data-theme="glass2"]) .dt-empty-btn,
 :root:is([data-theme="glass2"]) .grid-empty-btn,

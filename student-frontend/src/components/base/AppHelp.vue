@@ -207,7 +207,7 @@ function positionBubble() {
 .app-help:hover,
 .app-help:focus-visible {
   outline: none;
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
   background-color: var(--color-primary-light);
 }
 :root[data-theme="glass2"] .app-help:active {

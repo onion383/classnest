@@ -85,11 +85,12 @@ function onChange(e) {
 }
 
 .app-switch:not(.is-disabled):hover .app-switch-track {
-  border-color: var(--color-primary);
+  border-color: var(--color-primary-vivid, var(--color-primary));
 }
 .app-switch.is-checked .app-switch-track {
-  background-color: var(--color-primary);
-  border-color: var(--color-primary);
+  /* 豁免：开关开启态的蓝色保留旧的高饱和观感 */
+  background-color: var(--color-primary-vivid, var(--color-primary));
+  border-color: var(--color-primary-vivid, var(--color-primary));
 }
 
 .app-switch-knob {

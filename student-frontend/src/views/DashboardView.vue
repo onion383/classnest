@@ -956,10 +956,10 @@ onBeforeUnmount(() => {
   color: #374151;
 }
 .line-label {
-  color: #6b7280;
+  color: #455368;
 }
 .class-placeholder {
-  color: #9ca3af;
+  color: #455368;
   font-style: italic;
 }
 /* 第三部分：倒计时（大字排版） */
@@ -973,7 +973,7 @@ onBeforeUnmount(() => {
   line-height: 1.4;
 }
 .cd-item-name {
-  color: #2563eb;
+  color: var(--color-primary);
 }
 .cd-bottom {
   /* 数字大字、单位跟随基线对齐 */
@@ -987,11 +987,11 @@ onBeforeUnmount(() => {
   font-size: 58px;
   font-weight: 800;
   line-height: 1;
-  color: #2563eb;
+  color: var(--color-primary);
 }
 .countdown-empty {
   font-size: 14px;
-  color: #9ca3af;
+  color: #455368;
 }
 
 /* 班费金额查看/隐藏切换：模糊渐入（与 AnimatedClock 时钟 charFlipIn 同款效果） */
@@ -1194,7 +1194,7 @@ onBeforeUnmount(() => {
   border: none;
   border-radius: var(--radius-control);
   background: transparent;
-  color: #94a3b8;
+  color: #455368;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
   white-space: nowrap;
@@ -1206,7 +1206,7 @@ onBeforeUnmount(() => {
 }
 .class-gear:hover {
   background: rgba(59, 130, 246, 0.1);
-  color: #2563eb;
+  color: var(--color-primary);
 }
 
 /* ======================== 首屏组件内加载条 ========================

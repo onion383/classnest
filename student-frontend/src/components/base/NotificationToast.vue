@@ -145,11 +145,12 @@ function onAction(item) {
   overflow: hidden;
 }
 
-/* 类型着色（左侧边框） */
-.nt-success { border-left: 4px solid var(--color-success, #22c55e); }
-.nt-error   { border-left: 4px solid var(--color-danger, #ef4444);  }
-.nt-warning { border-left: 4px solid var(--color-warning, #f59e0b); }
-.nt-info    { border-left: 4px solid var(--color-info, #3b82f6);    }
+/* 类型着色（左侧边框）
+   通知条属于「装饰性色块」，豁免 AAA 加深，走 vivid 档保留原有高饱和观感。 */
+.nt-success { border-left: 4px solid var(--color-success-vivid, #22c55e); }
+.nt-error   { border-left: 4px solid var(--color-danger-vivid, #ef4444);  }
+.nt-warning { border-left: 4px solid var(--color-warning-vivid, #f59e0b); }
+.nt-info    { border-left: 4px solid var(--color-info-vivid, #3b82f6);    }
 
 /* 图标 */
 .nt-icon {
@@ -165,10 +166,10 @@ function onAction(item) {
   font-weight: 700;
   color: #fff;
 }
-.nt-success .nt-icon { background: var(--color-success, #22c55e); }
-.nt-error   .nt-icon { background: var(--color-danger, #ef4444);  }
-.nt-warning .nt-icon { background: var(--color-warning, #f59e0b); }
-.nt-info    .nt-icon { background: var(--color-info, #3b82f6);    }
+.nt-success .nt-icon { background: var(--color-success-vivid, #22c55e); }
+.nt-error   .nt-icon { background: var(--color-danger-vivid, #ef4444);  }
+.nt-warning .nt-icon { background: var(--color-warning-vivid, #f59e0b); }
+.nt-info    .nt-icon { background: var(--color-info-vivid, #3b82f6);    }
 
 /* 消息体 */
 .nt-body {
@@ -198,7 +199,7 @@ function onAction(item) {
   padding: 2px 7px;
   border-radius: 999px;
   color: #fff;
-  background: var(--color-primary, #2563eb);
+  background: var(--color-primary-vivid, #3b82f6);
 }
 
 /* 消息内容 */
@@ -256,10 +257,10 @@ function onAction(item) {
 .nt-bar-paused {
   animation-play-state: paused;
 }
-.nt-success .nt-bar { background: var(--color-success, #22c55e); }
-.nt-error   .nt-bar { background: var(--color-danger, #ef4444);  }
-.nt-warning .nt-bar { background: var(--color-warning, #f59e0b); }
-.nt-info    .nt-bar { background: var(--color-info, #3b82f6);    }
+.nt-success .nt-bar { background: var(--color-success-vivid, #22c55e); }
+.nt-error   .nt-bar { background: var(--color-danger-vivid, #ef4444);  }
+.nt-warning .nt-bar { background: var(--color-warning-vivid, #f59e0b); }
+.nt-info    .nt-bar { background: var(--color-info-vivid, #3b82f6);    }
 
 @keyframes nt-shrink {
   from { width: 100%; }

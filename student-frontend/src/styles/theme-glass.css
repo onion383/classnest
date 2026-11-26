@@ -7,6 +7,10 @@
   --color-primary-active: #1d4ed8;
   --color-primary-light: rgba(59, 130, 246, 0.12);
 
+  /* 豁免档：通知条等装饰色块沿用旧的高饱和蓝（其余语义色继承 theme.css 默认 vivid） */
+  --color-primary-vivid: #3b82f6;
+  --color-info-vivid: #3b82f6;
+
   /* 背景色 */
   --color-bg: #f0f4f8;
   --color-surface: var(--alpha-white-92);
@@ -17,8 +21,8 @@
 
   /* 文字色 */
   --color-text: #1e293b;
-  --color-text-secondary: #475569;
-  --color-text-muted: #64748b;
+  --color-text-secondary: #35404f;
+  --color-text-muted: #475263;
   --color-text-inverse: #ffffff;
 
   /* 边框 */
@@ -470,7 +474,7 @@
   background: rgba(251, 146, 60, 0.5);
   border: none;
   backdrop-filter: blur(12px) saturate(1.3);
-  color: #9a3412;
+  color: #7c2d12;
   box-shadow:
     inset 0 0 0 40px var(--alpha-white-50),
     0 0 14px var(--alpha-white-12);
@@ -1160,16 +1164,16 @@
   pointer-events: none;
 }
 :root:is([data-theme="glass"]) .grid.grid-cols-3 .text-success {
-  color: #16a34a !important;
+  color: var(--color-success) !important;
 }
 :root:is([data-theme="glass"]) .grid.grid-cols-3 .text-info {
-  color: #2563eb !important;
+  color: var(--color-info) !important;
 }
 :root:is([data-theme="glass"]) .grid.grid-cols-3 .text-danger {
-  color: #dc2626 !important;
+  color: var(--color-danger) !important;
 }
 :root:is([data-theme="glass"]) .grid.grid-cols-3 .text-text-secondary {
-  color: #64748b !important;
+  color: var(--color-text-secondary) !important;
 }
 
 /* ========== 登录界面背景和光效 ========== */
@@ -1186,7 +1190,7 @@
   color: #2b3a4d !important;
 }
 :root:is([data-theme="glass"]):not([data-mode="night"]) .login-bg input::placeholder {
-  color: #64748b;
+  color: #475263;
 }
 :root:is([data-theme="glass"]) .login-glow {
   position: relative;
@@ -1479,7 +1483,7 @@
 }
 :root:is([data-theme="glass"]) .dt-empty-text,
 :root:is([data-theme="glass"]) .grid-empty-text {
-  color: #9fb3d1;
+  color: #475263;
 }
 :root:is([data-theme="glass"]) .dt-empty-btn,
 :root:is([data-theme="glass"]) .grid-empty-btn,

@@ -26,6 +26,14 @@
   --color-info: #3b82f6;
   --color-info-hover: #2563eb;
 
+  /* 豁免档：通知条、导航选中、操作栏等「纯装饰/品牌色块」不参与 AAA 加深，
+     保留旧的高饱和观感。只有显式引用 vivid 的元素才会用到它们。 */
+  --color-primary-vivid: #22c55e;
+  --color-success-vivid: #22c55e;
+  --color-warning-vivid: #f59e0b;
+  --color-danger-vivid: #ef4444;
+  --color-info-vivid: #3b82f6;
+
   /* 玻璃层透明度阶梯：各主题文件统一引用，改整体浓淡只动这里
      （取值与原硬编码逐字一致，替换后视觉零变化） */
   --alpha-white-06: rgba(255, 255, 255, 0.06);
@@ -102,8 +110,8 @@
 
   /* 文字色 */
   --color-text: #111827;
-  --color-text-secondary: #4b5563;
-  --color-text-muted: #6b7280;
+  --color-text-secondary: #38404b;
+  --color-text-muted: #4d525d;
   --color-text-inverse: #ffffff;
 
   /* 边框色 */
@@ -158,3 +166,22 @@
      12px 的间距用在「卡片内缩 12px 处放圆角块」这种典型嵌套上。 */
   --radius-concentric-gap: 12px;
 }
+
+/* ==================== 语义色 / 主色作文字时的 AAA 兜底 ====================
+   夜间层里这些 token 仍是「实心按钮底色」用的中等亮度，直接当文字放在深底上
+   只有 3~6:1；各夜间文件另外给出 --color-*-ink（浅一档、≥7:1）。
+   这里让 .text-* 与其 hover 变体优先取 ink，日间没有 ink 定义时回退原 token，
+   外观零变化。本段不放进 @layer，因此优先于 Tailwind utilities 里的同名类。 */
+.text-primary { color: var(--color-primary-ink, var(--color-primary)); }
+.text-success { color: var(--color-success-ink, var(--color-success)); }
+.text-warning { color: var(--color-warning-ink, var(--color-warning)); }
+.text-danger { color: var(--color-danger-ink, var(--color-danger)); }
+.text-info { color: var(--color-info-ink, var(--color-info)); }
+.hover\:text-primary:hover { color: var(--color-primary-ink, var(--color-primary)); }
+.hover\:text-success:hover { color: var(--color-success-ink, var(--color-success)); }
+.hover\:text-warning:hover { color: var(--color-warning-ink, var(--color-warning)); }
+.hover\:text-danger:hover { color: var(--color-danger-ink, var(--color-danger)); }
+.hover\:text-info:hover { color: var(--color-info-ink, var(--color-info)); }
+/* 带了透明度修饰的主色文字（如 text-primary/80）会因混合而降对比，
+   这里钉回不透明的主色 ink，字号本身已承担弱化语义。 */
+.text-primary\/80 { color: var(--color-primary-ink, var(--color-primary)); }

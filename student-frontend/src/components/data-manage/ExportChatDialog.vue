@@ -241,7 +241,7 @@ async function doExport() {
 }
 .role-user {
   background: color-mix(in srgb, var(--color-primary) 16%, transparent);
-  color: var(--color-primary);
+  color: var(--color-primary-ink, var(--color-primary));
 }
 .role-ai {
   background: color-mix(in srgb, var(--color-success, #10b981) 18%, transparent);

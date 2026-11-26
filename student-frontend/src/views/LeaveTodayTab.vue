@@ -2,9 +2,9 @@
   <div>
     <!-- 数据看板 -->
     <div class="grid grid-cols-3 gap-4 mb-6">
-      <div class="bg-surface rounded-xl border border-border p-4">
+      <div class="bg-info/10 rounded-xl border border-border p-4">
         <div class="text-sm text-text-secondary">全班人数</div>
-        <div class="text-2xl font-bold text-text">{{ ctx.totalStudents }} 人</div>
+        <div class="text-2xl font-bold text-info">{{ ctx.totalStudents }} 人</div>
       </div>
       <div class="bg-success/10 rounded-xl border border-border p-4">
         <div class="text-sm text-text-secondary">在校人数</div>

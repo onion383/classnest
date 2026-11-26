@@ -347,7 +347,7 @@ classnest/
 
 ## 综合概述
 
-- **定位**：单元测试层（`testjs/units/`），362 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
+- **定位**：单元测试层（`testjs/units/`），363 个 `node:test`（Node 内置测试框架）文件，覆盖纯函数与内存库上的数据层逻辑。
 - **公共逻辑**：零第三方依赖（`node:test`（Node 内置测试框架）+ `node:assert`（Node 内置校验库）），不启动后端与前端；失败退出码非 0，可直接接 CI。运行：`npm run test:units`（支持 `--only=`（只跑指定文件）/ `--skip=`（跳过指定文件）/ `--bail`（首个失败即停）/ `--list`（只列用例不执行））。
 - **公共夹具**：后端路由测试统一用 `testjs/units/_db-express-fixture.cjs`，不要各自再抄「env 兜底 → 内存库 → 换 `db.js` 的 Proxy → `express.listen(0)`」。它提供 `createBackendDb({ label, dataDir, extraDbExports })`、`fx.reset()`（每个用例换干净库，`db.js` 的导出是转发到当前库的 Proxy，模块顶层 require 的引用才不会失效）、`fx.mount(path, routerOrRel)`（可多次挂不同前缀，也接受 `createDynamicTableRouter(...)` 这类实例）、`fx.call(method, path, body)`（返回 `{ status, text, json }`，`path` 可写相对挂载点或 `/api/...` 绝对路径）。`getFields` 默认按 `table_meta` 真查；`renumber` 这类闭包导出用 `extraDbExports` 覆盖。要测「多步写中途失败」时给 `createBackendDb` 加 `faults: true`，再用 `fx.inject({ failAt: N })`（第 N 次 `run()` 抛错）或 `fx.inject({ failMatch: /表名/i, failAtMatch: N })`（按 SQL 锁定注入点，业务新增一次写也不会把故障落错步骤）；`reset()` 会清掉注入。`test-assets.test.js` 有一条守卫：旧样板文件数必须为 0（历史 21 个已全部迁到夹具），新写的测试自己再抄一份 `require.cache[dbPath].exports` 就会红。
 - **局限**：不覆盖 UI、进程间链路与真实数据目录；部分数据层用例会用「内存库 + 真 Express router」跑 HTTP（如座位单格写入、分组维度删除、相册合并）。分层说明见 [testing/README.md](./README.md) 的「各层的可信范围与局限」。
@@ -581,6 +581,7 @@ classnest/
 | [`score-leave-undo-same-tx.test.js`](../../../testjs/units/backend/score-leave-undo-same-tx.test.js) | 成绩/请假 PUT/DELETE 同事务：`cell_update` 逐字段与 `row_delete` 整行 payload 按前端 spec 原样登记、404 不登记、无 spec 变异反证 | 真内存库 + 真 router + 真 HTTP；5 条 |
 | [`seat-cell-undo-same-tx.test.js`](../../../testjs/units/seat/seat-cell-undo-same-tx.test.js) | 座位单格 PATCH 同事务：带 spec 回 `undoId`、`grid_cell` payload 原样保留、洞里塞人被拒不登记、几何（types/rows/cols）不动、无 spec 变异反证 | 真内存库 + 真 router + 真 HTTP；4 条 |
 | [`group-dimension-settings-same-tx.test.js`](../../../testjs/units/student/group-dimension-settings-same-tx.test.js) | 899 维度设置：组名批量改 + 结构快照同事务 —— `groupRenames` 合进 dimensions PUT，撤销 `newValue` 是改名后组名；去掉改名则保留旧名（变异反证） | 真内存库 + 真 router + 真 HTTP；2 条 |
+| [`theme-contrast.test.js`](../../../testjs/units/ui/theme-contrast.test.js) | 主题文字对比度闸门（WCAG AAA 三级梯度）：7 个场景三档文字过 7:1 且梯度不塌，玻璃主题按滑块 0/40/100% 三档取最差值；色值从产品 CSS 现读、按 WCAG 公式实算 | 读 CSS + 对比度实算；7 条 |
 
 新增：在 `units/` 建 `*.test.js`，用 `node:test` 的 `test()` 编写，无需改配置。
 

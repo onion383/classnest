@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../utils/sendError')
 const router = express.Router();
 // jsonwebtoken 只在登录/注册/重置密码等「签发 Token」时用到，不需要在后端就绪前加载：
 // 改为首次调用时才 require，避免把它（连带 semver / side-channel 等）的冷加载成本
@@ -553,7 +554,7 @@ router.post('/recover-password', async (req, res) => {
         console.warn('[auth] 恢复改密同步账号密码失败:', err.message);
       }
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return sendError(res, err);
     }
     // 密码已重置：该账号在其它班级/窗口的旧 token 立即失效，要求重新登录。
     const row = userStore.findByUsername(resolved.conn, name);
@@ -565,7 +566,7 @@ router.post('/recover-password', async (req, res) => {
   try {
     resolved = dbManager.resolveByUsername(name);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return sendError(res, err);
   }
   if (!resolved) return res.status(404).json({ error: '账号不存在' });
 

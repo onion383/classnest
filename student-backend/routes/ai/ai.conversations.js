@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../../utils/sendError')
 const aiConversationStore = require('../../services/aiConversationStore');
 const dbManager = require('../../dbManager/dbManager');
 const { currentSettings } = require('./ai.config');
@@ -38,7 +39,7 @@ router.get('/conversations', (req, res) => {
     const rows = aiConversationStore.listConversations();
     res.json({ success: true, data: rows });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -83,7 +84,7 @@ router.get('/conversations/:id/messages', (req, res) => {
     const kept = hasMore ? rows.slice(1) : rows; // 丢弃多取的探测条（升序首位＝最早者）
     res.json({ success: true, data: parseMessageRows(kept), hasMore });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -122,7 +123,7 @@ router.post('/conversations/:id/messages', (req, res) => {
     }
     res.json({ success: true, id: info.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -141,12 +142,14 @@ router.put('/conversations/:id/messages/:mid', (req, res) => {
     aiConversationStore.touch(req.params.id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
 // DELETE /api/ai/conversations/:id/messages/last-assistant —— 重试前移除最近一条助手回复
 router.delete('/conversations/:id/messages/last-assistant', (req, res) => {
+  // 与同文件其余 PUT/DELETE 一致：不存在的会话回 404，不静默回 success:true（coverage route.not_found_404）。
+  if (!conversationExists(req.params.id)) return res.status(404).json({ error: '会话不存在' });
     const row = aiConversationStore.lastAssistantId(req.params.id);
   if (row) aiConversationStore.deleteMessage(row.id);
   res.json({ success: true, removed: !!row });
@@ -163,7 +166,7 @@ router.post('/conversations/:id/messages/delete', (req, res) => {
     aiConversationStore.touch(req.params.id);
     res.json({ success: true, removed: info.changes });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

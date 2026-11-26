@@ -263,7 +263,7 @@
 import { ref, computed, watch, onMounted, onActivated, onBeforeUnmount, nextTick, toRef, TransitionGroup } from 'vue';
 import { useGridViewDrag } from './GridView.drag.js';
 import { useDisposables } from '../../../utils/disposables.js';
-import { normSearchText } from '../../../utils/tableSearch.js';
+import { normSearchText, studentCandidateHit } from '../../../utils/tableSearch.js';
 import { formatStudentLabel } from '../../../utils/studentLabel.js';
 import CustomScrollbar from '../../base/CustomScrollbar.vue';
 import IconGlyph from '../../base/IconGlyph.vue';
@@ -524,7 +524,8 @@ const filteredCandidates = computed(() => {
         const kw = normSearchText(text);
         // 用预缓存的标签小写，避免每次击键都对每个候选现场 String+toLowerCase 分配（同行为、更快）
         const cache = ctx.candidateLabelCache.value;
-        return list.filter(s => cache.get(s).includes(kw));
+        // 缓存命中文字子串；未命中的再按统一口径判一次（含拼音），六处下拉同口径。
+        return list.filter(s => cache.get(s).includes(kw) || studentCandidateHit(s.姓名, kw));
       }
       return list;
 })
@@ -781,10 +782,14 @@ const methods = {
       const original = ctx.rows.value[row].cells[col] || {};
       const cell = { ...original, course: ctx.editingCellData.value.course || '' };
       // 候选选中的学生 id 随格子保存：调用方（如座位）优先按 id 落库。
-      // 格子被清空时不保留，避免留下「空名字 + 旧 id」的孤儿格。
+      // 关键：浅拷贝会把原格子的 _studentId 一起带过来，而手输改名时 onEditInput
+      // 只清了编辑器里的 _studentId——若不在这里显式删，旧 id 会随新姓名落库，
+      // 调用方按旧 id 绑定，用户改名被丢弃（V9-F03-01）。
       if (ctx.candidateIdField.value && cell.course && ctx.editingCellData.value._studentId != null) {
         cell._studentId = ctx.editingCellData.value._studentId;
-      } else if (!cell.course) {
+      } else {
+        // 非候选模式 / 清空 / 手输改名（id 已清）：一律不留旧 id。
+        // 用 null 而非 delete，保持与清空分支既有契约一致（消费端按 != null 判断）。
         cell._studentId = null;
       }
       newRows[row].cells[col] = cell;

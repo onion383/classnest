@@ -7,6 +7,7 @@
 // =========================================================================
 
 const express = require('express');
+const { sendError } = require('../../../utils/sendError')
 const dbManager = require('../../../dbManager/dbManager');
 const tokenStore = require('../../../services/mcpTokenStore');
 const proposals = require('../../../services/mcpProposalStore');
@@ -36,7 +37,7 @@ router.get('/privacy', (req, res) => {
   try {
     const cur = inDb(req, () => aiConfigStore.readMcpPrivacy());
     res.json({ success: true, data: { ...cur, tables: privacyTables(cur) } });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 router.put('/privacy', (req, res) => {
@@ -51,7 +52,7 @@ router.put('/privacy', (req, res) => {
     const next = inDb(req, () => aiConfigStore.setMcpPrivacy(normalizePrivacyPatch(req.body)));
     try { privacy.invalidate(); } catch (_) { /* best-effort: 缓存清理失败不阻断设置保存 */ }
     res.json({ success: true, data: { ...next, tables: privacyTables(next) }, message: '已保存' });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // ---- 提案 ----
@@ -70,13 +71,13 @@ router.get('/proposals', (req, res) => {
     }));
     const view = isDone ? proposalView.describeDone : proposalView.describe;
     res.json({ proposals: rows.map((p) => view(p)) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // 提案的保留设置（只作用于「已处理」）。未处理的不受这个数字影响。
 router.get('/prefs', (req, res) => {
   try { res.json(inDb(req, () => aiConfigStore.readMcpPrefs())); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { sendError(res, e); }
 });
 
 router.put('/prefs', (req, res) => {
@@ -85,7 +86,7 @@ router.put('/prefs', (req, res) => {
     // 改小后立刻生效：不能等下一次提案进来才裁，否则界面还显示着旧条数。
     const removed = inDb(req, () => proposals.trimDone(next.proposal_keep));
     res.json({ ...next, removed });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // 老师确认/拒绝：confirm 复用既有写入链路（单事务），状态抢占保证幂等
@@ -96,7 +97,7 @@ router.post('/proposals/:id/decide', (req, res) => {
     const result = inDb(req, () => mcpProposalExec.confirm(req.params.id, decision));
     if (!result.ok) return res.status(409).json(result);
     res.json(result);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // ---- 启用开关 ----
@@ -104,7 +105,7 @@ router.post('/proposals/:id/decide', (req, res) => {
 router.get('/enabled', (req, res) => {
   try {
     res.json({ enabled: inDb(req, () => aiConfigStore.readMcpEnabled()) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 router.put('/enabled', (req, res) => {
@@ -112,7 +113,7 @@ router.put('/enabled', (req, res) => {
     const on = !!(req.body && req.body.enabled);
     inDb(req, () => aiConfigStore.setMcpEnabled(on));
     res.json({ enabled: on });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // ---- token 管理 ----
@@ -132,7 +133,7 @@ router.get('/tokens', (req, res) => {
     // 只列当前 slug 的 token：tokenStore.list 不按 slug 过滤，这里在应用侧筛一遍。
     const all = tokenStore.list();
     res.json({ tokens: all.filter((t) => t.slug === slug(req)), endpoint: '/mcp' });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // 复制令牌：按需从班级库读明文副本（core 索引只存 hash，鉴权不开库）。
@@ -142,7 +143,7 @@ router.get('/tokens/:id/plain', (req, res) => {
     const plain = tokenStore.getPlain(req.params.id, slug(req));
     if (!plain) return res.status(404).json({ error: '令牌不存在、已撤销，或没有可复制的明文（旧令牌）' });
     res.json({ token: plain });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 router.post('/tokens/:id/revoke', (req, res) => {
@@ -150,7 +151,7 @@ router.post('/tokens/:id/revoke', (req, res) => {
     // 带当前 slug：只能撤销自己班的令牌，不能跨班越权（与 getPlain 同口径）。
     const ok = tokenStore.revoke(req.params.id, slug(req));
     res.json({ ok });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // 去除记录：从 core 索引里彻底删掉这条令牌（只接受已撤销/已过期的，有效令牌拒绝）。
@@ -161,7 +162,7 @@ router.post('/tokens/:id/remove', (req, res) => {
     const ok = tokenStore.remove(req.params.id, slug(req));
     if (!ok) return res.status(404).json({ error: '令牌不存在，或该令牌仍有效（请先删除配置使其失效）' });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 module.exports = router;

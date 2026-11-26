@@ -910,7 +910,7 @@
     </div>
 
     <!-- 账号数据管理：空间管理区「管理」入口打开（默认永久，删除全部需显式点击） -->
-    <AccountDataDialog v-model:visible="accountDataVisible" @view="openDataManageFromSettings" @view-snapshots="snapshotPickerOpen = true" @view-trash="openTrashPreview" @changed="loadDiskUsage(true)" />
+    <AccountDataDialog v-model:visible="accountDataVisible" @view="openDataManageFromSettings" @view-snapshots="openSnapshotPickerFromSettings" @view-trash="openTrashPreview" @changed="loadDiskUsage(true)" />
     <TrashPreviewDialog v-if="trashPreviewKind" :visible="true" :kind="trashPreviewKind" :z-index="10014" @close="trashPreviewKind = ''" @changed="loadDiskUsage(true)" />
     <!-- 四层：管理 10012 → 选择/数据管理 10014 → 具体快照管理 10016 → 内部确认 10017 -->
     <DataManageDialog v-if="dataManageOpened" v-model:visible="dataManageOpen" :z-index="10014" />
@@ -1249,6 +1249,10 @@ function openDataManageFromSettings() {
 // 快照选择弹窗（账号数据管理「查看」→ 单独一层选择 → 再进具体域）
 const snapshotPickerOpened = ref(false)
 const snapshotPickerOpen = ref(false)
+function openSnapshotPickerFromSettings() {
+  snapshotPickerOpened.value = true
+  snapshotPickerOpen.value = true
+}
 // 按域打开快照管理；上层弹窗保持打开，关掉子弹窗后能回到它。
 const trashPreviewKind = ref('')
 function openTrashPreview(kind) {

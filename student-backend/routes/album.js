@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../utils/sendError')
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
@@ -278,7 +279,7 @@ router.post('/', async (req, res) => {
     dispatchFull(albumId, '');
     res.json({ id: albumId, message: '相册已添加，正在扫描索引…' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -334,7 +335,7 @@ router.post('/merge', (req, res) => {
     for (const tp of thumbs) fsp.unlink(tp).catch(() => {}); // best-effort: 源索引已删，缩略图清理失败可忽略
     res.json({ id: newId, message: `已合并 ${sourceAlbums.length} 个相册`, removed });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -456,7 +457,7 @@ router.get('/random-photo/thumb', async (req, res) => {
     // maxAge: 0 → no-store。URL 是固定的，让浏览器缓存 24h 的话首页永远是同一张。
     await sendThumb(res, pickedId, { maxAge: 0 });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -518,7 +519,7 @@ router.get('/tasks', (req, res) => {
     }
     res.json({ data: list });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -545,7 +546,7 @@ router.get('/tasks/pending', (req, res) => {
     }));
     res.json({ data: list });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -596,7 +597,7 @@ router.post('/tasks/resume', (req, res) => {
     }
     res.json({ message: resumed ? `已继续 ${resumed} 个未完成的扫描任务` : '没有可恢复的任务', resumed });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -643,7 +644,7 @@ router.delete('/:id', async (req, res) => {
     // 局部 catch：与本文件其他路由口径一致（统一 { error } + 明确状态码）。
     // 不靠全局错误中间件兜底 —— 那条路径返回的是 500 且会打全量现场，
     // 而「相册不存在」这类业务错误应当是 404。
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -699,7 +700,7 @@ router.get('/:id/dates', (req, res) => {
     // 这里原样返回空串，由前端按同一规则显示成「未知时间」（与 /photos 的分组键一致）。
     res.json({ data: rows });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -768,7 +769,7 @@ router.get('/:id/photos', (req, res) => {
       cursor,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -857,7 +858,7 @@ router.post('/photos/move', (req, res) => {
       message: `已移动 ${moved} 张照片到「${target.name}」${extra}`,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -955,7 +956,7 @@ router.get('/photo/:photoId/file', async (req, res) => {
       stream.pipe(res);
     }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -1023,7 +1024,7 @@ async function sendThumb(res, photoId, { maxAge = 86400 } = {}) {
     res.setHeader('Cache-Control', maxAge > 0 ? `private, max-age=${maxAge}` : 'no-store');
     return res.end(buf);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   } finally {
     if (claimed) releasePreview(claimed);
   }
@@ -1069,7 +1070,7 @@ router.get('/photo/:photoId/locate', (req, res) => {
     // 其余列与网格照片对象同源，查看器 / 左右翻页可直接把这一行当一张照片用
     res.json({ success: true, data: photo });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -1110,7 +1111,7 @@ router.get('/photo/:photoId/info', async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -1259,7 +1260,7 @@ router.post('/photo/thumbs', async (req, res) => {
       try { res.end(); } catch (_) { /* best-effort: socket 已断，忽略 */ }
       return;
     }
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   } finally {
     // releaseUnstarted 已把「没轮到」的部分还掉了，这里只还「真的跑过」的。
     // 幂等：claimed 被减到 0 时不会重复释放。
@@ -1288,7 +1289,7 @@ router.post('/thumbs/purge', async (req, res) => {
     albumThumbs.purgeCache();
     res.json({ success: true, data: result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -1324,7 +1325,7 @@ router.post('/thumbs/sweep', async (req, res) => {
     if (apply && result.deleted) albumThumbs.purgeCache();
     res.json({ success: true, data: result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -1355,7 +1356,7 @@ router.delete('/photo/:photoId', async (req, res) => {
     }
     res.json({ message: '已移入回收站' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -1384,7 +1385,7 @@ router.get('/photo/:photoId/save-as', async (req, res) => {
     });
     stream.pipe(res);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

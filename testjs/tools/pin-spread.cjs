@@ -408,7 +408,18 @@ function readPinLine(line) {
   return m ? m[1] : null
 }
 
-const files = fs.readdirSync(UNITS).filter((f) => f.endsWith('.test.js')).sort()
+/** 递归收集 *.test.js，返回相对 units/ 的路径（与 guard-ledger.collectTests 同口径）。
+ *  347 个单测全在 13 个子目录，非递归会扫到 0 个文件、静默报「0 断言 / 0 可补锚点」（V9-T02b-04）。 */
+function collectTests(dir, base = dir, out = []) {
+  for (const e of fs.readdirSync(base, { withFileTypes: true })) {
+    const full = path.join(base, e.name)
+    if (e.isDirectory()) { collectTests(dir, full, out); continue }
+    if (e.name.endsWith('.test.js')) out.push(path.relative(dir, full).split(path.sep).join('/'))
+  }
+  return out
+}
+
+const files = collectTests(UNITS).sort()
 const rows = []
 let totalAssert = 0, pinned = 0, bare = 0
 

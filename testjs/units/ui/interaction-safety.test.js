@@ -89,3 +89,51 @@ test('F06-10 相册删除照片不再用原生 confirm()', () => {
   // @pin student-frontend/src/views/AlbumView.vue#deletePhoto
   assert.match(src, /function deletePhoto\(p\) \{\s*if \(!p\) return\s*deleteTarget\.value = p/)
 })
+
+// ---- V9 接线判据（从 v9-fixes.test.js 并入，同类纯源码判据不另起文件）----
+test('V9-F01-01 候选下拉：模板用的 studentRowLabel 必须在 setup 作用域可解析', () => {
+  const src = read('student-frontend/src/components/CadreTreeList.vue')
+  // @pin student-frontend/src/components/CadreTreeList.vue#studentRowLabel
+  assert.match(src, /\{\{\s*studentRowLabel\(s\)\s*\}\}/)
+  // @pin student-frontend/src/components/CadreTreeList.vue#studentRowLabel
+  assert.match(src, /import\s*\{\s*studentRowLabel\s*\}\s*from\s*['"]\.\.\/utils\/studentLabel\.js['"]/,
+    '必须从 utils/studentLabel.js 导入；V9-F01-01 漏这一行会让候选下拉 ReferenceError')
+})
+
+test('V9-F02-01 快照「管理」：v-if 与 visible 的 ref 必须同一函数同时置位', () => {
+  const src = read('student-frontend/src/views/SettingsView/SettingsView.vue')
+  // @pin student-frontend/src/views/SettingsView/SettingsView.vue#openSnapshotPickerFromSettings
+  assert.match(src, /@view-snapshots="openSnapshotPickerFromSettings"/)
+  const fn = src.match(/function openSnapshotPickerFromSettings\(\)\s*\{([\s\S]*?)\}/)
+  assert.ok(fn, '必须有统一打开函数')
+  // @pin student-frontend/src/views/SettingsView/SettingsView.vue#openSnapshotPickerFromSettings
+  assert.match(fn[1], /snapshotPickerOpened\.value\s*=\s*true/)
+  // @pin student-frontend/src/views/SettingsView/SettingsView.vue#openSnapshotPickerFromSettings
+  assert.match(fn[1], /snapshotPickerOpen\.value\s*=\s*true/)
+})
+
+test('V9-F03-01 GridView 手输改名不得残留原格子的 _studentId', () => {
+  const src = read('student-frontend/src/components/tables/GridView/GridView.vue')
+  const body = src.slice(src.indexOf('saveEditCell()'), src.indexOf('cancelEdit()'))
+  // @pin student-frontend/src/components/tables/GridView/GridView.vue#saveEditCell
+  assert.match(body, /const cell = \{ \.\.\.original/)
+  // @pin student-frontend/src/components/tables/GridView/GridView.vue#saveEditCell
+  assert.match(body, /cell\._studentId = null/)
+  // @pin student-frontend/src/components/tables/GridView/GridView.vue#saveEditCell
+  assert.match(body, /if \(ctx\.candidateIdField\.value[\s\S]*?\)\s*\{[\s\S]*?\}\s*else\s*\{/,
+    '手输改名（id 已清）也要走 else 清掉残留 id')
+})
+
+// V9-F06-01 成功路径统一清明文口令（从 v9-fixes 同类判据并入）
+test('登录页每个成功跳转前都清掉明文口令 ref', () => {
+  const src = read('student-frontend/src/views/Login.vue')
+  // @pin student-frontend/src/views/Login.vue#clearPlainPassword
+  assert.match(src, /function clearPlainPassword\(\)[\s\S]{0,120}password\.value\s*=\s*''[\s\S]{0,60}confirm\.value\s*=\s*''/)
+  const pushes = [...src.matchAll(/router\.push\('\/'\)/g)]
+  assert.ok(pushes.length >= 6, `成功跳转应≥6处，实际 ${pushes.length}`)
+  for (const m of pushes) {
+    const before = src.slice(Math.max(0, m.index - 120), m.index)
+    // @pin student-frontend/src/views/Login.vue#clearPlainPassword
+    assert.match(before, /clearPlainPassword\(\)/, `跳转 ${m.index} 前必须先清明文口令`)
+  }
+})

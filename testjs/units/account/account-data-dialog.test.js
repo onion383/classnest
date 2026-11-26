@@ -99,7 +99,11 @@ test('⑨ 历史快照行只留一个对齐的「管理」，三域选项移到�
   }
   assert.match(picker, /\$emit\('pick', d\.key\)/, '点选项要发 pick 事件')
   const host = read('views/SettingsView/SettingsView.vue')
-  assert.match(host, /@view-snapshots="snapshotPickerOpen = true"/, '设置页要接 viewSnapshots 打开选择弹窗')
+  // V9-F02-01：旧断言钉的是内联 `snapshotPickerOpen = true`，只置了 visible 一半，
+  // v-if 挂在另一个 ref 上 → 弹窗永不挂载。改为统一函数同时置两个 ref。
+  assert.match(host, /@view-snapshots="openSnapshotPickerFromSettings"/, '设置页要接 viewSnapshots 走统一打开函数')
+  assert.match(host, /snapshotPickerOpened\.value\s*=\s*true[\s\S]{0,120}snapshotPickerOpen\.value\s*=\s*true/,
+    '两个 ref 必须同时置真，不能只接 visible 一半')
   assert.match(host, /@pick="openSnapshotDialog"/, '选择弹窗的 pick 要接上')
 })
 
@@ -135,9 +139,9 @@ test('⑪ 回收站两行同款：档位进 draft、删除全部走确认，且�
     assert.match(src, new RegExp('stats\\.' + kind + '\\.count'), `${label} 行缺少占用统计`)
   }
   // @pin student-frontend/src/components/dialogs/AccountDataDialog.vue#ALL_KINDS
-  assert.match(src, /ALL_KINDS\.some\(k => draft\[k\] !== policy\[k\]\)/, 'dirty 必须覆盖四类')
+  assert.match(src, /ALL_KINDS\.some\(k => draft\[k\] !== policy\[k\]\)/, 'dirty 必须覆盖全部类型')
   // @pin student-frontend/src/components/dialogs/AccountDataDialog.vue#ALL_KINDS
-  assert.match(src, /ALL_KINDS\.reduce\(\(sum, k\) => sum \+ \(willDelete\[k\] \|\| 0\), 0\)/, '预览确认必须累计四类')
+  assert.match(src, /ALL_KINDS\.reduce\(\(sum, k\) => sum \+ \(willDelete\[k\] \|\| 0\), 0\)/, '预览确认必须累计全部类型')
   assert.match(src, /清空回收站后，对应删除不能再撤销还原/, '帮助文案必须提示撤销影响')
   assert.match(src, /对应的删除记录也不能再撤销还原/, '清空确认框必须提示撤销影响')
 })

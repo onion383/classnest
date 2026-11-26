@@ -19,7 +19,13 @@ const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 
 const ROOT = path.join(__dirname, '..', '..')
-const TEST = path.join(ROOT, 'testjs', 'units', 'sweep-fixes.test.js')
+// 测试已随 units 按业务域分目录迁到 runtime/；路径不跟随会让 node --test 找不到文件，
+// TAP 流里没有 `not ok`，工具把「文件不存在」误报成「判据太松」（V9-T02b-02）。
+const TEST = path.join(ROOT, 'testjs', 'units', 'runtime', 'sweep-fixes.test.js')
+if (!fs.existsSync(TEST)) {
+  console.error('[mutate-sweep] 配置错误：测试文件不存在：' + TEST)
+  process.exit(2)
+}
 
 // file → 备份
 const FILES = {

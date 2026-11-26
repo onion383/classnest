@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../utils/sendError')
 const router = express.Router();
 const store = require('../services/slotStore');
 const { studentsBrief } = require('../services/dashboardAgg');
@@ -334,7 +335,7 @@ router.post('/snapshot/backfill', (req, res) => {
     const { inserted } = dutyWrite.backfillHistory({ mode, start, upper, today, includeToday });
     res.json({ message: `已补存 ${inserted} 天`, inserted });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -356,31 +357,17 @@ router.post('/history/week', (req, res) => {
     if (!isDateStr(raw)) return res.status(400).json({ error: '周起始日期格式不正确' });
     const mode = normalizeMode(req.body && req.body.mode);
     const weekStart = mondayOf(raw);
-    const layout = store.getDoc('duty_layout');
-    const layoutPayload = {
-      cells: layout ? unpackMode(layout.cells, mode) : {},
-      settings: layout ? unpackMode(layout.settings, mode) : {},
-    };
-
-    let inserted = 0
-    let noHit = 0
-    // 大扫除只在命中日补：命中日判定与自动补存共用 services/dutyWrite 的同一份实现，
-    // 否则「手动补录整周」会把 7 天全写上，历史列表多出空记录、按快照计数的
-    // 值日指数偏高（审查 v7 · #79）。
-    const isHit = dutyWrite.hitDayMatcher(mode)
-    for (let i = 0; i < 7; i++) {
-      const date = shiftDateStr(weekStart, i);
-      if (isHit && !isHit(date)) { noHit++; continue }
-      if (store.histFind('duty', date, mode)) continue;
-      const src = store.histPrev('duty', date, mode);
-      const payload = src ? { cells: src.payload.cells || {}, settings: src.payload.settings || {} } : layoutPayload;
-      store.histInsert('duty', { weekStart, snapDate: date, mode, payload });
-      inserted++;
-    }
+    const upper = shiftDateStr(weekStart, 6);
+    // 整周 7 天的写入与自动补存共用同一个事务循环（services/dutyWrite）：
+    // 命中日判定、跳过已有、沿用 prev、整批回滚全部同源。以前这里是一条裸 for 循环，
+    // 中途某天写失败会留下半截周（V9-K03-03）。weekStart 固定本周一起，不随逐日 mondayOf 变。
+    const { inserted, noHit } = dutyWrite.backfillHistory({
+      mode, start: weekStart, upper, weekStart, includeToday: false,
+    });
     if (!inserted && noHit === 7) return res.json({ message: '该周没有大扫除日，未生成记录', inserted });
     res.json({ message: inserted ? `已生成 ${inserted} 天记录` : '该周记录已完整，无需补录', inserted });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

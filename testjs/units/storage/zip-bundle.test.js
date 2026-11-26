@@ -242,3 +242,32 @@ test('空清单也能写出一个合法的空包（解压器不报错）', async
 test.after(() => {
   try { fs.rmSync(tmp, { recursive: true, force: true }) } catch (_) { /* 清理失败不影响结论 */ }
 })
+
+test('V9-K05-01 加密条目的中央目录 compSize 必须含 12 字节加密头', async () => {
+  // 本地头按「12 字节另算」定位（firstLocalHeader 的约定），但中央目录记整条目落盘尺寸。
+  // 少算 12 时，多条目包按下一条目定位会错位 —— 这正是 V9-K05-01 的根因。
+  const password = 'Test1234'
+  const text = '班费记录\n'.repeat(20)
+  const zipPath = tmpFile('encrypted-central.zip')
+  const ws = fs.createWriteStream(zipPath)
+  await writeZip([
+    { name: 'a.csv', data: text, method: 'deflate' },
+    { name: 'b.csv', data: text, method: 'deflate' },
+  ], ws, { password })
+  ws.end()
+  await new Promise((r) => ws.on('close', r))
+
+  const buf = fs.readFileSync(zipPath)
+  const plainCompSize = zlib.deflateRawSync(Buffer.from(text, 'utf8')).length
+  let pos = 0, found = 0
+  while ((pos = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]), pos)) !== -1) {
+    const extraLen = buf.readUInt16LE(pos + 30)
+    const extra = buf.subarray(pos + 46 + buf.readUInt16LE(pos + 28), pos + 46 + buf.readUInt16LE(pos + 28) + extraLen)
+    // ZIP64 extra：4 字节字段头（id+len）+ uncompressed(8) + compressed(8) + localOffset(8)
+    const comp = Number(extra.readBigUInt64LE(4 + 8))
+    assert.equal(comp, plainCompSize + 12, '中央目录 compSize 必须含 12 字节 ZipCrypto 头')
+    found++
+    pos += 4
+  }
+  assert.equal(found, 2, '两条加密条目都要检查到')
+})

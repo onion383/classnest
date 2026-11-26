@@ -6,6 +6,7 @@
 // =========================================================================
 
 const express = require('express')
+const { sendError } = require('../../utils/sendError')
 const undoStore = require('../../services/undoStore')
 const { executors } = require('./undo.executors')
 const { withGridCache } = require('./undo.helpers')
@@ -72,7 +73,7 @@ router.get('/stale', (req, res) => {
       }
     })
     res.json({ key, stale })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { sendError(res, e) }
 })
 
 // 新增记录

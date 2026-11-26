@@ -23,6 +23,7 @@
 // =========================================================================
 
 const { Client, StreamableHTTPClientTransport } = require('@modelcontextprotocol/client');
+const { publicToolError } = require('./utils/publicToolError')
 const { McpServer, createMcpHandler, fromJsonSchema } = require('@modelcontextprotocol/server');
 const { serveStdio } = require('@modelcontextprotocol/server/stdio');
 const { readRuntimePort, buildCandidates, guessRuntimeFiles } = require('./mcpForwarderDiscovery.cjs');
@@ -111,7 +112,7 @@ async function main() {
               ...(res.isError ? { isError: true } : {}),
             };
           } catch (e) {
-            return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }], isError: true };
+            return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: publicToolError(e && e.message) }) }], isError: true };
           }
         }
       );

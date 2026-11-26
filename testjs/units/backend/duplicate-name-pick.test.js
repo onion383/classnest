@@ -51,13 +51,30 @@ test('座位/值日格内候选：学生候选显示学号，课表候选不受�
   const body = fnBody(src, 'getCandidateLabel(item) {')
 
   // 有 candidateIdField（学生表）时才补学号；课表等按 label 字段的不加
+  // @pin student-frontend/src/components/tables/GridView/GridView.vue#getCandidateLabel
   assert.match(body, /ctx\.candidateIdField\.value/, '要按候选是否落学生 id 判断是否补学号')
+  // @pin student-frontend/src/components/tables/GridView/GridView.vue#getCandidateLabel
   assert.match(body, /item\.学号/, '要读学生行里的学号')
+  // @pin student-frontend/src/components/tables/GridView/GridView.vue#getCandidateLabel
   assert.match(body, /formatStudentLabel\(/, '显示文案走统一标签函数（姓名 · 学号）')
+  // @pin student-frontend/src/components/tables/GridView/GridView.vue#formatStudentLabel
   assert.match(src, /import\s*\{\s*formatStudentLabel\s*\}/, 'GridView 要引入统一标签函数')
 
   // 标签函数本身：有学号显示「姓名 · 学号」，空学号留给模板的「临时」标签
   const labelSrc = fs.readFileSync(abs('student-frontend/src/utils/studentLabel.js'), 'utf8')
   const fmt = fnBody(labelSrc, 'export function formatStudentLabel(name, xuehao)')
+  // @pin student-frontend/src/utils/studentLabel.js#formatStudentLabel
   assert.match(fmt, /\$\{n\} · \$\{x\}/, '统一标签要含学号')
+})
+
+// V9-U01-01 · 变异反证（可执行）：把点选优先的守卫改成「恒走姓名 find」，
+// 同一条判据必须判失败。只写头注不算反证（C-34）。
+test('变异反证：confirmAdd 退回按姓名 find 后，点选优先判据必须失败', () => {
+  const src = fs.readFileSync(TREE, 'utf8')
+  const body = fnBody(src, 'function confirmAdd()')
+  const pickGuard = /if\s*\(\s*picked\s*&&/
+  assert.match(body, pickGuard, '前置：真实源码要点选守卫')
+  const mutated = body.replace(pickGuard, 'if (false &&')
+  assert.notEqual(mutated, body, '变异必须真的匹配到守卫')
+  assert.doesNotMatch(mutated, pickGuard, '变异后同一判据必须失败，否则是假绿')
 })

@@ -132,6 +132,8 @@
 
 <script setup vapor>
 import { useNotification } from '../composables/useNotification.js'
+import { studentRowLabel } from '../utils/studentLabel.js'
+import { studentCandidateHit } from '../utils/tableSearch.js'
 import { ref, computed, nextTick } from 'vue'
 
 defineOptions({ name: 'CadreTreeList' })
@@ -166,23 +168,15 @@ const memberCount = computed(() => {
 const hasContent = computed(() => {
   return hasChildren.value || memberCount.value > 0
 })
-// 候选学生：排除本职务已担任的学生，按姓名过滤（逻辑与座位表一致）
+// 候选学生：排除本职务已担任的学生，按统一口径过滤（归一化 + 拼音，与表格搜索一致）
 const candidates = computed(() => {
-  const kw = String(addKeyword.value || '').toLowerCase().trim()
+  const kw = String(addKeyword.value || '').trim()
   const existing = new Set((props.node.members || []).map(m => String(m.student_name || '').trim()))
-  const lower = studentNameLower.value
   return props.allStudents.filter(s => {
     const name = String(s.姓名 ?? '')
-    return !existing.has(name.trim()) && (!kw || (lower.get(s) || '').includes(kw))
+    return !existing.has(name.trim()) && studentCandidateHit(name, kw)
   })
 })
-// 学生姓名小写缓存：只在名单变更时重建一次，编辑框每次按键不必逐项构造小写字符串
-const studentNameLower = computed(() => {
-  const map = new Map()
-  for (const s of props.allStudents) map.set(s, String(s.姓名 ?? '').toLowerCase())
-  return map
-})
-
 function toggle() {
   if (hasContent.value) collapsed.value = !collapsed.value
 }

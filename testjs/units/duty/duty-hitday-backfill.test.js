@@ -120,6 +120,12 @@ test('接线：两条路径共用 dutyWrite.hitDayMatcher（不许各写一份�
   const start = src.indexOf("router.post('/history/week'")
   assert.ok(start > 0, '找不到 /history/week')
   const seg = src.slice(start, src.indexOf('module.exports', start))
-  assert.match(seg, /dutyWrite\.hitDayMatcher\(mode\)/, '手动补录必须用共用的命中日判定')
-  assert.match(seg, /if \(isHit && !isHit\(date\)\)/, '命中日不成立要跳过该天')
+  // V9-K03-03：手动补录的裸 7 天循环已收口到 dutyWrite.backfillHistory —— 命中日判定、
+  // 跳过已有、沿用 prev、整批事务全部与自动补存共用一份。旧断言钉「路由里要有 hitDayMatcher」
+  // 是在钉实现细节；现在判定下沉到服务，路由只负责传入指定周范围。
+  assert.match(seg, /dutyWrite\.backfillHistory\(/, '手动补录必须复用唯一的补存事务出口')
+  assert.match(seg, /weekStart,\s*includeToday:\s*false/, '固定本周范围且不覆盖今天')
+  const svc = require('node:fs').readFileSync(abs('student-backend/services/dutyWrite.js'), 'utf8')
+  assert.match(svc, /hitDayMatcher\(mode\)/, '命中日判定必须在唯一出口内部')
+  assert.match(svc, /if \(!isHit\(cur\)\)/, '命中日不成立要跳过该天')
 })

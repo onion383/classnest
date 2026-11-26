@@ -151,3 +151,11 @@ test('方向B 限流：读/搜索/写各走自己的桶，写还看老师的待�
     assert.equal(ok.ok, true, JSON.stringify(ok))
   })
 })
+
+test('V9-I-05/06 对账：create 硬上限与闸门 pendingMax 必须一致', () => {
+  const storeSrc = require('node:fs').readFileSync(BACKEND + '/services/mcpProposalStore.js', 'utf8')
+  const rateSrc = require('node:fs').readFileSync(BACKEND + '/services/mcpRateLimit.js', 'utf8')
+  const hard = Number(storeSrc.match(/PENDING_HARD_MAX\s*=\s*(\d+)/)[1])
+  const limit = Number(rateSrc.match(/write:\s*\{\s*perMin:\s*\d+,\s*pendingMax:\s*(\d+)/)[1])
+  assert.equal(hard, limit, 'create 的硬上限必须与闸门 DEFAULT_LIMITS.write.pendingMax 一致，否则两处会漂')
+})

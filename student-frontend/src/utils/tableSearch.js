@@ -12,6 +12,16 @@ export function normSearchText(v) {
   return String(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase()
 }
 
+// 学生候选下拉的统一匹配口径（V9-I-11/12）：归一化子串 + 拼音（全拼/首字母）。
+// 过去六处下拉各写一份：有的只 toLowerCase.includes，有的 normSearchText 但不带拼音，
+// 同一批输入在不同弹窗得到不同候选。所有学生候选项都走这里，改口径只改一处。
+export function studentCandidateHit(name, keyword) {
+  const kw = normSearchText(keyword)
+  if (!kw) return true
+  const raw = String(name == null ? '' : name)
+  return normSearchText(raw).includes(kw) || pinyinHit(raw, kw)
+}
+
 // 按行对象缓存「字段值的归一化形式」。
 //
 // 为什么需要：过滤要对**每一行**做一次归一 + substring。

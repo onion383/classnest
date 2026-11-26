@@ -62,3 +62,14 @@ test('K03-14 forwardDemand 回传实际转发条数并记录被截数量', () =>
   assert.match(src, /return batch\.length/)
   assert.doesNotMatch(src, /return ids\.length/)
 })
+
+// V9-U01-02 · 变异反证（可执行）：把「失败回传」改成静默吞掉，判据必须失败。
+test('变异反证：把 forwardDemand 的真实条数改回 ids.length 后判据必须失败', () => {
+  const src = read('student-backend/scanWorker.js')
+  const real = /return batch\.length/
+  // @pin student-backend/scanWorker.js#forwardDemand
+  assert.match(src, real, '前置：真实源码要回传实际转发条数')
+  const mutated = src.replace(real, 'return ids.length')
+  assert.doesNotMatch(mutated, real, '变异后真实条数判据必须失败')
+  assert.match(mutated, /return ids\.length/, '变异确实退回静默假成功')
+})

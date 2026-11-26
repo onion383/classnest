@@ -82,6 +82,19 @@ test('边界：空 child / 无 pid / 已退出都不抛', () => {
   assert.doesNotThrow(() => killTree({ pid: 999999, exitCode: null, signalCode: 'SIGTERM' }))
 })
 
+test('V9-RUN-01：裸 {pid}（无 .kill 方法）也必须能杀掉进程', async (t) => {
+  const src = fs.readFileSync(abs('testjs/tools/killTree.cjs'), 'utf8')
+  // @pin testjs/tools/killTree.cjs#killTree
+  assert.match(src, /process\.kill\(child\.pid, signal\)/, '回退单杀必须用 process.kill(pid)，裸 {pid} 没有 .kill()')
+  if (process.platform === 'win32') { t.skip('Windows 走 taskkill /T /F 分支，无需 POSIX 回退'); return }
+  const victim = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'])
+  await new Promise((r) => victim.once('spawn', r))
+  assert.ok(isAlive(victim.pid), '前置：子进程应存活')
+  killTree({ pid: victim.pid, exitCode: null, signalCode: null })
+  const ok = await waitFor(() => !isAlive(victim.pid), 2000).catch(() => false)
+  assert.ok(ok, '裸 {pid} 传入后子进程必须被杀掉，不能残留')
+})
+
 test('静态接线：三处 POSIX 分支都必须走进程组', () => {
   const read = (rel) => fs.readFileSync(abs(rel), 'utf8')
 

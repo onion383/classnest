@@ -1,4 +1,5 @@
 const express = require('express')
+const { sendError } = require('../utils/sendError')
 const router = express.Router()
 const { runSearch } = require('../services/searchQuery')
 
@@ -7,7 +8,7 @@ router.get('/', (req, res) => {
   try {
     res.json(runSearch(req.query))
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    sendError(res, err)
   }
 })
 

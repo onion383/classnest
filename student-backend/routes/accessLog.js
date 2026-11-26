@@ -10,6 +10,7 @@
 // =========================================================================
 
 const express = require('express');
+const { sendError } = require('../utils/sendError')
 const dbManager = require('../dbManager/dbManager');
 const accessLog = require('../services/accessLogStore');
 const timeline = require('../services/accessTimeline');
@@ -46,7 +47,7 @@ router.get('/', (req, res) => {
       };
     });
     res.json(out);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // 记录设置：保留条数 + 查看粒度。两个面板共用一份（同一张表，规则不该两套）。
@@ -63,7 +64,7 @@ router.put('/config', (req, res) => {
       return next;
     });
     res.json({ config });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 // 清空：必须带 source，避免一个面板顺手把另一个来源的记录也清了。
@@ -73,7 +74,7 @@ router.delete('/', (req, res) => {
     if (!source) return res.status(400).json({ error: '必须指定 source（ai 或 mcp）' });
     const removed = inDb(req, () => accessLog.clear({ source }));
     res.json({ removed });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, e); }
 });
 
 module.exports = router;

@@ -25,7 +25,12 @@ test('CI：构建后起 Vite、等端口、跑 smoke 后停 Vite，并点名关�
   assert.match(smokeStep, /Invoke-WebRequest[\s\S]{0,200}\$port/, '必须轮询前端端口等 Vite 就绪')
   assert.match(smokeStep, /throw\s+'Vite[\s\S]{0,60}未就绪/, '端口等不到必须判失败，不能继续跑');
   assert.match(smokeStep, /finally[\s\S]{0,120}Stop-Process/, '无论成功失败都要停 Vite')
-  assert.match(smokeStep, /require-pass=secure-channel-retry/, '必须点名安全通道 smoke 为关键用例')
+  // V9-T01-03：原来只点名一条，其余关键回归 SKIP 不拦闸。扩到真实存在的 smoke 脚本。
+  for (const key of ['secure-channel-retry', 'undo-batch-test', 'cadre-undo-test', 'unzip-safe-test', 'api-routes-test']) {
+    assert.match(smokeStep, new RegExp(`require-pass=${key}`), `必须点名关键用例 ${key}`)
+    assert.ok(fs.existsSync(`testjs/smoke/${key}${key === 'secure-channel-retry' ? '.js' : '.cjs'}`),
+      `点名的 ${key} 必须真在 smoke/ 下，否则 require-pass 会永远 missingRequired`)
+  }
   assert.match(smokeStep, /\$LASTEXITCODE\s*-ne\s*0/, 'smoke 非零退出必须让 CI 失败')
   // 端口来源必须是唯一口径，不写死
   assert.match(smokeStep, /config\/ports\.cjs/, '前端端口须取自 ports.cjs，不写死')

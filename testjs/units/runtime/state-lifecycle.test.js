@@ -52,11 +52,15 @@ test('F06-06：活动/倒计时加载只认最后一次', () => {
   assert.match(fn, /if \(!loadAllGuard\.isCurrent\(token\)\) return false/)
 })
 
-test('F06-08：登录成功/失败都清空口令', () => {
+test('F06-08 → V9-F06-01：登录成功/失败都清空口令（统一函数）', () => {
   const src = read('student-frontend/src/views/Login.vue')
   const fn = src.slice(src.indexOf('function login()'), src.indexOf('function register()'))
-  const clears = fn.match(/password\.value = ''/g) || []
-  assert.ok(clears.length >= 2, `成功与失败分支都要清空，实际 ${clears.length} 处`)
+  // 旧断言数 `password.value=''` 出现次数；V9-F06-01 把成功路径收口到 clearPlainPassword，
+  // 这里改为验证两条分支都调用了统一函数（失败分支保留清空以便重试）。
+  // @pin student-frontend/src/views/Login.vue#clearPlainPassword
+  assert.match(fn, /clearPlainPassword\(\)/, '成功分支必须走统一清口令函数')
+  // @pin student-frontend/src/views/Login.vue#clearPlainPassword
+  assert.match(fn, /password\.value\s*=\s*''/, '失败分支仍需清空以便用户重试')
 })
 
 test('F02-04：推理开关失败回滚数据模型，不只回滚 DOM', () => {

@@ -15,6 +15,7 @@
 // =========================================================================
 
 const express = require('express');
+const { publicToolError } = require('../../../utils/publicToolError')
 const dbManager = require('../../../dbManager/dbManager');
 const tokenStore = require('../../../services/mcpTokenStore');
 const mcpTools = require('../../../services/mcpTools');
@@ -237,12 +238,8 @@ function logMcpRead(actor, tool, args, result) {
   });
 }
 
-// 外部客户端可见的错误文案（K02-05）：业务错误原样返回，内部细节（SQL / 路径 / 堆栈）脱敏。
-const INTERNAL_DETAIL_RE = /(SQLITE_|ENOENT|EACCES|EPERM|at\s+\S+\s+\(|[A-Za-z]:\\|\/[\w.-]+\/[\w.-]+\.(js|json|cjs|db))/;
-function publicToolError(message) {
-  const m = String(message == null || message === '' ? '工具执行失败' : message);
-  return INTERNAL_DETAIL_RE.test(m) ? '工具执行失败（内部错误，详情见应用日志）' : m;
-}
+// 外部客户端可见的错误文案（K02-05）：统一实现在 utils/publicToolError，
+// stdio 转发器复用同一份，避免两处正则漂移（V9-K02-01）。
 
 // 自动执行的访问记录。只落元信息（哪个工具 / 几条 / 成败），不复制任何数据内容。
 // 老师开了「自动执行」之后，这里是他唯一能看到「AI 今天自己改了几次」的地方，

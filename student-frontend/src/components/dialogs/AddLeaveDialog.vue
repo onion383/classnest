@@ -137,6 +137,7 @@ import CustomScrollbar from '../base/CustomScrollbar.vue'
 import { useNotification } from '../../composables/useNotification.js'
 import { formatDateTimeLocal, formatDateTime } from '../../utils/dateTime.js'
 import { studentRowLabel } from '../../utils/studentLabel.js'
+import { studentCandidateHit } from '../../utils/tableSearch.js'
 
 defineOptions({ name: 'AddLeaveDialog' })
 
@@ -167,9 +168,8 @@ const form = ref({
 });
 
 const filteredStudents = computed(() => {
-  const kw = keyword.value.toLowerCase();
-  const list = props.students.filter(s => !kw || String(s.姓名 || '').toLowerCase().includes(kw));
-  return list;
+  // 与表格搜索 / 其它候选下拉同一口径（归一化 + 拼音）
+  return props.students.filter(s => studentCandidateHit(s.姓名, keyword.value))
 })
 const isEdit = computed(() => {
   return !!(props.editingRecord && props.editingRecord.id != null)

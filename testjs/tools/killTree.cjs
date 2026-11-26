@@ -41,7 +41,10 @@ function killTree(child, opts = {}) {
       process.kill(-child.pid, signal)
       return
     } catch (_) { /* 没有以该 pid 为组号的进程组（spawn 未 detached）→ 退回单杀 */ }
-    try { child.kill(signal) } catch (_) { /* 已退出 */ }
+    // 进程组不存在时退回单杀。调用方可能只传了 {pid}（如 measure-startup），
+    // 这种裸对象没有 .kill()，直接调用会抛错被吞 → 子进程残留、主进程不退出（V9-RUN-01）。
+    // 统一用 process.kill(pid)，对真 ChildProcess 和 {pid} 都成立。
+    try { process.kill(child.pid, signal) } catch (_) { /* 已退出 */ }
   } catch (_) { /* 清理路径不抛 */ }
 }
 

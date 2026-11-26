@@ -2,8 +2,10 @@
  * ESLint 配置（最小规则集，覆盖前端 / 后端 / Electron 主进程）
  *
  * 定位：**只做「低级错误护栏」，不做风格管理**。
- * 不启用 eslint:recommended，也不启用 vue 的规则集——后者大量是审美类
+ * 不启用 eslint:recommended，也不启用 vue 的整套规则——后者大量是审美类
  * （如 multi-word-component-names），对本项目没有价值，只会淹没真正的问题。
+ * 唯一例外：`vue/no-undef-properties`（仅前端块开），它抓的是模板引用未定义
+ * 符号这类运行时 ReferenceError，不是审美。V9-F01-01 就是它本该拦住的漏网。
  *
  * 三块代码的运行环境不同，规则相同、languageOptions 不同：
  *   student-frontend/src  ESM + 浏览器全局（+ Vue 编译器宏）
@@ -193,7 +195,13 @@ export default [
         withDefaults: 'readonly',
       },
     },
-    rules: { ...SHARED_RULES, 'no-restricted-syntax': ['error', R_NO_RELOAD, ...R_NO_HARDCODED_PORT] },
+    rules: {
+      ...SHARED_RULES,
+      // 模板里引用未定义的标识符会直接 ReferenceError；Vapor 模式实测零误报。
+      // 只开这一条，不开 vue 规则集里的审美类规则。
+      'vue/no-undef-properties': 'error',
+      'no-restricted-syntax': ['error', R_NO_RELOAD, ...R_NO_HARDCODED_PORT],
+    },
   },
 
   // ---------- 后端 + 主进程：CJS + Node ----------

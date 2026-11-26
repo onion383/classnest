@@ -174,7 +174,7 @@ import DialogShell from '../base/DialogShell.vue'
 import '../../styles/dialog-transition.css'
 import { useNotification } from '../../composables/useNotification.js'
 import { formatDateTimeLocal } from '../../utils/dateTime.js'
-import { normSearchText } from '../../utils/tableSearch.js'
+import { studentCandidateHit } from '../../utils/tableSearch.js'
 import { createLatest } from '../../utils/latestOnly.js'
 
 defineOptions({ name: 'AddScoreDialog' })
@@ -220,9 +220,8 @@ const form = ref({
 const PROVISIONAL_ID = '__provisional__'
 const filteredStudents = computed(() => {
   const raw = String(keyword.value || '').trim()
-  // 与表格搜索同口径：全半角 / 空白差异不影响命中（Q1-03）
-  const kw = normSearchText(raw)
-  const matched = props.students.filter(s => !kw || normSearchText(s.姓名).includes(kw))
+  // 与表格搜索同口径：全半角 / 空白 + 拼音（Q1-03 / V9-I-12）
+  const matched = props.students.filter(s => studentCandidateHit(s.姓名, raw))
   if (raw && matched.length === 0) {
     return [{ id: PROVISIONAL_ID, 姓名: raw, 学号: '', is_provisional: true }]
   }

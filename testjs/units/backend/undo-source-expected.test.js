@@ -169,6 +169,26 @@ test('复合类型不校验：doc_update 即使当前状态对不上也走原逻
   assert.equal(r.ok, true, JSON.stringify(r))
 })
 
+// V9-I-14 · 导入类 redo 按原 id 回插前必须查占用（id 已被新行重建时拒绝）
+test('rows_batch_insert / cadre_import 的 redo 预检：id 被占用则拒绝，未被占用则放行', async () => {
+  fx.reset()
+  const c = fx.conn
+  // 种一条 students 行作为 rows_batch_insert 的占位目标
+  c.prepare("INSERT INTO students (id, 姓名) VALUES (9001, '张三')").run()
+  const batch = { type: 'rows_batch_insert', payload: { table: 'students', rows: [{ id: 9001, 姓名: '张三' }] } }
+  const blocked = expectedMod.checkExpected(batch, 'redo')
+  assert.match(blocked || '', /9001.*已被重新创建/, 'redo 插回时 id 已被占用必须拒绝')
+  assert.equal(expectedMod.checkExpected(batch, 'undo'), null, 'undo 是删行，不查占用')
+  const free = { type: 'rows_batch_insert', payload: { table: 'students', rows: [{ id: 9999, 姓名: '李四' }] } }
+  assert.equal(expectedMod.checkExpected(free, 'redo'), null, 'id 空闲应放行')
+
+  // cadre_import：cadres 表的 id 被占用
+  c.prepare("INSERT INTO cadres (id, name, max_count) VALUES (9002, '班长', 1)").run()
+  const imp = { type: 'cadre_import', payload: { cadres: [{ id: 9002, name: '班长' }], members: [] } }
+  assert.match(expectedMod.checkExpected(imp, 'redo') || '', /9002.*已被重新创建/)
+  assert.equal(expectedMod.checkExpected(imp, 'undo'), null, 'undo 删行不查占用')
+})
+
 // ---------------------------------------------------------------------------
 // Q2-02 / Q2-05 · 格子类冲突比对下沉到 flip 内核（undo 与 redo 两侧）
 // ---------------------------------------------------------------------------

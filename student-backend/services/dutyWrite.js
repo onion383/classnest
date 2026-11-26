@@ -124,8 +124,11 @@ function hitDayMatcher(mode) {
 // 大扫除只在命中日补 —— 它的「周期 + 星期几」决定发生频率，逐日补会让值日指数
 // 永远等于学期天数（对所有人一样）。日常值日维持逐日补。
 // start / upper 由调用方按学期范围裁剪后传入；命中日判定在内部（口径单源在本模块）。
+// 手动补录整周传 weekStart：snap 的 week_start 固定用它，而不是逐日 mondayOf(cur)——
+// 这样「指定周补录」与「自动补存学期范围」共用同一份事务循环，不再各写一条路
+// （V9-K03-03：手动路由的裸 7 天循环中途失败留半截周）。
 // 事务体全是同步调用（没有 await），可以安全放进 better-sqlite3 的同步事务。
-function backfillHistory({ mode, start, upper, today, includeToday } = {}) {
+function backfillHistory({ mode, start, upper, today, includeToday, weekStart } = {}) {
   const layout = store.getDoc('duty_layout')
   const layoutPayload = {
     cells: layout ? unpackMode(layout.cells, mode) : {},
@@ -136,6 +139,8 @@ function backfillHistory({ mode, start, upper, today, includeToday } = {}) {
   const isHit = hit || (() => true)
 
   let inserted = 0
+  let noHit = 0
+  const snapWeek = (date) => weekStart || mondayOf(date)
   db.transaction(() => {
     let cur = start
     while (cur <= upper) {
@@ -143,6 +148,7 @@ function backfillHistory({ mode, start, upper, today, includeToday } = {}) {
       // 不表示「今天无条件写」。放在后面会让非大扫除日也留下今天的快照
       // （历史列表多出空记录、按快照计数的值日指数偏高 —— 审查 v7 · #79）。
       if (!isHit(cur)) {
+        noHit++
         cur = shiftDateStr(cur, 1)
         continue
       }
@@ -151,19 +157,19 @@ function backfillHistory({ mode, start, upper, today, includeToday } = {}) {
       if (isToday && includeToday) {
         // 今天：总是覆盖为当前值日表
         if (exists) store.histUpdateByDate('duty', cur, mode, layoutPayload)
-        else store.histInsert('duty', { weekStart: mondayOf(cur), snapDate: cur, mode, payload: layoutPayload })
+        else store.histInsert('duty', { weekStart: snapWeek(cur), snapDate: cur, mode, payload: layoutPayload })
         inserted++
       } else if (!exists) {
         // 过去日期：缺失才补，沿用最近一天该模式的值日表；没有更早快照则用当前值日表
         const src = store.histPrev('duty', cur, mode)
         const payload = src ? { cells: src.payload.cells || {}, settings: src.payload.settings || {} } : layoutPayload
-        store.histInsert('duty', { weekStart: mondayOf(cur), snapDate: cur, mode, payload })
+        store.histInsert('duty', { weekStart: snapWeek(cur), snapDate: cur, mode, payload })
         inserted++
       }
       cur = shiftDateStr(cur, 1)
     }
   })()
-  return { inserted }
+  return { inserted, noHit }
 }
 
 module.exports = {

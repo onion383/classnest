@@ -26,7 +26,20 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // 重抢是安全的：写入与定稿同事务，崩溃时整批回滚，不存在「写了一半」被重放。
 const PROCESSING_STALE_MS = 10 * 60 * 1000;
 
+// 与 mcpRateLimit.DEFAULT_LIMITS.write.pendingMax 对齐（对账测试见 mcp-pending-limit.test.js）。
+// 闸门 checkPending 发生在 await 工具执行之前，并发提案都能通过；这道守卫在 create 的
+// 同步调用里再数一次，是最后的原子防线（V9-I-05/06）。
+const PENDING_HARD_MAX = 30;
+
 function create({ kind, label, table, operation, payload, requestedBy }) {
+  // 同一事务/同步调用内检查，多个并发请求在 Node 单线程下不会同时越过这道闸。
+  const pending = countPendingSince(new Date(Date.now() - MAX_AGE_MS).toISOString());
+  if (pending >= PENDING_HARD_MAX) {
+    const err = new Error(`老师还有 ${pending} 条提案待确认（上限 ${PENDING_HARD_MAX} 条），请等老师处理后再提交`);
+    err.status = 400;
+    err.code = 'MCP_PENDING_FULL';
+    throw err;
+  }
   const proposalId = crypto.randomBytes(16).toString('hex');
   const now = new Date();
   db.prepare(`INSERT INTO mcp_proposals

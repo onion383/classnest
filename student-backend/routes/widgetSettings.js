@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../utils/sendError')
 const router = express.Router();
 const { cleanPath } = require('../services/sanitize');
 const widgetSettingsStore = require('../services/widgetSettingsStore');
@@ -125,7 +126,7 @@ router.put('/', (req, res) => {
     widgetSettingsStore.updateSettings(sets, vals);
     res.json({ success: true, message: '小组件设置已保存' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -159,7 +160,7 @@ router.get('/class-info', (req, res) => {
       xuefeng: ci.xuefeng || '',
     }});
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

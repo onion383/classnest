@@ -291,6 +291,14 @@ const confirmAction = ref('restore');   // restore=覆盖恢复 | recovery=注�
 const confirmText = ref('确定');
 const cancelText = ref('取消');
 
+// 成功进入系统前统一清明文口令 ref：注册 / 确认注册 / 离线恢复 / 本机改密等
+// 成功路径都要走它。以前只有登录那一路清了，其余路径把密码留在内存里（V9-F06-01）。
+// 失败路径不清（用户要改了重试），模式切换有各自的清理语义，都不调用这里。
+function clearPlainPassword() {
+  password.value = '';
+  confirm.value = '';
+}
+
 const registerNeedsPassword = computed(() => {
   return securityLevel.value === 'password' || securityLevel.value === 'privacy';
 });
@@ -443,9 +451,8 @@ function login() {
     setToken(res.data.token);
     storeMediaToken(res.data.mediaToken);
     setCurrentUser(res.data.user);
-    // 跳转前清掉明文口令（F06-08）
-    password.value = '';
-    confirm.value = '';
+    // 跳转前清掉明文口令（F06-08 → V9-F06-01 统一收口）
+    clearPlainPassword();
     router.push('/');
   }).catch(err => {
     // 账号/密码错误：内联显示在表单上方，不再弹提示条
@@ -478,6 +485,7 @@ function register() {
       setToken(res.data.token);
       storeMediaToken(res.data.mediaToken);
       setCurrentUser(res.data.user);
+      clearPlainPassword();
       router.push('/');
     }
   }).catch(err => {
@@ -508,6 +516,7 @@ async function confirmRecovery() {
       setToken(res.data.token);
       storeMediaToken(res.data.mediaToken);
       setCurrentUser(res.data.user);
+      clearPlainPassword();
       router.push('/');
     })
     .catch(err => {
@@ -561,6 +570,7 @@ async function restoreFromZip(confirm) {
       storeMediaToken(res.data.mediaToken);
       setCurrentUser(res.data.user);
       useNotification().success(overwrite ? '已覆盖本机数据，恢复完成' : '恢复成功');
+      clearPlainPassword();
       router.push('/');
       return;
     }
@@ -662,6 +672,7 @@ function recoverByLocalAccount() {
     if (data.mustChangePassword === false) {
       setCurrentUser(data.user || {});
       useNotification().success('已通过本机数据库验证，正在进入系统');
+      clearPlainPassword();
       return router.push('/');
     }
     recoveredUser.value = data.user;
@@ -683,6 +694,7 @@ function saveRecoveredPassword() {
   submitRecoveredPassword(password.value).then(() => {
     setCurrentUser(recoveredUser.value || {});
     useNotification().success('新密码已设置');
+    clearPlainPassword();
     router.push('/');
   }).catch(err => {
     reportError(err, { action: '设置新密码' });

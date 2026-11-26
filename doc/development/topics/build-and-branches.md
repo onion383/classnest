@@ -161,8 +161,8 @@ Draft Release 固定挂三类资产，每类都附 `.sha256`（SHA-256 校验值
 ```powershell
 npm run lint                      # 三块代码一次检查
 npm test                          # units + behavior（约 2.4s）
-node testjs/probe/vapor-verify.mjs        # 只看 __vapor:true 判据
-node testjs/probe/measure-startup.mjs     # 启动耗时
+node testjs/tools/vapor-verify.mjs        # 只看 __vapor:true 判据
+node testjs/tools/measure-startup.mjs     # 启动耗时
 npm run smoke                     # 发版前链路冒烟（约 1min）
 ```
 

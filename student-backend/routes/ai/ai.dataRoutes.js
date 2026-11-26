@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../../utils/sendError')
 const path = require('path');
 const fs = require('fs');
 const { db, getFields } = require('../../db');
@@ -44,7 +45,7 @@ router.get('/records/:table', (req, res) => {
     // 只返回列表页展示的列（过滤 position / 外键 / created_at 等内部列），整行不再全部露出
     res.json({ success: true, data: { columns: displayColumns(table), rows: ids.map((id) => byId.get(id)).filter(Boolean) } });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -345,7 +346,7 @@ router.post('/snapshot/restore', (req, res) => {
     clearTableColumnsCache();
     res.json({ ok: true, snapshot: name, reload: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

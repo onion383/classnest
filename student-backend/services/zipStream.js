@@ -195,7 +195,9 @@ function createZipWriter(writable, opts = {}) {
         size += chunk.length
         hasher?.update(chunk)
       }
-      // 收据 / 视频本身已是压缩格式，deflate 基本不缩小；store 让尺寸在写头时已知
+      // 收据 / 视频本身已是压缩格式，deflate 基本不缩小；store 让尺寸在写头时已知。
+      // compSize 保持明文尺寸：本地头与解压端约定「12 字节加密头另算」（见 zip-bundle
+      // 测试的 firstLocalHeader）。中央目录那份另加 12，见 addEncrypted 的 addCentral。
       return { method: 0, crc: crc32End(crc), rawSize: size, compSize: size, sha256: hasher && hasher.digest('hex') }
     }
     const raw = toBuffer(entry.data)
@@ -243,7 +245,10 @@ function createZipWriter(writable, opts = {}) {
       for await (const chunk of fs.createReadStream(entry.path, { highWaterMark: CHUNK })) await writeEncrypted(chunk)
     }
 
-    addCentral({ nameBytes, flags, method: plan.method, crc: plan.crc, compSize: plan.compSize, rawSize: plan.rawSize, localOffset })
+    // 本地头/解压端按「12 字节加密头另算」定位，所以 plan.compSize 是明文尺寸；
+    // 但中央目录记的是整条目的落盘尺寸，必须含 12 字节加密头，否则多条目包按
+    // 中央目录 compSize 跳到下一条时会少读 12×N 字节、后续条目解压失败（V9-K05-01）。
+    addCentral({ nameBytes, flags, method: plan.method, crc: plan.crc, compSize: plan.compSize + 12, rawSize: plan.rawSize, localOffset })
     count += 1
     return { name, size: plan.rawSize, sha256: plan.sha256 }
   }

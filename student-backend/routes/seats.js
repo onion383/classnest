@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../utils/sendError')
 const router = express.Router();
 const { db } = require('../db');
 const store = require('../services/slotStore');
@@ -215,7 +216,7 @@ function cellPatchHandler(table) {
       if (err instanceof SeatWriteError) return res.status(err.status).json({ error: err.message });
       // 解析/数据库异常：带上原始信息，别把它伪装成「参数错误」
       console.error(`[seats] 单格写入失败（${table} ${row},${col}）:`, err);
-      res.status(500).json({ error: err.message });
+      sendError(res, err);
     }
   };
 }
@@ -571,18 +572,23 @@ router.post('/history/week', (req, res) => {
     const layoutPayload = layout ? seatSnapshotPayload(layout) : null;
 
     let inserted = 0;
-    for (let i = 0; i < 7; i++) {
-      const date = shiftDateStr(weekStart, i);
-      if (store.histFind('seat', date, null)) continue;
-      const prev = store.histPrev('seat', date, null);
-      const payload = prev ? prev.payload : layoutPayload;
-      if (!payload) continue;
-      store.histInsert('seat', {
-        weekStart, snapDate: date, mode: payload.mode || 'single',
-        payload: { ...payload, aisleCols: [], groupsConfig: [] },
-      });
-      inserted++;
-    }
+    // 整周 7 天要么全成、要么全不成：逐条 INSERT 各自提交时，中途某天失败会留下
+    // 半截周快照，座位指数按天数累加就偏低（V9-K03-03，与 duty 侧同源的缺口）。
+    // 事务体全是同步调用，安全放进 better-sqlite3 的同步事务。
+    db.transaction(() => {
+      for (let i = 0; i < 7; i++) {
+        const date = shiftDateStr(weekStart, i);
+        if (store.histFind('seat', date, null)) continue;
+        const prev = store.histPrev('seat', date, null);
+        const payload = prev ? prev.payload : layoutPayload;
+        if (!payload) continue;
+        store.histInsert('seat', {
+          weekStart, snapDate: date, mode: payload.mode || 'single',
+          payload: { ...payload, aisleCols: [], groupsConfig: [] },
+        });
+        inserted++;
+      }
+    })();
     res.json({ message: inserted ? `已生成 ${inserted} 天记录` : '该周记录已完整，无需补录', inserted });
   } catch (err) {
     // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。

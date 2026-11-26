@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../utils/sendError')
 const router = express.Router();
 const store = require('../services/slotStore');
 const semesterStore = require('../services/semesterStore');
@@ -133,7 +134,7 @@ router.get('/semesters', (req, res) => {
     const list = semesterStore.list();
     res.json({ semesters: list, current: list.find(s => s.is_current) || list[0] || null });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

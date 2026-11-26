@@ -52,3 +52,21 @@ test('Q4-01 缺口③：下发给模型的每个工具都有派发 case（含 sc
   const missing = names.filter((n) => !cases.has(n))
   assert.deepStrictEqual(missing, [], `下发了但无派发 case（模型调用会落空）：${missing.join(', ')}`)
 })
+
+test('V9-I-15 工具名双向集合相等：派发 case ↔ 下发清单不能有任一侧多出来', () => {
+  // 上一轮只断言「下发 ⊆ case」；反向「case ⊆ 下发」缺失 —— 删掉一个工具的下发注册，
+  // 派发 case 仍留着，守卫不会红（Q4-01 缺口③的反向）。这里改成双向集合相等。
+  const names = new Set(llm.getTools().map((t) => t.function.name))
+  // @pin student-backend/routes/ai/ai.tools/tools.js#runTool
+  const cases = new Set([...require('node:fs').readFileSync(abs('student-backend/routes/ai/ai.tools/tools.js'), 'utf8')
+    .matchAll(/case\s+'([a-z_]+)'\s*:/g)].map((m) => m[1]))
+  // 两个合法例外（不是缺口）：
+  //  · run_subagent 走独立派发分支，不在 tools.js 的 switch 里（上一条已断言它在下发清单）；
+  //  · web_search 只在 DeepSeek 模式 + 用户开联网时条件下发（tools.schema.js:287 / ai.llm.js:103），
+  //    默认 getTools() 不含它是设计如此，派发 case 保留是为了条件开启时能调用。
+  const knownExceptions = new Set(['run_subagent', 'web_search'])
+  const dispatched = [...names].filter((n) => !knownExceptions.has(n)).sort()
+  const dispatchedCases = [...cases].filter((n) => !knownExceptions.has(n)).sort()
+  assert.deepStrictEqual(dispatched, dispatchedCases,
+    `下发与派发 case 必须双向相等：仅下发=${dispatched.filter(n => !cases.has(n))} 仅case=${dispatchedCases.filter(n => !names.has(n))}`)
+})

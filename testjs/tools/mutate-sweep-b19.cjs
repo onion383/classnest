@@ -13,7 +13,12 @@ const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 
 const ROOT = path.join(__dirname, '..', '..')
-const TEST = path.join(ROOT, 'testjs', 'units', 'sweep-fixes-b19.test.js')
+// 同 mutate-sweep：测试已迁到 units/runtime/，路径不跟随会静默误报（V9-T02b-03）。
+const TEST = path.join(ROOT, 'testjs', 'units', 'runtime', 'sweep-fixes-b19.test.js')
+if (!fs.existsSync(TEST)) {
+  console.error('[mutate-sweep-b19] 配置错误：测试文件不存在：' + TEST)
+  process.exit(2)
+}
 
 const FILES = {
   httpclient: 'student-frontend/src/utils/httpClient.js',

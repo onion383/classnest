@@ -64,26 +64,37 @@ function checkCellCurrent(rec, mode) {
     : '这一格之后又被改过，无法重做，请先撤销后面的改动'
 }
 
-// 复合回插类：undo 会按显式 id 把旧对象写回去。id 已被新数据占用时，
+// 复合回插类：按显式 id 把旧对象写回去。id 已被新数据占用时，
 // 要么主键冲突整批失败、要么与后补数据叠加 —— 统一提前拒绝并说清原因（Q2-04）。
-function checkCompositeUndo(rec) {
+// 方向：删除类在 undo 插回时检查（undo）；导入类在 redo 按原 id 重建时检查（redo）。
+// group_snapshot / cadre_order 是整块重建、无显式 id 回插冲突，不加预检（加了会误杀）。
+function checkCompositeUndo(rec, mode) {
   const p = rec.payload || {}
   const exists = (table, id) => Number.isInteger(id) && !!undoStore.findRowById(table, id)
-  if (rec.type === 'student_cascade_delete') {
+  const undoing = mode === 'undo'
+  if (undoing && rec.type === 'student_cascade_delete') {
     const sid = p.student && p.student.id
     if (exists('students', sid)) return '该学生已被重新创建，无法撤销本次删除'
-  } else if (rec.type === 'rows_batch_delete') {
+  } else if (undoing && rec.type === 'rows_batch_delete') {
     const hit = (p.rows || []).find((r) => r && exists(p.table, r.id))
     if (hit) return `记录 id=${hit.id} 已被重新创建，无法撤销本次删除`
-  } else if (rec.type === 'cadre_delete') {
+  } else if (undoing && rec.type === 'cadre_delete') {
     if (exists('cadres', p.node && p.node.id)) return '该职务已被重新创建，无法撤销本次删除'
-  } else if (rec.type === 'group_dimension_delete') {
+  } else if (undoing && rec.type === 'group_dimension_delete') {
     if (exists('group_dimensions', p.dimension && p.dimension.id)) return '该分组维度已被重新创建，无法撤销本次删除'
-  } else if (rec.type === 'album_delete') {
+  } else if (undoing && rec.type === 'album_delete') {
     if (exists('albums', p.album && p.album.id)) return '该相册已被重新创建，无法撤销本次删除'
-  } else if (rec.type === 'album_merge') {
+  } else if (undoing && rec.type === 'album_merge') {
     const hit = (p.sources || []).find((s) => s && s.album && exists('albums', s.album.id))
     if (hit) return `相册「${hit.album.name || hit.album.id}」已被重新创建，无法撤销本次合并`
+  } else if (!undoing && rec.type === 'rows_batch_insert') {
+    // redo 按原 id 整批插回；id 已被新记录占用时拒绝，避免主键冲突整批失败。
+    const hit = (p.rows || []).find((r) => r && exists(p.table, r.id))
+    if (hit) return `记录 id=${hit.id} 已被重新创建，无法重做本次导入`
+  } else if (!undoing && rec.type === 'cadre_import') {
+    const hit = (p.cadres || []).find((c) => c && exists('cadres', c.id))
+      || (p.members || []).find((m) => m && exists('cadre_members', m.id))
+    if (hit) return `职务/成员 id=${hit.id} 已被重新创建，无法重做本次导入`
   }
   return null
 }
@@ -94,7 +105,7 @@ function checkExpected(rec, mode) {
   if (!type) return null
   const cellErr = checkCellCurrent(rec, mode)
   if (cellErr) return cellErr
-  if (!ROW_TYPES.has(type)) return mode === 'undo' ? checkCompositeUndo(rec) : null
+  if (!ROW_TYPES.has(type)) return checkCompositeUndo(rec, mode)
 
   const p = rec.payload || {}
   const table = p.table

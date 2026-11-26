@@ -23,6 +23,13 @@ const boards = [
   // 探针必须进快测：它们是外键/守卫这类「只有故意改坏才看得见」的判据，
   // 不进 npm test 就等于没有闸门（v8 · T01-01）。
   { name: '探针 probe', script: 'run-probes.cjs' },
+  // tools 审计（V9-I-04 三类缺口里真正没进总闸的一类）：这些是纯静态、
+  // 命中即报的守卫，已清到 0 违规才挂进来。radius-audit 仍有硬编码圆角存量，
+  // 不进拦截闸（另行清理）；文档核验与覆盖度审计已在 CI 独立步骤里拦截，
+  // 不在本总闸重复跑（npm run docs:verify / check:coverage 各自非零即失败）。
+  { name: '审计 comment', script: 'tools/comment-audit.js' },
+  { name: '审计 模板绑定', script: 'tools/template-binding-audit.mjs' },
+  { name: '审计 Vapor 组件', script: 'tools/component-vapor-audit.mjs' },
 ]
 if (!fast) boards.push({ name: '冒烟 smoke', script: 'run-smoke.cjs' })
 

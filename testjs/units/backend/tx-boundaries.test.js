@@ -55,3 +55,13 @@ test('Q2-14 AI 批量写：逐项成功即把 undoId 绑到 proposal', () => {
   assert.ok(pushes.length >= 2, `批量新增与删除都要逐项绑定，实际 ${pushes.length} 处`)
   assert.match(src, /m\.proposal\.undoIds = undoIds/)
 })
+
+// V9-U01-03 · 变异反证（可执行）：把活动导入的事务壳去掉，判据必须失败。
+test('变异反证：活动导入去掉 db.transaction 后同事务判据必须失败', () => {
+  const src = read('student-backend/routes/activities.js')
+  const fn = src.slice(src.indexOf("router.post('/import'"), src.indexOf('module.exports = router'))
+  const tx = /db\.transaction\(\(\) => \{/
+  assert.match(fn, tx, '前置：真实源码要在事务内')
+  const mutated = fn.replace(tx, '{ /* 去掉事务 */')
+  assert.doesNotMatch(mutated, tx, '变异后同一判据必须失败，否则是假绿')
+})

@@ -90,6 +90,6 @@
 ## 5. Vapor 标记
 
 - 组件可写 `<script setup vapor>`（Vapor 编译标记）；Vue 3.5 会逐字忽略该属性，因此同一份源码在 3.5 / 3.6 两条通道都能编译。
-- 拼错标记**不报错、只静默失效**，验证必须跑 `node testjs/probe/vapor-verify.mjs`（Vapor 产物校验脚本）（判据只看 `__vapor: true`（产物里的 Vapor 标记字段））。
+- 拼错标记**不报错、只静默失效**，验证必须跑 `node testjs/tools/vapor-verify.mjs`（Vapor 产物校验脚本）（判据只看 `__vapor: true`（产物里的 Vapor 标记字段））。
 
 ---

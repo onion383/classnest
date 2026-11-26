@@ -85,7 +85,7 @@ VersionInfoVersion={#MyAppVersion}
 
 ; 安装到系统 Program Files（需管理员权限）。{autopf} 在 64 位安装模式下解析为
 ; C:\Program Files，安装时会请求 UAC。
-DefaultDirName={autopf}\班集
+DefaultDirName={autopf}\ClassNest
 DefaultGroupName=班集
 DisableProgramGroupPage=yes
 ; 默认权限模式：请求管理员权限（会弹 UAC）
@@ -99,7 +99,7 @@ OutputBaseFilename=ClassNest{#SetupSuffix}-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 SetupLogging=yes
-; 沿用上次的安装目录（机器级 Program Files\班集），同一 AppId 下可直接覆盖升级。
+; 沿用上次的安装目录（机器级 Program Files\ClassNest），同一 AppId 下可直接覆盖升级。
 UsePreviousAppDir=yes
 
 ; ---- 图标 -------------------------------------------------------------------
@@ -592,15 +592,24 @@ begin
   Gap2 := ScaleY(26);
   Gap3 := ScaleY(24);
 
-  { Vue 3.6 预览通道在标题下多两行提示；非该通道时两者为 0，
-    下面 BlockH / RowTop 的算式退化成原样，安装页布局逐像素不变。
-    HintH 按「两行文案各最多折两行」留量：9pt 中文在 417px 的 Surface 上约 34 字/行，
-    两句各 40 字上下，允许折行才不会右侧被截断。 }
+  { Vue 3.6 预览通道在标题下多两行提示；非该通道时下面这些值保持原样，
+    安装页布局逐像素不变。
+    Surface 高度是固定的：内容块总高 BlockH 必须压在约 240 以内，否则
+    Top0 := (SH - BlockH) div 2 会撞到下面的 ScaleY(10) 下限，整个块往下顶，
+    最底部的协议勾选框会被挤出 Surface、落到按钮栏底下看不见（安装按钮随之禁用）。
+    预览通道额外占 76+12，因此这里同时收紧 logo / 间距，把 BlockH 拉回 236
+    （与正式版持平）。文案不动，两句各一行，ScaleY(24) 的高度足够。 }
   HintH := 0;
   HintGap := 0;
 #ifdef Vue36
-  HintH := ScaleY(76);
-  HintGap := ScaleY(12);
+  LogoSize := ScaleX(64);
+  Gap1 := ScaleY(12);
+  TitleH := ScaleY(28);
+  Gap2 := ScaleY(14);
+  RowH := ScaleY(28);
+  Gap3 := ScaleY(10);
+  HintH := ScaleY(54);
+  HintGap := ScaleY(8);
 #endif
 
   { 竖直居中：先算内容块总高，再取居中起点 }
@@ -647,7 +656,7 @@ begin
   Vue36Hint1.Alignment := taCenter;
   Vue36Hint1.Left := ScaleX(18);
   Vue36Hint1.Width := SW - ScaleX(36);
-  Vue36Hint1.Height := ScaleY(36);
+  Vue36Hint1.Height := ScaleY(24);
   Vue36Hint1.Top := Top0 + LogoSize + Gap1 + TitleH + Gap2;
   Vue36Hint1.Font.Size := 9;
   Vue36Hint1.Caption := '该版本为Vue 3.6 新版本测试版本，可能会有不稳定性，仅供体验使用。';
@@ -659,8 +668,8 @@ begin
   Vue36Hint2.Alignment := taCenter;
   Vue36Hint2.Left := ScaleX(18);
   Vue36Hint2.Width := SW - ScaleX(36);
-  Vue36Hint2.Height := ScaleY(36);
-  Vue36Hint2.Top := Vue36Hint1.Top + ScaleY(38);
+  Vue36Hint2.Height := ScaleY(24);
+  Vue36Hint2.Top := Vue36Hint1.Top + ScaleY(28);
   Vue36Hint2.Font.Size := 9;
   Vue36Hint2.Caption := '目前不推荐这个版本作为主力版本使用，如需主力使用，请下载其他版本';
 #endif
@@ -699,7 +708,7 @@ begin
   PathEdit.Left := FieldBg.Left + ScaleX(9);
   PathEdit.Width := FieldW - ScaleX(18);
   PathEdit.Top := RowTop + (RowH - PathEdit.Height) div 2;
-  PathEdit.Text := ExpandConstant('{autopf}\班集');
+  PathEdit.Text := ExpandConstant('{autopf}\ClassNest');
 
   BrowseButton := TNewButton.Create(CustomPage);
   BrowseButton.Parent := CustomPage.Surface;

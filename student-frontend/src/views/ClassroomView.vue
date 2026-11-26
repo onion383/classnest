@@ -92,6 +92,7 @@
       :load-error="loadError"
       error-text="学生名单加载失败"
       @retry="fetchStudents"
+      @scroll-end="loadMore"
       :sortField="sortField"
       :sortOrder="sortOrder"
       :editingCell="editingCell"
@@ -241,7 +242,9 @@ const table = useTableCRUD(`${API_BASE}/students`, DEFAULT_FIELDS, {
   undoTableKey: 'students',
   // 只取正式学生：临时学生（在值日/座位/分组里直接填名字自动建档的）不进这张名单，
   // 否则看不出谁是临时、也会被算进人数和导出。它们走工具栏「临时学生」入口统一转正。
-  query: { formal: 1 }
+  query: { formal: 1 },
+  // 首屏只拉第一页，滚到底再续（5-5）；导出/去重/跨页定位前由页面补拉全量。
+  paging: { pageSize: 50 }
 })
 
 // 跨页定位：标题栏全局搜索点「学生」结果跳转 /students?focus=<id> 时，
@@ -253,11 +256,16 @@ const rowFocusHost = createRowFocusHost(route, router)
 // 班干部结果（focus=cadre:<职务id>）：这里只切页签，定位交给 CadreManage 自己做。
 // 不能在这里调 applyRouteRowFocus —— 它解析成功后会 router.replace 清掉 query，
 // 而 CadreManage 是 v-if 懒加载、切页签后才挂载，清早了它就永远收不到 focus。
-const applyFocus = () => {
-  if (String(route.query.focus || '').startsWith('cadre:')) {
+const applyFocus = async () => {
+  const focusKey = String(route.query.focus || '')
+  if (focusKey.startsWith('cadre:')) {
     activeTab.value = 'cadres'
     return
   }
+  // 没有定位目标时别补量，否则每次进页面都把分页拉成全表，白做。
+  if (!focusKey) return
+  // 目标行可能不在第一页：先补成全量再定位，否则 useRowFocus 重试到上限也找不到 DOM 行。
+  await ensureFullRows()
   applyRouteRowFocus(rowFocusHost, {
     parse: (key) => { activeTab.value = 'students'; return key }
   })
@@ -280,7 +288,7 @@ const {
   importDialogVisible, dedupeDialogVisible,
   displayRows, displayIndexes, visibleFields, allBusinessFields,
   searchNoResult,
-  fetchRows, applyUndoChange, showAlert, showConfirm, onDialogConfirm, onDialogCancel, onDialogExtra,
+  fetchRows, loadMore, ensureFullRows, applyUndoChange, showAlert, showConfirm, onDialogConfirm, onDialogCancel, onDialogExtra,
   startEditCell, saveCell,
   addNewRowAtBottom, cancelNewRow, saveNewRow,
   moveRow,
@@ -304,9 +312,12 @@ const moreItems = computed(() => [
   },
   { key: 'dedupe', label: '去除重复数据', icon: 'search', danger: true }
 ])
-function onMoreSelect(key) {
+async function onMoreSelect(key) {
   if (key === 'batchDelete') onBatchDelete()
-  else if (key === 'dedupe') dedupeDialogVisible.value = true
+  else if (key === 'dedupe') {
+    // 去重要看全表，不能只扫第一页；补齐失败就别开弹窗让用户对着半张表操作
+    if (await ensureFullRows()) dedupeDialogVisible.value = true
+  }
 }
 function onMoreHover(key) {
   if (key === 'dedupe') prefetch(loadDeduplicateDialog)
@@ -529,9 +540,10 @@ function onExportFinish() {
 }
 
 // 导出学生信息：无数据时直接提示，不弹导出选项弹窗
-function openExport() {
+async function openExport() {
   if (students.value.length === 0) return useNotification().info('暂无学生数据可导出')
-  exportDialogVisible.value = true
+  // 导出要全表：第一页有数据不代表只有这些，补完再开弹窗（弹窗 :rows 绑定 students）
+  if (await ensureFullRows()) exportDialogVisible.value = true
 }
 </script>
 

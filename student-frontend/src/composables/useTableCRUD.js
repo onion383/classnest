@@ -1,5 +1,5 @@
 import { reportError } from '../utils/reportError.js'
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, reactive, watch, onMounted } from 'vue'
 import { useDisposables } from '../utils/disposables.js'
 import axios from 'axios'
 import { recordUndo as recordUndoSpec, rowSnapshot } from '../utils/undoRecorder.js'
@@ -14,6 +14,7 @@ import { zhCollator } from '../utils/collator.js'
 import { createLatest } from '../utils/latestOnly.js'
 import { moveRowByAnchor, moveRowsByAnchor } from '../utils/rowReorder.js'
 import { readRenameOutcome } from '../utils/renameOutcome.js'
+import { buildListParams as buildPagingParams, nextPageState } from '../utils/tablePaging.js'
 
 export function useTableCRUD(apiBase, defaultFields, options = {}) {
   const { error: notifyError, success: notifySuccess, warning: notifyWarning } = useNotification()
@@ -25,10 +26,20 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     undoTableKey = null,
     // 附加查询参数（对象，或返回对象的函数——参数依赖响应式状态时用函数）。
     // 学生管理用它传 { formal: 1 } 只取正式学生，其它使用方不传即保持全量。
-    query = null
+    query = null,
+    // 首屏分页（opt-in）：只学生管理页传。首屏 GET 带 limit=PAGE_SIZE，
+    // 滚到底再逐页追加。需要全量的动作（导出/去重/跨页定位/改名级联等）走 ensureFullRows()。
+    // 不传的调用方（如缴费页）行为完全不变：一次拉全表。
+    paging = null
   } = options
 
   // ==================== 状态 ====================
+  const PAGE_SIZE = paging?.pageSize || 50
+  // 分页游标：offset 已加载行数（分页响应体带 total，前端据此算 hasMore）。
+  // fullLoaded 表示 rows 已被补成全量（此时 hasMore 恒 false）。
+  const pageState = reactive({ offset: 0, total: 0, hasMore: false, loading: false })
+  const fullLoaded = ref(!paging)
+  const fullInFlight = { current: null }
   const rows = ref([])
   // 加载失败标志：原来只在「表里还没有任何行」时弹一次 alert，关掉之后表格就显示
   // 「还没有 XX 数据」——用户分不清是自己没数据还是加载挂了。交给表格组件显示告警 + 重试。
@@ -62,6 +73,8 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   const scheduleSearch = d.defer()
   watch(searchKeyword, (v) => {
     if (v === '') { scheduleSearch.cancel(); searchKeywordDebounced.value = ''; return }
+    // 分页模式：搜索只加载了第一页会漏人。先把全量补齐（非分页调用方此处是 no-op）。
+    if (paging) void ensureFullRows()
     scheduleSearch(() => { searchKeywordDebounced.value = v }, 150)
   })
   const dialogCallback = ref(null)
@@ -188,36 +201,61 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   // ==================== 数据加载 ====================
   // 返回 boolean：调用方（尤其是「刷新」按钮）据此判断是否该提示成功。
   // 原实现失败时只置 loadError，调用方拿不到结果，于是刷新失败也弹「已刷新」。
+  // 组装 GET 参数。append 时带 limit/offset 取下一页；非分页或显式全量时不带 limit。
+  function buildListParams({ full = false, offset = 0 } = {}) {
+    const extra = typeof query === 'function' ? query() : query
+    const params = buildPagingParams({
+      extra,
+      pageSize: paging ? PAGE_SIZE : 0,
+      offset,
+      full,
+      fullLoaded: fullLoaded.value
+    })
+    params.set('_t', String(Date.now()))
+    return params
+  }
+
+  // 把一次响应应用到行/字段状态。mode: 'replace' 整表替换 / 'append' 追加下一页 / 'full' 全量替换。
+  function applyRows(result, mode) {
+    if (!Array.isArray(result.data)) return false
+    const decorated = result.data.map(r => ({ ...r, _rowKey: r.id, _isNew: false }))
+    if (mode === 'append') {
+      // 追加：已加载行 + 新页。reuseRows 让已展示行沿用旧对象引用，避免滚一次重画整表。
+      rows.value = reuseRows([...rows.value, ...decorated])
+      rowsSnapshot.value = [...rowsSnapshot.value, ...result.data.map(r => ({ ...r }))]
+    } else {
+      rows.value = reuseRows(decorated)
+      rowsSnapshot.value = result.data.map(r => ({ ...r }))
+    }
+    if (result.fields && result.fields.length > 0) {
+      fields.value = result.fields.map(f => {
+        const defaultField = defaultFields.find(df => df.name === f.name)
+        return { ...f, ...defaultField }
+      })
+    }
+    if (!fields.value || fields.value.length === 0) fields.value = [...defaultFields]
+    if (paging) {
+      const next = nextPageState({ mode, loaded: rows.value.length, total: result.total })
+      fullLoaded.value = next.fullLoaded
+      pageState.offset = next.offset
+      pageState.total = next.total
+      pageState.hasMore = next.hasMore
+    }
+    return true
+  }
+
+  // 全量刷新（默认入口）：分页模式下拉首屏一页，其余调用方一次拉全表。
+  // 返回 boolean：调用方（尤其是「刷新」按钮）据此判断是否该提示成功。
   async function fetchRows() {
     const token = fetchGuard.begin()
     try {
-      // _t 破缓存（后端不设短时缓存，这里只为让 GET 不被中间层合并）；
-      // query 里的键值由页面决定，值统一字符串化，避免布尔/数字被序列化成怪样子。
-      const params = new URLSearchParams({ _t: String(Date.now()) })
-      const extra = typeof query === 'function' ? query() : query
-      if (extra) for (const [k, v] of Object.entries(extra)) params.set(k, String(v))
+      const params = buildListParams()
       const res = await axios.get(`${apiBase}?${params}`)
       const result = res.data
       // 已被更新的请求取代 → 丢弃本次结果（否则旧表会覆盖新表）。
       // 返回 true 而非 false：这次刷新动作已由更新的一次接管，调用方不该弹「刷新失败」。
       if (!fetchGuard.isCurrent(token)) return true
-      if (Array.isArray(result.data)) {
-        // 行对象自带展示字段（_rowKey/_isNew）：字段随行对象长期存在，
-        // 使派生列表可以复用行对象引用，单行变化时只重渲染那一行。
-        // 再经复用缓存：整表刷新时内容不变的行沿用旧对象，避免整表重画。
-        rows.value = reuseRows(result.data.map(r => ({ ...r, _rowKey: r.id, _isNew: false })))
-        // 撤销用快照：独立浅拷贝，避免被后续 v-model 编辑污染
-        rowsSnapshot.value = result.data.map(r => ({ ...r }))
-        if (result.fields && result.fields.length > 0) {
-          fields.value = result.fields.map(f => {
-            const defaultField = defaultFields.find(df => df.name === f.name)
-            return { ...f, ...defaultField }
-          })
-        }
-      }
-      if (!fields.value || fields.value.length === 0) {
-        fields.value = [...defaultFields]
-      }
+      applyRows(result, (paging && !fullLoaded.value) ? 'replace' : 'full')
       loadError.value = false
       return true
     } catch (err) {
@@ -228,6 +266,58 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       loadError.value = true
       return false
     }
+  }
+
+  // 滚到底加载下一页。单飞：loading 中或已无更多时直接返回。
+  async function loadMore() {
+    if (!paging || fullLoaded.value || !pageState.hasMore || pageState.loading) return false
+    const token = fetchGuard.begin()
+    pageState.loading = true
+    try {
+      const params = buildListParams({ offset: pageState.offset })
+      const res = await axios.get(`${apiBase}?${params}`)
+      const result = res.data
+      if (!fetchGuard.isCurrent(token)) return false
+      const ok = applyRows(result, 'append')
+      if (!ok) return false
+      loadError.value = false
+      return true
+    } catch (err) {
+      if (!fetchGuard.isCurrent(token)) return false
+      console.error(err)
+      loadError.value = true
+      return false
+    } finally {
+      pageState.loading = false
+    }
+  }
+
+  // 需要全量的动作（导出/去重/跨页定位/批量重排）先调这个把 rows 补成全表。
+  // 单飞：并发调用共享同一个 Promise；失败后清掉在途槽，允许下次重试。
+  async function ensureFullRows() {
+    if (!paging || fullLoaded.value) return true
+    if (fullInFlight.current) return fullInFlight.current
+    const token = fetchGuard.begin()
+    const task = (async () => {
+      try {
+        const params = buildListParams({ full: true })
+        const res = await axios.get(`${apiBase}?${params}`)
+        const result = res.data
+        if (!fetchGuard.isCurrent(token)) return false
+        applyRows(result, 'full')
+        loadError.value = false
+        return true
+      } catch (err) {
+        if (!fetchGuard.isCurrent(token)) return false
+        console.error(err)
+        loadError.value = true
+        return false
+      } finally {
+        fullInFlight.current = null
+      }
+    })()
+    fullInFlight.current = task
+    return task
   }
 
   // 撤销/重做后按后端返回的结构化变更做本地增量应用，避免整表重拉与重建。
@@ -390,7 +480,9 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     try {
       const res = await axios.post(apiBase, data)
       newRow.value = null
-      await fetchRows()
+      // 新行插在末尾：分页首屏只有第一页，不补量就看不到刚加的那行（还以为没加上）。
+      if (paging) await ensureFullRows()
+      else await fetchRows()
       // POST 只回 id，撤销需要完整行：按 id 从刚拉到的全表快照里取（取不到用提交数据兜底）
       if (undoTableKey && Number.isInteger(res.data?.id)) {
         recordRowInsert(undoTableKey, rowSnapshot(rows.value, res.data.id, data))
@@ -673,7 +765,9 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     try {
       const res = await axios.post(`${apiBase}/import`, { fields, rows: importRows })
       notifySuccess(res.data.message)
-      await fetchRows()
+      // 同新增：导入行落在末尾，分页首屏看不到，补成全量再展示
+      if (paging) await ensureFullRows()
+      else await fetchRows()
       // 后端回传「本次真正新建的行」：导入几百行也只记一条撤销，且不受每 key 50 条上限截断
       recordRowsBatchInsert(undoTableKey, res.data?.created)
     } catch (err) {
@@ -821,8 +915,8 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     dialogCallback, selectedCount, clipboard, selectedRowKeys,
     importDialogVisible, dedupeDialogVisible,
     displayRows, displayIndexes, visibleFields, allBusinessFields,
-    searchNoResult,
-    fetchRows, applyUndoChange, showAlert, showConfirm, onDialogConfirm, onDialogCancel, onDialogExtra,
+    searchNoResult, pageState, fullLoaded,
+    fetchRows, loadMore, ensureFullRows, applyUndoChange, showAlert, showConfirm, onDialogConfirm, onDialogCancel, onDialogExtra,
     startEditCell, saveCell, validateValue,
     addNewRowAtBottom, insertRowAbove, insertRowBelow, createNewRow, cancelNewRow, saveNewRow,
     moveRow, deleteColumn, startAddColumn, confirmAddColumn,

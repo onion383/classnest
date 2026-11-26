@@ -96,6 +96,7 @@ classnest/
 │   │       ├── sequencedCache.js  # createSequencedCache({ load, ttl })：带账号代次的进程内缓…
 │   │       ├── serialSaver.js  # 串行保存器：并发合并、失败即停、每轮取最新状态
 │   │       ├── studentLabel.js  # formatStudentLabel(name, xuehao) / studentRowL…
+│   │       ├── tablePaging.js  # 首屏分页的纯决策：limit/offset 参数、hasMore/全量游标
 │   │       ├── tableSearch.js  # 表格关键字过滤与「无结果」判定
 │   │       ├── thumbCachePolicy.js  # 缩略图缓存淘汰策略：MAX_KEEP（1500 个真 blob）、IDLE_KEEP、MIS…
 │   │       ├── todoInvalidator.js  # 写成功后广播事件，通知中心收到即重拉待办，不新增 IPC 通道
@@ -161,7 +162,7 @@ classnest/
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themeTransition.js`](../../../student-frontend/src/styles/themeTransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，72 个）
+### 4. 工具（`src/utils/`，73 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |
@@ -197,6 +198,7 @@ classnest/
 | [`semesterStart.js`](../../../student-frontend/src/utils/semesterStart.js) | 学期开始日/教学周推算 | `ScheduleView`、AI 工具 |
 | [`serialSaver.js`](../../../student-frontend/src/utils/serialSaver.js) | 串行保存器：并发合并、失败即停、每轮取最新状态 | 设置页写入 |
 | [`rowReuse.js`](../../../student-frontend/src/utils/rowReuse.js) | 表格行复用与 key 稳定（减少重渲染） | `DynamicTable` |
+| [`tablePaging.js`](../../../student-frontend/src/utils/tablePaging.js) | 首屏分页的纯决策：`buildListParams`（分页带 limit/offset、全量不带）与 `nextPageState`（hasMore / 全量游标） | `useTableCRUD` |
 | [`dialogPrefetch.js`](../../../student-frontend/src/utils/dialogPrefetch.js) | `v-preload` 指令：悬停 80ms 后加载弹窗 chunk | 各视图按钮 |
 | [`dialogOverlayPulse.js`](../../../student-frontend/src/utils/dialogOverlayPulse.js) | 遮罩点击提示的全局事件委托（捕获阶段拦截） | `main.js` |
 | [`routePrefetch.js`](../../../student-frontend/src/utils/routePrefetch.js) | `prefetchRoute(router, path)`：悬停预取目标路由 chunk | `Sidebar` |

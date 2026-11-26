@@ -20,6 +20,14 @@ const { safeJson } = require('../../utils/json');
 const { localDateStr, mondayOf } = require('../../utils/date');
 const { toModeMap } = require('../../services/dutyMode');
 const { seatSnapshotPayload } = require('../../services/seatSnapshot');
+// undoStore 惰性加载：db 是按请求绑定的 Proxy，测试夹具会替换 require.cache 里的 db 模块，
+// 顶层 require 会抓住旧连接（db.transaction 失效）。Node 模块有缓存，重复 require 成本极低。
+function undoDeps() {
+  return {
+    undoStore: require('../../services/undoStore'),
+    validSpec: require('../../services/writeWithUndo').validSpec,
+  }
+}
 // 工具相关常量/执行器惰性加载：仅在真正处理对应路由时才 require
 const tools = () => require('./ai.tools/tools');
 
@@ -191,18 +199,36 @@ function applyDocWrite(table, id, values) {
 //   写入前对课表/座位先把旧值快照进历史表。返回写入前后的列值（before/after），供前端登记「整块撤销」。
 router.post('/doc', (req, res) => {
     const { table, id, values } = req.body || {};
-  const r = applyDocWrite(table, id, values);
+  const { takeUndoSpec, writeWithUndo } = require('../../services/writeWithUndo');
+  const spec = takeUndoSpec(req.body);
+  const r = writeWithUndo(spec, () => applyDocWrite(table, id, values), (result) =>
+    result && !result.error ? { table: result.table, id: result.id, before: result.before, after: result.after } : null);
   if (r.error) return res.status(400).json({ error: r.error });
   res.json({
     ok: true, table: r.table, id: r.id, before: r.before, after: r.after,
     // 座位表里的名册外姓名会自动建临时学生，必须回传让前端/AI 说清楚
     createdStudents: r.createdStudents, ambiguousNames: r.ambiguousNames,
+    ...(r.undoId ? { undoId: r.undoId } : {}),
   });
 });
 
 // 当前请求所属班主任库的 slug（取自鉴权中间件写入 token 的 dbSlug，与 AI 工具 ctx.slug 口径一致）
 function currentSlug(req) {
   return (req.user && req.user.dbSlug) || 'default';
+}
+
+// 批量写结果的撤销 payload：与前端 aiExec._pushUndoForBatch 同结构，
+// 但由后端在写事务内生成，避免「写成功、前端二次登记失败」留下无栈记录。
+function batchUndoPayload(r) {
+  if (!r || !r.action) return null
+  if (r.action === 'add') return { table: r.table, row: r.row }
+  if (r.action === 'update') return { table: r.table, rowId: r.id, oldRow: r.before, newRow: r.after }
+  if (r.action === 'delete') {
+    if (r.undoType === 'student_cascade_delete') return { row: r.row, purged: r.purged }
+    return { table: r.table, row: r.row }
+  }
+  if (r.action === 'doc') return { table: r.table, id: r.id, before: r.before, after: r.after }
+  return null
 }
 
 // POST /api/ai/apply-batch —— 把多张表/多类写操作放进「单个事务」执行：任一步失败整体回滚。
@@ -214,6 +240,7 @@ router.post('/apply-batch', (req, res) => {
     if (!ops.length) return res.status(400).json({ error: '缺少要执行的操作（ops 不能为空）' });
     if (ops.length > tools().MAX_BATCH_OPS) return res.status(400).json({ error: `一次最多 ${tools().MAX_BATCH_OPS} 个操作（当前 ${ops.length} 个）` });
     const results = [];
+    const undoIds = [];
     const run = db.transaction(() => {
       for (let i = 0; i < ops.length; i++) {
         const op = ops[i] || {};
@@ -310,9 +337,24 @@ router.post('/apply-batch', (req, res) => {
           throw new Error(`${at}：未知操作类型「${action}」`);
         }
       }
+      // 撤销登记与整批写入同事务（V9-2-5）：前端传 _undoSpecs（与 ops 一一对应），
+      // 后端用 results 生成 payload 并在同一事务 push。任一步失败整批回滚。
+      const { undoStore, validSpec } = undoDeps()
+      const specs = Array.isArray(req.body && req.body._undoSpecs) ? req.body._undoSpecs : [];
+      for (let i = 0; i < results.length; i++) {
+        const s = specs[i];
+        if (!validSpec(s)) continue;
+        const payload = batchUndoPayload(results[i]);
+        if (payload == null) continue;
+        undoIds.push(undoStore.push({
+          key: s.key, type: s.type,
+          label: typeof s.label === 'string' ? s.label : '',
+          payload, origin: typeof s.origin === 'string' ? s.origin : '',
+        }));
+      }
     });
     run();
-    res.json({ ok: true, count: results.length, results });
+    res.json({ ok: true, count: results.length, results, undoIds });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -337,7 +379,7 @@ router.post('/snapshot/restore', async (req, res) => {
     // 必须 await 回执：发消息不等于停干净，在飞扫描仍会写旧库（V9-K01-01）。
     let lockResult = { ok: true, reason: 'worker-not-started' };
     try { lockResult = await require('../../scanWorker').lockDb(slug); }
-    catch (_) { /* 子进程未启动 / 模块加载失败：没有在飞扫描，照旧还原 */ }
+    catch (_) { /* best-effort: 子进程未启动 / 模块加载失败：没有在飞扫描，照旧还原 */ }
     if (lockResult && lockResult.ok === false) {
       throw new Error(`扫描子进程未确认停止，还原已中止（${lockResult.reason || '无回执'}）`);
     }

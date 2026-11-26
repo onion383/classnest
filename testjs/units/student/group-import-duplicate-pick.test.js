@@ -90,5 +90,6 @@ test('⑤ 分组页传名册给导入组件，⑥ onImportData 透传 studentIds
   assert.match(tag, /:students="allStudents"/, '要传名册才能检测同名')
   // @pin student-frontend/src/views/GroupManageView.vue#onImportData
   assert.match(src, /async function onImportData\(\{ fields, rows, studentIds \}\)/, 'onImportData 要接 studentIds')
-  assert.match(src, /JSON\.stringify\(\{ fields, rows, studentIds \}\)/, '要把 studentIds 透传给后端')
+  // V9-2-5：请求体额外带 _undoSpec（后端同事务登记），studentIds 仍要透传
+  assert.match(src, /JSON\.stringify\(\{ fields, rows, studentIds, _undoSpec: spec \}\)/, '要把 studentIds 与 _undoSpec 透传给后端')
 })

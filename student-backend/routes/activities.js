@@ -4,6 +4,7 @@ const { db, renumber } = require('../db');
 const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../utils/sql');
 const { readRowsByIds } = require('../services/createdRows');
 const activityStore = require('../services/activityStore');
+const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['时间', '主题', '地点', '简介', '参与人员'];
@@ -19,17 +20,18 @@ router.post('/', (req, res) => {
   // 500 + HTML 错误页，前端只看到「服务器错误」，看不出是时间填错了。
   try {
     const body = req.body || {};
+    const spec = takeUndoSpec(body);
     const data = cleanUp(body, EDITABLE, 'activities');
     data.created_at = now();
     // position 的「取最大值 + 插入 + 重排」必须在同一个事务里：并发两个 POST 时
     // 两个请求都读到同一个 max，会写出重复 position（审查 v4 · B02-12）。
-    const result = db.transaction(() => {
+    const result = writeWithUndo(spec, () => db.transaction(() => {
       data.position = maxPosition('activities') + 1;
       const r = buildInsert('activities', data);
       renumber('activities');
       return r;
-    })();
-    res.json({ id: result.lastInsertRowid, message: '添加活动成功' });
+    })(), (result, hint) => ({ ...hint, row: { ...hint, id: result.lastInsertRowid } }));
+    res.json({ id: result.lastInsertRowid, message: '添加活动成功', undoId: result.undoId });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -38,13 +40,21 @@ router.post('/', (req, res) => {
 // PUT /api/activities/:id 编辑
 router.put('/:id', (req, res) => {
   try {
+    const spec = takeUndoSpec(req.body);
     const row = cleanUp(req.body || {}, EDITABLE, 'activities');
     if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
     // 不存在的 id 必须 404：buildUpdate 对空结果不报错，原先一律回「修改成功」，
     // 前端在另一个窗口已删掉这条时看不到任何异常，用户以为改动保存了。
-    const result = buildUpdate('activities', row, req.params.id);
+    // 撤销登记与写入同事务（V9-I-13）：payload 的 oldRow 由前端随 spec 带来（写前才知道），
+    // newRow 用提交字段拼；changes===0（id 不存在）时 buildPayload 返回 null 不登记。
+    const id = Number(req.params.id);
+    const result = writeWithUndo(spec,
+      () => buildUpdate('activities', row, req.params.id),
+      (r, hint) => (r && r.changes > 0)
+        ? { table: 'activities', rowId: id, oldRow: (hint && hint.oldRow) || null, newRow: { ...(hint && hint.oldRow), ...row, id } }
+        : null);
     if (result.changes === 0) return res.status(404).json({ error: '活动不存在' });
-    res.json({ message: '修改成功' });
+    res.json({ message: '修改成功', undoId: result.undoId });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -52,10 +62,16 @@ router.put('/:id', (req, res) => {
 
 // DELETE /api/activities/:id 删除
 router.delete('/:id', (req, res) => {
-    const result = activityStore.removeById(Number(req.params.id));
+  const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+  const id = Number(req.params.id);
+  // 删除前的整行由前端随 spec.payload 带来（row_delete 的 inverse 需要完整列）。
+  // changes===0（id 不存在）时不登记，避免撤销栈留下空记录。
+  const result = writeWithUndo(spec,
+    () => activityStore.removeById(id),
+    (r, hint) => (r && r.changes > 0) ? (hint || { table: 'activities', row: { id } }) : null);
   if (result.changes === 0) return res.status(404).json({ error: '活动不存在' });
   renumber('activities');
-  res.json({ message: '删除成功' });
+  res.json({ message: '删除成功', undoId: result.undoId });
 });
 
 // POST /api/activities/import —— 从 Excel 导入活动（按表头名映射，列顺序可任意）

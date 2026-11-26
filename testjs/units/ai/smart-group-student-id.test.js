@@ -105,5 +105,6 @@ test('⑥ 前端把 studentIds 透传给写回接口', () => {
   // @pin student-frontend/src/views/GroupManageView.vue#handleSmartGroupResult
   assert.match(src, /async function handleSmartGroupResult\(result\)[\s\S]{0,200}const studentIds = result && result\.studentIds/,
     '处理器要接住 studentIds')
-  assert.match(src, /JSON\.stringify\(\{ groups, studentIds \}\)/, '要把 studentIds 透传给后端')
+  // V9-2-5：请求体额外带 _undoSpec（后端同事务登记），studentIds 仍要透传
+  assert.match(src, /JSON\.stringify\(\{ groups, studentIds, _undoSpec: spec \}\)/, '要把 studentIds 与 _undoSpec 透传给后端')
 })

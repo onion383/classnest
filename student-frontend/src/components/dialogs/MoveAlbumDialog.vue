@@ -80,9 +80,12 @@ async function submit() {
   if (!props.photoIds.length) { useNotification().warning('请先选择要移动的照片'); return }
   busy.value = true
   try {
+    // 撤销随移动请求一起发：records/目标相册由后端在同事务里生成并登记。
+    const spec = { key: 'album', type: 'album_photo_move', label: '移动照片', payload: {} }
     const res = await axios.post('/api/album/photos/move', {
       photo_ids: props.photoIds,
       target_album_id: targetId.value,
+      _undoSpec: spec,
     }, { headers: authHeaders() })
     const data = res.data || {}
     // 记录「移动照片索引」撤销：undo 把索引搬回来源、redo 再搬过去（只动索引，不动文件）
@@ -95,7 +98,7 @@ async function submit() {
         target_album_name: data.target_album_name || '',
         records: data.photos || [],
       },
-    })
+    }, data.undoId)
     useNotification().success(data.message || '已移动')
     emit('moved', data)
   } catch (err) {

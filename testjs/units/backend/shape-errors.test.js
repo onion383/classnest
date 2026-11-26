@@ -27,15 +27,18 @@ test('K01-14 导出：DB_LOCKED 归一为 401', () => {
 })
 
 test('K03-01/02/03：按 id 写/删不存在时必须 404', () => {
+  // V9-2-5：buildUpdate/removeById 移进 writeWithUndo 事务（见 () => buildUpdate(...)），
+  // 前缀不再是 const result =，但「用 buildUpdate 写 + changes===0→404」两要素不变。
   const scores = read('student-backend/routes/scores.js')
-  assert.match(scores, /const result = buildUpdate\('score_records', row, req\.params\.id\);[\s\S]*?changes === 0\) return res\.status\(404\)/)
+  assert.match(scores, /=> buildUpdate\('score_records', row, req\.params\.id\),[\s\S]*?changes === 0\) return res\.status\(404\)/)
 
   const leaves = read('student-backend/routes/leaves.js')
-  assert.match(leaves, /const result = buildUpdate\('leave_records', row, req\.params\.id\);[\s\S]*?changes === 0\) return res\.status\(404\)/)
-  assert.match(leaves, /const result = leaveStore\.removeById\([\s\S]*?changes === 0\) return res\.status\(404\)/)
+  assert.match(leaves, /=> buildUpdate\('leave_records', row, req\.params\.id\),[\s\S]*?changes === 0\) return res\.status\(404\)/)
+  assert.match(leaves, /=> leaveStore\.removeById\([\s\S]*?changes === 0\) return res\.status\(404\)/)
 
   const cadres = read('student-backend/routes/cadres.js')
-  assert.match(cadres, /const result = cadreStore\.deleteMember\(id\);[\s\S]*?changes === 0\) return res\.status\(404\)/)
+  // V9-2-5：删除移进 writeWithUndo 事务，404 改为 findMember 预检 + 事务内 changes===0 双保险
+  assert.match(cadres, /const existing = cadreStore\.findMember\(id\);[\s\S]*?res\.status\(404\)/)
   const cadreStore = read('student-backend/services/cadreStore.js')
   assert.match(cadreStore, /function deleteMember\(id\) \{[\s\S]*?return db\.prepare\('DELETE FROM cadre_members/)
 })

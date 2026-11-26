@@ -339,9 +339,11 @@ function evidence(entry, line, note) {
 const NOT_FOUND_404_REVIEWED = Object.freeze({
   'route:student-backend/routes/ai/ai.conversations.js:149:delete:/conversations/:id/messages/last-assistant':
     '幂等契约：返回 { success:true, removed:false }，removed 已如实表示没删到（重试前清理用）',
-  'route:student-backend/routes/dynamicTable.js:54:put:/:id':
+  // 行号随 V9-2-5 接入 writeWithUndo 下移（原 :54/:67 → :57/:74），语义未变：
+  // updateRowWithRename / deleteRow 内部 throw「记录不存在」，路由回 400 —— 不谎报成功。
+  'route:student-backend/routes/dynamicTable.js:57:put:/:id':
     'updateRow 内部 throw「记录不存在」，路由回 400 —— 不谎报成功，只是状态码口径不同',
-  'route:student-backend/routes/dynamicTable.js:67:delete:/:id':
+  'route:student-backend/routes/dynamicTable.js:74:delete:/:id':
     'deleteRow 内部 throw「记录不存在」，同上',
   'route:student-backend/routes/undo/undo.js:232:delete:/:id':
     '幂等删除：撤销记录只从列表里点，重复删除无副作用，前端也不提示「删除成功」',

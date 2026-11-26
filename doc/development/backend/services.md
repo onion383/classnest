@@ -80,6 +80,7 @@ classnest/
 │   │   ├── thumbSweep.js  # 按库对账回收孤儿缩略图（默认只读，apply=true 才删；库打不开则整目录跳过）
 │   │   ├── tmpSweep.js  # 启动期回收崩溃遗留临时文件：AI 附件 / 还原上传 / 解包目录 / OCR 中转四处，只…
 │   │   ├── undoStore.js  # undo_history + 撤销执行器：记录入栈与每 key 淘汰、方向 CAS、按批次取…
+│   │   ├── writeWithUndo.js  # 写与撤销登记同事务（V9-I-13）：取/移 _undoSpec、校验 spec、在单事务里写+登记回 undoId(s)
 │   │   ├── unzipSafe.js  # 安全解压
 │   │   ├── uploadSignatures.js  # 收据上传的类型判定：扩展名白名单（图片 20MB / PDF 30MB / ooxml 30…
 │   │   ├── usernameRules.js
@@ -368,6 +369,7 @@ classnest/
 | [`services/albumStore.js`](../../../student-backend/services/albumStore.js) | 相册索引 `albums` / `album_photos`：列表与封面、照片分页、索引复制与删除、缩略图路径、日期计数 | `listAlbums`、`listPhotos`、`photoDateCountsPage`、`copyPhotoRow`、`updateThumbPath`、`randomPhotoId` |
 | [`services/exportQuery.js`](../../../student-backend/services/exportQuery.js) | 导出侧只读查询：单表读取失败返回空结果，不拖垮整份导出 | `all`、`get`、`countOf` |
 | [`services/undoStore.js`](../../../student-backend/services/undoStore.js) | `undo_history` + 撤销执行器：记录入栈与每 key 淘汰、方向 CAS、按批次取 id、各执行器的复合动作（删维度 / 合并相册 / 删职务 / 删学生 / 相册增删 / 照片移动）、动态表行级与网格列写 | `push`、`claimDir`、`idsByOrigin`、`restoreDimension`、`restoreMergedAlbum`、`restoreStudentCascade`、`applyRowPositions`、`writeGridSnapshot` |
+| [`services/writeWithUndo.js`](../../../student-backend/services/writeWithUndo.js) | 写与撤销登记同事务（V9-I-13）：`_undoSpec` 是保留字段、写前从 body 移除绝不落库；非法 spec 退化为直写不阻断业务；单事务里写 + `undoStore.push`，单条回 `undoId`、多条回 `undoIds`；`buildPayload` 可按写结果（新建 id / 结构快照）生成 payload，返回 `null` 表示不登记 | `takeUndoSpec`、`validSpec`、`writeWithUndo` |
 
 - **搬进 store 判据（三档）**：①单例槽位读 —— 直接用 `slotStore.getDoc(逻辑名)`，路由里不再抄列清单（那份清单是 `SPEC` 的手抄副本，加列时会静默漏读）；②单表语句 —— 进对应 `*Store`，路由只做参数归一与字段清洗；③「必须在一个事务里才一致」的复合操作 —— 整条进 service，事务边界跟着数据操作走，路由只收结果（`groupDim` 的改组数、删维度带快照、移动成员都属这一档）。
 - **例外：事务里夹着文件系统副作用时，事务留在路由**（`album`：先 `unlink` 缩略图再删索引、删完派发或停止 `scanWorker`）。搬进 service 会把「先删缓存再删库」的顺序藏起来，评审时看不见。

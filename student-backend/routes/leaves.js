@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { db, renumber } = require('../db');
+const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
 const { now, cleanUp, maxPosition, buildInsert, buildUpdate } = require('../utils/sql');
 const { sanitizeField } = require('../services/sanitize');
 const { validateRow } = require('../services/businessRules');
@@ -52,6 +53,7 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   try {
     const body = req.body || {};
+  const spec = takeUndoSpec(body);
   const data = {};
 
   // 首选通过 studentId 从学生表带出姓名与联系方式
@@ -106,10 +108,13 @@ router.post('/', (req, res) => {
   // 跨字段校验：结束时间必须晚于开始时间（不合法直接拒绝，避免写入「负时长 / 倒置」请假）
   validateRow('leave_records', { 开始时间: data.开始时间, 结束时间: data.结束时间 });
 
-  data.position = maxPosition('leave_records') + 1;
-  const result = buildInsert('leave_records', data);
-  renumber('leave_records');
-  res.json({ id: result.lastInsertRowid, message: '添加请假成功' });
+  const result = writeWithUndo(spec, () => {
+    data.position = maxPosition('leave_records') + 1;
+    const r = buildInsert('leave_records', data);
+    renumber('leave_records');
+    return r;
+  }, (result, hint) => ({ ...hint, row: { ...hint, id: result.lastInsertRowid } }));
+  res.json({ id: result.lastInsertRowid, message: '添加请假成功', undoId: result.undoId });
   } catch (err) {
     // 跨字段校验（结束早于开始等）是业务错误 → 400；带 status 的异常按其状态返回
     res.status((err && err.status) || 400).json({ error: err.message });
@@ -119,6 +124,7 @@ router.post('/', (req, res) => {
 // PUT /api/leaves/:id 编辑
 router.put('/:id', (req, res) => {
   try {
+    const _spec = takeUndoSpec(req.body);
     const row = cleanUp(req.body || {}, EDITABLE, 'leave_records');
   if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
   // cleanUp 的跨字段校验只能看到本次请求带的列：只改「结束时间」时「开始时间」为空，
@@ -158,9 +164,18 @@ router.put('/:id', (req, res) => {
     }
   }
 
-  const result = buildUpdate('leave_records', row, req.params.id);
+  // 撤销登记与写入同事务（V9-I-13）；changes===0（id 不存在）不登记。
+  const id = Number(req.params.id);
+  const result = writeWithUndo(_spec,
+    () => buildUpdate('leave_records', row, req.params.id),
+    (r, hint) => {
+      if (!r || r.changes === 0) return null; // 404 不登记
+      // 前端 spec.payload 已带正确结构（cell_update / row_update），优先透传；没有才兜底。
+      if (hint && (hint.field || hint.oldRow || hint.newRow || hint.rows)) return hint;
+      return { table: 'leave_records', rowId: id, oldRow: null, newRow: { ...row, id } };
+    });
   if (!result || result.changes === 0) return res.status(404).json({ error: '记录不存在' });
-    res.json({ message: '修改成功' });
+    res.json({ message: '修改成功', undoId: result.undoId });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -308,10 +323,14 @@ router.post('/import', (req, res) => {
 
 // DELETE /api/leaves/:id 删除
 router.delete('/:id', (req, res) => {
-    const result = leaveStore.removeById(Number(req.params.id));
+  const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+  const id = Number(req.params.id);
+  const result = writeWithUndo(spec,
+    () => leaveStore.removeById(id),
+    (r, hint) => (r && r.changes > 0) ? (hint || { table: 'leave_records', row: { id } }) : null);
   if (!result || result.changes === 0) return res.status(404).json({ error: '记录不存在' });
   renumber('leave_records');
-  res.json({ message: '删除成功' });
+  res.json({ message: '删除成功', undoId: result.undoId });
 });
 
 // POST /api/leaves/return-batch 批量销假（「全部销假」一次往返）

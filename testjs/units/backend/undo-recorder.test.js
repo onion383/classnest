@@ -284,3 +284,62 @@ test('后端仍按命令类型白名单校验：统一入口不绕过服务端�
   const s = code('student-backend/routes/undo/undo.js')
   assert.match(s, /if \(!\(type in executors\)\)/, '后端不能因为前端收口就去掉类型校验')
 })
+
+test('后端已同事务登记（registeredUndoId）：transport 一次都不调用，绝不二次 POST', async () => {
+  const { recordUndo, configureUndoRecorder, resetUndoRecorderForTest } = await load()
+  let transportCalls = 0
+  let refreshCalls = 0
+  configureUndoRecorder({
+    transport: () => { transportCalls++; return Promise.resolve({ data: { id: 'should-not-happen' } }) },
+    onRegistered: () => { refreshCalls++ },
+  })
+  const id = await recordUndo({ key: 'students', type: 'cell_update', payload: { a: 1 } }, 42)
+  assert.equal(id, 42, '返回后端给的 undoId')
+  assert.equal(transportCalls, 0, '后端已登记时绝不能发第二次 POST /api/undo')
+  assert.equal(refreshCalls, 1, '仍要刷一次可用态')
+  resetUndoRecorderForTest()
+})
+
+test('变异反证：不传 registeredUndoId 时必须照旧走 transport', async () => {
+  const { recordUndo, configureUndoRecorder, resetUndoRecorderForTest } = await load()
+  let transportCalls = 0
+  configureUndoRecorder({
+    transport: () => { transportCalls++; return Promise.resolve({ data: { id: 9 } }) },
+  })
+  const id = await recordUndo({ key: 'students', type: 'cell_update', payload: { a: 1 } })
+  assert.equal(transportCalls, 1, '没有后端 undoId 时仍走原登记通道')
+  assert.equal(id, 9)
+  resetUndoRecorderForTest()
+})
+
+// —— ⑤ V9-I-13 收口：dynamicTable 弹窗改 + 学生单条删走同事务 ——
+// 机制（recordUndo 收到 undoId 跳过 transport）上面已真跑 + 变异反证；
+// 这里只钉「调用点确实把 spec 随写请求发出、并透传 undoId」这层接线，
+// 否则机制在、却没人接，仍是「写后补登记」两写窗口。
+test('students/fee-records 弹窗改与学生单条删：spec 随写请求发、undoId 透传登记', async () => {
+  const cr = code('student-frontend/src/views/ClassroomView.vue')
+  const fee = code('student-frontend/src/views/FeeManagement.vue')
+  const uu = code(USE_UNDO)
+
+  // 三个写请求都带 _undoSpec（后端同事务登记）
+  // @pin student-frontend/src/views/ClassroomView.vue#undoSpec
+  assert.match(cr, /axios\.put\(`\$\{API_BASE\}\/students\/\$\{oldRow\.id\}`, \{ \.\.\.data, _undoSpec: undoSpec \}\)/, '学生弹窗改没把 undoSpec 随 PUT 发出')
+  // @pin student-frontend/src/views/FeeManagement.vue#undoSpec
+  assert.match(fee, /axios\.put\(`\$\{API_BASE\}\/fee-records\/\$\{oldRow\.id\}`, \{ \.\.\.data, _undoSpec: undoSpec \}\)/, '班费弹窗改没把 undoSpec 随 PUT 发出')
+  // @pin student-frontend/src/views/ClassroomView.vue#deleteStudent
+  assert.match(cr, /axios\.delete\(`\$\{API_BASE\}\/students\/\$\{id\}`, \{ data: spec \? \{ _undoSpec: spec \} : \{\} \}\)/, '学生单条删没把 spec 随 DELETE 发出')
+
+  // 三处登记都用响应 undoId（拿到 undoId 就不再二次 POST）
+  // @pin student-frontend/src/composables/useUndo.js#recordRowUpdate
+  assert.match(cr, /recordRowUpdate\('students',[^\n]*res\.data && res\.data\.undoId\)/, '学生弹窗改没透传 undoId')
+  // @pin student-frontend/src/composables/useUndo.js#recordRowUpdate
+  assert.match(fee, /recordRowUpdate\('fee_records',[^\n]*res\.data && res\.data\.undoId\)/, '班费弹窗改没透传 undoId')
+  // @pin student-frontend/src/composables/useUndo.js#recordRowDelete
+  assert.match(cr, /recordRowDelete\('students', row, res\.data && res\.data\.undoId\)/, '学生单条删没透传 undoId')
+
+  // 两个封装真的把 registeredUndoId 透传到统一入口（第 2 参）
+  // @pin student-frontend/src/composables/useUndo.js#recordRowUpdate
+  assert.match(uu, /export function recordRowUpdate\(key, oldRow, newRow, origin = '', registeredUndoId\)[\s\S]*?\}, registeredUndoId\)/, 'recordRowUpdate 没把 undoId 透传给 recordUndo')
+  // @pin student-frontend/src/composables/useUndo.js#recordRowDelete
+  assert.match(uu, /export function recordRowDelete\(key, row, registeredUndoId\)[\s\S]*?\}, registeredUndoId\)/, 'recordRowDelete 没把 undoId 透传给 recordUndo')
+})

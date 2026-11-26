@@ -4,6 +4,7 @@ const { renumber } = require('../db');
 const { now, cleanUp, maxPosition, buildInsert, buildUpdate, isDateStr } = require('../utils/sql');
 const { readRowsByIds } = require('../services/createdRows');
 const countdownStore = require('../services/countdownStore');
+const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
 
 // 允许前端更新的字段白名单
 const EDITABLE = ['名称', '截止日', '包含这一天'];
@@ -15,33 +16,47 @@ router.get('/', (req, res) => {
 
 // POST /api/countdowns 新增
 router.post('/', (req, res) => {
+    const spec = takeUndoSpec(req.body);
     const data = cleanUp(req.body || {}, EDITABLE, 'countdowns');
   // 必填校验（K03-07）：名称/截止日为空会落一条永远无法显示「还剩几天」的脏记录。
   if (!String(data.名称 == null ? '' : data.名称).trim()) return res.status(400).json({ error: '请填写倒计时名称' });
   if (!String(data.截止日 == null ? '' : data.截止日).trim()) return res.status(400).json({ error: '请选择截止日' });
   if (!isDateStr(data.截止日)) return res.status(400).json({ error: '截止日格式不正确（应为 YYYY-MM-DD）' });
-  data.position = maxPosition('countdowns') + 1;
-  const result = buildInsert('countdowns', data);
-  renumber('countdowns');
-  res.json({ id: result.lastInsertRowid, message: '添加倒计时成功' });
+  const result = writeWithUndo(spec, () => {
+    data.position = maxPosition('countdowns') + 1;
+    const r = buildInsert('countdowns', data);
+    renumber('countdowns');
+    return r;
+  }, (result, hint) => ({ ...hint, row: { ...hint, id: result.lastInsertRowid } }));
+  res.json({ id: result.lastInsertRowid, message: '添加倒计时成功', undoId: result.undoId });
 });
 
 // PUT /api/countdowns/:id 编辑
 router.put('/:id', (req, res) => {
-    const row = cleanUp(req.body || {}, EDITABLE, 'countdowns');
+  const spec = takeUndoSpec(req.body);
+  const row = cleanUp(req.body || {}, EDITABLE, 'countdowns');
   if (Object.keys(row).length === 0) return res.status(400).json({ error: '没有可更新的字段' });
-  // 同 activities：buildUpdate 命中 0 行时原先照样回「修改成功」，要显式 404。
-  const result = buildUpdate('countdowns', row, req.params.id);
+  // 撤销登记与写入同事务（V9-I-13）；changes===0（id 不存在）不登记。
+  const id = Number(req.params.id);
+  const result = writeWithUndo(spec,
+    () => buildUpdate('countdowns', row, req.params.id),
+    (r, hint) => (r && r.changes > 0)
+      ? { table: 'countdowns', rowId: id, oldRow: (hint && hint.oldRow) || null, newRow: { ...(hint && hint.oldRow), ...row, id } }
+      : null);
   if (result.changes === 0) return res.status(404).json({ error: '倒计时不存在' });
-  res.json({ message: '修改成功' });
+  res.json({ message: '修改成功', undoId: result.undoId });
 });
 
 // DELETE /api/countdowns/:id 删除
 router.delete('/:id', (req, res) => {
-    const result = countdownStore.removeById(Number(req.params.id));
+  const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+  const id = Number(req.params.id);
+  const result = writeWithUndo(spec,
+    () => countdownStore.removeById(id),
+    (r, hint) => (r && r.changes > 0) ? (hint || { table: 'countdowns', row: { id } }) : null);
   if (result.changes === 0) return res.status(404).json({ error: '倒计时不存在' });
   renumber('countdowns');
-  res.json({ message: '删除成功' });
+  res.json({ message: '删除成功', undoId: result.undoId });
 });
 
 // POST /api/countdowns/import —— 从 Excel 导入倒计时

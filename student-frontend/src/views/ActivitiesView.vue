@@ -401,8 +401,10 @@ async function updateActivity(payload) {
   const { id, ...fields } = payload
   const oldRow = activityMap.value[id]
   try {
-    await axios.put(`${API}/activities/${id}`, fields)
-    recordRowUpdate('activities', oldRow, { ...oldRow, ...fields, id })
+    // 撤销随 PUT 一起发（V9-I-13）：oldRow 写前才有，后端同事务登记带回 undoId。
+    const spec = { key: 'activities', type: 'row_update', label: payload.主题 || '', payload: { table: 'activities', rowId: id, oldRow, newRow: { ...oldRow, ...fields, id } } }
+    const res = await axios.put(`${API}/activities/${id}`, { ...fields, _undoSpec: spec })
+    recordRowUpdate('activities', oldRow, { ...oldRow, ...fields, id }, '', res.data && res.data.undoId)
     actDialogVisible.value = false
     useNotification().success('已保存')
     await loadAll()
@@ -418,8 +420,9 @@ function askDeleteActivity(a) {
 async function deleteActivity(id) {
   const row = activityMap.value[id]
   try {
-    await axios.delete(`${API}/activities/${id}`)
-    recordRowDelete('activities', row)
+    const spec = row ? { key: 'activities', type: 'row_delete', label: row.主题 || '', payload: { table: 'activities', row } } : null
+    const res = await axios.delete(`${API}/activities/${id}`, { data: spec ? { _undoSpec: spec } : {} })
+    recordRowDelete('activities', row, res.data && res.data.undoId)
     confirm.value.visible = false
     useNotification().success('已删除')
     await loadAll()

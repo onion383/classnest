@@ -496,7 +496,7 @@ const api = (path, options = {}) =>
 
 // 记录分组管理页的单元格撤销：key 统一为 group_manage（便于 Ctrl+Z 连续撤销跨表操作），
 // table 为实际数据表名（group_members / groups / group_dimensions），需在 undo.js ALLOWED_TABLES 内。
-function recordGroupUndo(table, rowId, field, old, val, refs) {
+function recordGroupUndo(table, rowId, field, old, val, refs, registeredUndoId) {
   // 原先这里绕开 API 层直接发登记请求，且把失败空吞：
   // 单元格改了却没登记成功时用户毫不知情。统一入口会给出「本次无法撤销」弱提示。
   const payload = { table, rowId, field, oldValue: old, newValue: val };
@@ -508,7 +508,7 @@ function recordGroupUndo(table, rowId, field, old, val, refs) {
     type: 'cell_update',
     label: `${field}：「${old == null ? '' : old}」→「${val == null ? '' : val}」`,
     payload
-  })
+  }, registeredUndoId)
 }
 
 // 当前维度全量快照（组+成员），用于结构变更撤销对比
@@ -524,7 +524,7 @@ function buildGroupSnapshot() {
   }));
 }
 // 记录一次分组结构变更（增删小组/成员、成员排序、智能分组、小组数量增减等）
-function recordGroupStructure(before, after) {
+function recordGroupStructure(before, after, registeredUndoId) {
   if (!Array.isArray(before) || !Array.isArray(after) || JSON.stringify(before) === JSON.stringify(after)) return;
   const dimId = activeDimId.value != null ? Number(activeDimId.value) : active.value?.dimension?.id;
   if (dimId == null) return;
@@ -533,7 +533,7 @@ function recordGroupStructure(before, after) {
     type: 'group_snapshot',
     label: '分组结构变更',
     payload: { dimId, oldValue: before, newValue: after }
-  })
+  }, registeredUndoId)
 }
 useUndoShortcut('group_manage', {
   // 撤销/重做可能恢复或删掉了「当前正在看的维度」，所以不能只按旧 id 拉详情：
@@ -874,20 +874,52 @@ async function doSaveSettings(form, names) {
     const dim = active.value?.dimension;
     const oldName = dim ? dim.name : null;
     const oldLeaderTitle = dim ? dim.leader_title : null;
-    await api(`/dimensions/${activeDimId.value}`, {
+    // 字段级撤销随写请求一起发：后端同事务登记，响应回 undoIds（一写两登记）。
+    const changedFields = []
+    if (dim && String(oldName ?? '') !== String(form.name ?? '')) changedFields.push(['name', oldName ?? '', form.name ?? ''])
+    if (dim && String(oldLeaderTitle ?? '') !== String(form.leader_title ?? '')) changedFields.push(['leader_title', oldLeaderTitle ?? '', form.leader_title ?? ''])
+    const undoSpecs = changedFields.map(([field, old, val]) => ({
+      key: 'group_manage', type: 'cell_update',
+      label: `${field}：「${old}」→「${val}」`,
+      payload: { table: 'group_dimensions', rowId: dim.id, field, oldValue: old, newValue: val },
+      origin: undefined,
+    }))
+    // V9-2-5 · 899：组名自动编号（原 applyGroupNames 第二次请求）合进这次 PUT 的同一事务。
+    // 后端按同样规则跳过无变化的组；group_snapshot 的 after 在改名之后同事务生成，不再漏组名。
+    const groupRenames = []
+    if (names?.length) {
+      (active.value?.groups || []).forEach((g, i) => {
+        if (i >= names.length) return
+        if (String(g.name || '') === names[i]) return
+        groupRenames.push({ id: g.id, name: names[i] })
+      })
+    }
+    // 结构快照 spec 放在最后：后端 dimensionSettingsPayload 按 type 分派，用同事务读到的
+    // 改名后结构作 after；前端不再写后二次 GET 登记。
+    const snapIdx = undoSpecs.length
+    undoSpecs.push({ key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { dimId: activeDimId.value, oldValue: before } })
+    const saved = await api(`/dimensions/${activeDimId.value}`, {
       method: 'PUT',
       // name_rule 只用于前端生成组名，后端无此列（X3-02）
-      body: JSON.stringify({ name: form.name, leader_title: form.leader_title, members_per_group: form.members_per_group, group_count: form.group_count, male_group_count: form.male_group_count, female_group_count: form.female_group_count }),
+      body: JSON.stringify({ name: form.name, leader_title: form.leader_title, members_per_group: form.members_per_group, group_count: form.group_count, male_group_count: form.male_group_count, female_group_count: form.female_group_count, groupRenames, _undoSpecs: undoSpecs }),
     });
-    if (dim) {
-      if (String(oldName ?? '') !== String(form.name ?? '')) recordGroupUndo('group_dimensions', dim.id, 'name', oldName ?? '', form.name ?? '');
-      if (String(oldLeaderTitle ?? '') !== String(form.leader_title ?? '')) recordGroupUndo('group_dimensions', dim.id, 'leader_title', oldLeaderTitle ?? '', form.leader_title ?? '');
-    }
-    if (names?.length) await applyGroupNames(active.value?.groups || [], names);
+    changedFields.forEach(([field, old, val], i) => {
+      // 一条 spec 时后端回 undoId（标量），多条回 undoIds 数组；两种都要能跳过二次 POST。
+      const uid = saved && (undoSpecs.length === 1 ? saved.undoId : (saved.undoIds && saved.undoIds[i]))
+      recordGroupUndo('group_dimensions', dim.id, field, old, val, undefined, uid)
+    })
     showSettings.value = false;
     await selectDim(activeDimId.value);
     success('设置已保存');
-    recordGroupStructure(before, buildGroupSnapshot());
+    // 单条 spec 时后端回 undoId；多条（同时改了维度字段）回 undoIds 数组。
+    const snapUndoId = saved && (undoSpecs.length === 1 ? saved.undoId : (saved.undoIds && saved.undoIds[snapIdx]))
+    if (snapUndoId) {
+      // 后端已同事务登记结构快照：传 undoId 让入口跳过二次 POST、只刷可用态。
+      // payload 仅用于通过入口校验（真正内容已在后端同事务写好）。
+      recordUndoSpec({ key: 'group_manage', type: 'group_snapshot', payload: { dimId: activeDimId.value, oldValue: before } }, snapUndoId)
+    } else {
+      recordGroupStructure(before, buildGroupSnapshot());
+    }
   } catch (e) {
     error(e.message);
   }
@@ -902,19 +934,22 @@ async function submitSettings() {
     settingsForm.female_group_count = Math.min(50, Math.max(0, Number(settingsForm.female_group_count) || 0));
     const before = buildGroupSnapshot();
     try {
-      await api(`/dimensions/${activeDimId.value}`, {
+      // 结构快照 spec 随写请求发，后端同事务生成 after（这里只有一次写，无额外改名）。
+      const spec = { key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { oldValue: before } }
+      const saved = await api(`/dimensions/${activeDimId.value}`, {
         method: 'PUT',
         body: JSON.stringify({
           leader_title: settingsForm.leader_title,
           members_per_group: settingsForm.members_per_group,
           male_group_count: settingsForm.male_group_count,
           female_group_count: settingsForm.female_group_count,
+          _undoSpecs: [spec],
         }),
       });
       showSettings.value = false;
       await selectDim(activeDimId.value);
       success('设置已保存');
-      recordGroupStructure(before, buildGroupSnapshot());
+      recordGroupStructure(before, buildGroupSnapshot(), saved && saved.undoIds && saved.undoIds[0]);
     } catch (e) {
       error(e.message);
     }
@@ -964,14 +999,15 @@ async function submitAddGroup() {
   if (!addGroupName.value.trim()) return error('请输入小组名字');
   const before = buildGroupSnapshot();
   try {
-    await api(`/dimensions/${activeDimId.value}/groups`, {
+    const spec = { key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { oldValue: before } }
+    const saved = await api(`/dimensions/${activeDimId.value}/groups`, {
       method: 'POST',
-      body: JSON.stringify({ name: addGroupName.value }),
+      body: JSON.stringify({ name: addGroupName.value, _undoSpec: spec }),
     });
     showAddGroup.value = false;
     success('添加成功');
     await selectDim(activeDimId.value);
-    recordGroupStructure(before, buildGroupSnapshot());
+    recordGroupStructure(before, buildGroupSnapshot(), saved && saved.undoId);
   } catch (e) {
     error(e.message);
   }
@@ -983,9 +1019,11 @@ async function renameGroup(g) {
   const newName = g.name;
   if (String(oldName ?? '') === String(newName ?? '')) { g._undoName = undefined; return; }
   try {
-    await api(`/groups/${g.id}`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
-    // 落库成功后再登记撤销；失败时不留无效撤销记录，并把界面恢复成旧名字（B06-04）
-    recordGroupUndo('groups', g.id, 'name', oldName ?? '', newName);
+    // 撤销登记随写请求一起发：后端同事务登记，响应带 undoId 就不再二次 POST。
+    const spec = { key: 'group_manage', type: 'cell_update', label: `name：「${oldName ?? ''}」→「${newName}」`, payload: { table: 'groups', rowId: g.id, field: 'name', oldValue: oldName ?? '', newValue: newName } }
+    const res = await api(`/groups/${g.id}`, { method: 'PUT', body: JSON.stringify({ name: newName, _undoSpec: spec }) });
+    // 失败时不留无效撤销记录，并把界面恢复成旧名字（B06-04）
+    recordGroupUndo('groups', g.id, 'name', oldName ?? '', newName, undefined, res && res.undoId);
     g._undoName = undefined;
   } catch (e) {
     g.name = oldName;
@@ -1480,13 +1518,14 @@ function clearDrag() {
 async function moveMember(memberId, targetGroupId, targetIndex) {
   const before = buildGroupSnapshot();
   try {
+    const spec = { key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { oldValue: before } }
     const data = await api('/group-members/move', {
       method: 'POST',
-      body: JSON.stringify({ memberId, targetGroupId, targetIndex }),
+      body: JSON.stringify({ memberId, targetGroupId, targetIndex, _undoSpec: spec }),
     });
     dimensions.value = data.dimensions || [];
     if (data.dimension) active.value = { dimension: data.dimension, groups: data.groups };
-    recordGroupStructure(before, buildGroupSnapshot());
+    recordGroupStructure(before, buildGroupSnapshot(), data && data.undoId);
   } catch (e) {
     error(e.message);
   }
@@ -1509,9 +1548,10 @@ async function doCommitMember(m) {
     try {
       const body = { member_name: m.member_name, remark: m.remark };
       if (m._studentId != null) body.student_id = m._studentId;
+      const spec = { key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { oldValue: before } }
       const data = await api(`/groups/${m._groupId}/members`, {
         method: 'POST',
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, _undoSpec: spec }),
       });
       m.id = data.id;
       m._studentId = null;
@@ -1519,7 +1559,7 @@ async function doCommitMember(m) {
       // 用户刚点进的下一个输入框会立刻失焦 —— 连续录入变成「每输一个都要重新点一次」。
       // 新行就地「转正」即可，数据与后端一致：姓名/备注是本地值，sort_order 后端取 max+1（末尾），
       // 前端 push 也在末尾。_local 保留不动，让 v-for 的 key 稳定、这一行自己也不重建。
-      recordGroupStructure(before, buildGroupSnapshot());
+      recordGroupStructure(before, buildGroupSnapshot(), data && data.undoId);
       // 新名字可能刚在后端被记为临时学生：刷新候选名册，下一次输入就能带「临时」标记选到它
       fetchStudents();
     } catch (e) {
@@ -1539,19 +1579,35 @@ async function doCommitMember(m) {
     const body = { member_name: newName, remark: newRemark };
     // 只有「刚从名册选中的人」才带 id；手输姓名时留给后端按姓名解析。
     if (m._studentId != null) body.student_id = m._studentId;
+    // 撤销随写请求一起发：后端同事务登记；改名的 newRef 由后端用解析出的 student_id 补。
+    const specs = [];
+    if (String(oldName ?? '') !== String(newName ?? '')) {
+      specs.push({
+        key: 'group_manage', type: 'cell_update',
+        label: `member_name：「${oldName ?? ''}」→「${newName}」`,
+        payload: { table: 'group_members', rowId: m.id, field: 'member_name', oldValue: oldName ?? '', newValue: newName, oldRef, newRef: '__SAVED_STUDENT_ID__' },
+      })
+    }
+    if (String(oldRemark ?? '') !== String(newRemark ?? '')) {
+      specs.push({
+        key: 'group_manage', type: 'cell_update',
+        label: `remark：「${oldRemark ?? ''}」→「${newRemark}」`,
+        payload: { table: 'group_members', rowId: m.id, field: 'remark', oldValue: oldRemark ?? '', newValue: newRemark },
+      })
+    }
     const saved = await api(`/group-members/${m.id}`, {
       method: 'PUT',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, _undoSpecs: specs }),
     });
-    // 保存成功后才登记撤销；失败时回滚界面到旧值，避免「撤销一个没生效的修改」（B06-04）
-    // 同时记下后端解析出的新绑定（saved.student_id），撤销/重做都按 ID 恢复引用
+    const ids = (saved && saved.undoIds) || []
+    let si = 0
     if (String(oldName ?? '') !== String(newName ?? '')) {
       recordGroupUndo('group_members', m.id, 'member_name', oldName ?? '', newName, {
         oldRef,
         newRef: saved && saved.student_id != null ? Number(saved.student_id) : null,
-      });
+      }, ids[si++])
     }
-    if (String(oldRemark ?? '') !== String(newRemark ?? '')) recordGroupUndo('group_members', m.id, 'remark', oldRemark ?? '', newRemark);
+    if (String(oldRemark ?? '') !== String(newRemark ?? '')) recordGroupUndo('group_members', m.id, 'remark', oldRemark ?? '', newRemark, undefined, ids[si++])
     // 改名也可能产生新的临时学生（原名被替换）；刷新候选名册
     if (String(oldName ?? '') !== String(newName ?? '')) fetchStudents();
     m._undoName = undefined;
@@ -1579,9 +1635,10 @@ async function doRemoveMember(g, id, prevRects) {
   const before = buildGroupSnapshot();
   const prev = prevRects || captureMemberRows();
   try {
-    await api(`/group-members/${id}`, { method: 'DELETE' });
+    const spec = { key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { oldValue: before } }
+    const saved = await api(`/group-members/${id}`, { method: 'DELETE', body: JSON.stringify({ _undoSpec: spec }) });
     await selectDim(activeDimId.value);
-    recordGroupStructure(before, buildGroupSnapshot());
+    recordGroupStructure(before, buildGroupSnapshot(), saved && saved.undoId);
     await nextTick();
     playMemberFlip(prev);
   } catch (e) {
@@ -1599,9 +1656,12 @@ async function doDelete() {
   const isGroup = p.type === 'group';
   // 小组删除走 group_snapshot 撤销；维度删除走后端整包快照（见下）
   const before = isGroup ? buildGroupSnapshot() : null;
+  let groupDeleteUndoId = null;
   try {
     if (p.type === 'dimension') {
-      const res = await api(`/dimensions/${p.id}`, { method: 'DELETE' });
+      // 撤销随删除请求一起发：整包快照由后端在同事务里生成（前端写前拿不到 removed）。
+      const spec = { key: 'group_manage', type: 'group_dimension_delete', label: `删除分组维度 #${p.id}`, payload: {} }
+      const res = await api(`/dimensions/${p.id}`, { method: 'DELETE', body: JSON.stringify({ _undoSpec: spec }) });
       const removed = res?.removed;
       if (removed?.dimension) {
         // 维度删除原先完全不可撤销：删掉一个维度，其下所有小组/成员只能手工重建。
@@ -1611,13 +1671,16 @@ async function doDelete() {
           type: 'group_dimension_delete',
           label: `删除分组维度「${removed.dimension.name || `#${removed.dimension.id}`}」`,
           payload: removed,
-        });
+        }, res?.undoId);
       }
       // 当前维度已被删掉：不清空 activeDimId，loadAll 会去请求不存在的 id → 404，
       // 页面停在旧数据上还弹一条「维度不存在」。
       activeDimId.value = null;
     } else {
-      await api(`/groups/${p.id}`, { method: 'DELETE' });
+      // 小组删除的撤销快照由后端在同事务里生成，before 作 spec 发出。
+      const spec = { key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { oldValue: before } }
+      const saved = await api(`/groups/${p.id}`, { method: 'DELETE', body: JSON.stringify({ _undoSpec: spec }) });
+      groupDeleteUndoId = saved && saved.undoId;
     }
     confirmMsg.value = null;
     pendingDelete.value = null;
@@ -1625,7 +1688,8 @@ async function doDelete() {
     success('删除成功');
     await loadAll();
     // 小组删除后再拉一次当前维度，确保快照取自最新结构
-    if (isGroup) { await selectDim(activeDimId.value); recordGroupStructure(before, buildGroupSnapshot()); }
+    if (isGroup) { await selectDim(activeDimId.value); recordGroupStructure(before, buildGroupSnapshot(), groupDeleteUndoId); }
+    groupDeleteUndoId = null;
   } catch (e) {
     error(e.message);
   }
@@ -1649,15 +1713,17 @@ async function handleSmartGroupResult(result) {
   const studentIds = result && result.studentIds;
   const before = buildGroupSnapshot();
   try {
+    // before 作 spec 发出，后端在同事务里生成 after 快照并登记，前端跳过二次登记。
+    const spec = { key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { oldValue: before } }
     const data = await api(`/dimensions/${activeDimId.value}/apply-grouping`, {
       method: 'POST',
-      body: JSON.stringify({ groups, studentIds }),
+      body: JSON.stringify({ groups, studentIds, _undoSpec: spec }),
     });
     showSmartGroup.value = false;
     dimensions.value = data.dimensions || [];
     if (data.dimension) active.value = { dimension: data.dimension, groups: data.groups };
     success('智能分组已应用');
-    recordGroupStructure(before, buildGroupSnapshot());
+    recordGroupStructure(before, buildGroupSnapshot(), data && data.undoId);
   } catch (e) {
     error(e.message);
   }
@@ -1704,14 +1770,15 @@ async function onImportData({ fields, rows, studentIds }) {
   if (activeDimId.value == null) return;
   const before = buildGroupSnapshot();
   try {
+    const spec = { key: 'group_manage', type: 'group_snapshot', label: '分组结构变更', payload: { oldValue: before } }
     const data = await api(`/dimensions/${activeDimId.value}/import`, {
       method: 'POST',
-      body: JSON.stringify({ fields, rows, studentIds }),
+      body: JSON.stringify({ fields, rows, studentIds, _undoSpec: spec }),
     });
     dimensions.value = data.dimensions || [];
     if (data.dimension) active.value = { dimension: data.dimension, groups: data.groups };
     success(data.message || '导入成功');
-    recordGroupStructure(before, buildGroupSnapshot());
+    recordGroupStructure(before, buildGroupSnapshot(), data && data.undoId);
   } catch (e) {
     error(e.message);
   }
@@ -1774,7 +1841,7 @@ watch(() => route.query.focus, applyFocus);
 }
 /* 删除类按钮 hover 变红（.dlg-close:hover 默认是普通文字色，这里要压过它） */
 .grp-btn-del:hover {
-  color: var(--color-danger);
+  color: var(--color-danger-ink, var(--color-danger));
 }
 /* 成员拖拽：虚拟位置反馈线（上/下缘高亮） */
 tbody tr[class*="drop-line"] td,

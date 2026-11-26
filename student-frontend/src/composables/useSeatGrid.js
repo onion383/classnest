@@ -158,19 +158,20 @@ export function useSeatGrid(apiBase, options = {}) {
   }
 
   // 单格更新：有 cellBase（单格接口）则只提单格，否则回退到整块 save
-  async function saveSingleCell(row, col, value) {
+  // spec：可选撤销登记（写前才知道 oldValue），随 PATCH 同事务登记；返回 { ok, undoId }。
+  async function saveSingleCell(row, col, value, spec) {
     if (cellBase) {
       try {
-        await axios.patch(cellBase, { row, col, value })
-        return true
+        const res = await axios.patch(cellBase, { row, col, value, ...(spec ? { _undoSpec: spec } : {}) })
+        return { ok: true, undoId: res.data && res.data.undoId }
       } catch (e) {
         console.error(e)
         useNotification().error('座位保存失败，改动未保存')
       }
-      return false
+      return { ok: false, undoId: null }
     }
-    await save()
-    return true
+    const ok = await save()
+    return { ok, undoId: null }
   }
 
   // 同格快速编辑的提交队列：把每次 onCellsUpdate 的提交串行化。
@@ -217,13 +218,19 @@ export function useSeatGrid(apiBase, options = {}) {
       // 用 .catch 兜底，前面某次提交抛错不能让整条队列断掉、后续编辑永远不提交。
       commitQueue = commitQueue.catch(() => {}).then(async () => { // best-effort: 前面某次提交失败不阻断队列，后续编辑继续提交
         for (const [r, c] of changed) {
-          const ok = await saveSingleCell(r, c, next[r]?.[c] ?? null)
-          if (!ok) {
+          const oldV = prev[r]?.[c] ?? null
+          const newV = next[r]?.[c] ?? null
+          // 撤销随单格 PATCH 一起发（V9-I-13）：后端同事务登记带回 undoId，跳过二次 POST。
+          const spec = undo ? { key: undo.key, type: 'grid_cell',
+            label: `格子(${r + 1},${c + 1})`,
+            payload: { table: undo.table, row: r, col: c, oldValue: oldV, newValue: newV, ...(undoBatch ? { origin: undoBatch } : {}) } } : null
+          const out = await saveSingleCell(r, c, newV, spec)
+          if (!out.ok) {
             // 保存失败：以库里的真实数据为准回滚界面，并停止后续格子（避免半新半旧）
             await load()
             return
           }
-          if (undo) recordGridCellUndo(undo.key, undo.table, r, c, prev[r]?.[c] ?? null, next[r]?.[c] ?? null, null, undoBatch)
+          if (undo) recordGridCellUndo(undo.key, undo.table, r, c, oldV, newV, null, undoBatch, out.undoId)
         }
         // 批次登记期间不逐条刷状态，全部登记完统一刷一次（见 flushUndoStatus）
         if (undoBatch) flushUndoStatus()

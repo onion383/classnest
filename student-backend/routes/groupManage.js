@@ -1,6 +1,33 @@
 const express = require('express');
 const router = express.Router();
 const groupDim = require('../services/groupDim');
+const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
+
+// 维度设置可能同时改字段（cell_update）和改组数（group_snapshot）——一写多登记。
+// buildPayload 按 spec.type 分派：cell_update 保持前端原 payload，group_snapshot 后端填 after。
+function dimensionSettingsPayload(result, hint, spec) {
+  if (spec && spec.type === 'group_snapshot') {
+    const before = hint && hint.oldValue
+    if (!Array.isArray(before)) return null
+    return { dimId: result.dimId, oldValue: before, newValue: groupDim.structureSnapshot(result.dimId) }
+  }
+  return hint
+}
+
+// 结构变更的撤销登记：写与 after 快照在同一事务生成，前端把 before 作 spec.payload 带来。
+// 返回 { ...writeResult, undoId }；spec 是 group_snapshot，payload = { dimId, oldValue: before, newValue: after }。
+function withStructureUndo(spec, dimId, writeFn) {
+  return writeWithUndo(spec, () => {
+    const result = writeFn() || {};
+    // after 必须在同一事务里读：写后状态，不能靠前端二次 GET（那是写后补登记窗口）
+    return { ...result, _snapshot: dimId == null ? null : groupDim.structureSnapshot(dimId) };
+  }, (result, hint) => {
+    const before = hint && hint.oldValue;
+    // before 缺失或快照读不到时不登记（与前端 recordGroupStructure 同口径）
+    if (!Array.isArray(before) || result._snapshot == null) return null;
+    return { dimId, oldValue: before, newValue: result._snapshot };
+  });
+}
 
 // ============ 上限常量（与前端一致） ============
 const MAX_MEMBERS_PER_GROUP = 99; // 每组最大人数
@@ -49,6 +76,7 @@ router.put('/dimensions/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
     const { name, leader_title, members_per_group, group_count } = req.body;
+    const specs = req.body._undoSpecs;
     const dim = groupDim.dimensionById(id);
     if (!dim) return res.status(404).json({ error: '维度不存在' });
 
@@ -57,25 +85,43 @@ router.put('/dimensions/:id', (req, res) => {
       const male = req.body.male_group_count !== undefined ? clamp(req.body.male_group_count, 0, MAX_GROUP_COUNT) : dim.male_group_count;
       const female = req.body.female_group_count !== undefined ? clamp(req.body.female_group_count, 0, MAX_GROUP_COUNT) : dim.female_group_count;
       const mpg = members_per_group !== undefined ? clamp(members_per_group, 0, MAX_MEMBERS_PER_GROUP) : dim.members_per_group;
-      groupDim.updateDefaultDimension(id, {
-        leaderTitle: leader_title !== undefined ? String(leader_title).trim() : dim.leader_title,
-        membersPerGroup: mpg,
-        maleCount: male,
-        femaleCount: female,
-      });
-      return res.json({ message: '保存成功' });
+      const out = writeWithUndo(specs, () => {
+        groupDim.updateDefaultDimension(id, {
+          leaderTitle: leader_title !== undefined ? String(leader_title).trim() : dim.leader_title,
+          membersPerGroup: mpg, maleCount: male, femaleCount: female,
+        });
+        return { dimId: id };
+      }, dimensionSettingsPayload);
+      const { dimId: _d, ...body } = out;
+      return res.json({ ...body, message: '保存成功' });
     }
 
     // ===== 普通维度 =====
     const newCount = group_count !== undefined ? clamp(group_count, 0, MAX_GROUP_COUNT) : dim.group_count;
     const newMpg = members_per_group !== undefined ? clamp(members_per_group, 0, MAX_MEMBERS_PER_GROUP) : dim.members_per_group;
-    groupDim.updateDimension(id, {
-      name: name !== undefined ? String(name).trim() : dim.name,
-      leaderTitle: leader_title !== undefined ? String(leader_title).trim() : dim.leader_title,
-      membersPerGroup: newMpg,
-      groupCount: newCount,
-    });
-    res.json({ message: '保存成功' });
+    // V9-2-5 · 899：组名自动编号原先是这次 PUT 之后的第二次请求（applyGroupNames →
+    // rename-batch），group_snapshot 的 after 在那时尚未改名、会漏组名。把改名合进同一
+    // 事务：改维度设置 → 批量改组名 → 由 dimensionSettingsPayload 读改名后的结构快照，
+    // 一步到位且撤销与两处写共存亡。前端「无变化跳过」已保证 items 只含真改的组。
+    const groupRenames = Array.isArray(req.body.groupRenames) ? req.body.groupRenames : [];
+    for (const it of groupRenames) {
+      const rid = Number(it && it.id);
+      const rname = it && typeof it.name === 'string' ? it.name.trim() : '';
+      if (!Number.isInteger(rid) || rid <= 0 || !rname || rname.length > 50) {
+        return res.status(400).json({ error: '组名批量更新参数不合法' });
+      }
+    }
+    const out = writeWithUndo(specs, () => {
+      groupDim.updateDimension(id, {
+        name: name !== undefined ? String(name).trim() : dim.name,
+        leaderTitle: leader_title !== undefined ? String(leader_title).trim() : dim.leader_title,
+        membersPerGroup: newMpg, groupCount: newCount,
+      });
+      if (groupRenames.length) groupDim.renameGroupsBatch(groupRenames.map((it) => ({ id: Number(it.id), name: String(it.name).trim() })));
+      return { dimId: id };
+    }, dimensionSettingsPayload);
+    const { dimId: _d2, ...body } = out;
+    res.json({ ...body, message: '保存成功' });
   } catch (err) {
     res.status((err && err.status) || 500).json({ error: err.message });
   }
@@ -88,8 +134,11 @@ router.delete('/dimensions/:id', (req, res) => {
   if (!dim) return res.status(404).json({ error: '维度不存在' });
   if (dim.is_default) return res.status(400).json({ error: '内置宿舍组不可删除' });
   // removed 带回完整快照：维度删除原先不可撤销，删掉后所有小组/成员只能手工重建。
-  const removed = groupDim.deleteDimension(id);
-  res.json({ message: '删除成功', removed });
+  // 删除与撤销登记同事务，第二次登记失败不会让这步变成不可撤销。
+  const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+  const out = writeWithUndo(spec, () => ({ removed: groupDim.deleteDimension(id) }),
+    (result) => result.removed);
+  res.json({ ...out, message: '删除成功' });
 });
 
 // ============ 组 ============
@@ -105,7 +154,12 @@ router.post('/dimensions/:dimId/groups', (req, res) => {
     if (groupDim.groupCount(dimId) >= MAX_GROUP_COUNT) {
       return res.status(400).json({ error: `小组数量不能超过 ${MAX_GROUP_COUNT} 个` });
     }
-    res.json({ id: groupDim.addGroup(dimId, name), message: '添加成功' });
+    const spec = takeUndoSpec(req.body);
+    const out = withStructureUndo(spec, dimId, () => {
+      const newId = groupDim.addGroup(dimId, name);
+      return { id: newId };
+    });
+    res.json({ ...out, message: '添加成功' });
   } catch (err) {
     res.status((err && err.status) || 500).json({ error: err.message });
   }
@@ -143,8 +197,9 @@ router.put('/groups/:id', (req, res) => {
   if (!name || !String(name).trim()) return res.status(400).json({ error: '请输入小组名字' });
   const g = groupDim.groupById(id);
   if (!g) return res.status(404).json({ error: '小组不存在' });
-  groupDim.renameGroup(id, name);
-  res.json({ message: '保存成功' });
+  const spec = takeUndoSpec(req.body);
+  const out = writeWithUndo(spec, () => { groupDim.renameGroup(id, name); return {} });
+  res.json({ ...out, message: '保存成功' });
 });
 
 // DELETE /api/group-manage/groups/:id —— 删除组（级联删除成员）
@@ -152,8 +207,12 @@ router.delete('/groups/:id', (req, res) => {
     const id = Number(req.params.id);
   const g = groupDim.groupById(id);
   if (!g) return res.status(404).json({ error: '小组不存在' });
-  groupDim.deleteGroup(id, g.dimension_id);
-  res.json({ message: '删除成功' });
+  const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+  const out = withStructureUndo(spec, g.dimension_id, () => {
+    groupDim.deleteGroup(id, g.dimension_id);
+    return {};
+  });
+  res.json({ ...out, message: '删除成功' });
 });
 
 // ============ 组成员 ============
@@ -174,10 +233,15 @@ router.post('/groups/:groupId/members', (req, res) => {
       return res.status(400).json({ error: `该组人数已达上限 ${effectiveLimit} 人` });
     }
     // student_id 是前端从名册选人时带上的权威引用；同名两人靠它区分，姓名只是快照。
-    const { id, student } = groupDim.addMember(groupId, name, remark, student_id);
+    const spec = takeUndoSpec(req.body);
+    let added = null;
+    const out = withStructureUndo(spec, g.dimension_id, () => {
+      added = groupDim.addMember(groupId, name, remark, student_id);
+      return { id: added.id };
+    });
     res.json({
-      id,
-      student: student && student.id ? { id: student.id, 姓名: student.name, is_provisional: !!student.is_provisional } : null,
+      ...out,
+      student: added.student && added.student.id ? { id: added.student.id, 姓名: added.student.name, is_provisional: !!added.student.is_provisional } : null,
       message: '添加成功',
     });
   } catch (err) {
@@ -192,22 +256,38 @@ router.put('/group-members/:id', (req, res) => {
     const id = Number(req.params.id);
   const { member_name, remark, student_id } = req.body;
   if (!groupDim.memberById(id)) return res.status(404).json({ error: '成员不存在' });
+  const inlineSpecs = req.body._undoSpecs;
+  const single = takeUndoSpec(req.body);
+  const specs = Array.isArray(inlineSpecs) ? inlineSpecs : (single ? [single] : null);
   let saved = null;
   try {
-    saved = groupDim.updateMember(id, { memberName: member_name, remark, studentId: student_id });
+    // 登记与写入同事务；改名那条的 newRef（后端解析出的 student_id）由 buildPayload 补。
+    saved = writeWithUndo(specs, () => groupDim.updateMember(id, { memberName: member_name, remark, studentId: student_id }),
+      (result, hint) => {
+        const p = { ...hint }
+        if (p.newRef === '__SAVED_STUDENT_ID__') p.newRef = result.studentId == null ? null : Number(result.studentId)
+        return p
+      });
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
-  // student_id 一并返回：前端登记撤销时要连「改名前后各绑的是谁」一起记，
-  // 撤销回写姓名时才不用按姓名重新猜人（同名歧义会清掉引用，v7 §5-4）。
-  res.json({ message: '保存成功', member_name: saved.name, student_id: saved.studentId });
+  res.json({ message: '保存成功', member_name: saved.name, student_id: saved.studentId, undoId: saved.undoId, undoIds: saved.undoIds });
 });
 
 // DELETE /api/group-manage/group-members/:id —— 删除成员
 router.delete('/group-members/:id', (req, res) => {
     const id = Number(req.params.id);
-  if (!groupDim.deleteMember(id)) return res.status(404).json({ error: '成员不存在' });
-  res.json({ message: '删除成功' });
+  // 先查成员及其维度（404 在事务外），删除与快照登记同事务。
+  const mem = groupDim.memberById(id);
+  if (!mem) return res.status(404).json({ error: '成员不存在' });
+  const grp = groupDim.groupById(mem.group_id);
+  const dimId = grp && grp.dimension_id;
+  const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+  const out = withStructureUndo(spec, dimId, () => {
+    if (!groupDim.deleteMember(id)) { const e = new Error('成员不存在'); e.status = 404; throw e }
+    return {};
+  });
+  res.json({ ...out, message: '删除成功' });
 });
 
 // POST /api/group-manage/group-members/move —— 移动成员（同组排序 / 跨组移动）
@@ -232,10 +312,14 @@ router.post('/group-members/move', (req, res) => {
         return res.status(400).json({ error: `该组人数已达上限 ${limit} 人，无法移入` });
       }
     }
-    groupDim.moveMember(memberId, sourceGroupId, targetGroupId, targetIndex);
-
-    const dimData = groupDim.loadDimension(tgt.dimension_id);
-    if (!dimData) return res.status(404).json({ error: '维度不存在' });
+    const spec = takeUndoSpec(req.body);
+    const out = withStructureUndo(spec, tgt.dimension_id, () => {
+      groupDim.moveMember(memberId, sourceGroupId, targetGroupId, targetIndex);
+      const dimData = groupDim.loadDimension(tgt.dimension_id);
+      if (!dimData) { const e = new Error('维度不存在'); e.status = 404; throw e }
+      return dimData;
+    });
+    const { _snapshot, ...dimData } = out;
     res.json({ dimensions: groupDim.listDimensions(), ...dimData });
   } catch (err) {
     res.status((err && err.status) || 500).json({ error: err.message });
@@ -271,9 +355,12 @@ router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
       }
     }
 
-    groupDim.replaceGroupMembers(dimId, rawGroups, studentIds);
-
-    const data = groupDim.loadDimension(dimId);
+    const spec = takeUndoSpec(req.body);
+    const out = withStructureUndo(spec, dimId, () => {
+      groupDim.replaceGroupMembers(dimId, rawGroups, studentIds);
+      return groupDim.loadDimension(dimId);
+    });
+    const { _snapshot, ...data } = out;
     res.json({ dimensions: groupDim.listDimensions(), ...data });
   } catch (err) {
     res.status((err && err.status) || 500).json({ error: err.message });
@@ -325,15 +412,19 @@ router.post('/dimensions/:dimId/import', (req, res) => {
       ? Math.min(dim.members_per_group, MAX_MEMBERS_PER_GROUP)
       : MAX_MEMBERS_PER_GROUP;
 
-    const { createdGroups, addedMembers, skippedMembers } = groupDim.importMembers({
-      dimId,
-      entries,
-      allowCreateGroups: !dim.is_default,
-      perGroupLimit,
-      maxGroupCount: MAX_GROUP_COUNT,
+    let createdGroups = 0, addedMembers = 0, skippedMembers = 0;
+    const spec = takeUndoSpec(req.body);
+    const out = withStructureUndo(spec, dimId, () => {
+      const r = groupDim.importMembers({
+        dimId, entries,
+        allowCreateGroups: !dim.is_default,
+        perGroupLimit,
+        maxGroupCount: MAX_GROUP_COUNT,
+      });
+      createdGroups = r.createdGroups; addedMembers = r.addedMembers; skippedMembers = r.skippedMembers;
+      return groupDim.loadDimension(dimId);
     });
-
-    const data = groupDim.loadDimension(dimId);
+    const { _snapshot, ...data } = out;
     res.json({
       message: `成功导入 ${addedMembers} 名成员${createdGroups ? `，新建 ${createdGroups} 个小组` : ''}`,
       skipped: skippedMembers,

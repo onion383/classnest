@@ -115,7 +115,8 @@ test('validate：缺维度整行直接拒绝', () => {
 
 test('接线：路由返回四段快照，执行器已注册', () => {
   const route = read('student-backend/routes/groupManage.js')
-  assert.match(route, /res\.json\(\{ message: '删除成功', removed \}\)/, '路由把 service 带回的快照原样返回')
+  // V9-2-5：删除与撤销登记同事务，响应改成展开 out（仍带 removed）并附 undoId
+  assert.match(route, /res\.json\(\{ \.\.\.out, message: '删除成功' \}\)/, '路由把 service 带回的快照随响应返回')
   // M12-B1：四段快照与「删除前取排序」已下沉到 services/groupDim.js 的 deleteDimension
   const svc = read('student-backend/services/groupDim.js')
   assert.match(svc, /return \{ dimension: dim, groups, members, sortOrders \}/)

@@ -49,6 +49,26 @@ function loadDimension(dimId) {
   return { dimension: dim, groups: data }
 }
 
+// 结构撤销快照：与前端 buildGroupSnapshot 完全同构（组 + 成员，成员按组内序号），
+// 供写路由在同事务里生成 after——前端原本靠写后二次 GET 拿它，是「写后补登记」的窗口。
+// 刻意不带 student_id：前端 before 快照也没有，两边结构必须一致，否则回插时字段错位。
+function structureSnapshot(dimId) {
+  const groups = db.prepare('SELECT id, name, gender, sort_order FROM groups WHERE dimension_id = ? ORDER BY sort_order, id').all(dimId)
+  const membersStmt = db.prepare('SELECT id, member_name, remark FROM group_members WHERE group_id = ? ORDER BY sort_order, id')
+  return groups.map(g => ({
+    id: g.id,
+    name: g.name,
+    gender: g.gender == null ? null : g.gender,
+    sort_order: g.sort_order,
+    members: membersStmt.all(g.id).map((m, i) => ({
+      id: m.id,
+      member_name: m.member_name,
+      remark: m.remark,
+      sort_order: i + 1,
+    })),
+  }))
+}
+
 // 新增维度（按组数自动初始化小组）；返回新维度 id
 function createDimension({ name, leaderTitle = '', membersPerGroup = 0, groupCount = 0 }) {
   const maxSort = db.prepare('SELECT MAX(sort_order) AS max FROM group_dimensions').get().max || 0
@@ -483,6 +503,7 @@ module.exports = {
   listDimensions,
   dimensionById,
   loadDimension,
+  structureSnapshot,
   createDimension,
   updateDefaultDimension,
   updateDimension,

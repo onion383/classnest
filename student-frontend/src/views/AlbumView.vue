@@ -1361,7 +1361,9 @@ async function mergeSelectedAlbums() {
   if (ids.length < 2) { useNotification().info('请至少选择两个虚拟相册'); return }
   merging.value = true
   try {
-    const res = await axios.post('/api/album/merge', { album_ids: ids }, { headers: authHeaders() })
+    // 撤销随合并请求一起发：后端在同事务里用写结果生成整包快照并登记。
+    const spec = { key: 'album', type: 'album_merge', label: '合并相册', payload: {} }
+    const res = await axios.post('/api/album/merge', { album_ids: ids, _undoSpec: spec }, { headers: authHeaders() })
     // 合并原先不可撤销：源相册被删后只能重新建、重新扫。后端把「新相册 + 新照片索引 +
     // 每个源相册（整行 + 照片整行）」整包带回，这里登记成一条 album_merge 命令。
     const removed = res.data?.removed
@@ -1371,7 +1373,7 @@ async function mergeSelectedAlbums() {
         type: 'album_merge',
         label: `合并相册：${removed.newAlbum.name}`,
         payload: removed,
-      })
+      }, res.data?.undoId)
     }
     exitSelectMode()
     await loadAlbums()
@@ -1719,18 +1721,17 @@ async function doDeletePhoto() {
   deleteTarget.value = null
   if (!p) return
   try {
-    await axios.delete(`/api/album/photo/${p.id}`, { headers: authHeaders() })
-    // 记录「删除照片」撤销：undo 从回收站搬回文件+还原索引，redo 再次移入回收站。
-    // 走统一入口：登记失败会给出「本次无法撤销」弱提示并留日志，
-    // 不再只写 console.warn（用户看不见，等于没提示）。
-    recordUndoSpec({
-      key: 'album',
-      type: 'photo_trash',
-      label: `删除照片：${p.file_name}`,
+    // 撤销随删除请求一起发：后端在同事务里登记（payload 写前已知），
+    // 登记失败连索引删除一起回退、文件搬回原处。
+    const spec = {
+      key: 'album', type: 'photo_trash', label: `删除照片：${p.file_name}`,
       payload: {
         photo: { id: p.id, album_id: activeAlbum.value?.id, file_path: p.file_path, file_name: p.file_name, file_size: p.file_size, mtime: p.mtime, photo_date: p.photo_date, exif_date: p.exif_date, date_src: p.date_src }
       }
-    })
+    }
+    const res = await axios.delete(`/api/album/photo/${p.id}`, { headers: authHeaders(), data: { _undoSpec: spec } })
+    // 记录「删除照片」撤销：undo 从回收站搬回文件+还原索引，redo 再次移入回收站。
+    recordUndoSpec(spec, res.data && res.data.undoId)
     resetPan()
     viewer.value = null
     useNotification().success('已移入回收站')

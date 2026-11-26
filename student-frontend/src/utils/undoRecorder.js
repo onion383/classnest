@@ -85,13 +85,20 @@ export function resetUndoRecorderForTest() { hooks = null }
 //   refresh 缺省 = !origin（批次由调用方 flushUndoStatus 统一刷一次，不逐条发 /status）
 //   返回 Promise<撤销记录 id | null>；失败一律返回 null 并提示，绝不把异常抛回主流程
 //   —— 业务操作已经落库，抛回去只会让界面误报「操作失败」。
-export function recordUndo(spec) {
+// `registeredUndoId`：后端已在写请求里同事务登记并返回 undoId 时传入。
+// 此时绝不再发第二次 POST /api/undo —— 那正是「写与撤销跨请求两写」的窗口。
+// 只刷新可用态即可；transport 一次都不调用。
+export function recordUndo(spec, registeredUndoId) {
   const h = currentHooks()
   const label = spec && spec.label ? String(spec.label) : ''
   const invalid = validateUndoSpec(spec)
   if (invalid) {
     h.notifyFailure(label, new Error(invalid))
     return Promise.resolve(null)
+  }
+  if (registeredUndoId != null) {
+    try { h.onRegistered() } catch (_) { /* best-effort: 状态查询失败不打断用户 */ }
+    return Promise.resolve(registeredUndoId)
   }
   const body = {
     key: spec.key,

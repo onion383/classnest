@@ -377,7 +377,18 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
     const snap = rowsSnapshot.value.find(r => r.id === row.id)
     const oldVal = snap ? snap[field.name] : undefined
     try {
-      const res = await axios.put(`${apiBase}/${row.id}`, { [field.name]: val })
+      // 撤销登记随写请求一起发（V9-I-13）：后端在同事务里写数据 + 登记，
+      // 响应带回 undoId 时不再二次 POST，崩溃/登记失败都不会留「有数据无栈」。
+      const undoSpec = undoTableKey && oldVal !== val ? {
+        key: undoTableKey,
+        type: 'cell_update',
+        label: `${field.name}：「${oldVal == null ? '' : oldVal}」→「${val == null ? '' : val}」`,
+        payload: { table: undoTableKey, rowId: row.id, field: field.name, oldValue: oldVal, newValue: val },
+      } : null
+      const res = await axios.put(`${apiBase}/${row.id}`, {
+        [field.name]: val,
+        ...(undoSpec ? { _undoSpec: undoSpec } : {}),
+      })
       // 学生改名时后端会一并级联「只存姓名」的关联表；旧名有同名学生时会跳过级联
       // （宁可不同步也不能改错人）。此前这里完全不看响应 → 用户以为改名全部生效，
       // 实际值日表/座位表还挂着旧名，历史值日指数从此归不到他名下，且界面不报错。
@@ -391,9 +402,9 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       if (live) live[field.name] = val
       const s = rowsSnapshot.value.find(r => r.id === row.id)
       if (s) s[field.name] = val
-      // 值确实发生变化才记录撤销
-      if (undoTableKey && oldVal !== val) {
-        recordUndo(row.id, field.name, oldVal, val)
+      // 值确实发生变化才记录撤销；后端已同事务登记时只传 undoId，不二次 POST。
+      if (undoSpec) {
+        recordUndo(row.id, field.name, oldVal, val, res.data && res.data.undoId)
       }
     } catch {
       // 失败要把本地值回滚到旧值：v-model 已经把新值写进了行对象，
@@ -414,13 +425,13 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
   // 记录一条持久化撤销（单元格编辑）
   // 走统一登记入口：原先这里的 .catch(() => {}) 会静默吞掉登记失败，
   // 单元格已经改了、撤销栈里却没有这条，用户按 Ctrl+Z 才发现撤不回来（Q2-10）。
-  function recordUndo(rowId, fieldName, oldVal, newVal) {
+  function recordUndo(rowId, fieldName, oldVal, newVal, registeredUndoId) {
     return recordUndoSpec({
       key: undoTableKey,
       type: 'cell_update',
       label: `${fieldName}：「${oldVal == null ? '' : oldVal}」→「${newVal == null ? '' : newVal}」`,
       payload: { table: undoTableKey, rowId, field: fieldName, oldValue: oldVal, newValue: newVal }
-    })
+    }, registeredUndoId)
   }
 
   function validateValue(val, type) {
@@ -690,9 +701,10 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
         // 删除前存整行：后端 DELETE 不回数据，删完就再也取不到 inverse 需要的列
         const snapshot = rowSnapshotById(row.id)
         try {
-          await axios.delete(`${apiBase}/${row.id}`)
+          const spec = snapshot ? { key: undoTableKey, type: 'row_delete', label: snapshot.姓名 || snapshot.名称 || `#${row.id}`, payload: { table: undoTableKey, row: snapshot } } : null
+          const res = await axios.delete(`${apiBase}/${row.id}`, { data: spec ? { _undoSpec: spec } : {} })
           await fetchRows()
-          if (snapshot) recordRowDelete(undoTableKey, snapshot)
+          if (snapshot) recordRowDelete(undoTableKey, snapshot, res.data && res.data.undoId)
           selectedCount.value = 0
           selectedRowKeys.value = []
         } catch (err) {
@@ -712,9 +724,10 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
         const removed = rows.value.filter(s => selectedIds.includes(s.id)).map(s => ({ ...s }))
         // 一次请求删整批：原来逐条 DELETE 要来回 N 次；后端整批一个事务，任一 id 失败整批回滚，
         // 因此不再有「部分成功」的半截状态，撤销只需登记整批。
-        await axios.post(`${apiBase}/batch-delete`, { ids: selectedIds })
+        const spec = removed.length ? { key: undoTableKey, type: 'rows_batch_delete', label: `批量删除 ${removed.length} 条记录`, payload: { table: undoTableKey, rows: removed.map(s => ({ ...s })) } } : null
+        const res = await axios.post(`${apiBase}/batch-delete`, { ids: selectedIds, ...(spec ? { _undoSpec: spec } : {}) })
         await fetchRows()
-        if (removed.length) recordRowsBatchDelete(undoTableKey, removed)
+        if (removed.length) recordRowsBatchDelete(undoTableKey, removed, res.data && res.data.undoId)
         selectedCount.value = 0
         selectedRowKeys.value = []
       } catch (err) {
@@ -853,9 +866,10 @@ export function useTableCRUD(apiBase, defaultFields, options = {}) {
       showConfirm('确定删除该记录吗？', async () => {
         const snapshot = rowSnapshotById(id)
         try {
-          await axios.delete(`${apiBase}/${id}`)
+          const spec = snapshot ? { key: undoTableKey, type: 'row_delete', label: snapshot.姓名 || snapshot.名称 || `#${id}`, payload: { table: undoTableKey, row: snapshot } } : null
+          const res = await axios.delete(`${apiBase}/${id}`, { data: spec ? { _undoSpec: spec } : {} })
           await fetchRows()
-          if (snapshot) recordRowDelete(undoTableKey, snapshot)
+          if (snapshot) recordRowDelete(undoTableKey, snapshot, res.data && res.data.undoId)
           selectedCount.value = 0
           selectedRowKeys.value = []
         } catch (err) {

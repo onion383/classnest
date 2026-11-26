@@ -108,7 +108,8 @@ test('⑥ 班干部页给导入组件传名册 + 列名 + 多名标记，且透�
   assert.match(tag, /:student-name-fields="\['担任学生'/ , '要指定学生列为「担任学生」')
   assert.match(tag, /:multi-name-per-row="true"/, '一行多名要拆开逐个选人')
   assert.match(manage, /function onImportData\(\{ fields, rows, studentIds \}\)/, 'onImportData 要接 studentIds')
-  assert.match(manage, /data:\s*\{\s*fields,\s*rows,\s*studentIds\s*\}/, '要把 studentIds 透传给后端')
+  // V9-2-5：导入请求额外带 _undoSpec（后端同事务登记），studentIds 仍要透传
+  assert.match(manage, /data:\s*\{\s*fields,\s*rows,\s*studentIds,\s*_undoSpec:\s*spec\s*\}/, '要把 studentIds 与 _undoSpec 透传给后端')
 })
 
 test('⑦ ImportExcel 支持多名分桶与 key 派发（默认口径不变）', () => {

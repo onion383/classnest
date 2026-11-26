@@ -6,6 +6,7 @@ const { sanitizeField, normNumber } = require('../services/sanitize');
 const { readRowsByIds } = require('../services/createdRows');
 const { resolveOne, resolvePickedForImport } = require('../services/provisionalStudents');
 const scoreStore = require('../services/scoreStore');
+const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
 const { fingerprintOf, findBatch, recordBatch } = require('../services/importBatch');
 
 // 允许前端更新的字段白名单
@@ -40,6 +41,7 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   try {
     const body = req.body || {};
+    const spec = takeUndoSpec(body);
     const data = {};
 
     // 小组加分：单条独立记录，不展开成每人一条
@@ -96,8 +98,8 @@ router.post('/', (req, res) => {
     data.加分时间 = sanitizeField(body.加分时间 || now(), 'score_records', '加分时间');
     data.created_at = now();
 
-    const result = buildInsert('score_records', data);
-    res.json({ id: result.lastInsertRowid, message: '添加加分成功' });
+    const result = writeWithUndo(spec, () => buildInsert('score_records', data), (result, hint) => ({ ...hint, row: { ...hint, id: result.lastInsertRowid } }));
+    res.json({ id: result.lastInsertRowid, message: '添加加分成功', undoId: result.undoId });
   } catch (err) {
     // 400 而不是 500：这个 handler 里只有入参清洗、跨列校验和一条插入，
     // 失败原因基本都是入参（与 PUT /:id、导入接口同口径）。加分时间加了严格日期规则后，
@@ -109,6 +111,7 @@ router.post('/', (req, res) => {
 // PUT /api/scores/:id 编辑
 router.put('/:id', (req, res) => {
   try {
+    const _spec = takeUndoSpec(req.body);
     const row = cleanUp(req.body || {}, EDITABLE, 'score_records');
   // 「分值」已由 cleanUp 按列级规则清洗（数字 + 范围），这里不再二次 Number()。
   // 「成员数」没有列级规则，cleanUp 可能原样留下字符串；Number('abc') = NaN，
@@ -142,10 +145,20 @@ router.put('/:id', (req, res) => {
     }
   }
 
-  const result = buildUpdate('score_records', row, req.params.id);
+  // 撤销登记与写入同事务（V9-I-13）；changes===0（id 不存在）不登记。
+  const id = Number(req.params.id);
+  const result = writeWithUndo(_spec,
+    () => buildUpdate('score_records', row, req.params.id),
+    (r, hint, s) => {
+      if (!r || r.changes === 0) return null; // 404 不登记
+      // 前端 spec.payload 已带正确结构（cell_update 逐字段 / row_update 整行），优先透传；
+      // 没有时才兜底生成 row_update（接口/脚本等不带 payload 的调用方）。
+      if (hint && (hint.field || hint.oldRow || hint.newRow || hint.rows)) return hint;
+      return { table: 'score_records', rowId: id, oldRow: null, newRow: { ...row, id } };
+    });
   // id 不存在时 UPDATE 影响 0 行：不能回「修改成功」（K03-01）
   if (!result || result.changes === 0) return res.status(404).json({ error: '记录不存在' });
-    res.json({ message: '修改成功' });
+    res.json({ message: '修改成功', undoId: result.undoId });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -157,9 +170,12 @@ router.delete('/:id', (req, res) => {
   try {
     const row = scoreStore.findRowById(req.params.id)
     if (!row) return res.status(404).json({ error: '记录不存在' })
-    const result = scoreStore.deleteById(req.params.id)
+    // 撤销登记与删除同事务（V9-I-13）；整行 row 删前已读到，供 row_delete 的 inverse。
+    const result = writeWithUndo(takeUndoSpec(req.body) || takeUndoSpec(req.query),
+      () => scoreStore.deleteById(req.params.id),
+      (r, hint) => (r && r.changes > 0) ? (hint || { table: 'score_records', row }) : null)
     if (!result || result.changes === 0) return res.status(404).json({ error: '记录不存在' })
-    res.json({ ok: true, deleted: row })
+    res.json({ ok: true, deleted: row, undoId: result.undoId })
   } catch (err) {
     res.status(400).json({ error: err.message })
   }

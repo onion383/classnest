@@ -584,16 +584,24 @@ async function saveCell(row) {
   // 撤销记录等 PUT 成功后再登记（见下方 try 内）：
   // 提前登记时，一旦保存失败、界面被 buildScoreRows 回滚，撤销栈里就留下一条
   // 「点了撤销也看不出变化」的孤儿记录。
-  try {
-    await axios.put(`${API}/scores/${row.id}`, payload)
-    if (orig) {
-      // 旧值来源仍是 activeData 的原始记录（必须在 Object.assign 之前取）
-      for (const f of Object.keys(payload)) {
-        const ov = orig[f], nv = payload[f]
-        if (String(ov ?? '') !== String(nv ?? '')) recordCellUndo('score_records', row.id, f, ov, nv)
+    try {
+      // 撤销随 PUT 一起发（V9-I-13）：逐字段 cell_update 的 payload 写前已知，后端同事务登记带回 undoId。
+      const specs = orig ? Object.keys(payload)
+        .filter((f) => String(orig[f] ?? '') !== String(payload[f] ?? ''))
+        .map((f) => ({ key: 'score_records', type: 'cell_update', label: `${f}：「${orig[f] ?? ''}」→「${payload[f] ?? ''}」`,
+          payload: { table: 'score_records', rowId: row.id, field: f, oldValue: orig[f], newValue: payload[f] } })) : []
+      const res = await axios.put(`${API}/scores/${row.id}`, { ...payload, ...(specs.length ? { _undoSpec: specs } : {}) })
+      if (orig) {
+        // 旧值来源仍是 activeData 的原始记录（必须在 Object.assign 之前取）
+        for (const f of Object.keys(payload)) {
+          const ov = orig[f], nv = payload[f]
+          if (String(ov ?? '') !== String(nv ?? '')) {
+            const idx = specs.findIndex((s) => s.payload.field === f)
+            recordCellUndo('score_records', row.id, f, ov, nv, idx >= 0 ? (res.data?.undoIds?.[idx] ?? res.data?.undoId) : undefined)
+          }
+        }
+        Object.assign(orig, payload)
       }
-      Object.assign(orig, payload)
-    }
     editingCell.value = null
     useNotification().success('已保存')
     buildScoreRows()
@@ -640,12 +648,14 @@ async function updateScore(payload) {
   const { id, ...fields } = payload
   try {
     const oldRow = activeData.value.find(s => s.id === id)
-    await axios.put(`${API}/scores/${id}`, fields)
+    // 撤销随 PUT 一起发（V9-I-13）：整行 row_update，后端同事务登记带回 undoId。
+    const spec = oldRow ? { key: 'score_records', type: 'row_update', label: oldRow.姓名 || oldRow.小组 || '', payload: { table: 'score_records', rowId: id, oldRow, newRow: { ...oldRow, ...fields, id } } } : null
+    const res = await axios.put(`${API}/scores/${id}`, { ...fields, ...(spec ? { _undoSpec: spec } : {}) })
     addDialogVisible.value = false
     useNotification().success('已保存')
     await loadAll()
     const newRow = activeData.value.find(s => s.id === id)
-    if (oldRow && newRow) recordRowUpdate('score_records', oldRow, newRow)
+    if (oldRow && newRow) recordRowUpdate('score_records', oldRow, newRow, '', res.data && res.data.undoId)
   } catch (err) {
     reportError(err, { action: '保存' })
   }
@@ -663,12 +673,13 @@ function askDelete(item) {
 async function deleteScore(id) {
   try {
     const row = activeData.value.find(s => s.id === id)
-    await axios.delete(`${API}/scores/${id}`)
+    const spec = row ? { key: 'score_records', type: 'row_delete', label: row.姓名 || row.小组 || '', payload: { table: 'score_records', row } } : null
+    const res = await axios.delete(`${API}/scores/${id}`, { data: spec ? { _undoSpec: spec } : {} })
     confirm.value.visible = false
     useNotification().success('已删除')
     await loadAll()
     // 记录撤销：删除前保存完整记录，撤销即恢复该行
-    if (row) recordRowDelete('score_records', row)
+    if (row) recordRowDelete('score_records', row, res.data && res.data.undoId)
   } catch (err) {
     reportError(err, { action: '删除' })
   }

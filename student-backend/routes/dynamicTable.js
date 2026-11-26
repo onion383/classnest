@@ -5,6 +5,7 @@ const {
   updateRowWithRename
 } = require('../services/tableService');
 const { clearTableColumnsCache } = require('./ai/ai.helpers');
+const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
 
 function createDynamicTableRouter(tableName, options = {}) {
   const router = express.Router();
@@ -43,7 +44,9 @@ function createDynamicTableRouter(tableName, options = {}) {
   // POST /
   router.post('/', (req, res) => {
     try {
-      const result = insertRow(tableName, req.body);
+      // 撤销登记与写入同事务：spec 随请求体来，登记失败连插入一起回滚。
+      const spec = takeUndoSpec(req.body);
+      const result = writeWithUndo(spec, () => insertRow(tableName, req.body));
       res.json({ ...result, message: '添加成功' });
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -56,8 +59,12 @@ function createDynamicTableRouter(tableName, options = {}) {
       // 学生改名要顺手把「只存姓名」的关联一起改掉（值日/座位/成绩/请假/小组/班干部），
       // 否则值日指数会按旧名归集、新名字从 0 开始。事务边界与级联规则都在
       // tableService.updateRowWithRename 里，路由不再直接持有 db。
-      const renamed = updateRowWithRename(tableName, req.params.id, req.body);
-      res.json({ message: '修改成功', renamed });
+      // 撤销登记与这次写入（含改名级联）同事务，失败一起回滚。
+      const spec = takeUndoSpec(req.body);
+      const result = writeWithUndo(spec, () => ({
+        renamed: updateRowWithRename(tableName, req.params.id, req.body),
+      }));
+      res.json({ ...result, message: '修改成功' });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -66,8 +73,13 @@ function createDynamicTableRouter(tableName, options = {}) {
   // DELETE /:id
   router.delete('/:id', (req, res) => {
     try {
-      deleteRow(tableName, req.params.id, { minCount });
-      res.json({ message: '删除成功' });
+      // 撤销登记与删除同事务；DELETE 的 spec 走 query 参数（body 常被忽略）。
+      const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+      const result = writeWithUndo(spec, () => {
+        deleteRow(tableName, req.params.id, { minCount });
+        return {};
+      });
+      res.json({ ...result, message: '删除成功' });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -78,9 +90,10 @@ function createDynamicTableRouter(tableName, options = {}) {
   // minCount 行数下限保护与单条 DELETE 同源（同一份 options），批量路径绕不过去。
   router.post('/batch-delete', (req, res) => {
     try {
+      const spec = takeUndoSpec(req.body);
       const { ids } = req.body || {};
-      const result = deleteRows(tableName, ids, { minCount });
-      res.json({ message: '删除成功', deleted: result.deleted });
+      const result = writeWithUndo(spec, () => deleteRows(tableName, ids, { minCount }));
+      res.json({ ...result, message: '删除成功' });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

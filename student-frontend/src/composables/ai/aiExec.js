@@ -85,11 +85,13 @@ export function useAiExec(ctx) {
         } else if (m.proposal.kind === 'json') {
           // 整块写入（课表/座位/权重/值日等「非行式」表）：按 id 覆盖指定列
           const p = m.proposal
-          const resp = await axios.post('/api/ai/doc', { table: p.table, id: p.id, values: p.values })
+          // payload（before/after）由后端在同事务里用写结果生成，前端不再二次登记。
+          const spec = { key: DOC_UNDO_KEY[p.table] || p.table, type: 'doc_update', label: p.label, payload: {} }
+          const resp = await axios.post('/api/ai/doc', { table: p.table, id: p.id, values: p.values, _undoSpec: spec })
           const d = resp.data || {}
           // 存下写入前的原始行：供「改动总结」统计被覆盖掉的原有非空格数，并在明细抽屉里对照
           m.proposal.gridBefore = d.before == null ? null : d.before
-          const uid = await ctx._pushUndo('doc_update', DOC_UNDO_KEY[p.table] || p.table, p.label, { table: p.table, id: p.id, before: d.before, after: d.after, label: p.label }, origin)
+          const uid = await ctx._pushUndo('doc_update', DOC_UNDO_KEY[p.table] || p.table, p.label, { table: p.table, id: p.id, before: d.before, after: d.after, label: p.label }, origin, d.undoId)
           m.proposal.undoIds = uid != null ? [uid] : []
           m.proposal.executing = false
           m.proposal.executed = true
@@ -101,11 +103,23 @@ export function useAiExec(ctx) {
           const ops = p.kind === 'batch_ops'
             ? (Array.isArray(p.ops) ? p.ops : [])
             : ((p.data && p.data.updates) || []).map((u) => ({ action: 'update', table: p.table, id: u.id, changes: u.changes }))
-          const res = await axios.post('/api/ai/apply-batch', { ops })
+          // 撤销登记随批量写一起发：后端在同事务里为每条结果登记并回 undoIds，
+          // 前端不再逐条二次 POST（V9-2-5）。spec 与 ops 一一对应。
+          const specs = ops.map((op) => {
+            const a = String(op.action || '')
+            const type = a === 'doc' ? 'doc_update'
+              : a === 'add' ? 'row_insert'
+              : a === 'update' ? 'row_update'
+              : a === 'delete' ? (op.table === 'students' ? 'student_cascade_delete' : 'row_delete')
+              : 'batch'
+            return { key: op.table || p.table || '', type, label: p.label, payload: {}, origin }
+          })
+          const res = await axios.post('/api/ai/apply-batch', { ops, _undoSpecs: specs })
           const results = (res.data && res.data.results) || []
+          const backendUndoIds = (res.data && res.data.undoIds) || []
           const undoIds = []
-          for (const r of results) {
-            const uid = await ctx._pushUndoForBatch(r, p.label, origin)
+          for (let i = 0; i < results.length; i++) {
+            const uid = await ctx._pushUndoForBatch(results[i], p.label, origin, backendUndoIds[i])
             if (uid != null) undoIds.push(uid)
           }
           m.proposal.undoIds = undoIds
@@ -135,10 +149,11 @@ export function useAiExec(ctx) {
           let ok = 0
           for (const r of rows) {
             const payload = ctx.cleanPayload(r)
-            const res = await axios.post(end.url, payload)
+            const spec = { key: end.undoKey, type: 'row_insert', label: ctx._rowName(payload), payload }
+            const res = await axios.post(end.url, { ...payload, _undoSpec: spec })
             const added = { id: res.data?.id ?? res.data?.row?.id, ...payload }
             if (added.id != null) {
-              const uid = await ctx._pushUndo('row_insert', end.undoKey, ctx._rowName(added), { table: end.undoKey, row: added }, origin)
+              const uid = await ctx._pushUndo('row_insert', end.undoKey, ctx._rowName(added), { table: end.undoKey, row: added }, origin, res.data?.undoId)
               if (uid != null) undoIds.push(uid)
             }
             ok++
@@ -156,10 +171,11 @@ export function useAiExec(ctx) {
           const deletedRows = []
           for (const id of ids) {
             const oldRow = await ctx._fetchRow(end.undoKey, id)
-            await axios.delete(`${end.url}/${id}`)
+            const spec = oldRow ? { key: end.undoKey, type: 'row_delete', label: ctx._rowName(oldRow), payload: { table: end.undoKey, row: oldRow } } : null
+            const res = await axios.delete(`${end.url}/${id}`, { data: spec ? { _undoSpec: spec } : {} })
             if (oldRow) {
               deletedRows.push(oldRow)
-              const uid = await ctx._pushUndo('row_delete', end.undoKey, ctx._rowName(oldRow), { table: end.undoKey, row: oldRow }, origin)
+              const uid = await ctx._pushUndo('row_delete', end.undoKey, ctx._rowName(oldRow), { table: end.undoKey, row: oldRow }, origin, res.data?.undoId)
               if (uid != null) undoIds.push(uid)
             }
             ok++
@@ -173,10 +189,11 @@ export function useAiExec(ctx) {
         } else {
           if (operation === 'add') {
             const payload = ctx.cleanPayload(data)
-            const res = await axios.post(end.url, payload)
+            const spec = { key: end.undoKey, type: 'row_insert', label: ctx._rowName(payload), payload }
+            const res = await axios.post(end.url, { ...payload, _undoSpec: spec })
             const added = { id: res.data?.id ?? res.data?.row?.id, ...payload }
             if (added.id != null) {
-              const uid = await ctx._pushUndo('row_insert', end.undoKey, ctx._rowName(added), { table: end.undoKey, row: added }, origin)
+              const uid = await ctx._pushUndo('row_insert', end.undoKey, ctx._rowName(added), { table: end.undoKey, row: added }, origin, res.data?.undoId)
               if (uid != null) undoIds.push(uid)
             }
           } else if (operation === 'update') {
@@ -184,17 +201,20 @@ export function useAiExec(ctx) {
             const oldRow = await ctx._fetchRow(end.undoKey, data.id)
             // 拿不到旧值就无法登记撤销：宁可中止这条修改，也不留下「改了但撤不回」的状态（B12-03）
             if (!oldRow) throw new Error(`没有找到要修改的记录（id=${data.id}），已取消该修改`)
-            await axios.put(`${end.url}/${data.id}`, ctx.cleanPayload(data.changes || {}))
+            const changes = ctx.cleanPayload(data.changes || {})
             const newRow = { ...oldRow, ...(data.changes || {}) }
-            const uid = await ctx._pushUndo('row_update', end.undoKey, ctx._rowName(newRow), { table: end.undoKey, rowId: data.id, oldRow, newRow }, origin)
+            const spec = { key: end.undoKey, type: 'row_update', label: ctx._rowName(newRow), payload: { table: end.undoKey, rowId: data.id, oldRow, newRow } }
+            const res = await axios.put(`${end.url}/${data.id}`, { ...changes, _undoSpec: spec })
+            const uid = await ctx._pushUndo('row_update', end.undoKey, ctx._rowName(newRow), { table: end.undoKey, rowId: data.id, oldRow, newRow }, origin, res.data?.undoId)
             if (uid != null) undoIds.push(uid)
           } else if (operation === 'delete') {
             // 先取整条记录，再删除，撤销时可整条恢复
             const oldRow = await ctx._fetchRow(end.undoKey, data.id)
-            await axios.delete(`${end.url}/${data.id}`)
+            const spec = oldRow ? { key: end.undoKey, type: 'row_delete', label: ctx._rowName(oldRow), payload: { table: end.undoKey, row: oldRow } } : null
+            const res = await axios.delete(`${end.url}/${data.id}`, { data: spec ? { _undoSpec: spec } : {} })
             m.proposal.deletedRows = oldRow ? [oldRow] : []
             if (oldRow) {
-              const uid = await ctx._pushUndo('row_delete', end.undoKey, ctx._rowName(oldRow), { table: end.undoKey, row: oldRow }, origin)
+              const uid = await ctx._pushUndo('row_delete', end.undoKey, ctx._rowName(oldRow), { table: end.undoKey, row: oldRow }, origin, res.data?.undoId)
               if (uid != null) undoIds.push(uid)
             }
           } else {
@@ -281,22 +301,23 @@ export function useAiExec(ctx) {
     },
     // 登记一条撤销记录，返回其 id（撤回按钮据此精确回退这次更改）
     // origin：AI 提案执行时传入的批次标识（供 AI 的 undo_change 工具整批回退）；手动编辑不传
-    async _pushUndo(type, key, label, payload, origin) {
+    async _pushUndo(type, key, label, payload, origin, registeredUndoId) {
       // 原先 try/catch 静默返回 null：AI 改完数据却没进撤销栈，用户完全不知道。
       // 统一入口负责失败弱提示 + 刷新可用态；这里仍按原语义返回 null，
       // 调用方据此放弃该条的精确撤回能力（不会误以为撤得回来）。
-      return recordUndoSpec({ key, type, label, payload, origin, refresh: true })
+      // registeredUndoId：后端已在写请求里同事务登记时传入，跳过二次 POST。
+      return recordUndoSpec({ key, type, label, payload, origin, refresh: true }, registeredUndoId)
     },
     // 批量事务返回的单项结果 → 登记一条撤销记录（供撤回按钮逐条回退）
     // r：{ action:'add'|'update'|'delete'|'doc', table, id, row, before, after }
-    async _pushUndoForBatch(r, label, origin) {
+    async _pushUndoForBatch(r, label, origin, registeredUndoId) {
       if (!r || !r.action) return null
       if (r.action === 'add') {
-        return ctx._pushUndo('row_insert', r.table, ctx._rowName(r.row), { table: r.table, row: r.row }, origin)
+        return ctx._pushUndo('row_insert', r.table, ctx._rowName(r.row), { table: r.table, row: r.row }, origin, registeredUndoId)
       }
       if (r.action === 'update') {
         const row = r.after || r.before || {}
-        return ctx._pushUndo('row_update', r.table, ctx._rowName(row), { table: r.table, rowId: r.id, oldRow: r.before, newRow: r.after }, origin)
+        return ctx._pushUndo('row_update', r.table, ctx._rowName(row), { table: r.table, rowId: r.id, oldRow: r.before, newRow: r.after }, origin, registeredUndoId)
       }
       if (r.action === 'delete') {
         // 删学生连带清了 7 处松耦合关联（请假/加分/座位/值日/小组/班干部）。
@@ -307,12 +328,12 @@ export function useAiExec(ctx) {
           return ctx._pushUndo('student_cascade_delete', r.table, ctx._rowName(r.row), {
             student: r.row,
             ...r.purged,
-          }, origin)
+          }, origin, registeredUndoId)
         }
-        return ctx._pushUndo('row_delete', r.table, ctx._rowName(r.row), { table: r.table, row: r.row }, origin)
+        return ctx._pushUndo('row_delete', r.table, ctx._rowName(r.row), { table: r.table, row: r.row }, origin, registeredUndoId)
       }
       if (r.action === 'doc') {
-        return ctx._pushUndo('doc_update', DOC_UNDO_KEY[r.table] || r.table, label, { table: r.table, id: r.id, before: r.before, after: r.after, label }, origin)
+        return ctx._pushUndo('doc_update', DOC_UNDO_KEY[r.table] || r.table, label, { table: r.table, id: r.id, before: r.before, after: r.after, label }, origin, registeredUndoId)
       }
       return null
     },

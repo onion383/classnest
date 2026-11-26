@@ -84,7 +84,7 @@ async function restoreBundle({ slug, username, data, srcPath, srcWal, dbKey, enc
   // ok:false（超时 / 子进程退出）时中止恢复，绝不带着活着的扫描覆盖文件。
   let lockResult = { ok: true, reason: 'worker-not-started' };
   try { lockResult = await require('../scanWorker').lockDb(slug); }
-  catch (_) { /* 子进程未启动 / 模块加载失败：没有在飞扫描，照旧恢复 */ }
+  catch (_) { /* best-effort: 子进程未启动 / 模块加载失败：没有在飞扫描，照旧恢复 */ }
   if (lockResult && lockResult.ok === false) {
     throw new Error(`扫描子进程未确认停止，恢复已中止（${lockResult.reason || '无回执'}）`);
   }

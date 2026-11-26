@@ -189,8 +189,8 @@ const api = (options = {}) => {
 const UNDO_KEY = '班干部'
 // 登记一条撤销记录；失败不影响主流程，但必须让用户知道「本次无法撤销」。
 // 原先 .catch(() => {}) 会把登记失败彻底吞掉（Q2-10），现由统一入口负责反馈与刷新状态。
-function recordUndo(type, label, payload) {
-  return recordUndoSpec({ key: UNDO_KEY, type, label, payload })
+function recordUndo(type, label, payload, registeredUndoId) {
+  return recordUndoSpec({ key: UNDO_KEY, type, label, payload }, registeredUndoId)
 }
 // 职务行 / 担任学生行：只取真实列，树节点多带的 children/members 由后端按表结构过滤
 function cadreRow(n) {
@@ -246,12 +246,12 @@ function findMemberName(list, id) {
   return ''
 }
 // 拖拽结束后对比前后态：没实际变化（拖回原处）不留撤销记录
-function recordMoveUndo(before, res, label) {
+function recordMoveUndo(before, res, label, registeredUndoId) {
   const treeAfter = (res.data && res.data.tree) || []
   const after = { cadres: cadreState(treeAfter), members: memberState(treeAfter) }
   if (JSON.stringify(before.cadres) === JSON.stringify(after.cadres)
     && JSON.stringify(before.members) === JSON.stringify(after.members)) return
-  recordUndo('cadre_order', label, { before, after })
+  recordUndo('cadre_order', label, { before, after }, registeredUndoId)
 }
 
 async function loadTree() {
@@ -334,7 +334,9 @@ const importFields = [
 async function onImportData({ fields, rows, studentIds }) {
   importVisible.value = false
   try {
-    const res = await api({ url: '/cadres/import', method: 'post', data: { fields, rows, studentIds } })
+    // 新建清单只有后端导入后才知道：spec 随请求发，payload 由后端同事务生成。
+    const spec = { key: UNDO_KEY, type: 'cadre_import', label: '导入班干部', payload: {} }
+    const res = await api({ url: '/cadres/import', method: 'post', data: { fields, rows, studentIds, _undoSpec: spec } })
     tree.value = (res.data && res.data.tree) || []
     // 只回滚本次真正新建的职务/成员；导入前已有的数据不受影响
     const created = res.data && res.data.created
@@ -342,7 +344,7 @@ async function onImportData({ fields, rows, studentIds }) {
       recordUndo('cadre_import', `导入班干部：${created.cadres.length} 个职务、${created.members.length} 名担任学生`, {
         cadres: created.cadres,
         members: created.members
-      })
+      }, res.data && res.data.undoId)
     }
     success((res.data && res.data.message) || '导入成功')
   } catch (e) {
@@ -418,10 +420,12 @@ async function onAddStudentInline({ nodeId, student }) {
     return info(`「${node.name}」人数已达上限 ${node.max_count} 人`)
   }
   try {
-    const res = await api({ url: `/cadres/${nodeId}/members`, method: 'post', data: { student_id: student.id, student_name: student.姓名 } })
+    // 新成员的 id/排序由后端生成，payload 在同事务里由后端填；前端不再二次登记。
+    const spec = { key: UNDO_KEY, type: 'row_insert', label: `添加担任学生：${student.姓名}`, payload: {} }
+    const res = await api({ url: `/cadres/${nodeId}/members`, method: 'post', data: { student_id: student.id, student_name: student.姓名, _undoSpec: spec } })
     const nodeAfter = findNode((res.data && res.data.tree) || [], nodeId)
     const added = nodeAfter && (nodeAfter.members || []).find(m => m.id === Number(res.data && res.data.id))
-    if (added) recordUndo('row_insert', `添加担任学生：${added.student_name}`, { table: 'cadre_members', row: memberRow(added) })
+    if (added) recordUndo('row_insert', `添加担任学生：${added.student_name}`, { table: 'cadre_members', row: memberRow(added) }, res.data && res.data.undoId)
     success('已添加担任学生')
     await loadTree()
   } catch (e) {
@@ -436,21 +440,26 @@ async function submitNode() {
   try {
     if (editTarget.value) {
       const oldRow = cadreRow(editTarget.value)
-      await api({ url: `/cadres/${editTarget.value.id}`, method: 'put', data: { name, max_count: maxCount } })
       // 名称/名额都没改时不登记：打开「修改」又直接确定，不该在撤销栈里留一条空记录
-      if (oldRow.name !== name || oldRow.max_count !== maxCount) {
-        recordUndo('row_update', `修改职务：${name}`, {
-          table: 'cadres',
-          rowId: oldRow.id,
-          oldRow,
-          newRow: { ...oldRow, name, max_count: maxCount }
-        })
+      const changed = oldRow.name !== name || oldRow.max_count !== maxCount
+      const payload = {
+        table: 'cadres',
+        rowId: oldRow.id,
+        oldRow,
+        newRow: { ...oldRow, name, max_count: maxCount }
       }
+      const res = await api({
+        url: `/cadres/${editTarget.value.id}`, method: 'put',
+        data: { name, max_count: maxCount, ...(changed ? { _undoSpec: { key: UNDO_KEY, type: 'row_update', label: `修改职务：${name}`, payload } } : {}) },
+      })
+      if (changed) recordUndo('row_update', `修改职务：${name}`, payload, res.data && res.data.undoId)
       success('已保存')
     } else {
-      const res = await api({ url: '/cadres', method: 'post', data: { name, max_count: maxCount, parent_id: parentTarget.value ? parentTarget.value.id : 0 } })
+      // 新增行的 id/排序只有后端知道：payload 由后端在同事务里生成，前端不再补登记。
+      const spec = { key: UNDO_KEY, type: 'row_insert', label: `添加职务：${name}`, payload: {} }
+      const res = await api({ url: '/cadres', method: 'post', data: { name, max_count: maxCount, parent_id: parentTarget.value ? parentTarget.value.id : 0, _undoSpec: spec } })
       const created = findNode((res.data && res.data.tree) || [], Number(res.data && res.data.id))
-      if (created) recordUndo('row_insert', `添加职务：${created.name}`, { table: 'cadres', row: cadreRow(created) })
+      if (created) recordUndo('row_insert', `添加职务：${created.name}`, { table: 'cadres', row: cadreRow(created) }, res.data && res.data.undoId)
       success('已添加')
     }
     nodeDialogVisible.value = false
@@ -481,8 +490,9 @@ async function doConfirmDelete() {
     children: (node.children || []).map(c => ({ id: c.id, parent_id: c.parent_id }))
   }
   try {
-    await api({ url: `/cadres/${p.id}`, method: 'delete' })
-    if (snapshot) recordUndo('cadre_delete', `删除职务：${snapshot.node.name}`, snapshot)
+    const spec = snapshot ? { key: UNDO_KEY, type: 'cadre_delete', label: `删除职务：${snapshot.node.name}`, payload: snapshot } : null
+    const res = await api({ url: `/cadres/${p.id}`, method: 'delete', data: spec ? { _undoSpec: spec } : undefined })
+    if (snapshot) recordUndo('cadre_delete', `删除职务：${snapshot.node.name}`, snapshot, res.data && res.data.undoId)
     success('已删除')
     confirmMsg.value = null
     pendingDelete.value = null
@@ -496,8 +506,10 @@ async function doConfirmDelete() {
 async function onRemoveMember(node, m) {
   const row = memberRow(m)
   try {
-    await api({ url: `/cadres/members/${m.id}`, method: 'delete' })
-    recordUndo('row_delete', `移除担任学生：${row.student_name}`, { table: 'cadre_members', row })
+    const payload = { table: 'cadre_members', row }
+    const spec = { key: UNDO_KEY, type: 'row_delete', label: `移除担任学生：${row.student_name}`, payload }
+    const res = await api({ url: `/cadres/members/${m.id}`, method: 'delete', data: { _undoSpec: spec } })
+    recordUndo('row_delete', `移除担任学生：${row.student_name}`, payload, res.data && res.data.undoId)
     success('已移除担任学生')
     await loadTree()
   } catch (e) {
@@ -563,8 +575,11 @@ async function moveCadre(id, target) {
   }
   const movedNode = findNode(tree.value, id)
   const before = { cadres: cadreState(tree.value), members: memberState(tree.value) }
-  const res = await api({ url: `/cadres/${id}/move`, method: 'post', data: { parent_id: parentId, index } })
-  recordMoveUndo(before, res, `调整职务：${(movedNode && movedNode.name) || `#${id}`}`)
+  // before 写前可知、after 写后才成立：把 before 作 hint 发给后端，同事务生成完整 payload 登记。
+  const label = `调整职务：${(movedNode && movedNode.name) || `#${id}`}`
+  const spec = { key: UNDO_KEY, type: 'cadre_order', label, payload: before }
+  const res = await api({ url: `/cadres/${id}/move`, method: 'post', data: { parent_id: parentId, index, _undoSpec: spec } })
+  recordMoveUndo(before, res, label, res.data && res.data.undoId)
   success('已保存职务调整')
   await loadTree()
 }
@@ -580,8 +595,10 @@ async function moveMember(id, target) {
   }
   const memberName = findMemberName(tree.value, id)
   const before = { cadres: cadreState(tree.value), members: memberState(tree.value) }
-  const res = await api({ url: `/cadres/members/${id}/move`, method: 'post', data: { cadre_id: cadreId, index } })
-  recordMoveUndo(before, res, `调整担任学生：${memberName || `#${id}`}`)
+  const label = `调整担任学生：${memberName || `#${id}`}`
+  const spec = { key: UNDO_KEY, type: 'cadre_order', label, payload: before }
+  const res = await api({ url: `/cadres/members/${id}/move`, method: 'post', data: { cadre_id: cadreId, index, _undoSpec: spec } })
+  recordMoveUndo(before, res, label, res.data && res.data.undoId)
   success('已保存学生调整')
   await loadTree()
 }

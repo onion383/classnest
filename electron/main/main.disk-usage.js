@@ -56,7 +56,7 @@ async function cacheDirPaths(userDataDir, io = fsp) {
     const p = path.join(root, name)
     try {
       if ((await io.stat(p)).isDirectory()) out.push(p)
-    } catch (_) { /* 不存在按无缓存处理 */ }
+    } catch (_) { /* best-effort: 不存在按无缓存处理 */ }
   }
   return out
 }

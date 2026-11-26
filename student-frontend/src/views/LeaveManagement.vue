@@ -445,10 +445,10 @@ function recordLeaveInsert(id) {
 }
 // 状态流转（销假 / 撤销销假）改的字段由后端决定（销假时间等），
 // 所以「之后」的行必须重新读库后的真值，而不是前端拼一个近似对象。
-function recordLeaveUpdate(before, id, origin = '') {
+function recordLeaveUpdate(before, id, origin = '', registeredUndoId) {
   if (!before) return
   const after = snapshotLeaveRow(id)
-  if (after) recordRowUpdate('leave_records', before, after, origin)
+  if (after) recordRowUpdate('leave_records', before, after, origin, registeredUndoId)
 }
 async function onImportData({ fields, rows, studentIds }) {
   importDialogVisible.value = false
@@ -603,11 +603,13 @@ async function updateLeave(payload) {
   const { id, ...fields } = payload
   const before = snapshotLeaveRow(id)
   try {
-    await axios.put(`${API}/leaves/${id}`, fields)
+    // 撤销随 PUT 一起发（V9-I-13）：整行 row_update，后端同事务登记带回 undoId。
+    const spec = before ? { key: 'leave_records', type: 'row_update', label: before.姓名 || '', payload: { table: 'leave_records', rowId: id, oldRow: before, newRow: { ...before, ...fields, id } } } : null
+    const res = await axios.put(`${API}/leaves/${id}`, { ...fields, ...(spec ? { _undoSpec: spec } : {}) })
     addDialogVisible.value = false
     notifySuccess('已保存')
     await loadAll()
-    recordLeaveUpdate(before, id)
+    recordLeaveUpdate(before, id, '', res.data && res.data.undoId)
   } catch (err) {
     reportError(err, { action: '保存' })
   }
@@ -740,8 +742,14 @@ async function saveCell(row, field) {
   const oldLeave = leaves.value.find(l => l.id === row.id)
   const oldVal = oldLeave ? oldLeave[field.name] : undefined
   try {
-    await axios.put(`${API}/leaves/${row.id}`, { [field.name]: val })
-    if (oldVal !== val) recordCellUndo('leave_records', row.id, field.name, oldVal, val)
+    // 撤销随 PUT 一起发（V9-I-13）：cell_update 的 payload 写前已知，后端同事务登记带回 undoId。
+    const body = { [field.name]: val }
+    if (oldVal !== val) {
+      body._undoSpec = { key: 'leave_records', type: 'cell_update', label: `${field.name}：「${oldVal ?? ''}」→「${val ?? ''}」`,
+        payload: { table: 'leave_records', rowId: row.id, field: field.name, oldValue: oldVal, newValue: val } }
+    }
+    const res = await axios.put(`${API}/leaves/${row.id}`, body)
+    if (oldVal !== val) recordCellUndo('leave_records', row.id, field.name, oldVal, val, res.data && res.data.undoId)
     notifySuccess('已保存')
   } catch (err) {
     notifyError('保存失败')
@@ -788,12 +796,14 @@ function deleteLeave(id) {
     ok: async () => {
       confirm.value.visible = false
       addDialogVisible.value = false // 关闭编辑弹窗
-      const before = snapshotLeaveRow(id)
-      try {
-        await axios.delete(`${API}/leaves/${id}`)
-        notifySuccess('已删除')
-        await loadAll()
-        if (before) recordRowDelete('leave_records', before)
+        const before = snapshotLeaveRow(id)
+        try {
+          // 撤销随 DELETE 一起发（V9-I-13）：整行 row_delete，后端同事务登记带回 undoId。
+          const spec = before ? { key: 'leave_records', type: 'row_delete', label: before.姓名 || '', payload: { table: 'leave_records', row: before } } : null
+          const res = await axios.delete(`${API}/leaves/${id}`, { data: spec ? { _undoSpec: spec } : {} })
+          notifySuccess('已删除')
+          await loadAll()
+          if (before) recordRowDelete('leave_records', before, res.data && res.data.undoId)
       } catch (err) {
         notifyError('删除失败')
       }

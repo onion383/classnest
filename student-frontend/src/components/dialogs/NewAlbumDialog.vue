@@ -170,7 +170,9 @@ async function submit() {
     const finalName = (name.value || '').trim() || (/相册$/.test(base) ? base : base + '相册')
     busy.value = true
     try {
-      const res = await axios.post('/api/album', { kind: 'folder', name: finalName, folder_path: folderPath.value }, { headers: authHeaders() })
+      // 撤销随添加请求一起发：新建相册整行由后端在同事务里生成并登记。
+      const spec = { key: 'album', type: 'album_add', label: `添加相册：${finalName}`, payload: {} }
+      const res = await axios.post('/api/album', { kind: 'folder', name: finalName, folder_path: folderPath.value, _undoSpec: spec }, { headers: authHeaders() })
       // 记录「添加相册」撤销：undo 删除索引与缩略图，redo 重新加入文件夹并重扫
       // （虚拟相册不记录：它的照片来自别的相册，重做无法还原索引，记了反而误导）
       recordUndoSpec({
@@ -180,7 +182,7 @@ async function submit() {
         payload: {
           album: { id: res.data.id, name: finalName, folder_path: folderPath.value, kind: 'folder', sort_order: res.data.id, created_at: '', updated_at: '' }
         }
-      })
+      }, res.data && res.data.undoId)
       useNotification().success('相册已创建，正在后台扫描照片索引…')
       emit('created', res.data.id)
       emit('close')

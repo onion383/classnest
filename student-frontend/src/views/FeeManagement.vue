@@ -403,10 +403,17 @@ async function onSubmitRecord(data) {
       // 只提交表单里的字段（收据走独立的收据管理流程，这里不带，免得把已有收据清空）
       // 弹窗整行提交不走共享 CRUD 的 saveCell，撤销按完整行前后态登记（Q2-07）。
       const oldRow = { ...editingRow.value }
-      await axios.put(`${API_BASE}/fee-records/${oldRow.id}`, data)
+      // 撤销随 PUT 一起发（V9-I-13）：后端同事务写数据 + 登记，响应带 undoId 时不再二次 POST。
+      const specRow = { ...oldRow, ...data, id: oldRow.id }
+      const undoSpec = {
+        key: 'fee_records', type: 'row_update',
+        label: specRow['姓名'] || specRow['名称'] || `#${oldRow.id}`,
+        payload: { table: 'fee_records', rowId: oldRow.id, oldRow, newRow: specRow },
+      }
+      const res = await axios.put(`${API_BASE}/fee-records/${oldRow.id}`, { ...data, _undoSpec: undoSpec })
       addDialogVisible.value = false
       await fetchRecords()
-      recordRowUpdate('fee_records', oldRow, table.rowSnapshotById(oldRow.id, { ...oldRow, ...data }))
+      recordRowUpdate('fee_records', oldRow, table.rowSnapshotById(oldRow.id, { ...oldRow, ...data }), '', res.data && res.data.undoId)
       notifySuccess('已保存修改')
     } else {
       // 弹窗不填收据，新增时置空，保持列存在

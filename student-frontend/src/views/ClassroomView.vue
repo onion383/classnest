@@ -418,10 +418,18 @@ async function onSubmitStudent(data) {
       // 弹窗整行提交不走共享 CRUD 的 saveCell，撤销要在这里按完整行登记（Q2-07）。
       // oldRow/newRow 都取完整行：row_update 的 undo 按列回写，学生改名还要反向级联关联表里只存姓名的引用。
       const oldRow = { ...editingRow.value }
-      await axios.put(`${API_BASE}/students/${oldRow.id}`, data)
+      // 撤销随 PUT 一起发（V9-I-13）：后端在同一事务里写数据 + 登记，响应带 undoId 时不再二次 POST。
+      // newRow 用提交数据预构造，供登记时拿到完整新行；刷新后仍以 rowSnapshotById 取真实行做本地快照。
+      const specRow = { ...oldRow, ...data, id: oldRow.id }
+      const undoSpec = {
+        key: 'students', type: 'row_update',
+        label: specRow['姓名'] || `#${oldRow.id}`,
+        payload: { table: 'students', rowId: oldRow.id, oldRow, newRow: specRow },
+      }
+      const res = await axios.put(`${API_BASE}/students/${oldRow.id}`, { ...data, _undoSpec: undoSpec })
       addDialogVisible.value = false
       await fetchStudents()
-      recordRowUpdate('students', oldRow, table.rowSnapshotById(oldRow.id, { ...oldRow, ...data }))
+      recordRowUpdate('students', oldRow, table.rowSnapshotById(oldRow.id, { ...oldRow, ...data }), '', res.data && res.data.undoId)
       notifySuccess('已保存修改')
     } else {
       const res = await axios.post(`${API_BASE}/students`, data)
@@ -478,10 +486,12 @@ async function deleteStudent(id) {
     try {
       // 先开行动画窗：必须在数据变化之前，否则那一行已经从列表里消失、离场动画播不出来
       dynamicTable.value?.beginRowsAnimWindow()
-      await axios.delete(`${API_BASE}/students/${id}`)
+      // 撤销随 DELETE 一起发（V9-I-13）：后端同事务删数据 + 登记，响应带 undoId 时不再二次 POST。
+      const spec = row ? { key: 'students', type: 'row_delete', label: row['姓名'] || `#${id}`, payload: { table: 'students', row } } : null
+      const res = await axios.delete(`${API_BASE}/students/${id}`, { data: spec ? { _undoSpec: spec } : {} })
       await finish()
       // 删完再登记撤销；拿到 id 后走 undoById，不依赖 performUndo 的「当前激活表」
-      const undoId = row ? await recordRowDelete('students', row) : null
+      const undoId = row ? await recordRowDelete('students', row, res.data && res.data.undoId) : null
       if (undoId) {
         notifyUndo(`已删除学生「${row['姓名']}」`, async () => {
           dynamicTable.value?.beginRowsAnimWindow() // 恢复也是行数变化，同样给行出入动画

@@ -10,6 +10,8 @@ const { moveToTrash, restoreToOriginal, deleteThumb } = require('../albumOps');
 const albumThumbs = require('../albumThumbs');
 // 「清理微缩图」只做文件删除（纯 fs，可单测）；索引与数据库一律不动，恢复靠 /thumb 的现场重建
 const { purgeThumbFiles } = require('../services/thumbPurge');
+const { takeUndoSpec, writeWithUndo, validSpec } = require('../services/writeWithUndo');
+const undoStore = require('../services/undoStore');
 // 「回收孤儿」按库对账后只删没被引用的 jpg（默认只读，apply=true 才真删）
 const { sweepThumbOrphans } = require('../services/thumbSweep');
 const { readExifDetail } = require('../albumExif');
@@ -271,13 +273,21 @@ router.post('/', async (req, res) => {
     }
     if (!stat.isDirectory()) return res.status(400).json({ error: '路径不是文件夹' });
 
-    const result = albumStore.insertFolderAlbum(name, folder, now());
-    const albumId = result.lastInsertRowid;
-    // 新相册默认排到最后
-    albumStore.setAlbumSort(albumId, albumId);
+    const spec = takeUndoSpec(req.body);
+    const result = writeWithUndo(spec, () => {
+      const r = albumStore.insertFolderAlbum(name, folder, now());
+      const albumId = r.lastInsertRowid;
+      // 新相册默认排到最后
+      albumStore.setAlbumSort(albumId, albumId);
+      return { id: albumId };
+    }, (writeResult, hint) => {
+      const album = albumStore.albumById(writeResult.id);
+      if (!album) return (hint && hint.album) || null;
+      return { album: { id: album.id, name: album.name, folder_path: album.folder_path, kind: 'folder', sort_order: album.sort_order, created_at: album.created_at, updated_at: album.updated_at } };
+    });
     // 浮动 promise 必须接 catch（扫描体内部已有 try/finally 兜底清理 task）
-    dispatchFull(albumId, '');
-    res.json({ id: albumId, message: '相册已添加，正在扫描索引…' });
+    dispatchFull(result.id, '');
+    res.json({ id: result.id, undoId: result.undoId, message: '相册已添加，正在扫描索引…' });
   } catch (err) {
     sendError(res, err);
   }
@@ -327,13 +337,24 @@ router.post('/merge', (req, res) => {
         albumStore.deletePhotosOfAlbum(album.id);
         albumStore.deleteAlbumRow(album.id);
       }
-      return { newId, thumbs, removed: { newAlbum, newPhotos, sources } };
+      // 撤销登记与整批合并同事务：removed 快照在同事务里生成，不靠前端二次 POST。
+      let undoId = null;
+      const spec = takeUndoSpec(req.body);
+      if (spec && validSpec(spec)) {
+        undoId = undoStore.push({
+          key: spec.key, type: spec.type,
+          label: typeof spec.label === 'string' ? spec.label : '',
+          payload: { newAlbum, newPhotos, sources },
+          origin: typeof spec.origin === 'string' ? spec.origin : '',
+        });
+      }
+      return { newId, thumbs, removed: { newAlbum, newPhotos, sources }, undoId };
     });
 
-    const { newId, thumbs, removed } = run();
+    const { newId, thumbs, removed, undoId } = run();
     // 源索引已删除，其缩略图缓存不再被引用，顺手清理（失败无所谓）
     for (const tp of thumbs) fsp.unlink(tp).catch(() => {}); // best-effort: 源索引已删，缩略图清理失败可忽略
-    res.json({ id: newId, message: `已合并 ${sourceAlbums.length} 个相册`, removed });
+    res.json({ id: newId, message: `已合并 ${sourceAlbums.length} 个相册`, removed, undoId });
   } catch (err) {
     sendError(res, err);
   }
@@ -609,8 +630,12 @@ router.put('/reorder', (req, res) => {
   if (!Array.isArray(raw)) return res.status(400).json({ error: 'ids 必须为数组' });
   if (raw.length > MAX_ALBUM_BATCH) return res.status(400).json({ error: `一次最多排序 ${MAX_ALBUM_BATCH} 个相册` });
   const ids = raw.map((v) => Number(v)).filter((v) => Number.isInteger(v) && v > 0);
-  ids.forEach((id, i) => albumStore.setAlbumSort(id, i));
-  res.json({ message: '排序已更新' });
+  const spec = takeUndoSpec(req.body);
+  const out = writeWithUndo(spec, () => {
+    ids.forEach((id, i) => albumStore.setAlbumSort(id, i));
+    return {};
+  });
+  res.json({ ...out, message: '排序已更新' });
 });
 
 // DELETE /api/album/:id 删除相册（仅删除索引，不删除磁盘照片）
@@ -633,13 +658,17 @@ router.delete('/:id', async (req, res) => {
     // 两条 DELETE 必须原子：各自提交时中途失败会留下「照片索引已删、相册还在」
     // 的半截状态 —— 界面上还看得到这个相册，点进去照片却全没了，且再删一次
     // 也删不掉那批已失效的索引行。better-sqlite3 事务是同步的。
-    db.transaction(() => {
-      albumStore.deletePhotosOfAlbum(albumId);
-      albumStore.deleteAlbumRow(albumId);
-    })();
+    const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+    const out = writeWithUndo(spec, () => {
+      db.transaction(() => {
+        albumStore.deletePhotosOfAlbum(albumId);
+        albumStore.deleteAlbumRow(albumId);
+      })();
+      return {};
+    });
     // 相册没了，正在跑的扫描也要停（子进程会在检查点发现相册已不存在而收工）
     scanWorker.requestStop(slug, albumId);
-    res.json({ message: '相册已删除' });
+    res.json({ ...out, message: '相册已删除' });
   } catch (err) {
     // 局部 catch：与本文件其他路由口径一致（统一 { error } + 明确状态码）。
     // 不靠全局错误中间件兜底 —— 那条路径返回的是 500 且会打全量现场，
@@ -838,8 +867,20 @@ router.post('/photos/move', (req, res) => {
       const touched = new Set(records.map(r => r.source_album_id));
       touched.add(targetId);
       for (const aid of touched) albumStore.touchAlbum(aid, now());
+      // 撤销登记与整批移动同事务：records 在同事务里生成，不靠前端二次 POST。
+      let undoId = null;
+      const spec = takeUndoSpec(req.body);
+      if (spec && validSpec(spec)) {
+        undoId = undoStore.push({
+          key: spec.key, type: spec.type,
+          label: typeof spec.label === 'string' ? spec.label : '',
+          payload: { target_album_id: target.id, target_album_name: target.name, records },
+          origin: typeof spec.origin === 'string' ? spec.origin : '',
+        });
+      }
+      return { undoId };
     });
-    run();
+    const { undoId } = run();
 
     // 被移走那几行的缩略图缓存已经没人引用了，顺手清掉（失败无所谓）
     // 路径按库隔离推导（{THUMB_DIR}/{slug}/{photoId}.jpg）
@@ -856,6 +897,7 @@ router.post('/photos/move', (req, res) => {
       target_album_name: target.name,
       photos: records,
       message: `已移动 ${moved} 张照片到「${target.name}」${extra}`,
+      undoId,
     });
   } catch (err) {
     sendError(res, err);
@@ -1344,8 +1386,11 @@ router.delete('/photo/:photoId', async (req, res) => {
     await deleteThumb(photo, dbManager.currentSlug()).catch(() => {}); // best-effort: 移入回收站后缩略图缓存清理失败不影响索引回退
     // 文件系统与数据库双写：文件已移入回收站，若删索引失败必须把文件搬回，
     // 否则索引仍指向源文件、但文件已在回收站 —— 两边状态永久不一致。
+    let out = {};
+    const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
     try {
-      albumStore.deletePhotoRow(photo.id);
+      // 删索引 + 撤销登记同事务；登记失败也走下面的文件回退，不留半截。
+      out = writeWithUndo(spec, () => { albumStore.deletePhotoRow(photo.id); return {} });
     } catch (err) {
       try {
         await restoreToOriginal(photo);
@@ -1354,7 +1399,7 @@ router.delete('/photo/:photoId', async (req, res) => {
       }
       return res.status(500).json({ error: '删除照片失败（已回退文件）：' + err.message });
     }
-    res.json({ message: '已移入回收站' });
+    res.json({ ...out, message: '已移入回收站' });
   } catch (err) {
     sendError(res, err);
   }

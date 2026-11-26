@@ -8,6 +8,7 @@ const { normalizeSeats, normalizeCellTypes } = require('../services/sanitize');
 // 单格写入的唯一入口（坐标 / 值形状 / 可坐性 / 引用关系都在它里面）
 // resolveNameCells：座位格子里的姓名字符串 → 学生 id（名册外姓名建档），见该模块说明
 const { writeSeatCell, resolveNameCells, SeatWriteError } = require('../services/seatWrite');
+const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
 const { readDocJson } = require('../utils/json');
 const { studentsBrief } = require('../services/dashboardAgg');
 // 历史快照 payload 的唯一构造点（补存 / 补录 / AI 写入前快照共用一套字段表）
@@ -210,8 +211,14 @@ function cellPatchHandler(table) {
   return (req, res) => {
     const { row, col, value } = req.body || {};
     try {
-      writeSeatCell(table, row, col, value);
-      res.json({ message: '已更新' });
+      // 撤销登记与单格写入同事务（V9-I-13）。writeSeatCell 内部已有事务，外层
+      // writeWithUndo 会退化为 SAVEPOINT（见 writeWithUndo 头注释），单格写与登记共存亡。
+      // payload 的 oldValue/newValue 由前端随 spec 带来（写前才知道旧值），这里原样透传。
+      const spec = takeUndoSpec(req.body);
+      const result = writeWithUndo(spec,
+        () => { writeSeatCell(table, row, col, value); return {}; },
+        (r, hint) => hint || { table, row, col, oldValue: null, newValue: value });
+      res.json({ message: '已更新', undoId: result.undoId });
     } catch (err) {
       if (err instanceof SeatWriteError) return res.status(err.status).json({ error: err.message });
       // 解析/数据库异常：带上原始信息，别把它伪装成「参数错误」

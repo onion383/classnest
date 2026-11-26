@@ -33,13 +33,14 @@ configureUndoRecorder({
 // ==================== 记录一条单元格编辑撤销 ====================
 // 供非 useTableCRUD 页面复用。
 // key = 后端 undo 分组的表 key（须在 undo.js ALLOWED_TABLES 内）
-export function recordCellUndo(key, rowId, fieldName, oldVal, newVal) {
+// registeredUndoId：后端已在写请求里同事务登记时传入（V9-I-13），入口跳过第二次 POST。
+export function recordCellUndo(key, rowId, fieldName, oldVal, newVal, registeredUndoId) {
   return recordUndo({
     key,
     type: 'cell_update',
     label: `${fieldName}：「${oldVal == null ? '' : oldVal}」→「${newVal == null ? '' : newVal}」`,
     payload: { table: key, rowId, field: fieldName, oldValue: oldVal, newValue: newVal },
-  })
+  }, registeredUndoId)
 }
 
 // 单元格展示文案：纯值或课表 {course} 对象都取可读文本
@@ -63,11 +64,11 @@ export function flushUndoStatus() {
 // table 必须是后端 GRID_SOURCES 中的表名，row/col 为格子坐标（从 0 开始）。
 // label：可选，传入则优先后端反馈展示（用于值日等需要自定义文案的场景）
 // origin：可选，同一次动作的多条记录传同一个批次标识（见 newUndoBatchId）
-export function recordGridCellUndo(key, table, row, col, oldVal, newVal, label, origin) {
+export function recordGridCellUndo(key, table, row, col, oldVal, newVal, label, origin, registeredUndoId) {
   const payload = { table, row, col, oldValue: oldVal, newValue: newVal }
   if (label) payload.label = label
   const text = label || `格子(${row + 1},${col + 1})：「${cellText(oldVal)}」→「${cellText(newVal)}」`
-  return recordUndo({ key, type: 'grid_cell', label: text, payload, origin: origin || '' })
+  return recordUndo({ key, type: 'grid_cell', label: text, payload, origin: origin || '' }, registeredUndoId)
 }
 
 // ==================== 记录一条值日单格撤销 ====================
@@ -117,7 +118,7 @@ export function recordGridSnapshotUndo(key, table, oldArr, newArr, label, opts =
 // 返回 Promise<撤销记录 id | null>：调用方拿到 id 后可以 undoById(id) 精确撤销这一条，
 // 不必走 performUndo 的「当前激活表」上下文（用户删完立刻切页面时，那个上下文已经换表了）。
 // 不接返回值的既有调用方行为不变。
-function pushRow(type, key, row) {
+function pushRow(type, key, row, registeredUndoId) {
   // 返回值语义保持不变：成功给撤销记录 id（调用方据此做「撤销」提示条），失败 null。
   // 失败反馈不再由这里单独决定，统一由入口负责（原先只 console.warn，用户看不见）。
   return recordUndo({
@@ -125,25 +126,27 @@ function pushRow(type, key, row) {
     type,
     label: row ? `${row.姓名 || row.group_name || row.主题 || row.名称 || `#${row.id}`}` : '',
     payload: { table: key, row },
-  })
+  }, registeredUndoId)
 }
 // 添加加分/记录：undo=删除该行，redo=重新插入
-export function recordRowInsert(key, row) {
-  pushRow('row_insert', key, row)
+export function recordRowInsert(key, row, registeredUndoId) {
+  return pushRow('row_insert', key, row, registeredUndoId)
 }
 // 删除加分/记录：undo=恢复该行，redo=再次删除。
 // 返回 Promise<撤销记录 id | null>，供「撤销」提示条直接按 id 撤销（见 pushRow 说明）。
-export function recordRowDelete(key, row) {
-  return pushRow('row_delete', key, row)
+export function recordRowDelete(key, row, registeredUndoId) {
+  return pushRow('row_delete', key, row, registeredUndoId)
 }
 // 编辑加分/记录（整条替换）：payload { rowId, oldRow, newRow }
 // origin：可选。一次动作改了多行时（如弹窗「全部销假」）传同一个 newUndoBatchId()，
 // 后端 Ctrl+Z 会整批回退；不传时与原来一样一条记录一步撤销。
 // 注意：传了 origin 就不再逐条刷撤销可用态，调用方登记完要自己 flushUndoStatus()。
-export function recordRowUpdate(key, oldRow, newRow, origin = '') {
+// registeredUndoId：后端已在写请求里同事务登记时传入，入口跳过第二次 POST（V9-I-13）。
+// 第 4 参 origin 保持兼容，故 undoId 追加在第 5 位。
+export function recordRowUpdate(key, oldRow, newRow, origin = '', registeredUndoId) {
   const payload = { table: key, rowId: newRow ? newRow.id : oldRow.id, oldRow, newRow }
   const name = (newRow || oldRow)?.姓名 || (newRow || oldRow)?.group_name || (newRow || oldRow)?.主题 || (newRow || oldRow)?.名称 || `#${payload.rowId}`
-  return recordUndo({ key, type: 'row_update', label: `${name}`, payload, origin })
+  return recordUndo({ key, type: 'row_update', label: `${name}`, payload, origin }, registeredUndoId)
 }
 
 // 删除学生（级联）的撤销登记已移到后端，与七处清理同事务完成（V8 · 5-2 / Q2-01）：
@@ -204,7 +207,7 @@ export function recordRowsBatchInsert(key, rows) {
 }
 
 // 记录一次批量删除（勾选删除 / 重复项清理）：rows 为删除前的完整行
-export function recordRowsBatchDelete(key, rows) {
+export function recordRowsBatchDelete(key, rows, registeredUndoId) {
   if (!key) return Promise.resolve(null)
   const list = (Array.isArray(rows) ? rows : []).map(plainRow).filter(Boolean)
   if (!list.length) return Promise.resolve(null)
@@ -213,7 +216,7 @@ export function recordRowsBatchDelete(key, rows) {
     type: 'rows_batch_delete',
     label: `批量删除 ${list.length} 条记录`,
     payload: { table: key, rows: list },
-  })
+  }, registeredUndoId)
 }
 
 // ==================== 全局撤销/重做状态（供标题栏按钮读取）====================

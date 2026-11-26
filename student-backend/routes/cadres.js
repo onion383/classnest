@@ -5,6 +5,8 @@ const cadreStore = require('../services/cadreStore');
 const studentLookup = require('../services/studentLookup');
 const { resolveOne, resolvePickedForImport } = require('../services/provisionalStudents');
 const { cleanText } = require('../services/sanitize');
+const { takeUndoSpec, writeWithUndo, validSpec } = require('../services/writeWithUndo');
+const undoStore = require('../services/undoStore');
 
 // ======================== 数据读写 ========================
 // cadres: { id, name, parent_id, max_count, sort_order, children: [], members: [] }
@@ -36,6 +38,24 @@ router.get('/', (req, res) => {
     res.json({ tree: buildTree() });
 });
 
+// 从库里取整行的撤销快照（与前端 cadreRow/memberRow 同结构）：
+// 新增行的 id/sort_order 只有后端知道，payload 必须由后端在同事务里生成。
+function cadreRowById(id) {
+  const n = cadreStore.findCadre(Number(id));
+  if (!n) return null;
+  return { id: n.id, name: n.name, parent_id: n.parent_id == null ? 0 : n.parent_id, max_count: n.max_count, sort_order: n.sort_order };
+}
+function memberRowById(id) {
+  const m = cadreStore.findMember(Number(id));
+  if (!m) return null;
+  return {
+    id: m.id, cadre_id: m.cadre_id,
+    student_id: m.student_id == null ? null : m.student_id,
+    student_name: m.student_name,
+    sort_order: m.sort_order == null ? 0 : m.sort_order,
+  };
+}
+
 // 新增职务
 router.post('/', (req, res) => {
     const name = cleanText(req.body.name || '');
@@ -46,9 +66,16 @@ router.post('/', (req, res) => {
   if (parentId && !cadreStore.cadreExists(parentId)) {
     return res.status(400).json({ error: '上级职务不存在' });
   }
+  const spec = takeUndoSpec(req.body);
   const maxSort = cadreStore.maxSort();
-  const info = cadreStore.insertCadre(name, parentId, maxCount, maxSort + 1);
-  res.json({ id: info.lastInsertRowid, tree: buildTree() });
+  const out = writeWithUndo(spec, () => {
+    const info = cadreStore.insertCadre(name, parentId, maxCount, maxSort + 1);
+    return { id: info.lastInsertRowid, tree: buildTree() };
+  }, (result) => {
+    const row = cadreRowById(result.id);
+    return row ? { table: 'cadres', row } : null;
+  });
+  res.json(out);
 });
 
 // 更新职务
@@ -73,8 +100,12 @@ router.put('/:id', (req, res) => {
       cur = p ? p : 0;
     }
   }
-  cadreStore.updateCadre(id, name, parentId, maxCount);
-  res.json({ tree: buildTree() });
+  const spec = takeUndoSpec(req.body);
+  const result = writeWithUndo(spec, () => {
+    cadreStore.updateCadre(id, name, parentId, maxCount);
+    return {};
+  });
+  res.json({ ...result, tree: buildTree() });
 });
 
 // 删除职务：级联删除其担任学生，其直接子职务上移挂到被删职务的上级
@@ -82,8 +113,12 @@ router.delete('/:id', (req, res) => {
     const id = Number(req.params.id);
   const node = cadreStore.findCadre(id);
   if (!node) return res.status(404).json({ error: '职务不存在' });
-  cadreStore.deleteCadreCascade(id, node.parent_id);
-  res.json({ tree: buildTree() });
+  const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+  const result = writeWithUndo(spec, () => {
+    cadreStore.deleteCadreCascade(id, node.parent_id);
+    return {};
+  });
+  res.json({ ...result, tree: buildTree() });
 });
 
 // ======================== 担任学生 ========================
@@ -125,17 +160,48 @@ router.post('/:id/members', (req, res) => {
     return res.status(400).json({ error: `「${cadre.name}」人数已达上限 ${maxCount} 人` });
   }
   const maxSort = cadreStore.maxMemberSort(cadreId);
-  const info = cadreStore.insertMember(cadreId, studentId, studentName, maxSort + 1);
-  res.json({ id: info.lastInsertRowid, tree: buildTree() });
+  const spec = takeUndoSpec(req.body);
+  const out = writeWithUndo(spec, () => {
+    const info = cadreStore.insertMember(cadreId, studentId, studentName, maxSort + 1);
+    return { id: info.lastInsertRowid, tree: buildTree() };
+  }, (result) => {
+    const row = memberRowById(result.id);
+    return row ? { table: 'cadre_members', row } : null;
+  });
+  res.json(out);
 });
 
 // 移除担任学生
 router.delete('/members/:id', (req, res) => {
     const id = Number(req.params.id);
-  const result = cadreStore.deleteMember(id);
-  if (!result || result.changes === 0) return res.status(404).json({ error: '担任学生不存在' });
-  res.json({ tree: buildTree() });
+  // 先查在不在（404 不进事务）；删除本身与撤销登记同事务。
+  const existing = cadreStore.findMember(id);
+  if (!existing) return res.status(404).json({ error: '担任学生不存在' });
+  const spec = takeUndoSpec(req.body) || takeUndoSpec(req.query);
+  const out = writeWithUndo(spec, () => {
+    const r = cadreStore.deleteMember(id);
+    if (!r || r.changes === 0) throw new Error('担任学生不存在')
+    return {}
+  })
+  res.json({ ...out, tree: buildTree() });
 });
+
+// 职务/成员的「顺序态」快照：与前端 cadreState/memberState 同结构。
+// 拖拽撤销的 after 只有写完后才成立，由后端在同事务里用写后的 tree 生成。
+function orderState(tree) {
+  const cadres = [], members = []
+  const walk = (nodes) => {
+    for (const n of nodes || []) {
+      cadres.push({ id: n.id, parent_id: n.parent_id == null ? 0 : n.parent_id, sort_order: n.sort_order })
+      for (const m of n.members || []) {
+        members.push({ id: m.id, cadre_id: m.cadre_id, sort_order: m.sort_order == null ? 0 : m.sort_order })
+      }
+      walk(n.children)
+    }
+  }
+  walk(tree)
+  return { cadres, members }
+}
 
 // 移动职务：挂到 parentId(0=顶级) 下第 index 位（排序），index 为去掉自身后目标位置，可为 null 表示放在末尾
 router.post('/:id/move', (req, res) => {
@@ -156,8 +222,17 @@ router.post('/:id/move', (req, res) => {
       cur = p ? p : 0;
     }
   }
-  cadreStore.moveCadre(id, parentId, index);
-  res.json({ tree: buildTree() });
+  const spec = takeUndoSpec(req.body);
+  const out = writeWithUndo(spec, () => {
+    cadreStore.moveCadre(id, parentId, index);
+    return { tree: buildTree() };
+  }, (result, hint) => {
+    const after = orderState(result.tree);
+    // 顺序没真变时不登记（与前端 recordMoveUndo 的同口径）
+    if (JSON.stringify(hint) === JSON.stringify(after)) return null;
+    return { before: hint, after };
+  });
+  res.json(out);
 });
 
 // 移动担任学生：挂到 cadreId 下第 index 位（index 为去掉自身后的目标位置，null 表示末尾）
@@ -181,8 +256,17 @@ router.post('/members/:id/move', (req, res) => {
     }
   }
   let index = Number.isFinite(req.body.index) ? Number(req.body.index) : null;
-  cadreStore.moveMember(id, cadreId, index);
-  res.json({ tree: buildTree() });
+  const spec = takeUndoSpec(req.body);
+  const out = writeWithUndo(spec, () => {
+    cadreStore.moveMember(id, cadreId, index);
+    return { tree: buildTree() };
+  }, (result, hint) => {
+    const after = orderState(result.tree);
+    // 顺序没真变时不登记（与前端 recordMoveUndo 的同口径）
+    if (JSON.stringify(hint) === JSON.stringify(after)) return null;
+    return { before: hint, after };
+  });
+  res.json(out);
 });
 
 
@@ -292,9 +376,25 @@ router.post('/import', (req, res) => {
         }
       }
     });
-    tx();
+    // 导入的撤销 payload 只有后端知道（新建了哪些职务/成员）；
+    // 登记放进同一事务，失败连整批导入一起回滚（V9-2-5）。
+    const spec = takeUndoSpec(req.body);
+    let undoId = null;
+    if (spec && validSpec(spec)) {
+      const tx2 = db.transaction(() => {
+        tx(); // 导入写（内部本就是 db.transaction，嵌套成 SAVEPOINT）
+        undoId = undoStore.push({
+          key: spec.key, type: spec.type,
+          label: typeof spec.label === 'string' ? spec.label : '',
+          payload: created, origin: typeof spec.origin === 'string' ? spec.origin : '',
+        })
+      })
+      tx2()
+    } else {
+      tx();
+    }
 
-    res.json({ message: `成功导入 ${list.length} 行班干部数据`, tree: buildTree(), created });
+    res.json({ message: `成功导入 ${list.length} 行班干部数据`, tree: buildTree(), created, undoId });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

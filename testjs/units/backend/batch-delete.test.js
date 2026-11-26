@@ -94,5 +94,6 @@ test('前端接线：两处删除都只发 1 个 batch-delete，不再逐条 DEL
   assert.doesNotMatch(src, /for \(const id of ids\) \{\s*await axios\.delete/)
   assert.doesNotMatch(src, /Promise\.all\(selectedIds\.map/)
   // 行内单条删除保留
-  assert.match(src, /await axios\.delete\(`\$\{apiBase\}\/\$\{row\.id\}`\)/)
+  // V9-2-5：单条删现在带 _undoSpec 作第二个 config 参数
+  assert.match(src, /await axios\.delete\(`\$\{apiBase\}\/\$\{row\.id\}`, \{ data:/)
 })

@@ -56,6 +56,10 @@
     "!**/node_modules/**/tests/**",
     "!**/*.map",
     "!**/*.d.ts",
+    "!**/*.d.mts",
+    "!**/*.d.cts",
+    "!**/node_modules/**/*.ts",
+    "!**/node_modules/.*-*",
     "package.json"
   ],
   "asarUnpack": [

@@ -197,6 +197,20 @@ test('工具箱四向限位', async (t) => {
     assert.doesNotMatch(resize, /wa\.width - newW \+ M/, '不许再沿用 before 左上角（会记住上次位置）')
   })
 
+  await t.test('桌面组件置底：z 序遍历靠链表到头终止，计数只作防环熔断', () => {
+    const layer = fs.readFileSync(abs('electron/main/main.desktop-layer.js'), 'utf8')
+    const guard = /const Z_WALK_GUARD = (\d+)/.exec(layer)
+    assert.ok(guard, '必须把防环熔断抽成常量')
+    assert.ok(Number(guard[1]) >= 65536,
+      '熔断值要足够大：窗口数没有上限，任何小数字都只是把天花板后移；它只防链成环卡死主进程')
+    // 两处循环都必须：① 靠 above/h 为 0（链表到头）终止 ② 熔断只是兜底
+    assert.match(layer, /i < Z_WALK_GUARD && above && !a\.IsWindowVisible\(above\)/,
+      'placeAboveDesktop 靠 above 为 0 或遇到可见窗口终止')
+    assert.match(layer, /i < Z_WALK_GUARD && h;/,
+      'isJustAboveDesktop 靠 h 为 0 终止')
+    assert.doesNotMatch(layer, /Z_WALK_LIMIT|i < 64\b|i < 256\b/, '不许再用业务上限当终止条件')
+  })
+
   await t.test('组件接线：方向判定与限位都走共享几何，没有第二套数字', () => {
     const vue = fs.readFileSync(VUE, 'utf8')
     assert.match(vue, /from '\.\/widgetLayout\.js'/, '必须 import 共享几何模块')

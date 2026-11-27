@@ -47,6 +47,13 @@ const SWP_NOSIZE = 0x0001
 const SWP_NOACTIVATE = 0x0010
 const HWND_BOTTOM = 1
 
+// z 序遍历只靠「链表走到头（GetWindow 返回 0）」终止，不设业务上限——
+// Progman 上方能堆多少不可见系统窗口（IME / Qt / 三方 SDK）没有定数，
+// 任何写死的数字都只是把天花板往后挪，迟早还会撞上（旧值 64 已被实测打爆）。
+// 这里的常量仅是**防环熔断**：正常 Windows z 序是无环链、走到顶必返回 0；
+// 万一系统状态异常成环，用这个值兜底跳出，避免主进程卡死。它不是窗口数上限。
+const Z_WALK_GUARD = 65536
+
 // 缓存的 FFI 绑定：首次调用时加载，失败后不再重试（避免每帧 try/catch 开销）
 let api = null
 let loadFailed = false
@@ -142,7 +149,7 @@ function placeAboveDesktop(win) {
     // 跳过 Default IME / MSCTFIME UI 这类不可见的系统窗口，避免它们插在我们和桌面之间
     //（它们不影响观感，但会让"是否已在底层"的判断变得不稳定）。
     let above = addr(a, a.GetWindow(shell, GW_HWNDPREV))
-    for (let i = 0; i < 64 && above && !a.IsWindowVisible(above); i++) {
+    for (let i = 0; i < Z_WALK_GUARD && above && !a.IsWindowVisible(above); i++) {
       const up = addr(a, a.GetWindow(above, GW_HWNDPREV))
       if (!up) break
       above = up
@@ -171,7 +178,7 @@ function isJustAboveDesktop(win) {
     const shell = addr(a, a.GetShellWindow())
     if (!shell) return false
     let h = addr(a, a.GetWindow(shell, GW_HWNDPREV))
-    for (let i = 0; i < 64 && h; i++) {
+    for (let i = 0; i < Z_WALK_GUARD && h; i++) {
       if (h === self) return true
       if (a.IsWindowVisible(h)) return false
       h = addr(a, a.GetWindow(h, GW_HWNDPREV))

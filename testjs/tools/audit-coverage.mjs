@@ -426,6 +426,8 @@ const ASYNC_REVIEWED = Object.freeze({
     '单次提交：busy 期间禁用按钮且禁止关闭，没有重复读取或并发写入',
   'fe:student-frontend/src/components/dialogs/MoveAlbumDialog.vue':
     '单次提交：busy 锁 + 成功后关闭弹窗，没有并发读取覆盖',
+  'fe:student-frontend/src/subwindows/widget/WidgetApp.vue':
+    '唯一的 async 是 checkToolboxEnabled：await 只读取设置与会话开关，之后仅发 IPC 同步显隐，不写会被界面/后续请求消费的组件状态，不存在旧响应盖新状态',
 })
 
 // ai.privacy_read 的人工复核签字：这些工具「没有把业务表数据回给模型」。

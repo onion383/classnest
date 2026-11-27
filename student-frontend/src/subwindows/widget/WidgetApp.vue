@@ -1,13 +1,13 @@
 <template>
-  <div class="widget-wrapper" :class="{ 'wrapper-fading': wrapperFading, 'no-pad': noteFullscreen }">
+  <div class="widget-wrapper" :class="['panel-' + expandDir, { 'wrapper-fading': wrapperFading, 'no-pad': noteFullscreen }]">
     <!-- 图标始终显示（工具状态时隐藏）。左键切换菜单，右键呼出「本次退出」等菜单 -->
     <div v-if="state !== 'tool'" class="fab" :class="{ 'fab-hidden': !fabReady }" @mousedown="onFabMouseDown" @contextmenu.prevent="onFabContextMenu">
       <IconGlyph name="toolbox" :size="24" />
     </div>
 
-    <!-- 功能菜单：展开/收起用 Transition 做宽度过渡，从图标右侧展开、收拢回图标 -->
-    <Transition :name="menuTransition">
-      <div v-if="state === 'menu'" class="panel menu-panel" :class="{ 'confirm-mode': exitConfirm }">
+    <!-- 功能菜单：面板先挂载（隐藏），窗口尺寸到位后再弹出；
+         收起时等动画播完才卸载，避免反复创建/销毁造成的闪动 -->
+    <div v-if="menuMounted" class="panel menu-panel" :class="{ 'confirm-mode': exitConfirm, 'menu-hidden': !menuVisible }">
         <div class="drag-bar" @mousedown="onDragMouseDown">
           <div class="drag-indicator"></div>
         </div>
@@ -41,7 +41,6 @@
           </div>
         </div>
       </div>
-    </Transition>
 
     <!-- 具体工具 -->
     <div v-if="state === 'tool'" class="panel tool-panel" :class="{ 'tool-hidden': !toolReady, 'no-radius': noteFullscreen }">
@@ -62,7 +61,7 @@
 </template>
 
 <script setup vapor>
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import Timer from './Timer.vue'
 import RollCall from './RollCall.vue'
@@ -71,6 +70,9 @@ import Note from './Note.vue'
 import IconGlyph from '../../components/base/IconGlyph.vue'
 import { SEND, INVOKE, RECEIVE } from '../../electronChannels.js'
 import { useDisposables } from '../../utils/disposables.js'
+import {
+  LAYOUT, freeMargin, panelRect, pickDir, clampIcon, clampIconWithPanel, nearestFeasibleIcon,
+} from './widgetLayout.js'
 
 // 浮窗里的定时器/拖拽监听全部走统一登记表：窗口销毁即释放，动态排期自动撤上一次
 const d = useDisposables()
@@ -83,8 +85,165 @@ const noteFullscreen = ref(false)
 const fabReady = ref(true)
 // 整体容器是否整体淡出：点工具时先整体淡出，再切面板/改窗口尺寸，最后整体淡入，避免闪一下
 const wrapperFading = ref(false)
-// 菜单面板的过渡名：进入工具时置空（不做收起动画，避免与工具面板布局打架），其余情况播放展开/收起
-const menuTransition = ref('toolbox-pop')
+// 面板展开方向：四向预留下图标恒在窗口中心，面板按方向显示在各预留区。
+// 'right' | 'left' | 'up' | 'down'
+const expandDir = ref('right')
+
+// 四向预留方案：窗口恒定 520×784（内容区），图标固定在正中心，
+// 面板按方向显示在图标左/右/上/下的预留区，开合菜单永不 resize、永不挪窗口。
+// 图标屏幕坐标是唯一真源——方向判定、边界夹紧、窗口摆位（仅拖拽/初始化）基于它。
+const { SHADOW } = LAYOUT
+const { ICON_OFF_X, ICON_OFF_Y } = LAYOUT
+
+// 图标左上角在屏幕上的坐标（DIP）。onMounted 首次采样，之后拖拽时维护。
+const iconScreen = ref([SHADOW, SHADOW])
+
+// 图标左上角在窗口内容区内的偏移：恒为中心，不随方向变（图标永远在同一位置）。
+function iconOffsetInWindow() {
+  return [ICON_OFF_X, ICON_OFF_Y]
+}
+
+// 工作区（DIP）。方向判定 / 限位与面板 CSS 共用 widgetLayout.js 的同一套几何。
+function workArea() {
+  return {
+    x: window.screen.availLeft || 0,
+    y: window.screen.availTop || 0,
+    w: window.screen.availWidth,
+    h: window.screen.availHeight,
+  }
+}
+
+// 把窗口左上角移到「图标屏幕坐标落在正确窗口内偏移」的位置。
+function placeWindowAtIcon() {
+  const [ox, oy] = iconOffsetInWindow()
+  window.electron.send(SEND.WIDGET_MOVE_TO, [
+    Math.round(iconScreen.value[0] - ox),
+    Math.round(iconScreen.value[1] - oy),
+  ])
+}
+
+// 方向判定与限位共用 widgetLayout.js 的同一套几何（面板预留区 ↔ CSS 定位），
+// 避免一处改了数字、另一处还在按旧尺寸判断导致面板被屏幕裁掉。
+
+// 只夹图标：图标态拖拽允许贴边（面板还没展开，不用为它让位）。
+function clampIconToWorkArea() {
+  iconScreen.value = clampIcon(iconScreen.value[0], iconScreen.value[1], workArea())
+}
+
+// 展开前：图标 + 面板一起限位，方向锁死在展开那一刻。
+// 先挑当前位置放得下的方向；四向都放不下时把图标挪到最近的可行位置，
+// 宁可在展开前挪一次窗口，也不让面板展开后被屏幕裁掉。
+function ensurePanelFits() {
+  const wa = workArea()
+  const [ix, iy] = iconScreen.value
+  const dir = pickDir(ix, iy, wa)
+  if (freeMargin(panelRect(dir, ix, iy), wa) >= 0) return dir
+  iconScreen.value = nearestFeasibleIcon(ix, iy, wa)
+  placeWindowAtIcon()
+  return pickDir(iconScreen.value[0], iconScreen.value[1], wa)
+}
+
+// 展开态拖动：方向锁死在展开时选定的那一边，只做限位、不换方向、不翻转。
+// - 上展开：面板占图标上方 368px，联合限位会把图标挡在距顶 368px 形成空气墙 →
+//   只夹图标本身，允许面板顶部出屏（这是 up 方向的固有取舍）。
+// - 其余方向：图标 + 面板联合限位，面板顶到工作区边界就停（稳定不翻转）。
+function clampExpandedPanel() {
+  if (expandDir.value === 'up') {
+    clampIconToWorkArea()
+    return
+  }
+  const wa = workArea()
+  iconScreen.value = clampIconWithPanel(iconScreen.value[0], iconScreen.value[1], wa, expandDir.value)
+}
+
+// 菜单面板：先挂载（隐藏）再等窗口尺寸到位显示；收起时等动画播完才卸载，避免重建闪动。
+// menuToken 用于作废「尚未执行/尚未回执」的展开流程，快速连点不会叠加两次窗口位移。
+const menuMounted = ref(false)
+const menuVisible = ref(false)
+let menuToken = 0
+let menuClosing = false
+
+// 打开菜单：先挂载隐藏面板并挪窗口，尺寸到位后再播放弹出动画。
+// 整个过程用 token 串行化；动画没结束时再次点击会被忽略（见 onFabMouseUp）。
+function openMenu() {
+  if (state.value !== 'icon' || menuClosing) return
+  const token = ++menuToken
+  fabReady.value = true
+  // 四向预留：窗口恒定、图标恒在中心，开合菜单不 resize；
+  // 按图标屏幕位置选放得下面板的方向，只有四向都放不下才在展开前挪一次窗口。
+  clampIconToWorkArea()
+  expandDir.value = ensurePanelFits()
+  menuMounted.value = true
+  menuVisible.value = false
+  state.value = 'menu'
+  // 展开时取消穿透（面板要能点）；等一帧布局完成再显示面板播动画。
+  setIgnoreMouse(false)
+  nextTick(() => requestAnimationFrame(() => {
+    if (token === menuToken) menuVisible.value = true
+  }))
+}
+
+// 收起菜单：先播收起动画，再按锚点缩回图标尺寸，最后卸载面板。
+function closeMenu() {
+  if (state.value !== 'menu' || menuClosing) return
+  menuClosing = true
+  cancelPendingToolOpen()
+  const token = ++menuToken
+  menuVisible.value = false
+  // 固定尺寸：不缩窗口、不挪位置，只播完收起动画后卸载面板。
+  // 方向不复位——图标 CSS 停在当前边，下次 openMenu 会用 iconScreen 重算。
+  scheduleIconShrink(() => {
+    if (token !== menuToken) { menuClosing = false; return }
+    menuMounted.value = false
+    state.value = 'icon'
+    // 不在这里强制切穿透：鼠标此刻仍停在图标上，若整窗穿透则下一次点击会穿过去。
+    // 透明区的穿透交给 onHoverMove —— 鼠标真正移出图标区域时才切。
+    menuClosing = false
+  }, 110)
+}
+
+// 鼠标穿透：图标态整窗穿透，只有鼠标落在图标/面板上时才切回可点。
+// forward 让穿透态仍收到 mousemove；用 lastIgnore 去重，避免每次移动都发 IPC。
+let lastIgnore = null
+function setIgnoreMouse(ignore) {
+  if (lastIgnore === ignore) return
+  lastIgnore = ignore
+  window.electron.send(SEND.WIDGET_SET_IGNORE_MOUSE, ignore)
+}
+
+// 拖拽期间冻结穿透切换：拖拽靠 mousemove 跟手、窗口摆位经 IPC 往返有几帧延迟，
+// 若 onHoverMove 此刻按鼠标位置判定，会误判「落在透明区」→ 切穿透 →
+// 穿透态不转发 mousedown/mouseup → mouseup 丢失、下一次 mousedown 穿过去 → 拖不动/点不动。
+let draggingWidget = false
+
+// 分区恒定穿透：所有「有内容的可见元素」（图标 + 菜单面板 + 工具面板）矩形内不穿透，
+// 其余透明区恒定穿透。用屏幕坐标判定：e.screenX/Y 与 window.screenX/Y 同为 DIP、同坐标系；
+// 穿透态 forward 出的 mousemove 其 clientX/Y 会被 DPI 放大、与 getBoundingClientRect 对不上，
+// 所以一律换算到屏幕坐标再比。元素矩形 = 窗口屏幕位置 + 窗口内偏移。
+// 隐藏态（opacity:0 / pointer-events:none）的元素不算「有东西」，不参与判定。
+function isOverVisibleContent(sx, sy) {
+  const wx = window.screenX
+  const wy = window.screenY
+  const els = document.querySelectorAll('.fab, .panel')
+  for (const el of els) {
+    if (el.classList.contains('fab-hidden') ||
+        el.classList.contains('menu-hidden') ||
+        el.classList.contains('tool-hidden')) continue
+    const r = el.getBoundingClientRect()
+    // 加 6px 容差：图标有 box-shadow / 圆形抗锯齿，视觉可点区略大于 DOM 矩形；
+    // 实测像素质心可能比 DOM 底边低 1~2px，不留容差会把「点在图标上」误判成透明区。
+    const pad = 6
+    if (sx >= wx + r.left - pad && sx <= wx + r.right + pad &&
+        sy >= wy + r.top - pad && sy <= wy + r.bottom + pad) return true
+  }
+  return false
+}
+
+function onHoverMove(e) {
+  if (draggingWidget) return // 拖拽中保持不穿透，交给拖拽结束后的 hover 重新判定
+  // 鼠标落在内容矩形内→不穿透（可点），透明区→穿透（不挡桌面）
+  setIgnoreMouse(!isOverVisibleContent(e.screenX, e.screenY))
+}
 
 // 等主进程确认窗口尺寸已生效后再执行 cb（多用于「先改窗口尺寸、再显示内容」），
 // 避免用固定延时带来的空窗；兜底 250ms 防止回执丢失时内容一直不显示。
@@ -115,9 +274,6 @@ const tools = [
 
 // 菜单面板「退出工具箱」的二次确认是否显示
 const exitConfirm = ref(false)
-
-// 菜单态窗口尺寸（确认视图不改变窗口大小，只是把面板内容换掉）
-const MENU_SIZE = [284, 360]
 
 // 「可替换」的定时器调度器：连点时自动撤掉上一次排期，不用手写 clearTimeout 配对
 const scheduleToolClose = d.defer()
@@ -151,7 +307,6 @@ function openTool(id) {
   // 这样「菜单瞬间消失 + 窗口立刻改尺寸」不会露出来，避免闪一下。
   wrapperFading.value = true
   scheduleToolOpen(() => {
-    menuTransition.value = ''
     activeTool.value = id
     toolReady.value = true // 内容就位（此时整体仍处于淡出态，看不到旧尺寸渲染）
     noteFullscreen.value = false
@@ -175,6 +330,10 @@ function onNoteShrink() {
 }
 
 function closeToIcon() {
+  if (state.value === 'menu') {
+    closeMenu()
+    return
+  }
   cancelPendingToolOpen()
   if (state.value === 'tool') {
     // 图标先隐藏，等窗口收缩/归位到位后再淡入，避免图标出现在旧位置又跳位造成的闪。
@@ -200,18 +359,46 @@ function closeToIcon() {
 
 function onDragMouseDown(e) {
   e.preventDefault()
+  draggingWidget = true
+  setIgnoreMouse(false) // 拖拽期间必须可点，否则 mousedown/mouseup 会被穿透
   const startScreenX = e.screenX
   const startScreenY = e.screenY
-  window.electron.send(SEND.WIDGET_DRAG_START, { screenX: startScreenX, screenY: startScreenY })
+  const startIcon = iconScreen.value.slice()
+  // 工具态：图标已隐藏，iconScreen 还是上次图标态的旧坐标，不能用它摆窗口。
+  // 改为窗口左上角直接跟手；工具态窗口尺寸小（200×400 那类），按窗口矩形夹进工作区。
+  const isTool = state.value === 'tool'
+  const startWinX = window.screenX
+  const startWinY = window.screenY
 
   const onMouseMove = (e) => {
-    window.electron.send(SEND.WIDGET_DRAG_MOVE, { screenX: e.screenX, screenY: e.screenY })
+    const dx = e.screenX - startScreenX
+    const dy = e.screenY - startScreenY
+    if (isTool) {
+      const wa = workArea()
+      const ww = window.outerWidth
+      const wh = window.outerHeight
+      const nx = Math.max(wa.x, Math.min(startWinX + dx, wa.x + wa.w - ww))
+      const ny = Math.max(wa.y, Math.min(startWinY + dy, wa.y + wa.h - wh))
+      window.electron.send(SEND.WIDGET_MOVE_TO, [Math.round(nx), Math.round(ny)])
+      return
+    }
+    // 图标/菜单态：图标跟手，实时夹紧到工作区（保证整个圆形图标始终完整留在屏幕内），
+    // 再由前端按图标屏幕坐标摆窗口。主进程 move 只改位置、保持窗口当前尺寸。
+    iconScreen.value = [startIcon[0] + dx, startIcon[1] + dy]
+    clampIconToWorkArea()
+    // 方向已在展开时定好，拖动只做联合限位，不让面板跳到另一侧
+    if (state.value === 'menu') clampExpandedPanel()
+    placeWindowAtIcon()
   }
 
   const onMouseUp = () => {
     cancelMove()
     cancelUp()
-    window.electron.send(SEND.WIDGET_DRAG_END)
+    draggingWidget = false
+    if (isTool) return // 工具态不碰 iconScreen，也不按图标偏移摆窗口
+    clampIconToWorkArea()
+    if (state.value === 'menu') clampExpandedPanel()
+    placeWindowAtIcon()
   }
 
   // 松手即摘：拖拽期间的 document 监听不能等到窗口卸载才收尾
@@ -223,33 +410,45 @@ function onFabMouseDown(e) {
   e.preventDefault()
   // 仅左键触发拖拽/菜单切换；右键只走 contextmenu 的「本次退出」原生菜单，不进工具箱菜单
   if (e.button !== 0) return
-  let hasMoved = false
   const startScreenX = e.screenX
   const startScreenY = e.screenY
   const startClientX = e.clientX
   const startClientY = e.clientY
-  window.electron.send(SEND.WIDGET_DRAG_START, { screenX: startScreenX, screenY: startScreenY })
+  const startIcon = iconScreen.value.slice()
+  // 拖拽只在真正移动超过阈值后才启动。此前 mousedown 就发 DRAG_START、
+  // mousemove 每次都发 DRAG_MOVE，导致「点一下」也会按 dragStartWindowPos 搬窗口：
+  // 快速连点时手抖几像素就与 openMenu/closeMenu 的 resize 抢窗口位置 → 图标闪一下/平移。
+  let dragging = false
 
   const onMouseMove = (e) => {
-    if (Math.abs(e.clientX - startClientX) > 3 || Math.abs(e.clientY - startClientY) > 3) {
-      hasMoved = true
+    if (!dragging) {
+      if (Math.abs(e.clientX - startClientX) <= 3 && Math.abs(e.clientY - startClientY) <= 3) return
+      dragging = true
+      draggingWidget = true
+      setIgnoreMouse(false) // 一旦进入拖拽，保持可点，避免 mouseup 被穿透丢失
     }
-    window.electron.send(SEND.WIDGET_DRAG_MOVE, { screenX: e.screenX, screenY: e.screenY })
+    iconScreen.value = [startIcon[0] + e.screenX - startScreenX, startIcon[1] + e.screenY - startScreenY]
+    clampIconToWorkArea()
+    if (state.value === 'menu') clampExpandedPanel()
+    placeWindowAtIcon()
   }
 
   const onMouseUp = () => {
     cancelMove()
     cancelUp()
-    window.electron.send(SEND.WIDGET_DRAG_END)
-    if (!hasMoved) {
-      cancelPendingToolOpen()
-      if (state.value === 'menu') {
-        state.value = 'icon'
-      } else {
-        fabReady.value = true
-        menuTransition.value = 'toolbox-pop' // 展开工具箱时播放展开动画
-        state.value = 'menu'
-      }
+    draggingWidget = false // 复位：否则拖过一次后穿透判定被永久冻结
+    if (dragging) {
+      clampIconToWorkArea()
+      if (state.value === 'menu') clampExpandedPanel()
+      placeWindowAtIcon()
+      return // 拖动过就不算点击，不切换菜单
+    }
+    // 纯点击（含微抖）：完全不碰拖拽通道，只切换菜单
+    if (state.value === 'menu') {
+      // 展开动画还没结束时忽略点击，避免「展开/收起」两次窗口位移叠加
+      if (menuVisible.value) closeMenu()
+    } else {
+      openMenu()
     }
   }
 
@@ -264,13 +463,12 @@ function onFabContextMenu() {
 
 // 点击菜单外部区域自动收起菜单
 function onDocMouseDown(e) {
-  if (state.value !== 'menu') return
+  if (state.value !== 'menu' || !menuVisible.value) return
   const menuPanel = document.querySelector('.menu-panel')
   const fab = document.querySelector('.fab')
   if (!menuPanel || !fab) return
   if (menuPanel.contains(e.target) || fab.contains(e.target)) return
-  cancelPendingToolOpen()
-  state.value = 'icon'
+  closeMenu()
 }
 
 let blurHandler = null
@@ -293,12 +491,20 @@ async function checkToolboxEnabled() {
 }
 
 onMounted(() => {
+  // 首次采样图标屏幕坐标：窗口左上角 + 图标在窗口内偏移（初始方向为右/下展开）。
+  // 之后拖拽/方向翻转都由代码维护，不再依赖 window.screenX。
+  iconScreen.value = [window.screenX + ICON_OFF_X, window.screenY + ICON_OFF_Y]
+  // 初始不穿透：保证鼠标已在图标上、未移动时也能点中。之后 hover 检测接管。
+  setIgnoreMouse(false)
+  d.listen(document, 'mousemove', onHoverMove)
   d.listen(document, 'mousedown', onDocMouseDown)
   checkToolboxEnabled()
   blurHandler = window.electron.on(RECEIVE.FROM_MAIN, (data) => {
     if (data && data.type === 'blur' && state.value === 'menu') {
-      cancelPendingToolOpen()
-      state.value = 'icon'
+      // 失焦也要走完整的 closeMenu：直接改 state 会跳过窗口收缩和面板卸载，
+      // 留下「state=icon 但窗口还是展开尺寸」的错位。此时 screenX 还是展开态值，
+      // 下次点击的方向判定会据此把贴右误判成 left=false，图标跑到窗口左边。
+      closeMenu()
     }
     if (data && data.type === 'settings-changed') {
       checkToolboxEnabled()
@@ -325,15 +531,16 @@ watch(
     // 回到图标态时复位「退出确认」，否则下次展开菜单会直接停在确认视图
     if (newState === 'icon') exitConfirm.value = false
 
+    // 菜单的展开/收起由 openMenu / closeMenu 自己完成（带 token 串行化），这里不再重复改窗口
+    if ((newState === 'menu' && oldState === 'icon') || (newState === 'icon' && oldState === 'menu')) return
+
+    // 工具态面板要接收点击 → 关穿透；回图标态 → 开穿透。
+    // 菜单↔icon 的穿透由 openMenu/closeMenu 各自处理，这里只管 tool。
+    if (newState === 'tool') setIgnoreMouse(false)
+    else if (newState === 'icon' && oldState === 'tool') setIgnoreMouse(true)
+
     let size
     if (newState === 'icon') {
-      if (oldState === 'menu') {
-        // 收起工具箱：先让面板播完收起动画，再收缩窗口，否则窗口提前变小会瞬间裁掉面板
-        scheduleIconShrink(() => {
-          window.electron.send(SEND.WIDGET_RESIZE, [48, 48])
-        }, 120)
-        return
-      }
       size = [48, 48]
       if (oldState === 'tool') {
         // 如果之前是全屏注释工具，先恢复窗口大小
@@ -342,30 +549,37 @@ watch(
         }
         window.electron.send(SEND.WIDGET_RESTORE_POSITION)
       }
-    } else if (newState === 'menu') {
-      fabReady.value = true
-      size = MENU_SIZE
     } else if (newState === 'tool') {
+      // 工具面板走居中显示，方向复位；菜单面板同时卸载
+      menuToken++
+      menuMounted.value = false
+      menuVisible.value = false
+      menuClosing = false
+      expandDir.value = 'right'
       if (newTool === 'note') {
         // 注释工具：先居中显示小窗口加载，等 Note 准备好再全屏
-        size = [220, 200]
+        size = [250, 240]
         window.electron.send(SEND.WIDGET_CENTER)
         window.electron.send(SEND.WIDGET_RESIZE, size)
         return
       }
       const toolSizes = {
-        timer: [200, 400],
-        rollcall: [220, 400],
-        screenshot: [250, 450],
+        timer: [200, 240],
+        rollcall: [220, 240],
+        screenshot: [250, 260],
       }
       size = toolSizes[newTool] || [200, 300]
       window.electron.send(SEND.WIDGET_CENTER)
     }
 
+    // 菜单展开已在上面单独处理（先改窗口、后插面板）
     window.electron.send(SEND.WIDGET_RESIZE, size)
-    // 收起工具：等窗口收缩并归位到位后再让图标淡入，避免图标先出现在旧位置再跳位
+    // 收起工具：等窗口收缩并归位到位后再让图标淡入，并重新采样图标屏幕坐标
+    // （工具态走居中/恢复位置，窗口位置变了，iconScreen 必须跟上）。
     if (newState === 'icon' && oldState === 'tool') {
       afterWidgetResized(() => {
+        expandDir.value = 'right'
+        iconScreen.value = [window.screenX + ICON_OFF_X, window.screenY + ICON_OFF_Y]
         fabReady.value = true
       })
     }
@@ -376,6 +590,7 @@ watch(
 
 <style scoped>
 .widget-wrapper {
+  position: relative;
   display: flex;
   align-items: flex-start;
   width: 100%;
@@ -401,6 +616,11 @@ watch(
 }
 
 .fab {
+  position: absolute;
+  /* 图标恒在窗口内容区正中（520×784 → 中心 260,392；48 图标左上角 236,368）。
+     四向预留下图标位置永不随展开方向变化。 */
+  left: 236px;
+  top: 368px;
   width: 48px;
   height: 48px;
   border-radius: 50%;
@@ -413,7 +633,9 @@ watch(
   font-size: 20px;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  transition: transform 0.2s ease, opacity 0.1s ease;
+  /* 去掉 hover 的 transform scale：展开/收起那一瞬窗口尺寸剧变，图标边缘反复掠过
+     鼠标指针，hover 在 1↔1.05 间抖动 → 图标一闪一闪。只保留 opacity 过渡。 */
+  transition: opacity 0.1s ease;
   user-select: none;
   flex-shrink: 0;
 }
@@ -423,12 +645,13 @@ watch(
   pointer-events: none;
 }
 
-.fab:hover {
-  transform: scale(1.05);
-}
-
 .panel {
-  background: var(--color-surface, #ffffff);
+  /* 工具箱是独立的透明窗口，没有主窗口的页面底做衬底。
+     玻璃主题的 --color-surface 本身带透明度，直接铺在这里会透出桌面/后面的窗口，
+     看起来就是“背景没了”。这里把页面底色 --color-bg 垫在玻璃面下面：
+     既保留玻璃质感，又保证面板始终是不透明的实体。 */
+  background-color: var(--color-bg, #ffffff);
+  background-image: linear-gradient(var(--color-surface, #ffffff), var(--color-surface, #ffffff));
   border-radius: var(--radius-surface);
   padding: 16px;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
@@ -436,32 +659,57 @@ watch(
 }
 
 .menu-panel {
+  position: absolute;
+  /* 默认往右：面板左缘贴图标右缘+间隙 (236+48+8=292)，
+     顶边与图标顶边对齐 (368) —— 图标在面板左上角旁，不是垂直居中。 */
+  left: 292px;
+  top: 368px;
   width: 228px;
-  margin-left: 8px; /* 图标与面板间距：用 margin 而非 wrapper gap，收起时不会瞬间位移 */
+  /* 面板保持内容自然高度，约 310；几何限位用的 PANEL_H 也是 310（同源），
+     所以「面板底贴工作区底」的判断与真实底边一致，不需要把面板撑高。 */
+  min-height: 310px;
   box-sizing: border-box;
   overflow: hidden;
-  transform-origin: left center; /* 浮现/收回都以图标一侧为锚点，像从图标里长出来 */
-}
-
-/* 展开/收起动画：整体缩放 + 淡入淡出，营造“整块窗口从图标处浮现/收回”的感觉。
-   展开走减速回弹曲线，收起走加速曲线；节奏偏快，避免拖沓。 */
-.toolbox-pop-enter-active {
+  transform-origin: left top; /* 从靠图标的角浮现 */
   transition:
     transform 0.1s cubic-bezier(0.22, 1, 0.36, 1),
     opacity 0.1s ease;
 }
 
-.toolbox-pop-leave-active {
-  transition:
-    transform 0.1s cubic-bezier(0.4, 0, 1, 1),
-    opacity 0.1s ease;
+/* 面板常驻 DOM，只切状态：不会出现卸载重建的闪动 */
+.menu-panel.menu-hidden {
+  opacity: 0;
+  transform: scale(0.86);
+  pointer-events: none;
 }
 
-.toolbox-pop-enter-from,
-.toolbox-pop-leave-to {
-  transform: scale(0.86);
-  opacity: 0;
+/* 面板始终贴着图标的左/右侧，垂直方向贴顶或贴底（图标落在该侧端部，不居中）。 */
+/* 往左展开（图标靠右缘）：面板在图标左侧，顶边对齐图标顶边。 */
+.widget-wrapper.panel-left .menu-panel {
+  left: 0;
+  top: 368px;
+  transform-origin: right top;
 }
+/* 往下展开：面板在图标右下方，顶边接图标底边+间隙 (416+8=424)。 */
+.widget-wrapper.panel-down .menu-panel {
+  left: 292px;
+  top: 424px;
+  transform-origin: left top;
+}
+/* 往上展开：面板在图标右上方，底边贴「图标底边-间隙 8」，和图标一起贴任务栏。
+   bottom 相对窗口内容区底部算，窗口内容区 = 内容 784 + 阴影留边 32 = 816；
+   图标底 = 368+48 = 416，面板底要在 416-8 = 408 → bottom = 816-408=408。
+   旧值 456 让面板底贴图标顶（360），比图标底高 56px → 面板悬在图标上方、离任务栏差一截。
+   面板高度由内容撑开（约 310），用 bottom 定位才能让底边恒定贴图标底。 */
+.widget-wrapper.panel-up .menu-panel {
+  left: 292px;
+  top: auto;
+  bottom: 408px;
+  transform-origin: left bottom;
+}
+
+/* 说明：菜单的展开/收起动画现在由 .menu-panel 的 transition 直接完成（见上），
+   不再走 Vue Transition 的挂载/卸载，避免重建闪动。 */
 
 .panel-header {
   display: flex;
@@ -538,10 +786,8 @@ watch(
   backdrop-filter: var(--sidebar-glass-blur, blur(24px) saturate(1.4));
   -webkit-backdrop-filter: var(--sidebar-glass-blur, blur(24px) saturate(1.4));
   transition: background 0.15s ease;
-  /* 窗口尺寸不动（360 高），确认态内容更矮：用 min-height 撑到与菜单视图接近的高度
-     （菜单视图实测约 310：padding32 + 拖动条20 + 标题40 + 两行功能项162 + 底部按钮58），
-     否则面板会缩成一小条、窗口下方留出一大片透明区。别设成窗口可用高度 328，
-     那样会比菜单视图高一截，看着"确认框比面板大"。 */
+  /* 确认态内容更矮，min-height 与 .menu-panel 一致（= 几何限位 PANEL_H），
+     flex 让确认内容垂直居中，面板高度与菜单视图一致。 */
   display: flex;
   flex-direction: column;
   min-height: 310px;

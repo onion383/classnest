@@ -139,7 +139,7 @@ classnest/
 
 **主要 IPC 通道**（均需在 [preload.js](../../electron/preload.js) 白名单登记）：
 
-- `on`（单向接收消息）：`widgets-ready`（小组件就绪）、`desktop-widget-enabled`（桌面组件启用）、`desktop-widget-content-ready`（内容就绪）、`desktop-widget-open-page`（打开主窗口页面）、`desktop-widget-drag-start/move/end`（拖动开始/移动/结束）、`widget-resize`（调整尺寸）、`widget-move-to`（移动到指定位置）、`widget-center`（居中）、`widget-restore-position`（恢复位置）、`widget-fullscreen`（全屏）、`widget-restore`（恢复尺寸）、`widget-set-ignore-mouse`（鼠标穿透）、`widget-set-visible`（显隐）、`widget-drag-start/move/end`（浮窗拖动）、`widget-context-menu`（右键菜单）、`widget-set-session-visible`（本次会话显隐）、`to-widget` / `to-main`（发往浮窗 / 主窗口）
+- `on`（单向接收消息）：`widgets-ready`（小组件就绪）、`desktop-widget-enabled`（桌面组件启用）、`desktop-widget-content-ready`（内容就绪）、`desktop-widget-open-page`（打开主窗口页面）、`desktop-widget-drag-start/move/end`（拖动开始/移动/结束）、`widget-resize`（调整尺寸）、`widget-move-to`（移动到指定位置）、`widget-center`（居中）、`widget-restore-position`（恢复位置）、`widget-fullscreen`（全屏）、`widget-restore`（恢复尺寸）、`widget-set-ignore-mouse`（鼠标穿透）、`widget-set-visible`（显隐）、`widget-context-menu`（右键菜单）、`widget-set-session-visible`（本次会话显隐）、`to-widget` / `to-main`（发往浮窗 / 主窗口）
 - `handle`（请求-响应）：`get-session-widget-visible`（读取本次会话显隐）、`get-master-key`（取主密钥）、`get-desktop-layer-state`（桌面置底状态）、`apps-select-file`（选择文件）、`apps-resolve-paths`（解析路径）、`apps-launch`（启动软件）（`get-main-token` / `get-widget-session` 随独立进程一起删除）
 
 > 常用软件的三个 `apps-*` 通道定义在 `electron/main/main.apps.js`，由主进程统一注册（组件窗口已在主进程内，不再需要 host 里重复注册）；拖入路径由该文件的 `apps-resolve-paths` 批量解析名称与系统图标。

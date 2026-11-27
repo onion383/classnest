@@ -11,6 +11,10 @@
        （glass 的底图、glass2 的光斑），这里全部压掉，避免整窗被铺成一块不透明矩形。 */
     html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: transparent !important; }
     body::before, body::after { content: none !important; }
+    /* 工具箱图标(.fab)和菜单(.menu-panel)都是 absolute 定位，脱离 flex 流后
+       没人撑开 .widget-wrapper；必须让挂载点有确定高度，wrapper 的 height:100% 才生效，
+       否则 wrapper 坍缩、overflow:hidden 把图标和菜单裁成一条。 */
+    #widget-app { height: 100%; }
   </style>
 </head>
 <body>

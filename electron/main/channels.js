@@ -16,9 +16,8 @@
 const CH = Object.freeze({
   // ---- send —— 渲染层 → 主进程（单向） ----
   WIDGET_RESIZE: 'widget-resize',
-  WIDGET_DRAG_START: 'widget-drag-start',
-  WIDGET_DRAG_MOVE: 'widget-drag-move',
-  WIDGET_DRAG_END: 'widget-drag-end',
+  WIDGET_MOVE_TO: 'widget-move-to',
+  WIDGET_SET_IGNORE_MOUSE: 'widget-set-ignore-mouse',
   WIDGET_CENTER: 'widget-center',
   WIDGET_RESTORE_POSITION: 'widget-restore-position',
   WIDGET_FULLSCREEN: 'widget-fullscreen',

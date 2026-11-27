@@ -80,17 +80,25 @@ function setWidgetIgnoreMouse(win, ignore) {
   } catch (_) { /* best-effort: 不支持鼠标事件透传的平台忽略即可 */ }
 }
 
+// 小组件窗口四周留出的阴影绘制边距（px）。
+// 渲染层用同值 padding 让「视觉内容」贴回原位置，因此窗口比内容大 2*M，且窗口位置相对视觉位置偏移 -M。
+const WIDGET_SHADOW_MARGIN = 16
+// 四向预留：窗口足够大，图标固定在正中心，面板往四个方向展开都在窗口内，
+// 开合菜单永不 resize、永不挪窗口。内容区 520×784 = 左面板228+间隙8+图标48+间隙8+右面板228
+// （高同理 360+8+48+8+360），加四周阴影 32。
+const WIDGET_CONTENT_W = 520
+const WIDGET_CONTENT_H = 784
+// 主进程限位几何（图标偏移 / 初始位置）集中在 widgetLayout.cjs，
+// 与渲染层同源；单测真跑那个模块，这里只做接线。
+// 拖拽夹位只在渲染层做（window.screen.avail*），主进程不重复夹——
+// 两边都夹会让 iconScreen 与窗口实际位置脱钩，累积成「面板和图标越来越远」。
+const { initialWidgetPosition } = require('./widgetLayout.cjs')
+
 // ===== 工具箱浮窗状态 =====
 // 上次浮窗位置：销毁前记下，重建时恢复，避免「关掉再打开」跳回屏幕左侧中间
 let lastWidgetBounds = null
 // 居中前的位置：关闭工具后恢复用
 let lastIconPosition = null
-// 记录预期窗口尺寸，防止拖动时漂移
-let currentWidgetSize = [48, 48]
-// 拖动起点：窗口初始位置 / 鼠标初始位置 / 初始尺寸
-let dragStartWindowPos = null
-let dragStartMousePos = null
-let dragStartWindowSize = null
 // 全屏（注释工具）前的窗口位置与尺寸
 let preFullscreenBounds = null
 // 「本次启用工具箱」会话级开关：仅影响本次运行浮窗显隐（不持久）。
@@ -113,18 +121,15 @@ let desktopContentReady = false
 // 渲染层迟迟不发就绪信号（页面加载失败等）时的兜底上屏时间
 const DESKTOP_READY_TIMEOUT_MS = 8000
 
-// 小组件窗口四周留出的阴影绘制边距（px）。
-// 渲染层用同值 padding 让「视觉内容」贴回原位置，因此窗口比内容大 2*M，且窗口位置相对视觉位置偏移 -M。
-const WIDGET_SHADOW_MARGIN = 16
-
 // 等主窗口加载完成（navigateMainWhenReady）的最长等待：超时即放弃这次导航。
 // 正常情况是毫秒级（页面已就绪时立即发）；给 30s 覆盖「首次启动要加载整个应用」的慢场景。
 const NAVIGATE_WAIT_TIMEOUT_MS = 30000
 
 function createWidgetWindow() {
   widgetWindow = new BrowserWindow({
-    width: 48 + WIDGET_SHADOW_MARGIN * 2,
-    height: 48 + WIDGET_SHADOW_MARGIN * 2,
+    // 四向预留的固定尺寸：图标居中、四周留足面板空间，开合菜单永不 resize/挪窗口。
+    width: WIDGET_CONTENT_W + WIDGET_SHADOW_MARGIN * 2,
+    height: WIDGET_CONTENT_H + WIDGET_SHADOW_MARGIN * 2,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -141,9 +146,9 @@ function createWidgetWindow() {
   // 登记窗口角色：浮窗只允许 widget 类通道（见 ipc-policy.json）
   ipcAuth.registerWindowRole(widgetWindow, ipcAuth.ROLE.WIDGET)
 
-  // 初始位置：屏幕左边缘中间（窗口相对视觉位置偏移 -M，让图标仍贴在左边缘）
-  const { height: screenH } = screen.getPrimaryDisplay().workAreaSize
-  widgetWindow.setPosition(-WIDGET_SHADOW_MARGIN, Math.round(screenH / 2 - 24) - WIDGET_SHADOW_MARGIN)
+  // 初始位置：图标完整贴在屏幕左缘、垂直居中。旧公式多算了 16px 阴影留边，
+  // 图标中心落到 x=-16，一大半在屏幕外；现按「窗口左上角 = 图标中心 - (260,392)」算。
+  widgetWindow.setPosition(...initialWidgetPosition(screen.getPrimaryDisplay().workAreaSize))
 
   if (process.platform === 'darwin') {
     widgetWindow.setWindowButtonVisibility(false)
@@ -162,24 +167,11 @@ function createWidgetWindow() {
     }
   })
 
-  // 窗口被拖动后做边界保护（防止完全拖出屏幕）
-  widgetWindow.on('moved', () => {
-    if (widgetWindow && !widgetWindow.isDestroyed()) {
-      const [x, y] = widgetWindow.getPosition()
-      const [width, height] = currentWidgetSize
-      const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize
-
-      let newX = x
-      let newY = y
-      const minVisible = 50
-      newX = Math.max(-width + minVisible, Math.min(newX, screenW - minVisible))
-      newY = Math.max(-height + minVisible, Math.min(newY, screenH - minVisible))
-
-      if (newX !== x || newY !== y) {
-        widgetWindow.setPosition(newX, newY)
-      }
-    }
-  })
+  // 刻意不监听 moved 做「拉回主屏」：固定尺寸窗口 552×816、绝大部分透明穿透，
+  // 图标贴边时窗口大半在屏外是**正常形态**（锚点是图标，不是整窗）。
+  // 任何按「窗口中心 / 图标中心出界就拉回」的兜底都会在拖拽的某一帧误判，
+  // 表现为图标碰到屏幕上下边时突然瞬移到屏幕中央。
+  // 限位只在渲染层做（位置真源 iconScreen），WIDGET_MOVE_TO 原样落地，这里不二次改位置。
 
   // 身份守卫：重启小组件时旧窗口的 closed 可能晚于新窗口创建触发，
   // 若不加判断会把刚建好的新引用置空（mainWindow 已是这种写法）。
@@ -592,15 +584,19 @@ function registerWidgetIpc(opts = {}) {
     const { width, height } = desktopDragBounds
     const dx = pos.screenX - desktopDragMouse[0]
     const dy = pos.screenY - desktopDragMouse[1]
-    const wa = screen.getPrimaryDisplay().workArea
-    const minVisible = 60
+    // 用鼠标所在显示器的工作区：多屏时不会把窗口拽回主屏
+    const wa = screen.getDisplayNearestPoint({
+      x: Math.round(pos.screenX),
+      y: Math.round(pos.screenY)
+    }).workArea
+    // 整窗必须留在工作区内，不再允许「只露一角」
     const nx = Math.max(
-      Math.round(wa.x - width + minVisible),
-      Math.min(Math.round(desktopDragBounds.x + dx), Math.round(wa.x + wa.width - minVisible))
+      wa.x,
+      Math.min(Math.round(desktopDragBounds.x + dx), Math.round(wa.x + wa.width - width))
     )
     const ny = Math.max(
-      Math.round(wa.y - height + minVisible),
-      Math.min(Math.round(desktopDragBounds.y + dy), Math.round(wa.y + wa.height - minVisible))
+      wa.y,
+      Math.min(Math.round(desktopDragBounds.y + dy), Math.round(wa.y + wa.height - height))
     )
     win.setContentBounds({ x: nx, y: ny, width, height })
   })
@@ -633,30 +629,73 @@ function registerWidgetIpc(opts = {}) {
     if (typeof page === 'string' && page.startsWith('/')) openMainPage(page)
   })
 
-  // 调整小组件窗口大小（带边界保护，防止超出屏幕）
-  // 入参 [width, height] 为「视觉内容」尺寸；窗口实际会比它大 2*M，四周多出的部分用于绘制阴影。
-  // 窗口位置保持不变——因为渲染层内容相对窗口固定偏移 M，所以视觉内容在屏幕上的位置不会变。
-  IPC.on(CH.WIDGET_RESIZE, (event, [width, height]) => {
+  // 调整小组件窗口大小。
+  // 固定尺寸方案：图标态(48×48)与菜单态(300×360)共用同一个窗口，尺寸恒定 MENU_SIZE+阴影，
+  // 这两种请求一律不写 setContentBounds —— 实验证明透明窗 resize 那一帧会让图标消失。
+  // 工具态（计时器/点名/截图等）仍按原逻辑 resize；工具态退出回图标态时也 resize 回固定尺寸。
+  // 入参 [width, height] 为「视觉内容」尺寸；窗口实际比它大 2*M。
+  IPC.on(CH.WIDGET_RESIZE, (event, payload) => {
     if (fromWidgetWindow(event)) {
+      const [width, height] = Array.isArray(payload)
+        ? payload
+        : [payload && payload.width, payload && payload.height]
       const M = WIDGET_SHADOW_MARGIN
-      widgetWindow.setContentSize(width + M * 2, height + M * 2)
-      const [actualW, actualH] = widgetWindow.getContentSize()
-      currentWidgetSize = [actualW, actualH]
+      const newW = width + M * 2
+      const newH = height + M * 2
+      const iconStateSize = (width === 48 && height === 48)
+      const menuStateSize = (width === 300 && height === 360)
 
-      // 回执：告知渲染层窗口尺寸已生效，便于其「先改尺寸、再显示内容」，避免固定延时造成的空窗
-      try { widgetWindow.webContents.send(CH.FROM_MAIN, { type: 'widget-resized', width: actualW, height: actualH }) } catch (_) { /* best-effort: 回执窗口已销毁时无法接收尺寸消息 */ }
-
-      // 边界保护：保证「视觉内容」（去掉阴影边距后的部分）不越出屏幕。
-      // 因视觉内容相对窗口左上角偏移 M，窗口本身允许向外溢出 M。
-      const [x, y] = widgetWindow.getPosition()
-      const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize
-
-      let newX = Math.min(Math.max(x, -M), screenW - width - M)
-      let newY = Math.min(Math.max(y, -M), screenH - height - M)
-
-      if (newX !== x || newY !== y) {
-        widgetWindow.setPosition(newX, newY)
+      if (iconStateSize || menuStateSize) {
+        // 固定尺寸：不 resize、不挪位，仅回执让前端流程继续（工具态退出回图标态时这里把尺寸恢复）。
+        const wantW = WIDGET_CONTENT_W + M * 2
+        const wantH = WIDGET_CONTENT_H + M * 2
+        const [cw, ch] = widgetWindow.getContentSize()
+        if (cw !== wantW || ch !== wantH) {
+          const b = widgetWindow.getContentBounds()
+          widgetWindow.setContentBounds({ x: b.x, y: b.y, width: wantW, height: wantH })
+        }
+        try { widgetWindow.webContents.send(CH.FROM_MAIN, { type: 'widget-resized', width: wantW, height: wantH }) } catch (_) { /* best-effort */ }
+        return
       }
+
+      // 工具态：按「新尺寸」居中。旧逻辑用 before（552×816 大窗居中后的左上角）当小窗左上角，
+      // 但 WIDGET_CENTER 先于 resize 执行、按大窗居中，导致小窗落在偏上偏左的位置，
+      // 看着像「记住了上次位置」。直接按目标尺寸算工作区中心，每次打开工具都真正居中。
+      // 主屏工作区为准（工具面板是临时面板，不必跟随多屏鼠标位置）。
+      const wa = screen.getPrimaryDisplay().workArea
+      const x = Math.round(wa.x + (wa.width - newW) / 2)
+      const y = Math.round(wa.y + (wa.height - newH) / 2)
+      widgetWindow.setContentBounds({ x, y, width: newW, height: newH })
+      try { widgetWindow.webContents.send(CH.FROM_MAIN, { type: 'widget-resized', width: newW, height: newH }) } catch (_) { /* best-effort */ }
+    }
+  })
+
+  // 移动窗口到指定左上角（DIP），**保持当前尺寸**。历史坑（见 3cf1af1 注释）：
+  // Electron 透明无边框窗口只调 setPosition，每帧会让窗口「越拖越大」/ 内容漂移；
+  // 必须每帧连宽高一起 setContentBounds。但宽高要取**当前实际值**，不能写死常量：
+  // 图标/菜单态窗口 552×816，工具态被 resize 成 200×400 那类小窗，
+  // 写死 552×816 会让工具面板一拖就「瞬间增大」成一坨。
+  // **不夹位**：主进程再按 Electron screen 夹会和渲染层 window.screen.avail* 打架，
+  // 两边不一致就会把 iconScreen 与窗口实际位置越拉越开。
+  IPC.on(CH.WIDGET_MOVE_TO, (event, pos) => {
+    if (!fromWidgetWindow(event) || !Array.isArray(pos)) return
+    const [x, y] = pos
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return
+    if (widgetWindow && !widgetWindow.isDestroyed()) {
+      const b = widgetWindow.getContentBounds()
+      widgetWindow.setContentBounds({
+        x: Math.round(x),
+        y: Math.round(y),
+        width: b.width,
+        height: b.height,
+      })
+    }
+  })
+
+  // 切换鼠标穿透：图标态整窗穿透，只让图标区域接收点击；菜单/工具态关闭穿透。
+  IPC.on(CH.WIDGET_SET_IGNORE_MOUSE, (event, ignore) => {
+    if (fromWidgetWindow(event) && typeof ignore === 'boolean') {
+      setWidgetIgnoreMouse(widgetWindow, ignore)
     }
   })
 
@@ -687,7 +726,6 @@ function registerWidgetIpc(opts = {}) {
       widgetWindow.setContentSize(width, height)
       widgetWindow.setAlwaysOnTop(true)
       widgetWindow.focus()
-      currentWidgetSize = [width, height]
     }
   })
 
@@ -698,7 +736,6 @@ function registerWidgetIpc(opts = {}) {
       widgetWindow.setContentSize(preFullscreenBounds.size[0], preFullscreenBounds.size[1])
       widgetWindow.setAlwaysOnTop(true)
       widgetWindow.focus()
-      currentWidgetSize = preFullscreenBounds.size
       preFullscreenBounds = null
     }
   })
@@ -708,22 +745,13 @@ function registerWidgetIpc(opts = {}) {
     if (fromWidgetWindow(event)) {
       if (visible) {
         widgetWindow.setOpacity(1)
-        setWidgetIgnoreMouse(widgetWindow, false)
+        // 穿透态完全由渲染层 hover 检测驱动（见 widget-set-ignore-mouse）：
+        // 这里不再改穿透，避免 checkToolboxEnabled 的重复 SET_VISIBLE 把它冲掉。
         widgetWindow.focus()
       } else {
         widgetWindow.setOpacity(0)
         setWidgetIgnoreMouse(widgetWindow, true)
       }
-    }
-  })
-
-  // 拖动开始：记录窗口初始位置、尺寸和鼠标初始位置
-  IPC.on(CH.WIDGET_DRAG_START, (event, { screenX, screenY }) => {
-    if (fromWidgetWindow(event)) {
-      if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return
-      dragStartWindowPos = widgetWindow.getPosition()
-      dragStartWindowSize = widgetWindow.getSize()
-      dragStartMousePos = [screenX, screenY]
     }
   })
 
@@ -764,34 +792,9 @@ function registerWidgetIpc(opts = {}) {
   // 桌面组件与主窗口同 origin，token 直接读自己的 localStorage；
   // 原来的 get-main-token IPC 已随独立进程一起删除。
 
-  // 拖动中：使用 setContentBounds 与 setContentSize 保持一致，避免 setBounds/setSize 边界计算差异
-  IPC.on(CH.WIDGET_DRAG_MOVE, (event, { screenX, screenY }) => {
-    if (fromWidgetWindow(event) && dragStartWindowPos && dragStartMousePos && dragStartWindowSize) {
-      if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return
-      const dx = screenX - dragStartMousePos[0]
-      const dy = screenY - dragStartMousePos[1]
-      let newX = Math.round(dragStartWindowPos[0] + dx)
-      let newY = Math.round(dragStartWindowPos[1] + dy)
-
-      const [width, height] = dragStartWindowSize
-      const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize
-
-      const minVisible = 50
-      newX = Math.max(-width + minVisible, Math.min(newX, screenW - minVisible))
-      newY = Math.max(-height + minVisible, Math.min(newY, screenH - minVisible))
-
-      widgetWindow.setContentBounds({ x: newX, y: newY, width, height })
-    }
-  })
-
-  // 拖动结束：确保尺寸正确
-  IPC.on(CH.WIDGET_DRAG_END, (event) => {
-    if (fromWidgetWindow(event)) {
-      const w = currentWidgetSize[0]
-      const h = currentWidgetSize[1]
-      widgetWindow.setContentSize(w, h)
-    }
-  })
+  // 拖动完全由渲染层通过 widget-move-to 驱动（实时夹紧图标到工作区后摆窗口）。
+  // 原来的 widget-drag-start/move/end 三条通道已删除：固定大窗下按窗口左上角跟手
+  // 与渲染层的图标夹紧打架，会把图标拖出屏幕。
 
   // 主应用 -> 所有小组件窗口（工具箱浮窗 + 桌面挂件）。
   // 桌面挂件此前收不到这条中继，业务数据变更只能等 5 分钟轮询；settings-changed

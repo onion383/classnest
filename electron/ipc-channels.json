@@ -2,9 +2,8 @@
   "_comment": "IPC 通道名单一来源：preload 白名单与渲染层调用共用此文件，避免两侧通道名失配。",
   "send": [
     "widget-resize",
-    "widget-drag-start",
-    "widget-drag-move",
-    "widget-drag-end",
+    "widget-move-to",
+    "widget-set-ignore-mouse",
     "widget-center",
     "widget-restore-position",
     "widget-fullscreen",

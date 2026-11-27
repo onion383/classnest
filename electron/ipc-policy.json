@@ -3,13 +3,10 @@
   "widget-resize": [
     "widget"
   ],
-  "widget-drag-start": [
+  "widget-move-to": [
     "widget"
   ],
-  "widget-drag-move": [
-    "widget"
-  ],
-  "widget-drag-end": [
+  "widget-set-ignore-mouse": [
     "widget"
   ],
   "widget-center": [

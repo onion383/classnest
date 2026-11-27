@@ -20,13 +20,19 @@ test.after(() => fx.close())
 
 const retention = require('../../../student-backend/services/retentionStore')
 
+// 相对日期：OLD 恒超期、NEW 恒在 7d 档内。曾用写死 2026-11-20 当「新数据」，
+// 跨过该日期+7 天后测试假红（2026-11-27 撞上）——时间炸弹，勿再写死。
+const sqlDate = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 19).replace('T', ' ')
+const OLD = sqlDate(365)
+const NEW = sqlDate(2)
+
 function seed() {
   const c = fx.reset()
   c.prepare("INSERT INTO ai_conversations (id, title) VALUES (1, '测试会话')").run()
-  c.prepare("INSERT INTO ai_messages (conversation_id, role, content, process_json, attachments_json, created_at) VALUES (1,'user','你好','{}','','2026-01-01 00:00:00')").run()
-  c.prepare("INSERT INTO ai_messages (conversation_id, role, content, process_json, attachments_json, created_at) VALUES (1,'assistant','回答','{}','','2026-11-20 00:00:00')").run()
-  c.prepare("INSERT INTO domain_history (domain, week_start, snap_date, payload, created_at) VALUES ('seat','2026-01-05','2026-01-01','{\"seats\":[]}','2026-01-01 00:00:00')").run()
-  c.prepare("INSERT INTO domain_history (domain, week_start, snap_date, payload, created_at) VALUES ('seat','2026-11-23','2026-11-20','{\"seats\":[1]}','2026-11-20 00:00:00')").run()
+  c.prepare("INSERT INTO ai_messages (conversation_id, role, content, process_json, attachments_json, created_at) VALUES (1,'user','你好','{}','',?)").run(OLD)
+  c.prepare("INSERT INTO ai_messages (conversation_id, role, content, process_json, attachments_json, created_at) VALUES (1,'assistant','回答','{}','',?)").run(NEW)
+  c.prepare("INSERT INTO domain_history (domain, week_start, snap_date, payload, created_at) VALUES ('seat','2026-01-05','2026-01-01','{\"seats\":[]}',?)").run(OLD)
+  c.prepare("INSERT INTO domain_history (domain, week_start, snap_date, payload, created_at) VALUES ('seat','2026-11-23','2026-11-20','{\"seats\":[1]}',?)").run(NEW)
   return c
 }
 

@@ -21,8 +21,11 @@ const fx = createBackendDb({ label: 'conversation-shell-retention' })
 test.after(() => fx.close())
 const retention = require('../../../student-backend/services/retentionStore')
 
-const OLD = '2026-01-01 00:00:00'
-const NEW = '2026-11-20 00:00:00'
+// 相对日期：NEW 恒为 2 天前（7d 档内的「新数据」），OLD 恒为一年前（必超期）。
+// 曾用写死 2026-11-20，跨过该日期+7 天后测试就假红——时间炸弹，勿再写死。
+const sqlDate = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 19).replace('T', ' ')
+const OLD = sqlDate(365)
+const NEW = sqlDate(2)
 
 // 四段会话：旧空壳 / 旧但有消息 / 新空壳 / 新且有消息
 function seed() {

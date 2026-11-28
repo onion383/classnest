@@ -16,10 +16,11 @@ const { pathToFileURL } = require('node:url')
 
 const urlOf = (rel) => pathToFileURL(abs(rel)).href
 
-test('9 项计数全部能从源码现算，且每份文档都有可替换的计数位置', async () => {
+test('计数项全部能从源码现算，且每份文档都有可替换的计数位置', async () => {
   const { countExpectations, replaceCount } = await import(urlOf('testjs/tools/docs-counts.mjs'))
   const list = countExpectations(228)
-  assert.equal(list.length, 9, '计数项数量变了就同步更新测试与文档')
+  // 13 项 = 原有 9 项 + 概览层 4 组测试资产计数（V9-I-02 / V10 2-5）
+  assert.equal(list.length, 13, '计数项数量变了就同步更新测试与文档')
   for (const e of list) {
     assert.ok(fs.existsSync(e.file), `${e.name} 的文档不存在：${e.file}`)
     assert.equal(typeof e.actual, 'number', `${e.name} 必须现算出数字`)

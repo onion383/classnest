@@ -83,6 +83,27 @@ test('产品函数：worker 导出的取消/等待/清理确实可执行（非�
   assert.equal(keyCache.size, 0)
 })
 
+test('V10-K05-02：锁库等待把补图需求算进去（排队 + 在途都不能提前回 idle）', async () => {
+  const running = new Map()
+  const queue = [{ slug: '@bbbbbbbbbbbb', id: 1 }]
+  assert.equal(
+    await waitRunningIdle('@bbbbbbbbbbbb', { running, demandQueue: queue, isDemandBusy: () => false }, 40, 5),
+    false, '排队补图未清，锁库不能提前回执'
+  )
+  assert.equal(
+    await waitRunningIdle('@bbbbbbbbbbbb', { running, demandQueue: [], isDemandBusy: () => true }, 40, 5),
+    false, '在途补图未收工，锁库不能提前回执'
+  )
+  assert.equal(
+    await waitRunningIdle('@bbbbbbbbbbbb', { running, demandQueue: [], isDemandBusy: () => false }, 40, 5),
+    true, '都清空后应真回 idle'
+  )
+  assert.equal(
+    await waitRunningIdle('@bbbbbbbbbbbb', { running, demandQueue: [{ slug: '@cccccccccccc', id: 2 }], isDemandBusy: () => false }, 40, 5),
+    true, '跨库补图与本库锁无关'
+  )
+})
+
 test('真 IPC：lock → locked 回执 ok:true（子进程确实处理了消息）', async () => {
   const { msg } = await withWorker({ cmd: 'lock', slug: '@aaaaaaaaaaaa' }, 'locked')
   assert.equal(msg.type, 'locked')

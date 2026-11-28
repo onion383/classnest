@@ -23,11 +23,13 @@ const spec = (type = 'row_insert') => ({
 })
 
 test('takeUndoSpec：取出保留字段并从 body 移除，绝不落库', () => {
-  const body = { '姓名': '甲', _undoSpec: spec() }
+  const body = { '姓名': '甲', _undoSpec: spec(), _undoSpecs: [spec(), spec()] }
   const taken = takeUndoSpec(body)
   assert.equal(taken.type, 'row_insert')
   // @pin student-backend/services/writeWithUndo.js#takeUndoSpec
   assert.ok(!('_undoSpec' in body), '保留字段必须移除')
+  // @pin student-backend/services/writeWithUndo.js#takeUndoSpec
+  assert.ok(!('_undoSpecs' in body), '多规格保留字段也必须移除（V10-K03-03）')
   assert.equal(Object.keys(body).length, 1, '只剩业务字段')
   assert.equal(Object.keys(body)[0], '姓名')
 })

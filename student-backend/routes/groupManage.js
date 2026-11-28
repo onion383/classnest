@@ -77,6 +77,7 @@ router.put('/dimensions/:id', (req, res) => {
     const id = Number(req.params.id);
     const { name, leader_title, members_per_group, group_count } = req.body;
     const specs = req.body._undoSpecs;
+    delete req.body._undoSpecs; // 保留字段不能流进 writeFn 的落库载荷（V10-K03-03）
     const dim = groupDim.dimensionById(id);
     if (!dim) return res.status(404).json({ error: '维度不存在' });
 

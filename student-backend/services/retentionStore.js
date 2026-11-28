@@ -292,15 +292,22 @@ function restoreReceipt(key) {
   if (fs.existsSync(target)) return { ok: false, error: '原位置已有同名文件，未覆盖' }
   try {
     fs.mkdirSync(uploads, { recursive: true })
-    fs.renameSync(found.path, target)
+    // 硬链接创建是排他的：目标已存在时 EEXIST 直接失败，不像 rename 那样静默覆盖。
+    // 预检 existsSync 与落盘之间若有并发同名到达，这里会挡住（V10-K04-02 的 TOCTOU）。
+    fs.linkSync(found.path, target)
+    fs.unlinkSync(found.path)
   } catch (e) {
-    // 跨盘不能用 rename：复制后删源文件
+    // 跨盘（link 不能跨文件系统）或源已被搬走：退回复制后删源，
+    // 但用 'wx' 排他创建目标，仍然不会覆盖并发到达的同名文件。
     try {
-      fs.copyFileSync(found.path, target)
+      fs.writeFileSync(target, fs.readFileSync(found.path), { flag: 'wx' })
       fs.unlinkSync(found.path)
     } catch (back) {
-      try { fs.unlinkSync(target) } catch (_) { /* best-effort: 目标没建成，忽略 */ }
-      return { ok: false, error: '恢复失败：' + back.message }
+      // EEXIST 说明并发同名已落盘，目标不是我们建的，绝不能 unlink 掉它。
+      if (back.code !== 'EEXIST') {
+        try { fs.unlinkSync(target) } catch (_) { /* best-effort: 目标没建成，忽略 */ }
+      }
+      return { ok: false, error: '恢复失败：' + (back.code === 'EEXIST' ? '原位置已有同名文件，未覆盖' : back.message) }
     }
   }
   return { ok: true, name: original }

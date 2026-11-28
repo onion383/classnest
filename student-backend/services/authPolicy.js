@@ -52,12 +52,21 @@ function load() {
   return cache;
 }
 
-function save() {
+// 原子写：先写同目录临时文件、再 rename 替换。直接 writeFileSync 覆盖时，
+// 写一半崩溃/掉电会留下半截 JSON，load() 解析失败就把所有账号的策略一起退回默认 30 天
+// （V10-K04-01）。临时文件带 pid 避免并发写互相踩；rename 失败则清临时文件、保留原文件。
+function save(impl = fs) {
+  const file = FILE();
+  if (!file || !cache) return;
+  const tmp = `${file}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(FILE(), JSON.stringify(cache), { encoding: 'utf8', mode: 0o600 });
-  } catch (_) { // best-effort: 写盘失败只影响重启记忆，内存已更新本次正确
-
-
+    impl.writeFileSync(tmp, JSON.stringify(cache), { encoding: 'utf8', mode: 0o600 });
+    impl.renameSync(tmp, file);
+  } catch (err) {
+    try { impl.unlinkSync(tmp) } catch (_) { /* best-effort: tmp 可能没建出来 */ }
+    // best-effort: 写盘失败只影响重启记忆，内存已更新本次结果；
+    // 原文件保持不动，下次重启读到的仍是上一次完整策略，不会整体回退默认。
+    console.warn('[authPolicy] 策略写盘失败，本次改动仅存内存：' + (err && err.message));
   }
 }
 
@@ -176,4 +185,6 @@ module.exports = {
   signOptsFor, slideWindowMs, sessionTtlMs, sessionTtlMsForSlug, mediaTtlFor,
   // —— 仅供单元测试构造场景，生产代码不要用 ——
   __test_reload: () => { cache = null; return load(); },
+  // 仅供单测注入假 fs 验证原子写（失败时原文件不动）
+  __test_save: (impl) => save(impl),
 };

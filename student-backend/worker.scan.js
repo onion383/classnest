@@ -241,7 +241,7 @@ function cancelRunningForSlug(slug, deps = { running, pendingStops }) {
 
 // 等该库在飞任务全部从 running 表退出。返回 boolean（超时也算失败，调用方据此回 ok:false）。
 // 用轮询而非事件：runScan 在多个检查点收工，没有统一的完成事件；20ms 间隔对扫描这种秒级操作可忽略。
-function waitRunningIdle(slug, deps = { running }, timeoutMs = LOCK_IDLE_TIMEOUT_MS, sleepMs = LOCK_IDLE_POLL_MS) {
+function waitRunningIdle(slug, deps = { running, demandQueue, isDemandBusy: () => demandBusy }, timeoutMs = LOCK_IDLE_TIMEOUT_MS, sleepMs = LOCK_IDLE_POLL_MS) {
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs;
     const check = () => {
@@ -249,7 +249,11 @@ function waitRunningIdle(slug, deps = { running }, timeoutMs = LOCK_IDLE_TIMEOUT
       for (const key of deps.running.keys()) {
         if (String(key).startsWith(`${slug}|`)) { busy = true; break; }
       }
-      if (!busy) return resolve(true);
+      // V10-K05-02：锁库也要等在途补图与排队需求收工，否则 applyLock 关掉连接后
+      // runDemand 仍拿旧连接写库，撞 closed-conn / SQLITE_BUSY。
+      const demandPending = (deps.demandQueue || []).some((q) => q && q.slug === slug)
+      const demandRunning = typeof deps.isDemandBusy === 'function' && deps.isDemandBusy()
+      if (!busy && !demandPending && !demandRunning) return resolve(true);
       if (Date.now() >= deadline) return resolve(false);
       setTimeout(check, sleepMs);
     };
@@ -324,6 +328,11 @@ process.on('message', async (msg) => {
       // 回执带 ok，主进程据此决定能否继续覆盖文件（V9-K01-01）。
       const slug = msg.slug;
       cancelRunningForSlug(slug);
+      // 丢弃该库尚未开跑的补图需求：锁库后这些 id 不该再写库；
+      // 在途批次仍会跑完（waitRunningIdle 等 demandBusy 收工）。
+      for (let i = demandQueue.length - 1; i >= 0; i--) {
+        if (demandQueue[i] && demandQueue[i].slug === slug) demandQueue.splice(i, 1);
+      }
       const idle = await waitRunningIdle(slug);
       try {
         applyLock(slug);

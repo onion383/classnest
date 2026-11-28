@@ -152,6 +152,33 @@ test('按班级 slug 反查：未知 slug 退回默认；登记过的走账号�
   assert.strictEqual(authPolicy.daysForSlug('@erin-class2'), 90, '一个账号多个班必须共用同一套天数')
 })
 
+test('V10-K04-01：策略文件原子写——失败时原文件不动，不整体回退默认', () => {
+  const file = dbManager.authPolicyPath
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ atomic_keep: { days: 120, updatedAt: 1 } }), { encoding: 'utf8', mode: 0o600 })
+  const original = fs.readFileSync(file, 'utf8')
+
+  // 假 fs：writeFileSync 成功写到 tmp，renameSync 抛错（模拟掉电/占用）
+  let wroteTmp = ''
+  const failing = {
+    writeFileSync: (p, data) => { if (String(p).endsWith('.tmp')) wroteTmp = data },
+    renameSync: () => { throw new Error(' simulated rename failure') },
+    unlinkSync: () => {},
+  }
+  // console.warn 会打到测试输出，临时静音
+  const realWarn = console.warn
+  console.warn = () => {}
+  try { authPolicy.__test_save(failing) } finally { console.warn = realWarn }
+
+  assert.ok(wroteTmp, '必须先写临时文件')
+  assert.equal(fs.readFileSync(file, 'utf8'), original, 'rename 失败时原文件必须保持完整，不能被半截 JSON 覆盖')
+  assert.equal(authPolicy.daysFor('atomic_keep'), 30, '缓存里仍是本次内存值（120 天不应被读回）')
+
+  // 正常路径：真 save 用 rename，内容可解析且保留原账号
+  authPolicy.__test_reload()
+  assert.equal(authPolicy.daysFor('atomic_keep'), 120, '原文件完整就能读回 120 天')
+})
+
 test.after(() => {
   try { fs.rmSync(DATA_DIR, { recursive: true, force: true }) } catch (_) {}
 })

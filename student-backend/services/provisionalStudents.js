@@ -165,8 +165,18 @@ function resolvePickedForImport(picked, rawName) {
   if (picked === 'new') {
     if (!name) return null
     // 直接建临时学生：正式名单里已有同名也照建（用户明确说这是新同学）。
-    const info = insertRow('students', { 姓名: name, is_provisional: 1 })
-    return { id: Number(info.id), name, is_provisional: true, created: true }
+    // 唯一索引 ux_students_provisional_name 冲突时按名查回既有临时学生（V10-K04-03），
+    // 不把约束违约原样抛给路由（否则前端收到 SQLITE_CONSTRAINT 而非业务 400）。
+    try {
+      const info = insertRow('students', { 姓名: name, is_provisional: 1 })
+      return { id: Number(info.id), name, is_provisional: true, created: true }
+    } catch (err) {
+      if (/UNIQUE/i.test(String(err && err.message))) {
+        const again = findByName(name).find((r) => r.is_provisional)
+        if (again) return { id: Number(again.id), name, is_provisional: true, created: false }
+      }
+      throw err
+    }
   }
   const id = Number(picked)
   if (!Number.isInteger(id) || id <= 0) return null

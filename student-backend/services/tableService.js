@@ -200,13 +200,18 @@ function deleteRow(tableName, id, options = {}) {
     if (count <= minCount) throw new Error('至少需要保留一条记录');
   }
 
-  const row = db.prepare(`SELECT position FROM ${tableName} WHERE id = ?`).get(id);
-  if (!row) throw new Error('记录不存在');
+  // DELETE 与 position 平移必须同事务（V10-K05-01）：两条语句之间若被中断
+  // （SQLITE_BUSY / 磁盘满），会留下 position 空洞，后续拖拽排序按空档错位。
+  // 与 deleteRows 同口径——校验也放进事务，失败即回滚，不留半截状态。
+  return db.transaction(() => {
+    const row = db.prepare(`SELECT position FROM ${tableName} WHERE id = ?`).get(id);
+    if (!row) throw new Error('记录不存在');
 
-  if (tableName === 'students' && !allowStudentOrphans) assertStudentRelationsCleared(id);
+    if (tableName === 'students' && !allowStudentOrphans) assertStudentRelationsCleared(id);
 
-  db.prepare(`DELETE FROM ${tableName} WHERE id = ?`).run(id);
-  db.prepare(`UPDATE ${tableName} SET position = position - 1 WHERE position > ?`).run(row.position);
+    db.prepare(`DELETE FROM ${tableName} WHERE id = ?`).run(id);
+    db.prepare(`UPDATE ${tableName} SET position = position - 1 WHERE position > ?`).run(row.position);
+  })();
 }
 
 // 批量删除：整批包在一个事务里，任一 id 失败整批回滚（不留半截状态）。

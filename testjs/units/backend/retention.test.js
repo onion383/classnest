@@ -16,6 +16,31 @@ const path = require('node:path')
 const { createBackendDb } = require('#testjs/units/_db-express-fixture.cjs')
 
 const fx = createBackendDb({ label: 'retention' })
+test('V10-K04-02：收据恢复 TOCTOU——预检通过后目标被占，不得覆盖', () => {
+  const dbm = require('../../../student-backend/dbManager/dbManager')
+  const archived = '1700000000000-123456-toctou.jpg'
+  const trashDir = dbm.receiptTrashDir
+  fs.mkdirSync(trashDir, { recursive: true })
+  const src = path.join(trashDir, archived)
+  fs.writeFileSync(src, ' archived-bytes ')
+  const uploads = dbm.uploadsDir
+  fs.mkdirSync(uploads, { recursive: true })
+  const target = path.join(uploads, 'toctou.jpg')
+  fs.writeFileSync(target, ' original-content ')
+
+  // 让预检 existsSync 谎报「目标不存在」，模拟预检与落盘之间的并发窗口
+  const realExists = fs.existsSync
+  fs.existsSync = (p) => (path.resolve(p) === path.resolve(target) ? false : realExists(p))
+  let out
+  try { out = retention.restoreReceipt(archived) } finally { fs.existsSync = realExists }
+
+  assert.equal(out.ok, false, '目标被占时必须拒绝恢复')
+  // @pin student-backend/services/retentionStore.js#restoreReceipt
+  assert.equal(fs.readFileSync(target, 'utf8'), ' original-content ', '并发占用的文件不能被覆盖或删除')
+  // @pin student-backend/services/retentionStore.js#restoreReceipt
+  assert.ok(fs.existsSync(src), '源归档仍留着，供用户重试')
+})
+
 test.after(() => fx.close())
 
 const retention = require('../../../student-backend/services/retentionStore')

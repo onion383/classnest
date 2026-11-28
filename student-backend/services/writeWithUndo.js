@@ -27,6 +27,9 @@ function takeUndoSpec(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null
   const spec = body._undoSpec
   delete body._undoSpec
+  // _undoSpecs 是「一写多规格」的保留字段（groupManage 等），取完后同样要清理，
+  // 否则后续 writeFn 若直接展开 body 落库会把撤销规格数组当列写进去（V10-K03-03）。
+  delete body._undoSpecs
   return spec && typeof spec === 'object' ? spec : null
 }
 

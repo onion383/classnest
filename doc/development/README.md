@@ -96,11 +96,11 @@
 | 文档 | 主要内容 |
 | --- | --- |
 | [`testing/README.md`](./testing/README.md) | testjs 目录分工与入库规则、入口命令矩阵、runner 与旗标、结论台账、新增脚本流程 |
-| [`testing/units.md`](./testing/units.md) | 92 个单元测试：逐个写覆盖范围、前置依赖、运行方式 |
+| [`testing/units.md`](./testing/units.md) | 368 个单元测试：逐个写覆盖范围、前置依赖、运行方式 |
 | [`testing/behavior.md`](./testing/behavior.md) | 10 个行为层测试：暴露面、失败语义、架构标准、登录态、串行保存等 |
-| [`testing/smoke.md`](./testing/smoke.md) | 17 个链路冒烟脚本：前置环境、产物顺序、退出码判据 |
-| [`testing/probe.md`](./testing/probe.md) | 53 个探针：启动/性能、渲染绘制、相册查看器、表格拖拽、Vapor、其他 |
-| [`testing/tools.md`](./testing/tools.md) | 18 个工具脚本：种子数据、代码统计、边界检查、审计、图标生成、文档一致性校验等 |
+| [`testing/smoke.md`](./testing/smoke.md) | 28 个链路冒烟脚本：前置环境、产物顺序、退出码判据 |
+| [`testing/probe.md`](./testing/probe.md) | 56 个探针：启动/性能、渲染绘制、相册查看器、表格拖拽、Vapor、其他 |
+| [`testing/tools.md`](./testing/tools.md) | 42 个工具脚本：种子数据、代码统计、边界检查、审计、图标生成、文档一致性校验等 |
 
 ### 2.8 小组件
 

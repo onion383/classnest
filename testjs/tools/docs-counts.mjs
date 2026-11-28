@@ -49,6 +49,12 @@ export function countExpectations(routeCount) {
     { name: '页面数', file: path.join(DOC_DIR, 'development/frontend/views.md'), actual: (read(path.join(ROOT, 'student-frontend/src/router/index.js')).match(/path:\s*'/g) || []).length - 2, re: /(\d+)\s*个页面/ },
     { name: '导出表数', file: path.join(DOC_DIR, 'development/frontend/components/data-manage.md'), actual: tableCount, re: /(\d+)\s*张业务表/ },
     { name: '单元测试文件数', file: path.join(DOC_DIR, 'development/testing/units.md'), actual: count(path.join(ROOT, 'testjs/units'), (p) => p.endsWith('.test.js')), re: /(\d+)\s*个\s*`node:test`/ },
+    // 概览层四组测试资产计数（V9-I-02 / V10 2-5）：以前 docs:sync 不覆盖这几行，
+    // 导致「dry 0 处」是假绿——文档仍写 92/17/53/18，实测早已不是。
+    { name: '概览-单元测试数', file: path.join(DOC_DIR, 'development/README.md'), actual: count(path.join(ROOT, 'testjs/units'), (p) => p.endsWith('.test.js')), re: /`testing\/units\.md`\]\([^)]*\) \| (\d+)\s*个单元测试/ },
+    { name: '概览-冒烟脚本数', file: path.join(DOC_DIR, 'development/README.md'), actual: count(path.join(ROOT, 'testjs/smoke'), (p) => /\.(c|m)?js$/.test(p) && !path.basename(p).startsWith('_')), re: /`testing\/smoke\.md`\]\([^)]*\) \| (\d+)\s*个链路冒烟脚本/ },
+    { name: '概览-探针数', file: path.join(DOC_DIR, 'development/README.md'), actual: count(path.join(ROOT, 'testjs/probe'), () => true), re: /`testing\/probe\.md`\]\([^)]*\) \| (\d+)\s*个探针/ },
+    { name: '概览-工具脚本数', file: path.join(DOC_DIR, 'development/README.md'), actual: count(path.join(ROOT, 'testjs/tools'), () => true), re: /`testing\/tools\.md`\]\([^)]*\) \| (\d+)\s*个工具脚本/ },
     { name: '后端路由数', file: path.join(DOC_DIR, 'development/backend/routes.md'), actual: routeCount, re: /共\s*(\d+)\s*条(?:路由|接口)/ },
   ]
 }

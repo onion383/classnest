@@ -137,3 +137,40 @@ test('登录页每个成功跳转前都清掉明文口令 ref', () => {
     assert.match(before, /clearPlainPassword\(\)/, `跳转 ${m.index} 前必须先清明文口令`)
   }
 })
+
+
+for (const [name, rel] of [
+  ['值日', 'dialogs/DutyRecordSettingsDialog.vue'],
+  ['座位', 'dialogs/SeatRecordSettingsDialog.vue'],
+]) {
+  test(`${name}历史：加载失败保留快照并显示失败态，不再误报「暂无」`, () => {
+    const s = read('student-frontend/src/components/' + rel)
+    // @pin student-frontend/src/components/dialogs/DutyRecordSettingsDialog.vue#loadWeeks
+    assert.match(s, /loadError\.value = '周列表加载失败'/, '失败要置错误态')
+    assert.match(s, /useNotification\(\)\.error\('周列表加载失败，请重试'\)/, '失败要提示')
+    assert.doesNotMatch(s, /catch \(_\) \{\s*weeks\.value = \[\]/, '失败不能再清空上次快照')
+    assert.match(s, /v-else-if="loadError"/, '模板要区分失败态与空态')
+    assert.match(s, /@click="loadWeeks\(\)"/, '失败态要能重试')
+  })
+}
+
+test('相册任务轮询：单次失败保留任务快照，只提示一次', () => {
+  const s = read('student-frontend/src/components/dialogs/AlbumTaskDialog.vue')
+  // @pin student-frontend/src/components/dialogs/AlbumTaskDialog.vue#fetchTasks
+  assert.match(s, /fetchFailedOnce/, '要有「只提示一次」的标志')
+  assert.match(s, /useNotification\(\)\.error\('扫描任务状态刷新失败，正在重试'\)/)
+  assert.doesNotMatch(s, /catch \(_\) \{\s*if \(!tasksSeq\.isCurrent\(my\)\) return\s*tasks\.value = \{\}/,
+    '轮询失败不能再清空任务表')
+  assert.match(s, /tasks\.value = map\s*\n\s*fetchFailedOnce = false/, '成功后要复位标志')
+})
+
+test('班干部数组访问有兜底（created / node.members / node.children）', () => {
+  const mgr = read('student-frontend/src/components/CadreManage.vue')
+  const tree = read('student-frontend/src/components/CadreTreeList.vue')
+  // @pin student-frontend/src/components/CadreManage.vue#created
+  assert.doesNotMatch(mgr, /created\.cadres\.length \|\| created\.members\.length/,
+    '导入回包的 created 字段可能缺失，必须兜底')
+  assert.match(mgr, /\(created\.cadres \|\| \[\]\)\.length/)
+  assert.match(mgr, /\(node\.members \|\| \[\]\)\.length >= node\.max_count/)
+  assert.match(tree, /\(node\.children \|\| \[\]\)\.length === 0 && \(node\.members \|\| \[\]\)\.length === 0/)
+})

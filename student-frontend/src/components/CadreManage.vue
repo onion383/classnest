@@ -340,10 +340,10 @@ async function onImportData({ fields, rows, studentIds }) {
     tree.value = (res.data && res.data.tree) || []
     // 只回滚本次真正新建的职务/成员；导入前已有的数据不受影响
     const created = res.data && res.data.created
-    if (created && (created.cadres.length || created.members.length)) {
-      recordUndo('cadre_import', `导入班干部：${created.cadres.length} 个职务、${created.members.length} 名担任学生`, {
-        cadres: created.cadres,
-        members: created.members
+    if (created && ((created.cadres || []).length || (created.members || []).length)) {
+      recordUndo('cadre_import', `导入班干部：${(created.cadres || []).length} 个职务、${(created.members || []).length} 名担任学生`, {
+        cadres: created.cadres || [],
+        members: created.members || []
       }, res.data && res.data.undoId)
     }
     success((res.data && res.data.message) || '导入成功')
@@ -416,7 +416,7 @@ function onEditSelected() {
 // 职务下方行内「添加学生」确认后添加担任学生
 async function onAddStudentInline({ nodeId, student }) {
   const node = findNode(tree.value, nodeId)
-  if (node && node.members.length >= node.max_count) {
+  if (node && (node.members || []).length >= node.max_count) {
     return info(`「${node.name}」人数已达上限 ${node.max_count} 人`)
   }
   try {

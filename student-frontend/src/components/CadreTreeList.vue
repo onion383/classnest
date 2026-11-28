@@ -103,7 +103,7 @@
           @drop-move="onDropBubble($event)"
         />
       </div>
-      <div v-if="node.children.length === 0 && node.members.length === 0" class="text-xs text-text-muted px-2 py-1">暂无下级职务 / 担任学生，可拖入或添加</div>
+      <div v-if="(node.children || []).length === 0 && (node.members || []).length === 0" class="text-xs text-text-muted px-2 py-1">暂无下级职务 / 担任学生，可拖入或添加</div>
     </div>
     </Transition>
 

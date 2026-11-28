@@ -15,7 +15,8 @@
           <!-- 周列表（可滚动）：学期内一组 + 学期外单独归到「未归入学期」 -->
           <div class="flex-1 overflow-auto border border-border rounded">
             <div v-if="loadingWeeks || loadingSemesters" class="text-xs text-text-muted p-3">加载中...</div>
-            <div v-else-if="!inSemesterWeeks.length && !orphanWeeks.length" class="text-xs text-text-muted p-3">该学期暂无周记录</div>
+            <div v-else-if="loadError" class="text-xs text-danger p-3">{{ loadError }} <button type="button" class="underline" @click="loadWeeks()">重试</button></div>
+            <div v-else-if="!inSemesterWeeks.length && !orphanWeeks.length" class="text-xs text-text-muted p-3">暂无周记录</div>
             <div v-else>
               <!-- 学期范围内的周 -->
               <div
@@ -102,6 +103,7 @@ const semesterId = ref('')
 const weeks = ref([])
 const loadingSemesters = ref(false)
 const loadingWeeks = ref(false)
+const loadError = ref('')
 // 正在删除的周（周一日期字符串），用于禁用对应行按钮
 const deletingWeek = ref('')
 const confirmVisible = ref(false)
@@ -172,8 +174,12 @@ async function loadWeeks() {
   try {
     const res = await axios.get('/api/seats/history')
     weeks.value = res.data || []
-  } catch (_) {
-    weeks.value = []
+    loadError.value = ''
+  } catch (err) {
+    // 加载失败不清空上次快照（V10-F02-05）：用户看到的「暂无」得是真没数据，
+    // 不是请求失败被吞成空列表。错误提示一次即可，不占常驻行。
+    loadError.value = '周列表加载失败'
+    useNotification().error('周列表加载失败，请重试')
   } finally {
     loadingWeeks.value = false
   }

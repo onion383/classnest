@@ -98,6 +98,7 @@ const bodyRef = ref(null)
 const albums = ref([])
 // 后端任务表：albumId -> { id, mode, scanning, cancelled, scanned, total, ... }
 const tasks = ref({})
+let fetchFailedOnce = false
 // 本地排队：按顺序一个个执行（后端允许并发，但这里刻意串行，避免同时扫多个大相册把机器拖死）
 const queue = ref([])
 // 「全部暂停」：暂停所有在跑的任务，并且让队列也不再往后推进
@@ -193,9 +194,15 @@ async function fetchTasks() {
     const map = {}
     for (const t of (res.data.data || [])) map[t.albumId] = t
     tasks.value = map
+    fetchFailedOnce = false
   } catch (_) {
     if (!tasksSeq.isCurrent(my)) return
-    tasks.value = {}
+    // 轮询一次失败不代表任务没了（V10-F02-06）：保留上次快照，别把界面闪成「无任务」。
+    // 只提示一次，下一次轮询成功会自然恢复。
+    if (!fetchFailedOnce) {
+      fetchFailedOnce = true
+      useNotification().error('扫描任务状态刷新失败，正在重试')
+    }
   }
 }
 

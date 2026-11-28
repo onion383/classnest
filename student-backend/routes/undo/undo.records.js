@@ -6,6 +6,7 @@
 
 const undoStore = require('../../services/undoStore')
 const { executors } = require('./undo.executors')
+const { publicToolError } = require('../../utils/publicToolError')
 const expected = require('./undo.expected')
 const { safeJson } = require('../../utils/json')
 
@@ -131,7 +132,7 @@ async function runAtomicBatchImpl(records, mode, fromDir, toDir) {
     } catch (rbErr) {
       console.error('[undo] 批量回退回滚失败:', rbErr.message)
     }
-    return { ok: false, error: err.message, count: labels.length, labels }
+    return { ok: false, error: publicToolError(err.message), count: labels.length, labels }
   }
   return { ok: true, count: labels.length, labels }
 }

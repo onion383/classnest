@@ -135,8 +135,10 @@ function createApiProxy({ fetchImpl, backendOrigin } = {}) {
       return res
     } catch (err) {
       perfLog(`[perf] proxy 失败 ${url.pathname} ${Date.now()}（${Date.now() - t0}ms）`)
-      // 后端未就绪：回 503，前端既有「不可达 → 等 backend-ready → 重试」链路会接管
-      return new Response(JSON.stringify({ error: `后端暂不可用：${err && err.message || 'fetch failed'}` }), {
+      // 后端未就绪：回 503，前端既有「不可达 → 等 backend-ready → 重试」链路会接管。
+      // 对外文案固定，原始错误只进主进程日志（V10-E01-02：err.message 可能含本机地址/路径）。
+      console.error('[api-proxy] 后端不可达：', err && err.message)
+      return new Response(JSON.stringify({ error: '后端暂不可用' }), {
         status: 503,
         headers: { 'content-type': 'application/json; charset=utf-8' },
       })

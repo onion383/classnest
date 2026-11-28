@@ -1,4 +1,5 @@
 const express = require('express');
+const { publicToolError } = require('../../utils/publicToolError');
 const { sendError } = require('../../utils/sendError')
 const path = require('path');
 const fs = require('fs');
@@ -139,7 +140,7 @@ function applyDocWrite(table, id, values) {
       cleaned[k] = sanitizeField(values[k], table, k, colType(table, k));
     }
   } catch (e) {
-    return { error: e.message };
+    return { error: publicToolError(e && e.message) };
   }
   const keys = Object.keys(cleaned);
   if (!keys.length) return { error: '没有可写入的字段' };
@@ -188,7 +189,7 @@ function applyDocWrite(table, id, values) {
       return { ok: true, table, id: rid, before, after, createdStudents, ambiguousNames };
     })();
   } catch (e) {
-    return { error: e.message };
+    return { error: publicToolError(e && e.message) };
   }
 }
 

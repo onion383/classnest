@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const groupDim = require('../services/groupDim');
 const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
+const { sendError } = require('../utils/sendError');
 
 // 维度设置可能同时改字段（cell_update）和改组数（group_snapshot）——一写多登记。
 // buildPayload 按 spec.type 分派：cell_update 保持前端原 payload，group_snapshot 后端填 after。
@@ -67,7 +68,7 @@ router.post('/dimensions', (req, res) => {
     });
     res.json({ id: dimId, message: '添加成功' });
   } catch (err) {
-    res.status((err && err.status) || 500).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -124,7 +125,7 @@ router.put('/dimensions/:id', (req, res) => {
     const { dimId: _d2, ...body } = out;
     res.json({ ...body, message: '保存成功' });
   } catch (err) {
-    res.status((err && err.status) || 500).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -162,7 +163,7 @@ router.post('/dimensions/:dimId/groups', (req, res) => {
     });
     res.json({ ...out, message: '添加成功' });
   } catch (err) {
-    res.status((err && err.status) || 500).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -188,7 +189,7 @@ router.put('/groups/rename-batch', (req, res) => {
     const updated = groupDim.renameGroupsBatch([...byId].map(([id, name]) => ({ id, name })));
     res.json({ message: '保存成功', updated });
   } catch (err) {
-    res.status(err.status || 400).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -248,7 +249,7 @@ router.post('/groups/:groupId/members', (req, res) => {
   } catch (err) {
     // 「student_id 指向已删除的学生」这类是用户填错/界面过期（err.status = 400），
     // 不是服务端故障；其余真异常仍按 500 报，别把两种混成一个状态码。
-    res.status(err && err.status ? err.status : 500).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -323,7 +324,7 @@ router.post('/group-members/move', (req, res) => {
     const { _snapshot, ...dimData } = out;
     res.json({ dimensions: groupDim.listDimensions(), ...dimData });
   } catch (err) {
-    res.status((err && err.status) || 500).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -364,7 +365,7 @@ router.post('/dimensions/:dimId/apply-grouping', (req, res) => {
     const { _snapshot, ...data } = out;
     res.json({ dimensions: groupDim.listDimensions(), ...data });
   } catch (err) {
-    res.status((err && err.status) || 500).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 

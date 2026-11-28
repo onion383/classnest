@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../utils/sendError');
 const router = express.Router();
 const { db, renumber } = require('../db');
 const { takeUndoSpec, writeWithUndo } = require('../services/writeWithUndo');
@@ -117,7 +118,7 @@ router.post('/', (req, res) => {
   res.json({ id: result.lastInsertRowid, message: '添加请假成功', undoId: result.undoId });
   } catch (err) {
     // 跨字段校验（结束早于开始等）是业务错误 → 400；带 status 的异常按其状态返回
-    res.status((err && err.status) || 400).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 

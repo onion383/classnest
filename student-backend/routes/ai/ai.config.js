@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const aiConfigStore = require('../../services/aiConfigStore');
+const { publicToolError } = require('../../utils/publicToolError');
 const { privacy: aiPrivacy } = require('../../services/aiPrivacy');
 
 const router = express.Router();
@@ -119,13 +120,13 @@ async function testConnection(cfg) {
     });
     if (!r.ok) {
       const text = await r.text();
-      return { ok: false, message: `模型服务返回 ${r.status}: ${text.slice(0, 300)}` };
+      return { ok: false, message: publicToolError(`模型服务返回 ${r.status}: ${text.slice(0, 300)}`) };
     }
     const j = await r.json();
-    if (j.error) return { ok: false, message: `接口报错：${j.error.message || JSON.stringify(j.error)}` };
+    if (j.error) return { ok: false, message: publicToolError(`接口报错：${j.error.message || JSON.stringify(j.error)}`) };
     return { ok: true, message: '连接成功' };
   } catch (err) {
-    return { ok: false, message: `连接失败：${err.message || '网络错误'}` };
+    return { ok: false, message: publicToolError(`连接失败：${err.message || '网络错误'}`) };
   }
 }
 

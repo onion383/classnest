@@ -151,6 +151,10 @@ test('openPath 失败：报错但应用不退出，用户仍留在界面里', as
   assert.deepEqual(r.calls, ['openPath'])
   assert.equal(r.last.status, 'error')
   assert.match(r.last.error, /打开安装包失败/)
+  // V10-E02-02：安装包绝对路径不能广播给渲染层，避免泄漏本机用户名/目录结构。
+  // @pin electron/main/main.updater.js#UPDATE_INSTALL
+  assert.doesNotMatch(r.last.error, /fake-userData|update-cache|ClassNest-Setup/,
+    '错误文案里不能拼安装包绝对路径')
 })
 
 test('静态：静默安装线索清零（child_process / SILENT / app.quit / stopBackend）', () => {
@@ -161,4 +165,14 @@ test('静态：静默安装线索清零（child_process / SILENT / app.quit / st
   }
   assert.match(CODE, /shell\.openPath\(resolved\)/)
   assert.match(CODE, /shell\.showItemInFolder\(resolved\)/)
+})
+
+test('V10-E02-02：校验失败 catch 文案固定，原始异常只进日志', () => {
+  // @pin electron/main/main.updater.js#UPDATE_INSTALL
+  assert.match(CODE, /console\.error\('\[updater\] 安装包校验失败：', err\)/, '原始异常要进主进程日志')
+  const fixed = "setUpdateState({ status: 'error', error: '安装包校验失败，请重新下载' })"
+  // @pin electron/main/main.updater.js#UPDATE_INSTALL
+  assert.ok(CODE.includes(fixed), '对外文案必须固定，不能拼 err.message')
+  // @pin electron/main/main.updater.js#UPDATE_INSTALL
+  assert.doesNotMatch(CODE, /'安装包校验失败：' \+ \(err/, '原生异常不能再拼进广播文案')
 })

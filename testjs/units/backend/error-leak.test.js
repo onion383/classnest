@@ -60,3 +60,51 @@ test('接线：app.js 装的是 errorResponse，不是内联副本', () => {
   assert.match(src, /app\.use\(errorResponse\)/, // @pin student-backend/services/errorResponse.js#errorResponse
     '全局错误处理必须挂抽出的函数')
 })
+
+test('V10-K01-01：路由 5xx 一律走 sendError，err.message 不进响应体', () => {
+  const { sendError } = require(abs('student-backend/utils/sendError.js'))
+  const calls = []
+  const res = {
+    status(code) { calls.push(['status', code]); return this },
+    json(body) { calls.push(['json', body]); return this },
+  }
+  const orig = console.error
+  console.error = () => {}
+  try {
+    sendError(res, new Error('SQLITE_CONSTRAINT: UNIQUE constraint failed: users.username at C:////data////index.db'))
+  } finally { console.error = orig }
+  const body = JSON.stringify(calls)
+  // @pin student-backend/utils/sendError.js#sendError
+  assert.doesNotMatch(body, /SQLITE_|UNIQUE|users\.username|index\.db/, '原生异常细节不能进响应体')
+  assert.deepEqual(calls, [['status', 500], ['json', { error: '服务器内部错误，请查看日志后重试' }]])
+
+  // 接线：account.js 的 5xx catch 必须经 sendError，不能自己拼 err.message
+  const account = read('student-backend/routes/account.js')
+  assert.match(account, /require\(['"]\.\.\/utils\/sendError['"]\)/, 'account.js 未引入 sendError')
+  assert.ok((account.match(/sendError\(res, /g) || []).length >= 7,
+    'account.js 的 5xx catch 应统一走 sendError')
+  assert.doesNotMatch(account, /status\(500\)\.json\(\{ error: [^}]*err\.message/,
+    '不能再有直接拼 err.message 的 500 响应')
+})
+
+test('V10-K03-02：动态 status 的 catch 收口到 sendError（4xx 业务文案仍保留）', () => {
+  for (const rel of [
+    'student-backend/routes/groupManage.js',
+    'student-backend/routes/seats.js',
+    'student-backend/routes/leaves.js',
+    'student-backend/routes/dataExport.js',
+  ]) {
+    const src = read(rel)
+    // @pin student-backend/utils/sendError.js#sendError
+    assert.match(src, /require\(['"]\.\.\/utils\/sendError['"]\)/, `${rel} 未引入 sendError`)
+    // @pin student-backend/utils/sendError.js#sendError
+    assert.ok((src.match(/sendError\(res, err, req\)/g) || []).length >= 1,
+      `${rel} 的动态 catch 未走 sendError`)
+  }
+  // 动态 status 直出 err.message 的形态必须清零（SeatWriteError 带 status 的业务分支除外）
+  const gm = read('student-backend/routes/groupManage.js')
+  assert.doesNotMatch(gm, /res\.status\(\(err && err\.status\) \|\| 500\)\.json\(\{ error: err\.message \}\)/,
+    '不能再有动态 status 直出 err.message')
+  assert.equal((gm.match(/sendError\(res, err, req\)/g) || []).length, 7,
+    'groupManage 的 7 处动态 catch 必须全部走 sendError')
+})

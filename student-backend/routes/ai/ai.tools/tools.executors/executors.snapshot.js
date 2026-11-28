@@ -1,6 +1,7 @@
 // ===== AI 工具执行逻辑·整库快照（snapshot_create / snapshot_list / snapshot_restore）=====
 // 纯代码搬运自 ../executors.js，行为不变。
 const fs = require('fs');
+const { publicToolError } = require('../../../../utils/publicToolError');
 const path = require('path');
 const { db } = require('../../../../db');
 const dbManager = require('../../../../dbManager/dbManager');
@@ -73,7 +74,7 @@ async function runSnapshotCreate(ctx) {
   } catch (err) {
     // 半成品快照必须删掉，否则会被当成可用快照出现在列表里
     try { fs.rmSync(file, { force: true }); } catch (_) { /* best-effort: 半成品快照删不掉时下面仍返回错误 */ }
-    return { error: `创建快照失败：${err.message}` };
+    return { error: publicToolError(`创建快照失败：${err.message}`) };
   }
   const files = snapshotFiles(slug);
   for (const f of files.slice(MAX_SNAPSHOTS)) {

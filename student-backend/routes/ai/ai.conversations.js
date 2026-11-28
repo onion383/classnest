@@ -1,4 +1,5 @@
 const express = require('express');
+const { publicToolError } = require('../../utils/publicToolError');
 const { sendError } = require('../../utils/sendError')
 const aiConversationStore = require('../../services/aiConversationStore');
 const dbManager = require('../../dbManager/dbManager');
@@ -454,7 +455,9 @@ router.post('/chat/stream', async (req, res) => {
   } catch (err) {
     // 客户端已断开（用户中断）：静默结束，不回报错也不写 SSE
     if (clientGone.signal.aborted) return res.end();
-    send({ type: 'err', message: err.message || 'AI 请求失败' });
+    // 业务错误（显式 expose）保留可读文案；原生异常（SQL/路径/errno）脱敏（V10-K02-01）。
+    const raw = String((err && err.message) || 'AI 请求失败');
+    send({ type: 'err', message: err && err.expose ? raw : publicToolError(raw) });
     return res.end();
   }
 });

@@ -428,7 +428,9 @@ function registerUpdateIpc(send) {
         return
       }
     } catch (err) {
-      setUpdateState({ status: 'error', error: '安装包校验失败：' + (err?.message || String(err)) })
+      // 原始异常（可能含本机路径 / errno）只进日志，不拼进广播给渲染层的文案（V10-E02-02）。
+      console.error('[updater] 安装包校验失败：', err)
+      setUpdateState({ status: 'error', error: '安装包校验失败，请重新下载' })
       return
     }
       if (resolveInstallAction({ allowLocalMock: endpoints.allowLocalMock }) === 'reveal') {
@@ -438,7 +440,9 @@ function registerUpdateIpc(send) {
         // 交给 Windows 正常安装向导；openPath 返回非空字符串表示失败
         const openError = await shell.openPath(resolved)
         if (openError) {
-          setUpdateState({ status: 'error', error: '打开安装包失败，请手动运行：' + resolved })
+          // resolved 是本机绝对路径，不广播给渲染层；用户可从下载目录自己找到安装包。
+          console.error('[updater] 打开安装包失败：', resolved, openError)
+          setUpdateState({ status: 'error', error: '打开安装包失败，请手动在下载目录运行' })
           return
         }
       }

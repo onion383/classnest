@@ -197,9 +197,7 @@ router.put('/', (req, res) => {
     // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
     // 以前这里一律 500，与单格 PATCH 的 400 不一致 —— 「学生 id 不存在 / 空位里还有人」
     // 是用户填错了，报「服务器错误」会让老师和排查都以为后端崩了。
-    const status = Number(err && err.status) || 500;
-    if (status >= 500) console.error('[seats] 座位表保存失败:', err);
-    res.status(status).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -288,9 +286,7 @@ router.put('/master', (req, res) => {
     // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
     // 以前这里一律 500，与单格 PATCH 的 400 不一致 —— 「学生 id 不存在 / 空位里还有人」
     // 是用户填错了，报「服务器错误」会让老师和排查都以为后端崩了。
-    const status = Number(err && err.status) || 500;
-    if (status >= 500) console.error('[seats] 座位表保存失败:', err);
-    res.status(status).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -549,9 +545,7 @@ router.post('/snapshot/backfill', (req, res) => {
     // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
     // 以前这里一律 500，与单格 PATCH 的 400 不一致 —— 「学生 id 不存在 / 空位里还有人」
     // 是用户填错了，报「服务器错误」会让老师和排查都以为后端崩了。
-    const status = Number(err && err.status) || 500;
-    if (status >= 500) console.error('[seats] 座位表保存失败:', err);
-    res.status(status).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 
@@ -601,9 +595,7 @@ router.post('/history/week', (req, res) => {
     // 业务校验失败带 status=400（businessRules 的 ValidationError），只有真异常才是 500。
     // 以前这里一律 500，与单格 PATCH 的 400 不一致 —— 「学生 id 不存在 / 空位里还有人」
     // 是用户填错了，报「服务器错误」会让老师和排查都以为后端崩了。
-    const status = Number(err && err.status) || 500;
-    if (status >= 500) console.error('[seats] 座位表保存失败:', err);
-    res.status(status).json({ error: err.message });
+    return sendError(res, err, req);
   }
 });
 

@@ -18,6 +18,7 @@ const { SECRET, auth, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middl
 const authPolicy = require('../services/authPolicy');
 const secureChannel = require('../services/secureChannel');
 const { pickPhrase, formatPhrase } = require('../services/recoveryKey');
+const { sendError } = require('../utils/sendError');
 const { normalizeUsername, usernameError } = require('../services/usernameRules');
 const sessions = require('../services/sessions');
 // 凭证变更（改密 / 删账号）后「全账号会话失效」的唯一动作层，规则不在路由里各写一遍
@@ -433,7 +434,7 @@ router.get('/classes', auth(), (req, res) => {
   try {
     classes = dbManager.listClasses(u.username);
   } catch (err) {
-    return res.status(500).json({ error: '读取班级列表失败：' + err.message });
+    return sendError(res, err, req);
   }
   res.json({ classes, current: u.dbSlug || '' });
 });
@@ -481,7 +482,7 @@ router.post('/class', auth(), async (req, res) => {
     });
   } catch (err) {
     console.warn('[account] 新增班级失败:', err.message);
-    res.status(500).json({ error: '创建班级失败：' + err.message });
+    sendError(res, err, req);
   }
 });
 
@@ -512,7 +513,9 @@ router.post('/switch-class', auth(), (req, res) => {
         code: 'CLASS_NEEDS_PASSWORD',
       });
     }
-    return res.status(409).json({ error: '该班级暂时无法打开：' + err.message });
+    // 409 是业务校验分支，但 err.message 可能带文件路径/errno，对外用固定文案（V10-K01-01）。
+    console.warn('[account] 切换班级打开失败:', err && err.message);
+    return res.status(409).json({ error: '该班级暂时无法打开，请稍后重试' });
   }
 
   // 会话里的 dbSlug 同步改掉：改密吊销是按 (userId, dbSlug) 匹配的，
@@ -608,7 +611,10 @@ router.put('/password', auth(), async (req, res) => {
     }
     res.json({ message: '密码修改成功' });
   } catch (err) {
-    res.status(err.code === 'PRIVACY_UNLOCK' ? 400 : 500).json({ error: err.message });
+    if (err && err.code === 'PRIVACY_UNLOCK') {
+      return res.status(400).json({ error: err.message });
+    }
+    return sendError(res, err, req);
   }
 });
 
@@ -635,7 +641,7 @@ router.delete('/class', auth(), (req, res) => {
     dbManager.deleteTeacher(current);
   } catch (err) {
     console.warn('[account] 删除班级失败:', err.message);
-    return res.status(500).json({ error: '删除班级失败：' + err.message });
+    return sendError(res, err, req);
   }
 
   // 会话跟着挪到剩下的班。不挪的话当前窗口的 token 还指着已删的库，下一个请求就是 500。
@@ -685,7 +691,7 @@ router.delete('/', auth(), (req, res) => {
     for (const slug of slugs) dbManager.deleteTeacher(slug);
   } catch (err) {
     console.warn('[account] 删除账号失败:', err.message);
-    return res.status(500).json({ error: '删除账号失败：' + err.message });
+    return sendError(res, err, req);
   }
   // 账号都没了，其它窗口残留的 token 不能继续按旧 sid 通过鉴权 ——
   // 按全部班级吊销（只吊销当前班会让别的班窗口的 token 继续可用）。
@@ -857,10 +863,11 @@ router.post('/security-level', auth(), async (req, res) => {
           }
         }
       }
-      return res.status(500).json({
-        error: '切换安全等级失败，已回滚可回滚的步骤（库加密态与登录密码）。'
-          + '若此前处于超级隐私模式，隐私开关可能已关闭，请重新设置。原始错误：' + err.message,
-      });
+      // 原始错误只进日志，对外固定文案（V10-K01-01）；回滚提示本身是业务事实，可保留。
+      return sendError(res, Object.assign(err, {
+        expose: true,
+        message: '切换安全等级失败，已回滚可回滚的步骤。若此前处于超级隐私模式，请重新设置。',
+      }), req);
     }
 
     // 上面写入或清空了登录密码 = 凭证变更：其它窗口的旧 token 立即失效，
@@ -873,7 +880,10 @@ router.post('/security-level', auth(), async (req, res) => {
       recoveryKey: phrase,
     });
   } catch (err) {
-    res.status(err.code === 'PRIVACY_UNLOCK' ? 400 : 500).json({ error: err.message });
+    if (err && err.code === 'PRIVACY_UNLOCK') {
+      return res.status(400).json({ error: err.message });
+    }
+    return sendError(res, err, req);
   }
 });
 

@@ -13,6 +13,7 @@
 //   这里统一展平成「一行一条记录」的明细表，用户拿到的才是能和页面表格对上的数据。
 // =========================================================================
 const express = require('express');
+const { sendError } = require('../utils/sendError');
 const router = express.Router();
 const { db } = require('../db');
 const { all, get, countOf } = require('../services/exportQuery');
@@ -565,11 +566,11 @@ router.post('/vacuum', (req, res) => {
   } catch (err) {
     const msg = String((err && err.message) || err);
     const busy = /SQLITE_BUSY|database is locked|database table is locked/i.test(msg);
-    res.status(500).json({
-      error: busy
-        ? '数据库正忙（可能有相册扫描或数据导入正在进行），请稍后再试'
-        : `整理失败：${msg}`,
-    });
+    if (busy) {
+      return res.status(500).json({ error: '数据库正忙（可能有相册扫描或数据导入正在进行），请稍后再试' });
+    }
+    // 非 busy 的原生异常（msg 可能含 SQL/路径）只进日志，对外走统一信封（V10-K03-02）。
+    return sendError(res, err, req);
   }
 });
 

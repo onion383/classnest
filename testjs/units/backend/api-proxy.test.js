@@ -67,10 +67,19 @@ test('API：方法/请求体/响应原样透传，帧级头被清理', async () 
 })
 
 test('后端不可达：回 503 JSON，前端可走既有重试链路', async () => {
-  const proxy = createApiProxy({ fetchImpl: async () => { throw new Error('ECONNREFUSED') } })
-  const res = await proxy(new Request('app://local/api/dashboard'))
+  // V10-E01-02：喂带本机路径/errno 的原生异常，对外 body 必须是固定文案。
+  const proxy = createApiProxy({
+    fetchImpl: async () => { throw new Error('fetch failed: C:\\Users\\someone\\AppData\\Roaming\\classnest\\ECONNREFUSED') },
+  })
+  const realErr = console.error
+  console.error = () => {}
+  let res
+  try { res = await proxy(new Request('app://local/api/dashboard')) } finally { console.error = realErr }
   assert.equal(res.status, 503)
-  assert.match(await res.text(), /后端暂不可用/)
+  const body = await res.text()
+  assert.match(body, /后端暂不可用/)
+  // @pin electron/main/main.api-proxy.js#createApiProxy
+  assert.doesNotMatch(body, /ECONNREFUSED|AppData|classnest\\|someone/, '原生异常细节不能进响应体')
 })
 
 test('2-16 归因打点：代理入口/返回必须带 epoch（仅 PERF_STARTUP=1）', () => {

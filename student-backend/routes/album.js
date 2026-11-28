@@ -1380,7 +1380,7 @@ router.delete('/photo/:photoId', async (req, res) => {
     try {
       await moveToTrash(photo);
     } catch (err) {
-      return res.status(500).json({ error: '移入回收站失败：' + err.message });
+      return sendError(res, Object.assign(err, { expose: true, message: '移入回收站失败，请稍后重试' }), req);
     }
     // 清理已生成的缩略图缓存（按库隔离路径）
     await deleteThumb(photo, dbManager.currentSlug()).catch(() => {}); // best-effort: 移入回收站后缩略图缓存清理失败不影响索引回退
@@ -1397,7 +1397,7 @@ router.delete('/photo/:photoId', async (req, res) => {
       } catch (back) {
         console.error('[album] 删索引失败且回退文件失败:', back.message);
       }
-      return res.status(500).json({ error: '删除照片失败（已回退文件）：' + err.message });
+      return sendError(res, Object.assign(err, { expose: true, message: '删除照片失败（已回退文件），请稍后重试' }), req);
     }
     res.json({ ...out, message: '已移入回收站' });
   } catch (err) {

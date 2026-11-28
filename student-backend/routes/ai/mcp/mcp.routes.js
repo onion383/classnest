@@ -7,6 +7,7 @@
 // =========================================================================
 
 const express = require('express');
+const { publicToolError } = require('../../../utils/publicToolError');
 const { sendError } = require('../../../utils/sendError')
 const dbManager = require('../../../dbManager/dbManager');
 const tokenStore = require('../../../services/mcpTokenStore');
@@ -125,7 +126,7 @@ router.post('/tokens', (req, res) => {
     const validDays = req.body && req.body.validDays;
     const created = tokenStore.create({ slug: slug(req), label, validDays });
     res.json(created);
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) { res.status(400).json({ error: publicToolError(e && e.message) }); }
 });
 
 router.get('/tokens', (req, res) => {

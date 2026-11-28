@@ -378,7 +378,8 @@ router.post('/register', async (req, res) => {
       });
     } catch (err) {
       console.error('[register] 注册抛异常:', uname, err.stack || err.message);
-      if (!res.headersSent) return res.status(500).json({ error: '注册失败：' + (err.message || '未知错误') });
+      // 注册失败细节仅进日志，对外固定文案（V10-SE-01）。
+      if (!res.headersSent) return sendError(res, Object.assign(err, { expose: true, message: '注册失败，请稍后重试' }), req);
       return;
     }
   }
@@ -479,7 +480,7 @@ router.post('/register/confirm', async (req, res) => {
     console.error('[register/confirm] 注册抛异常:', draft.username, err.stack || err.message);
     if (!res.headersSent) {
       pendingRegs.remove(draftId);
-      res.status(500).json({ error: '注册失败：' + (err.message || '未知错误') });
+      sendError(res, Object.assign(err, { expose: true, message: '注册失败，请稍后重试' }), req);
     }
   }
 });

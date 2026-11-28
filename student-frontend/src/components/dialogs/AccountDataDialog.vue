@@ -329,15 +329,24 @@ function onCancelConfirm() {
   confirm.open = false
 }
 
+// 删除在途闸门：确认弹窗关闭到请求返回之间还有一帧可点，重复点会发第二次清空请求
+// （V10-F02-02）。confirmed 后立刻置位，finally 释放，失败也能重试。
+const deleting = ref(false)
 async function doDelete() {
+  if (deleting.value) return
+  deleting.value = true
   try {
     const { data } = await axios.post('/api/retention/clear', { kind: confirm.kind })
     if (!data || !data.ok) throw new Error((data && data.error) || '删除失败')
     Object.assign(stats, data.stats)
-    notify.success(`已删除 ${data.deleted} 条`)
+    // 回收站两类删的是文件，其余三类删的是记录行（V10-F02-02）。
+    const unit = confirm.kind === 'albumTrash' || confirm.kind === 'receiptTrash' ? '个文件' : '条'
+    notify.success(`已删除 ${data.deleted} ${unit}`)
     emit('changed')
   } catch (e) {
     notify.error('删除失败：' + (e.response?.data?.error || e.message))
+  } finally {
+    deleting.value = false
   }
 }
 

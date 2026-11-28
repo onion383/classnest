@@ -233,3 +233,13 @@ test('⑰ 按钮尺寸统一，不留小号按钮', () => {
   assert.match(receipt, /width:\s*720px/, '参照弹窗（管理收据）应仍是 720px，避免改名后假绿')
   assert.doesNotMatch(src, /text-xs px-2 py-1|text-xs px-3 py-1\.5/, '不能再留小号按钮')
 })
+
+test('V10-F02-02：删除在途闸门 + 文件类按「个文件」报数', () => {
+  const src = read('components/dialogs/AccountDataDialog.vue')
+  const fn = src.slice(src.indexOf('async function doDelete()'), src.indexOf('watch(() => props.visible'))
+  // @pin student-frontend/src/components/dialogs/AccountDataDialog.vue#doDelete
+  assert.match(fn, /if \(deleting\.value\) return/, '在途重复点必须直接返回，不能发第二次请求')
+  assert.match(fn, /deleting\.value = true[\s\S]*finally \{\s*deleting\.value = false/, '无论成败都要释放闸门')
+  assert.match(fn, /albumTrash' \|\| confirm\.kind === 'receiptTrash' \? '个文件' : '条'/,
+    '回收站两类按「个文件」报数，其余按「条」')
+})

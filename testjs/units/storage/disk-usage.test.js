@@ -216,6 +216,46 @@ test('cacheDirPaths 只列存在的缓存目录，不列白名单外的目录', 
   assert.deepEqual(dirs.map((d) => path.basename(d)), ['Cache'])
 })
 
+test('cacheDirPaths 对 Network 只展开可再生子项，不返回根（保住 Cookies 登录态）', async () => {
+  const { cacheDirPaths } = require('../../../electron/main/main.disk-usage')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-network-'))
+  const network = path.join(root, 'Network')
+  fs.mkdirSync(path.join(network, 'Cache Storage'), { recursive: true })
+  fs.mkdirSync(path.join(network, 'Code Cache'), { recursive: true })
+  fs.mkdirSync(path.join(network, 'Service Worker'), { recursive: true }) // 白名单外：不展开
+  fs.writeFileSync(path.join(network, 'Cookies'), 'token=secret')
+  fs.writeFileSync(path.join(network, 'Cookies-journal'), 'journal')
+  fs.writeFileSync(path.join(network, 'Network Persistent State'), '{}')
+
+  const dirs = await cacheDirPaths(root)
+  const rel = dirs.map((d) => path.relative(network, d) || '<Network 根>')
+
+  assert.ok(!rel.includes('<Network 根>'), '绝不能把 Network 根交给清理函数（会删 Cookies）')
+  assert.ok(rel.includes('Cache Storage'), 'Network 下的可再生缓存子项应被展开')
+  assert.ok(rel.includes('Code Cache'), 'Network 下的可再生缓存子项应被展开') // @pin electron/main/main.disk-usage.js#NETWORK_CACHE_SUBDIRNAMES
+  for (const n of ['Service Worker', 'Cookies', 'Cookies-journal', 'Network Persistent State']) {
+    assert.ok(!rel.includes(n), `${n} 不应出现在缓存清单里`)
+  }
+  assert.deepEqual(rel.sort(), ['Cache Storage', 'Code Cache'], 'Network 下只展开这两个白名单子项')
+})
+
+test('清理后 Cookies 仍在：修法的端到端反证（变异把 Network 根交出去必红）', async () => {
+  const { cacheDirPaths, clearCacheDirs } = require('../../../electron/main/main.disk-usage')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-cookie-'))
+  const network = path.join(root, 'Network')
+  fs.mkdirSync(path.join(network, 'Cache Storage'), { recursive: true })
+  fs.writeFileSync(path.join(network, 'Cache Storage', 'blob.bin'), Buffer.alloc(1000))
+  const cookies = path.join(network, 'Cookies')
+  fs.writeFileSync(cookies, 'token=secret')
+
+  const dirs = await cacheDirPaths(root)
+  await clearCacheDirs(dirs)
+
+  assert.ok(fs.existsSync(cookies), '清理缓存后 Cookies 必须还在')
+  assert.equal(fs.readFileSync(cookies, 'utf8'), 'token=secret', 'Cookies 内容不能被改')
+  assert.equal(fs.existsSync(path.join(network, 'Cache Storage', 'blob.bin')), false, '缓存子项要被清掉')
+})
+
 test('clearCacheDirs 真删内容并重建空目录，按实际体积差报数', async () => {
   const { clearCacheDirs, dirSize } = require('../../../electron/main/main.disk-usage')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-clear-'))

@@ -32,6 +32,8 @@ const LOG_FILENAMES = new Set(['backend.log', 'inp.log', 'startup.log', 'desktop
 // 避免「统计算了但清理删不到」或反过来「清理删了统计不认」。
 // 刻意不含 Local Storage / Preferences / Local State —— 登录态与主题存在那里，
 // 删了要重新登录、配置归零，不能当缓存清。
+// 'Network' 在此只作为「要统计缓存体积的父目录」，绝不能把它的根路径交给清理函数：
+// Electron 45 起登录 Cookie 在 <userData>/Network/Cookies，整目录 rm 会连带清掉登录态。
 const CACHE_DIRNAMES = new Set([
   'Cache',
   'Code Cache',
@@ -47,6 +49,10 @@ const CACHE_DIRNAMES = new Set([
   'renderer-code-cache',
 ])
 
+// Network 下明确可再生、且不承载登录态的子目录。cacheDirPaths 只展开这些子项，
+// 不返回 Network 根；Cookies / Cookies-journal / Network Persistent State 等一律不碰。
+const NETWORK_CACHE_SUBDIRNAMES = new Set(['Cache Storage', 'Code Cache'])
+
 // 缓存目录绝对路径清单（只列存在的目录）：统计与「清理缓存」共用。
 async function cacheDirPaths(userDataDir, io = fsp) {
   if (!userDataDir) return []
@@ -55,8 +61,21 @@ async function cacheDirPaths(userDataDir, io = fsp) {
   for (const name of CACHE_DIRNAMES) {
     const p = path.join(root, name)
     try {
-      if ((await io.stat(p)).isDirectory()) out.push(p)
-    } catch (_) { /* best-effort: 不存在按无缓存处理 */ }
+      if (!(await io.stat(p)).isDirectory()) continue
+    } catch (_) { continue } /* best-effort: 不存在按无缓存处理 */
+    if (name !== 'Network') {
+      out.push(p)
+      continue
+    }
+    // Network 整目录含登录态 Cookie，只展开可再生缓存子项（见上）。
+    let entries = []
+    try {
+      entries = await io.readdir(p, { withFileTypes: true })
+    } catch (_) { continue }
+    for (const e of entries) {
+      if (!e.isDirectory() || !NETWORK_CACHE_SUBDIRNAMES.has(e.name)) continue
+      out.push(path.join(p, e.name))
+    }
   }
   return out
 }
@@ -234,7 +253,8 @@ async function scanDiskUsage({ appDir, dataDir, thumbsDir, logDirs, cacheDirs, s
 
 // 清空缓存目录内容（保留目录本身）：rm 掉里面所有条目后重建空目录。
 // 单个目录失败不影响其余；报数用清理前后的实际体积差 —— 并发写入导致没清干净时不虚报。
-// 注意只删白名单内的目录，绝不碰 Local Storage / Preferences。
+// 注意只删 cacheDirPaths 给出的白名单目录，绝不碰 Local Storage / Preferences。
+// 调用方必须传 cacheDirPaths 的输出：Network 只展开到可再生子项，传 Network 根会删掉 Cookies。
 async function clearCacheDirs(cacheDirs, io = fsp) {
   let clearedBytes = 0
   let clearedDirs = 0
@@ -265,6 +285,7 @@ module.exports = {
   logFilePaths,
   cacheDirPaths,
   CACHE_DIRNAMES,
+  NETWORK_CACHE_SUBDIRNAMES,
   ACCOUNT_DB_RE,
   THUMBS_DIRNAME,
 }

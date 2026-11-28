@@ -41,6 +41,7 @@ classnest/
 │   │       ├── apiPaths.js  # 认证端点路径单一来源（AUTH_API）：登出、媒体凭据等端点的真实路径。后端 authRo…
 │   │       ├── apiUrl.js  # apiUrl(path)、resourceUrl(path)：补后端地址并为图片/背景追加 …
 │   │       ├── authStorage.js  # token / 当前用户的唯一读写点（空值语义、坏 JSON 防御）
+│   │       ├── aiMemoryGuard.js  # AI 记忆读取失败态的禁写守卫：失败时不能拿空内容覆盖已有记忆
 │   │       ├── authSync.js  # 跨窗口登录态同步的唯一实现：按「账号 + 库 + 会话」判身份（滑动续期不算换人），换号/登…
 │   │       ├── backendOrigin.js  # B1 的地址唯一口径：apiBaseUrl() 永远返回相对路径（dev 走 Vite 代理…
 │   │       ├── backendReady.js  # waitForBackendReady(timeoutMs=4000)（等待后端就绪，超时 …
@@ -162,7 +163,7 @@ classnest/
 | [`themeLoader.js`](../../../student-frontend/src/styles/themeLoader.js) | 主题 CSS 按需加载（避免首屏加载全部主题） |
 | [`themeTransition.js`](../../../student-frontend/src/styles/themeTransition.js) | 主题切换的过渡控制 |
 
-### 4. 工具（`src/utils/`，73 个）
+### 4. 工具（`src/utils/`，74 个）
 
 | 文件 | 导出 / 职责 | 调用方 |
 | --- | --- | --- |
@@ -192,6 +193,7 @@ classnest/
 | [`albumMedia.js`](../../../student-frontend/src/utils/albumMedia.js) | 媒体类型判定、缩略图版本拼接、`parseThumbBatch` 二进制解析 | `AlbumView`、`useThumbBatch` |
 | [`heatColor.js`](../../../student-frontend/src/utils/heatColor.js) | 热力配色（分数/密度映射） | `DashboardView`、`ScoreManagement` |
 | [`chartHit.js`](../../../student-frontend/src/utils/chartHit.js) | 图表命中算法（柱/横条/饼扇区/图例） | `AiChart` |
+| [`aiMemoryGuard.js`](../../../student-frontend/src/utils/aiMemoryGuard.js) | AI 记忆「读取失败不能拿空内容覆盖」的纯守卫：`memorySaveGuard({ target, loadFailed, content })`，失败态禁写并给可读原因；技能文件走自己的读取路径，不受影响 | `DataManageDialog`（编辑/保存/导出三处） |
 | [`pdfFont.js`](../../../student-frontend/src/utils/pdfFont.js) | 中文 PDF 字体：全量缓存 + 按字符动态子集，失败回退全量 | `exportFormats` |
 | [`perfMark.js`](../../../student-frontend/src/utils/perfMark.js) | 启动/首屏**分段打点**（v6 · P1-01）：`perfNow`（epoch 毫秒，与主进程/后端同一时钟）、`createPhaseLog` / `markSince` / `phase`（挂在 axios config 的 `__perf` 上累积各段）、`logSummary`（汇总成一条，带 `@epoch` 兼容启动探针）。**没有 `__perf` 时全部空转**（普通请求零开销），打点抛错也静默、绝不影响请求 | `useDashboardData`、`secureAxios`、`httpClient`、`DashboardView` |
 | [`hbSubset.js`](../../../student-frontend/src/utils/hbSubset.js) | harfbuzz wasm 子集引擎（每次新建实例、用完即弃） | `pdfFont` |

@@ -138,6 +138,7 @@ import ExportChatDialog from './ExportChatDialog.vue'
 import ExportMarkdownDialog from './ExportMarkdownDialog.vue'
 import { useNotification } from '../../composables/useNotification'
 import { formatTime } from '../../composables/ai/aiMessages.js'
+import { memorySaveGuard } from '../../utils/aiMemoryGuard.js'
 import '../../styles/dialog-transition.css'
 import { INVOKE } from '../../electronChannels.js'
 
@@ -156,6 +157,8 @@ const bodyRef = ref(null)
 const conversations = ref([])
 const skills = ref([])
 const memoryContent = ref('')
+// AI 记忆读取失败态：失败时不能拿空内容去保存，否则整体覆盖已有记忆（V10-F02-03）
+const memoryLoadFailed = ref(false)
 // 技能 md 文件所在目录（来自主进程配置，供展示与打开）
 const skillsDir = ref('')
 const loadingConv = ref(false)
@@ -225,7 +228,13 @@ async function loadMemory() {
   try {
     const { data } = await axios.get('/api/ai/memory')
     memoryContent.value = (data.data && data.data.content) || ''
-  } catch (_) { memoryContent.value = '' }
+    memoryLoadFailed.value = false
+  } catch (err) {
+    // 与 loadConversations/loadSkills 口径一致：失败要可见，且不伪装成空数据。
+    // 保留上一次成功读到的内容；守卫会拦住失败态下的保存，避免空表单覆盖已有记忆。
+    memoryLoadFailed.value = true
+    notifyError(errMsg(err))
+  }
 }
 
 // ---------- 确认弹窗 ----------
@@ -258,6 +267,9 @@ function openNewSkill() {
   mdDlg.value = { visible: true, isNew: true, nameDisabled: false, originalName: '', initialName: '', initialContent: '', target: 'skill' }
 }
 function openEditMemory() {
+  // 读取失败时不打开编辑框：看到的空白是故障不是空记忆，编辑后保存会整体覆盖。
+  const guard = memorySaveGuard({ target: 'memory', loadFailed: memoryLoadFailed.value, content: memoryContent.value })
+  if (!guard.allowed) { notifyError(guard.reason); return }
   mdDlg.value = { visible: true, isNew: false, nameDisabled: true, originalName: '', initialName: 'AI 记忆文件', initialContent: memoryContent.value, target: 'memory' }
 }
 async function openEditSkill(s) {
@@ -272,6 +284,9 @@ async function onMdSave(payload) {
   mdSaving.value = true
   try {
     if (dlg.target === 'memory') {
+      // 双保险：编辑框已打开时若读取转失败，保存前再判一次，绝不覆盖。
+      const guard = memorySaveGuard({ target: dlg.target, loadFailed: memoryLoadFailed.value, content: payload.content })
+      if (!guard.allowed) { notifyError(guard.reason); return }
       await axios.put('/api/ai/memory', { content: payload.content })
       await loadMemory()
       notifySuccess('已保存记忆文件')
@@ -298,6 +313,8 @@ function askDeleteSkill(s) {
   })
 }
 function openExportMemory() {
+  const guard = memorySaveGuard({ target: 'memory', loadFailed: memoryLoadFailed.value, content: memoryContent.value })
+  if (!guard.allowed) { notifyError(guard.reason); return }
   mdExportDlg.value = { visible: true, content: memoryContent.value, filename: 'AI 记忆文件' }
 }
 async function openExportSkill(s) {

@@ -115,3 +115,15 @@ test('[行为] installIpcGuard 装好后，once 注册的 listener 被未授权�
   }
   assert.equal(called, 0, '未登记通道的 once listener 不能被执行')
 })
+
+test('V10-E02-01：WIDGET_CONTEXT_MENU handler 必须有浮窗来源校验', () => {
+  const code = stripComments(read(WIDGET))
+  const marker = 'IPC.on(CH.WIDGET_CONTEXT_MENU'
+  const at = code.indexOf(marker)
+  // @pin electron/main/main.widget.js#fromWidgetWindow
+  assert.ok(at >= 0, '找不到 WIDGET_CONTEXT_MENU handler')
+  const block = code.slice(at, at + 500)
+  // @pin electron/main/main.widget.js#fromWidgetWindow
+  assert.match(block, /if \(!fromWidgetWindow\(event\)\) return/,
+    '上下文菜单通道必须只认浮窗自己发的，主窗口渲染进程不能借它弹系统菜单')
+})

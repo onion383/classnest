@@ -759,6 +759,8 @@ function registerWidgetIpc(opts = {}) {
   // 会同步变为关闭，下次启动也不再出现）。
   // 注意：渲染层菜单面板里的「退出工具箱」按钮走同一个 exitToolbox（见下方 widget-exit）。
   IPC.on(CH.WIDGET_CONTEXT_MENU, (event) => {
+    // 与兄弟通道同口径：只认浮窗自己发的，主窗口渲染进程不能借这条通道弹系统菜单（V10-E02-01）。
+    if (!fromWidgetWindow(event)) return;
     const win = BrowserWindow.fromWebContents(event.sender)
     const menu = Menu.buildFromTemplate([
       {

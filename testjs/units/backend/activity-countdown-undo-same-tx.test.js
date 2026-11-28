@@ -117,3 +117,19 @@ test('变异反证：不带 spec（旧两写路径）写成功但无 undoId、�
   assert.equal(historyCount(), before, '没 spec 不自动登记（旧路径靠前端二次 POST）')
   assert.equal(conn.prepare('SELECT 主题 FROM activities WHERE id = ?').get(id).主题, '无 spec 改', '业务写不能被影响')
 })
+
+test('V9-K03-04：倒计时导入拒绝日历上不存在的日期（2026-02-30）', async () => {
+  const bad = await fx.call('POST', '/api/countdowns/import', {
+    fields: ['名称', '截止日'],
+    rows: [['春游', '2026-02-30']],
+  })
+  assert.equal(bad.status, 400, '无效日期必须被拒，不能库里落一个未来永远对不上的截止日')
+  // @pin student-backend/routes/countdowns.js#isDateStr
+  assert.match(bad.text, /截止日格式不正确/)
+
+  const good = await fx.call('POST', '/api/countdowns/import', {
+    fields: ['名称', '截止日'],
+    rows: [['秋游', '2026-10-01']],
+  })
+  assert.equal(good.status, 200, '合法日期仍要能导入')
+})

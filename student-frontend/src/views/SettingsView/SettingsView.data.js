@@ -4,7 +4,7 @@ import { getCurrentUser, setCurrentUser, clearAuth, markLoggingOut } from '../..
 import { reportError } from '../../utils/reportError.js'
 import axios from 'axios'
 import { listUndo, listUndoStale, rewindTo, replayTo, clearUndo, undoOnly, undoBatch, undoById } from '../../api/undo'
-import { pad2 } from '../../utils/dateTime.js'
+import { pad2, localDateStr } from '../../utils/dateTime.js'
 import { invalidateSemesterStart } from '../../utils/semesterStart.js'
 import { clearMediaToken } from '../../utils/apiUrl'
 import { AUTH_API } from '../../utils/apiPaths.js'
@@ -751,7 +751,8 @@ export function useSettingsData(ctx) {
           responseType: 'blob',
           onDownloadProgress: (e) => { ctx.exportProgress.value = e.loaded || 0 },
         })
-        const date = new Date().toISOString().slice(0, 10)
+        // 用户可见的文件名按本地日期（V9-I-52）：toISOString 是 UTC，东八区早上会显示昨天的日期。
+        const date = localDateStr()
         // 用户名可能含空格/斜杠等，直接当文件名会被浏览器改得很难认，先归一
         const who = String(ctx.user.value.username || 'classnest').replace(/[\\/:*?"<>|]/g, '_')
         const url = URL.createObjectURL(res.data)

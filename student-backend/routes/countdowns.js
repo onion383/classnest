@@ -90,6 +90,8 @@ router.post('/import', (req, res) => {
       const deadlineRaw = cell(row, ['截止日', '截止日期', '日期']);
       if (!name) throw new Error(`第 ${rowNo} 行缺少「名称」`);
       if (!deadlineRaw) throw new Error(`第 ${rowNo} 行缺少「截止日」`);
+      // 与单条新增同口径（V9-K03-04）：'2026-02-30' 这类日历上不存在的日期不能入库。
+      if (!isDateStr(deadlineRaw)) throw new Error(`第 ${rowNo} 行截止日格式不正确（应为 YYYY-MM-DD）`);
       const data = cleanUp({
         名称: name,
         截止日: deadlineRaw,

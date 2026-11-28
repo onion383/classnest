@@ -126,3 +126,11 @@ test('V10-F07-01：closeModal 清全部口令 ref', () => {
     assert.match(close, new RegExp(`ctx\\.${ref}\\.value = ''`), `closeModal 漏清 ${ref}`)
   }
 })
+
+test('V9-I-52：备份文件名用本地日期，不用 UTC', () => {
+  const src = fs.readFileSync(path.join(VIEW_DIR, 'SettingsView.data.js'), 'utf8')
+  // @pin student-frontend/src/utils/dateTime.js#localDateStr
+  assert.ok(!/new Date\(\)\.toISOString\(\)\.slice\(0, 10\)/.test(src), '备份文件名不能用 UTC 日期')
+  // @pin student-frontend/src/utils/dateTime.js#localDateStr
+  assert.match(src, /localDateStr\(\)/, '备份文件名应走本地日期口径')
+})

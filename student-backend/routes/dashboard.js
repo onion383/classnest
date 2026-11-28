@@ -110,7 +110,8 @@ router.get('/', (req, res) => {
         try {
           const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
           const n = (v) => (Array.isArray(v) ? v.length : 0);
-          size = `，响应 ${(bytes / 1024).toFixed(1)}KB（students ${n(studentsLite)} / scores ${summary.scoreCount} / fees ${summary.feeCount} / leaves ${n(leaves)} / activities ${n(activities)} / album ${n(album)}）`;
+          // V9-K01-05：这里必须数已解析的 students 数组，不是 studentsLite 函数引用（后者恒为 0）。
+          size = `，响应 ${(bytes / 1024).toFixed(1)}KB（students ${n(students)} / scores ${summary.scoreCount} / fees ${summary.feeCount} / leaves ${n(leaves)} / activities ${n(activities)} / album ${n(album)}）`;
         } catch (_) { /* best-effort: 只影响打点 */ }
       }
       console.log(`[boot] dashboard 首屏聚合 ${Date.now() - _t0}ms（进入 ${_t0}）: ${_seg.join(' / ')}${size}`);

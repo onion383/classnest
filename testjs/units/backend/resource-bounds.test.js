@@ -64,3 +64,13 @@ test('P3-16：点名器并行取学生与请假记录', () => {
   const src = read('student-frontend/src/subwindows/widget/RollCall.vue')
   assert.match(src, /Promise\.all\(\[studentsReq, axios\.get\('\/api\/leaves'\)\]\)/)
 })
+
+test('V9-K01-05：首屏打点数的是已解析数组，不是函数引用', () => {
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '../../../student-backend/routes/dashboard.js'), 'utf8')
+  // @pin student-backend/routes/dashboard.js#dashboardSummary
+  assert.doesNotMatch(src, /students \$\{n\(studentsLite\)\}/,
+    'n(studentsLite) 数的是函数形参个数（恒 0），必须数已解析的 students')
+  // @pin student-backend/routes/dashboard.js#dashboardSummary
+  assert.match(src, /students \$\{n\(students\)\}/)
+})

@@ -1,3 +1,5 @@
+// V10-U02-01：本文件的源码串副本变异是**静态旁证**，不是真模块回放；真回放范式见 ai-read-scope-gate.test.js（loadMutated + 依赖 stub + 真调函数）。
+// // 行为归属：tab 切换是否真不闪由 testjs/probe/ 的 Vapor 探针（GUI）覆盖；本文件钉 v-show 保活与 prefetch 的接线形态。
 // =========================================================================
 // cadre-tab-no-flicker.test.js —— 班干部 tab 反复切换不闪跳（保活）
 //

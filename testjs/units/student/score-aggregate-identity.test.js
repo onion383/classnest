@@ -100,3 +100,23 @@ test('§5-4 接线：ScoreManagement 的统计与人数都走 scoreAggregate（�
   assert.match(src, /countDistinctPeople\(todaySubRecords\.value\)/, '今日扣分人数要按身份去重')
   assert.doesNotMatch(src, /byId\[name\]/, '旧的「按姓名 into map」写法应已消失')
 })
+
+test('V10-U02-05：小数值与浮点求和精度有 oracle（分值列 TEXT 存储）', async () => {
+  const { aggregatePersonal } = await load()
+  // 分值列以 TEXT 存，小数与 0.1+0.2 类累加过去没有判据；这里锁定解析与求和口径。
+  const rows = aggregatePersonal([
+    rec({ 姓名: '甲', student_id: 1, 分值: 3.5 }),
+    rec({ 姓名: '甲', student_id: 1, 分值: 0.5 }),
+    rec({ 姓名: '乙', student_id: 2, 分值: '2.25' }), // TEXT 形态
+  ], 'add')
+  const byId = Object.fromEntries(rows.map((r) => [r.key, r.value]))
+  assert.equal(byId['id:1'], 4, '3.5 + 0.5 应为 4（字符串分值也能解析）')
+  assert.equal(byId['id:2'], 2.25, 'TEXT 分值 "2.25" 应与数值等值')
+
+  const floats = aggregatePersonal([
+    rec({ 姓名: '丙', student_id: 3, 分值: 0.1 }),
+    rec({ 姓名: '丙', student_id: 3, 分值: 0.2 }),
+  ], 'add')
+  // 0.1+0.2 在 IEEE754 是 0.30000000000000004；展示层要按一位小数四舍五入。
+  assert.equal(Number(floats[0].value.toFixed(1)), 0.3, '浮点求和精度要锁到一位小数')
+})

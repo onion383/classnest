@@ -53,12 +53,10 @@ const MUTANTS = [
     from: "  return m === 'get' || m === 'head'",
     to: "  return true",
   },
-  {
-    name: 'M3 明文模式又把 JWT 拼进 URL（凭据泄露到日志/历史）',
-    file: 'apiurl',
-    from: '  if (!safe()) return url',
-    to: '  // 变异：明文模式也拼 token',
-  },
+  // M3（明文模式把 JWT 拼进 URL）已移除：对应分支 `if (!safe()) return url`
+  // 在 secureChannel 重构后确已下线；明文模式现在同样走受限媒体凭据
+  // （apiUrl.js:139/161/164），B11-04 静态判据仍在 sweep-fixes-b19.test.js 守着。
+  // 留着旧锚点只会持续报「锚点未找到」，掩盖真正的漏网。
   {
     name: 'M4 字体改回裸路径（无 content hash → 缓存旧字体）',
     file: 'pdffont',

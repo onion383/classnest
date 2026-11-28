@@ -1,3 +1,4 @@
+// V9 测试守卫批次：静态/副本变异判据为旁证；真行为覆盖见 logout-quiet-window.behavior.test.js 与 ai-read-scope-gate.test.js 的 loadMutated 范式。
 // =========================================================================
 // docs-counts.test.js —— 文档计数「唯一来源」的可写性与正确性（v6 · 5-3）
 //

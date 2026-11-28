@@ -28,6 +28,17 @@ const path = require('node:path')
 const { spawn } = require('node:child_process')
 const os = require('node:os')
 
+// 关键回归名单（V10-T01-01）：以前只写在 CI 命令行，本地 npm run smoke 不拦任何
+// SKIP。移到这里做单一出处——无参运行默认带上，CI 的 --require-pass 仍可覆盖追加。
+// 名字必须能在 smoke/ 下匹配到文件，否则 require-pass 永远 missingRequired。
+const DEFAULT_REQUIRE_PASS = [
+  'secure-channel-retry',
+  'undo-batch-test',
+  'cadre-undo-test',
+  'unzip-safe-test',
+  'api-routes-test',
+]
+
 // 本次运行专属的临时根目录：所有冒烟脚本的数据目录都建在它下面，
 // 由**本进程**在全部子脚本退出后整体删除。
 // 为什么不由子脚本自己删：sqlite 的 index.db 连接在子进程内一直开着，
@@ -74,6 +85,13 @@ const ORDER_HINT = new Map([
 // ---------- 参数 ----------
 function parseArgs(argv) {
   const opt = { list: false, bail: false, only: [], skip: [], requirePass: [] }
+  // V10-T01-01：本地与 CI 共用的关键回归名单，固化在这里做单一出处。
+  // CI 命令行里的 --require-pass 仍有效（覆盖追加），本地 npm run smoke 也拦这些 SKIP。
+  // 只在「跑全量且没点名」时补默认：--only/--skip 是定向跑，不应被 5 个关键用例的缺失拦红。
+  if (!argv.some((a) => a.startsWith('--require-pass=')) &&
+      !argv.some((a) => a.startsWith('--only=') || a.startsWith('--skip='))) {
+    opt.requirePass.push(...DEFAULT_REQUIRE_PASS)
+  }
   for (const a of argv) {
     if (a === '--list') opt.list = true
     else if (a === '--bail') opt.bail = true
@@ -213,6 +231,6 @@ async function main() {
   process.exit(exit)
 }
 
-module.exports = { resolveSmokeExit }
+module.exports = { resolveSmokeExit, parseArgs, DEFAULT_REQUIRE_PASS }
 
 if (require.main === module) main()

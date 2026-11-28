@@ -1,3 +1,4 @@
+// V9 测试守卫批次：静态/副本变异判据为旁证；真行为覆盖见 logout-quiet-window.behavior.test.js 与 ai-read-scope-gate.test.js 的 loadMutated 范式。
 // =========================================================================
 // tmp-sweep.test.js —— 启动期回收崩溃遗留临时文件（v8 审查 P2-08 · RC-TMP）
 //

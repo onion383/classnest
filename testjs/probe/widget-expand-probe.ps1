@@ -1,9 +1,11 @@
-# Probe: toolbox expand direction / icon anchoring.
-# Moves the floating toolbox to the bottom-right corner, clicks the icon, samples
-# the yellow icon while the menu expands, and asserts:
-#   - the icon stays at the same screen position (no jump / no off-screen push)
-#   - the window grows left and up (right/bottom edges stay anchored)
-#   - closing returns to the same icon position without a jump
+# Probe: toolbox expand (fixed-window model).
+# The toolbox is a FIXED 520x784 DIP window (+16px shadow margin each side =
+# 552x816), resizable:false. Opening/closing the menu never resizes or moves it:
+# the icon sits at the center (236,368) in content coords, and the panel appears
+# in one of the four reserved quadrants. This probe asserts:
+#   - the window rect stays identical before / during / after the menu toggle
+#   - the yellow icon centroid does not jump or leave the screen
+#   - the menu panel actually becomes visible somewhere around the icon
 # ASCII only (PowerShell 5.1 reads scripts as ANSI).
 # Usage: powershell -ExecutionPolicy Bypass -File testjs\probe\widget-expand-probe.ps1
 # The app must be running with the floating toolbox enabled, in icon state.
@@ -57,6 +59,11 @@ public class ToolProbe {
     return _found;
   }
 
+  // Both windows share the title "XiaoZuJian"; distinguish by geometry.
+  // Toolbox: 552x816 DIP (+ DPI scale), resizable:false.
+  // Desktop widget: 320 DIP wide, ~95% of work-area height, resizable:true.
+  // Accept the fixed toolbox size within a DPI-scaled tolerance; reject the
+  // wide-but-short and narrow-but-tall desktop widget shapes.
   private static bool CbTitle(IntPtr h, IntPtr l) {
     if (!IsWindowVisible(h)) return true;
     var sb = new StringBuilder(128);
@@ -67,8 +74,11 @@ public class ToolProbe {
     if (!tt.ToString().Contains("\u5C0F\u7EC4\u4EF6")) return true;
     RECT r;
     if (!GetWindowRect(h, out r)) return true;
-    // desktop widget is tall (>800 physical), the toolbox is not
-    if (r.bottom - r.top > 800) return true;
+    int w = r.right - r.left, ht = r.bottom - r.top;
+    // scale from width, then require height to match the same scale
+    double sc = w / 552.0;
+    if (sc < 0.6 || sc > 3.5) return true;
+    if (Math.Abs(ht - 816 * sc) > 40 * sc) return true;
     _found = h;
     return false;
   }
@@ -87,6 +97,29 @@ public class ToolProbe {
     mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
     System.Threading.Thread.Sleep(40);
     mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+  }
+
+  // Count pixels differing by more than tol in any channel between two same-size
+  // bitmaps. Used to prove the menu panel actually appeared/disappeared: the fixed
+  // window never resizes, so a large diff can only come from panel contents.
+  public static int DiffPixels(Bitmap a, Bitmap b, int tol) {
+    if (a.Width != b.Width || a.Height != b.Height) return -1;
+    int diff = 0;
+    var da = a.LockBits(new Rectangle(0, 0, a.Width, a.Height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+    var db = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+    int stride = da.Stride, w = a.Width, h = a.Height;
+    byte[] ba = new byte[stride * h], bb = new byte[stride * h];
+    Marshal.Copy(da.Scan0, ba, 0, ba.Length);
+    Marshal.Copy(db.Scan0, bb, 0, bb.Length);
+    a.UnlockBits(da); b.UnlockBits(db);
+    for (int y = 0; y < h; y++) {
+      int row = y * stride;
+      for (int x = 0; x < w; x++) {
+        int i = row + x * 3;
+        if (Math.Abs(ba[i] - bb[i]) > tol || Math.Abs(ba[i+1] - bb[i+1]) > tol || Math.Abs(ba[i+2] - bb[i+2]) > tol) diff++;
+      }
+    }
+    return diff;
   }
 
   // Centroid of pixels close to (tr,tg,tb); -1 when nothing matches.
@@ -145,6 +178,15 @@ function Find-Icon([int]$cx, [int]$cy, [int]$half) {
   return @(($l + $ccx), ($t + $ccy), $n)
 }
 
+# Snapshot the whole window rect (screen-composited) for panel diffing.
+function Grab-Window([int]$l, [int]$t, [int]$w, [int]$h) {
+  $bmp = New-Object System.Drawing.Bitmap $w, $h
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.CopyFromScreen($l, $t, 0, 0, (New-Object System.Drawing.Size $w, $h))
+  $g.Dispose()
+  return $bmp
+}
+
 function Measure-Motion([int]$cx, [int]$cy, [int]$half, [int]$ms) {
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   $maxDev = 0.0
@@ -166,98 +208,108 @@ function Measure-Motion([int]$cx, [int]$cy, [int]$half, [int]$ms) {
   return @{ MaxDev = $maxDev; Lost = $lost; Frames = $frames; Last = $last }
 }
 
-# ---- locate the floating toolbox by its window title, normalizing to icon state ----
+# ---- locate the fixed-size toolbox window ----
 $hwnd = [ToolProbe]::FindToolbox()
 if ($hwnd -eq [IntPtr]::Zero) {
-  Write-Output "toolbox window not found. Start the app with the floating toolbox enabled."
+  Write-Output "toolbox window not found (fixed 552x816 at 100% DPI expected). Start the app with the floating toolbox enabled."
   exit 2
 }
 
 $r0 = Get-Rect $hwnd
-$w0 = $r0.right - $r0.left
-$h0 = $r0.bottom - $r0.top
-# expanded menu is 332x392 DIP (300 + 2*16 shadow); icon state is 80x80 DIP
-if ($w0 -gt 200) {
-  $scale0 = $w0 / 332.0
-  Report ("toolbox is expanded ({0}x{1}); closing it first" -f $w0, $h0)
-  [ToolProbe]::Click([int]($r0.left + 4 * $scale0), [int]($r0.top + 4 * $scale0))
-  # wait until it really collapses; never continue with an expanded-window scale
-  $deadline = (Get-Date).AddMilliseconds(2500)
-  do {
-    Start-Sleep -Milliseconds 100
-    $r0 = Get-Rect $hwnd
-  } while ((($r0.right - $r0.left) -gt 200) -and ((Get-Date) -lt $deadline))
-  if (($r0.right - $r0.left) -gt 200) {
-    Write-Output "FAIL  could not collapse the toolbox before the test"
-    exit 3
-  }
-}
-
 $winW = $r0.right - $r0.left
 $winH = $r0.bottom - $r0.top
-$scale = $winW / 80.0   # icon-state window is 80 DIP (48 + 2*16)
-if ($scale -lt 0.8 -or $scale -gt 3.0) {
-  Write-Output "FAIL  unexpected icon-state size {0}x{1} (scale={2})" -f $winW, $winH, $scale
+$scale = $winW / 552.0
+if ($scale -lt 0.6 -or $scale -gt 3.5) {
+  Write-Output "FAIL  unexpected toolbox size {0}x{1} (scale={2})" -f $winW, $winH, $scale
   exit 3
 }
 Report ("window hwnd=0x{0:X} rect={1},{2} {3}x{4} scale={5:N2}" -f [int64]$hwnd, $r0.left, $r0.top, $winW, $winH, $scale)
 $originX = $r0.left
 $originY = $r0.top
 
-# ---- place it near the bottom-right corner (forces left + up expansion) ----
+# ---- place it near the bottom-right corner (panel usually opens left/up) ----
 $tx = $wa.Right - $winW
 $ty = $wa.Bottom - $winH - [int](40 * $scale)
 [void][ToolProbe]::SetWindowPos($hwnd, [IntPtr]::Zero, $tx, $ty, 0, 0, 0x0001 -bor 0x0004 -bor 0x0010)
 Start-Sleep -Milliseconds 500
 $r1 = Get-Rect $hwnd
 Report ("moved to {0},{1}" -f $r1.left, $r1.top)
+if ([Math]::Abs(($r1.right - $r1.left) - $winW) -gt 4 -or [Math]::Abs(($r1.bottom - $r1.top) - $winH) -gt 4) {
+  Fail "toolbox is resizable (size changed when moved); expected a fixed window"
+}
 
-$iconCx = [int]($r1.left + (16 + 24) * $scale)
-$iconCy = [int]($r1.top + (16 + 24) * $scale)
+# Icon center: window rect includes the 16px shadow margin; content offset is
+# (236,368) for the icon's top-left, plus half the 48px icon => (260,392) in
+# content coords, so (276,408) in window-rect coords at 100% DPI.
+$iconCx = [int]($r1.left + (16 + 236 + 24) * $scale)
+$iconCy = [int]($r1.top + (16 + 368 + 24) * $scale)
 $half = [int](45 * $scale)
 $base = Find-Icon $iconCx $iconCy $half
 if (-not $base) {
-  Write-Output "FAIL  icon color not found before click (rect=$($r1.left),$($r1.top))"
+  Write-Output "FAIL  icon color not found near window center ({0},{1}); rect={2},{3}" -f $iconCx, $iconCy, $r1.left, $r1.top
   exit 4
 }
 $iconCx = [int]$base[0]
 $iconCy = [int]$base[1]
 Report ("icon baseline={0},{1} pixels={2}" -f $iconCx, $iconCy, $base[2])
 
-# ---- open the menu and watch the icon ----
+# Baseline screenshot of the fixed window area; panel appearance is measured
+# as a large pixel diff against it (window never resizes or moves).
+$shotClosed = Grab-Window $r1.left $r1.top $winW $winH
+
+# ---- open the menu: window must stay put, icon must not jump ----
 [ToolProbe]::Click($iconCx, $iconCy)
 $open = Measure-Motion $iconCx $iconCy $half $SettleMs
 $r2 = Get-Rect $hwnd
 $openW = $r2.right - $r2.left
 $openH = $r2.bottom - $r2.top
 
-Report ("open: rect={0},{1} {2}x{3} dx={4} dy={5} upLeft={6}" -f $r2.left, $r2.top, $openW, $openH, ($r2.left - $r1.left), ($r2.top - $r1.top), ($r2.left - $openW))
+Report ("open: rect={0},{1} {2}x{3} dx={4} dy={5}" -f $r2.left, $r2.top, $openW, $openH, ($r2.left - $r1.left), ($r2.top - $r1.top))
 Report ("open: icon maxDev={0:N1} lost={1}/{2} last={3},{4}" -f $open.MaxDev, $open.Lost, ($open.Frames + $open.Lost), $open.Last[0], $open.Last[1])
+$shotOpen = Grab-Window $r2.left $r2.top $winW $winH
+$panelDiff = [ToolProbe]::DiffPixels($shotClosed, $shotOpen, 18)
+Report ("panel diff pixels={0}" -f $panelDiff)
+# panel is ~228x310 DIP; at 100% that is ~70k pixels of surface color.
+if ($panelDiff -lt [int](20000 * $scale * $scale)) {
+  Fail ("menu panel did not appear (only {0} pixels changed; expected >= {1})" -f $panelDiff, [int](20000 * $scale * $scale))
+}
 
 if ($open.MaxDev -gt 15 * $scale) { Fail ("icon jumped {0:N1}px while opening" -f $open.MaxDev) }
 if ($open.Last -and ([Math]::Abs($open.Last[0] - $iconCx) -gt 8 * $scale -or [Math]::Abs($open.Last[1] - $iconCy) -gt 8 * $scale)) {
   Fail ("icon ended at {0},{1} (was {2},{3})" -f $open.Last[0], $open.Last[1], $iconCx, $iconCy)
 }
 if ($open.Lost -gt 2) { Fail ("icon lost in {0} frames (pushed away / clipped)" -f $open.Lost) }
-if ([Math]::Abs($openW - 332 * $scale) -gt 12 * $scale) { Fail ("expanded width {0}px, expected ~{1}px" -f $openW, [int](332 * $scale)) }
-if ([Math]::Abs($openH - 392 * $scale) -gt 12 * $scale) { Fail ("expanded height {0}px, expected ~{1}px" -f $openH, [int](392 * $scale)) }
-if ([Math]::Abs(($r2.right - $r1.right)) -gt 12 * $scale) { Fail ("right edge moved by {0}px (should stay anchored)" -f ($r2.right - $r1.right)) }
-if ([Math]::Abs(($r2.bottom - $r1.bottom)) -gt 12 * $scale) { Fail ("bottom edge moved by {0}px (should stay anchored)" -f ($r2.bottom - $r1.bottom)) }
-if ($r2.right -gt $wa.Right + 20 * $scale -or $r2.bottom -gt $wa.Bottom + 20 * $scale) { Fail "expanded window exceeds the work area" }
+if ([Math]::Abs(($r2.left - $r1.left)) -gt 4 -or [Math]::Abs(($r2.top - $r1.top)) -gt 4) {
+  Fail ("window moved on open by {0},{1} (fixed-window model: must not move)" -f ($r2.left - $r1.left), ($r2.top - $r1.top))
+}
+if ([Math]::Abs($openW - $winW) -gt 4 -or [Math]::Abs($openH - $winH) -gt 4) {
+  Fail ("window resized on open to {0}x{1} (expected {2}x{3})" -f $openW, $openH, $winW, $winH)
+}
+if ($r2.right -gt $wa.Right + 20 * $scale -or $r2.bottom -gt $wa.Bottom + 20 * $scale) { Fail "window exceeds the work area" }
 
-# ---- close via the padding strip (outside the panel / icon) ----
-$closeX = [int]($r2.left + 4 * $scale)
-$closeY = [int]($r2.top + 4 * $scale)
-[ToolProbe]::Click($closeX, $closeY)
+# ---- close by clicking the icon again (fixed window: no padding-strip trick) ----
+[ToolProbe]::Click($iconCx, $iconCy)
 $close = Measure-Motion $iconCx $iconCy $half $SettleMs
 $r3 = Get-Rect $hwnd
 Report ("close: rect={0},{1} {2}x{3}" -f $r3.left, $r3.top, ($r3.right - $r3.left), ($r3.bottom - $r3.top))
 Report ("close: icon maxDev={0:N1} lost={1} last={2},{3}" -f $close.MaxDev, $close.Lost, $close.Last[0], $close.Last[1])
+$shotClosed2 = Grab-Window $r3.left $r3.top $winW $winH
+$closeDiff = [ToolProbe]::DiffPixels($shotOpen, $shotClosed2, 18)
+Report ("close diff pixels={0}" -f $closeDiff)
+if ($closeDiff -lt [int](20000 * $scale * $scale)) {
+  Fail ("menu panel did not disappear (only {0} pixels changed)" -f $closeDiff)
+}
+$shotClosed.Dispose(); $shotOpen.Dispose(); $shotClosed2.Dispose()
 if ($close.MaxDev -gt 15 * $scale) { Fail ("icon jumped {0:N1}px while closing" -f $close.MaxDev) }
 if ($close.Last -and ([Math]::Abs($close.Last[0] - $iconCx) -gt 8 * $scale -or [Math]::Abs($close.Last[1] - $iconCy) -gt 8 * $scale)) {
   Fail ("icon did not return to {0},{1}" -f $iconCx, $iconCy)
 }
-if ([Math]::Abs(($r3.right - $r3.left) - $winW) -gt 12 * $scale) { Fail "window did not shrink back to icon size" }
+if ([Math]::Abs(($r3.right - $r3.left) - $winW) -gt 4 -or [Math]::Abs(($r3.bottom - $r3.top) - $winH) -gt 4) {
+  Fail "window resized on close (fixed-window model: must stay the same size)"
+}
+if ([Math]::Abs(($r3.left - $r1.left)) -gt 4 -or [Math]::Abs(($r3.top - $r1.top)) -gt 4) {
+  Fail "window moved on close (fixed-window model: must not move)"
+}
 
 Write-Output "failures=$($script:fail)"
 # restore the toolbox to the position it had before the probe

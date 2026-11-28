@@ -1,3 +1,4 @@
+// V9 测试守卫批次：静态/副本变异判据为旁证；真行为覆盖见 logout-quiet-window.behavior.test.js 与 ai-read-scope-gate.test.js 的 loadMutated 范式。
 // =========================================================================
 // mcp-read-scope.test.js —— U7：按表「完全禁止 AI 读取」在 MCP 三处读入口强制执行
 //

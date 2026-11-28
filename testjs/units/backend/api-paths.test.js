@@ -1,3 +1,4 @@
+// V9 测试守卫批次：静态/副本变异判据为旁证；真行为覆盖见 logout-quiet-window.behavior.test.js 与 ai-read-scope-gate.test.js 的 loadMutated 范式。
 // =========================================================================
 // api-paths.test.js —— 前端调用的认证路径 vs 后端**真实注册**的路径
 //

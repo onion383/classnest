@@ -83,3 +83,19 @@ test('CI：两条打包通道都在 electron-builder 前重建后端 bundle', ()
     assert.ok(atBuild >= 0 && atPack > atBuild, `${name} 的 build:backend 必须在 electron-builder 之前`)
   }
 })
+
+test('V10-T01-01：默认名单本地/CI 同源，定向跑不被误拦', () => {
+  const { parseArgs, DEFAULT_REQUIRE_PASS } = require(RUNNER)
+  // CI 点名的 5 个关键回归必须在默认名单里
+  assert.deepEqual(DEFAULT_REQUIRE_PASS, [
+    'secure-channel-retry', 'undo-batch-test', 'cadre-undo-test',
+    'unzip-safe-test', 'api-routes-test',
+  ])
+  // 无参跑全量：默认带上，本地也拦 SKIP
+  assert.deepEqual(parseArgs([]).requirePass, DEFAULT_REQUIRE_PASS)
+  // 显式点名：只按点名的来，不再叠加默认（CI 命令行形态）
+  assert.deepEqual(parseArgs(['--require-pass=foo']).requirePass, ['foo'])
+  // 定向跑：不补默认，否则 --only=auth 会因 5 个关键用例缺失而假红
+  assert.deepEqual(parseArgs(['--only=auth']).requirePass, [])
+  assert.deepEqual(parseArgs(['--skip=pdf']).requirePass, [])
+})

@@ -15,7 +15,6 @@
  * 退出码：0 = 全部通过；1 = 有断言失败
  */
 const fs = require('node:fs')
-const os = require('node:os')
 const path = require('node:path')
 const http = require('node:http')
 const { removeDirWithRetry, makeTempDir } = require('./_tmpdir.cjs')

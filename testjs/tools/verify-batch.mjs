@@ -28,6 +28,9 @@ const args = process.argv.slice(2)
 const FAST = args.includes('--fast')
 const only = (args.find((a) => a.startsWith('--only=')) || '').split('=')[1]
 const skip = (args.find((a) => a.startsWith('--skip=')) || '').split('=')[1]
+// 变异反证会改写工作树源文件再还原（见 mutate-sweep.cjs），不能混进日常批验证。
+// 显式 --with-mutations 或 --only=mutations 才跑；命中漏网即非零退出（V10-T02b-03）。
+const WITH_MUTATIONS = args.includes('--with-mutations')
 
 const onlySet = only ? new Set(only.split(',').map((s) => s.trim())) : null
 const skipSet = skip ? new Set(skip.split(',').map((s) => s.trim())) : new Set()
@@ -35,6 +38,7 @@ const skipSet = skip ? new Set(skip.split(',').map((s) => s.trim())) : new Set()
 function want(name) {
   if (skipSet.has(name)) return false
   if (onlySet) return onlySet.has(name)
+  if (name === 'mutations') return WITH_MUTATIONS
   if (FAST && (name === 'smoke' || name === 'build')) return false
   return true
 }
@@ -85,6 +89,14 @@ const STEPS = [
     title: 'ESLint',
     cmd: 'npx',
     args: ['eslint', 'student-backend', 'student-frontend/src'],
+    cwd: ROOT,
+  },
+  {
+    // 可选档：显式 --with-mutations 才跑；会改写工作树源文件再还原（见 mutations-gate.cjs）。
+    name: 'mutations',
+    title: '变异反证闸门',
+    cmd: process.execPath,
+    args: [path.join(ROOT, 'testjs', 'tools', 'mutations-gate.cjs')],
     cwd: ROOT,
   },
   {

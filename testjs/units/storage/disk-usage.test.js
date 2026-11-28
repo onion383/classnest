@@ -216,9 +216,10 @@ test('cacheDirPaths 只列存在的缓存目录，不列白名单外的目录', 
   assert.deepEqual(dirs.map((d) => path.basename(d)), ['Cache'])
 })
 
-test('cacheDirPaths 对 Network 只展开可再生子项，不返回根（保住 Cookies 登录态）', async () => {
+test('cacheDirPaths 对 Network 只展开可再生子项，不返回根（保住 Cookies 登录态）', async (t) => {
   const { cacheDirPaths } = require('../../../electron/main/main.disk-usage')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-network-'))
+  t.after(() => { try { fs.rmSync(root, { recursive: true, force: true }) } catch (_) { /* ignore */ } })
   const network = path.join(root, 'Network')
   fs.mkdirSync(path.join(network, 'Cache Storage'), { recursive: true })
   fs.mkdirSync(path.join(network, 'Code Cache'), { recursive: true })
@@ -239,9 +240,10 @@ test('cacheDirPaths 对 Network 只展开可再生子项，不返回根（保住
   assert.deepEqual(rel.sort(), ['Cache Storage', 'Code Cache'], 'Network 下只展开这两个白名单子项')
 })
 
-test('清理后 Cookies 仍在：修法的端到端反证（变异把 Network 根交出去必红）', async () => {
+test('清理后 Cookies 仍在：修法的端到端反证（变异把 Network 根交出去必红）', async (t) => {
   const { cacheDirPaths, clearCacheDirs } = require('../../../electron/main/main.disk-usage')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-cookie-'))
+  t.after(() => { try { fs.rmSync(root, { recursive: true, force: true }) } catch (_) { /* ignore */ } })
   const network = path.join(root, 'Network')
   fs.mkdirSync(path.join(network, 'Cache Storage'), { recursive: true })
   fs.writeFileSync(path.join(network, 'Cache Storage', 'blob.bin'), Buffer.alloc(1000))

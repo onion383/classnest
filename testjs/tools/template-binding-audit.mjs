@@ -4,9 +4,11 @@
 // 用法：node template-binding-audit.mjs [vue包目录]
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 
-const srcRoot = path.resolve('student-frontend/src')
+// 按脚本位置锚定仓库根：从任意 cwd 跑都读同一份源码（V10-T02a-01）。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const srcRoot = path.join(ROOT, 'student-frontend', 'src')
 // 审计只需要一个 Vue 3.x 编译器（3.5 / 3.6 产物一致，见文件头注释）。
 // 默认优先 vue36（本地有就用通道版），但 vue36 是 gitignore 的可选目录、CI test job 不装它
 // —— 缺了就 fallback 到主线 student-frontend/node_modules/vue（CI 必装）。
@@ -19,7 +21,7 @@ function pickVueDir() {
     'student-frontend/node_modules/vue',
   ]
   for (const rel of candidates) {
-    const dir = path.resolve(rel)
+    const dir = path.resolve(ROOT, rel)
     if (fs.existsSync(path.join(dir, 'compiler-sfc', 'index.mjs'))) return dir
   }
   throw new Error(`找不到 Vue compiler-sfc（试过：${candidates.join('、')}）`)

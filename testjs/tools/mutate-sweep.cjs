@@ -63,7 +63,7 @@ const MUTANTS = [
   {
     name: 'M1 日期收口：后端改回各自拼日期',
     file: 'dataroutes',
-    from: "const { localDateStr } = require('../../utils/date');",
+    from: "const { localDateStr, mondayOf } = require('../../utils/date');",
     to: "const localDateStr = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;",
   },
   {

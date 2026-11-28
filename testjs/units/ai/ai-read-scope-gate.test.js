@@ -81,3 +81,37 @@ test('变异反证：抹掉分发闸门后，接线判据必须失败', () => {
   assert.ok(!/readableBlockedError\(name, args\)[\s\S]*?if \(readErr\)/.test(d.slice(0, d.indexOf('switch (name)'))),
     '分发闸门抹掉后判据仍判 PASS —— 假绿')
 })
+
+test('真回放反证：真编译变异后的 tools.js，读闸门必须真的失效', async () => {
+  // V10-U02-01/03：上面那条只是源码串副本上跑正则（静态旁证）。这里用
+  // loadMutated 真编译变异模块、stub aiConfigStore 的 closed_tables，真调 runTool，
+  // 断言「闸门被抹掉后 students 表真的可读」——判据必须红才算反证成立。
+  const Module = require('node:module')
+  const realLoad = Module._load
+  function withClosed(fn) {
+    Module._load = function (request, parent, isMain) {
+      if (/(^|\/)aiConfigStore(\.js)?$/.test(request)) {
+        return {
+          readPrivacy: () => ({ closed_tables: ['students'], readonly_tables: [] }),
+          readMcpPrivacy: () => ({ closed_tables: [], readonly_tables: [] }),
+          LOG_DEFAULTS: { keep: 200, sources: ['ai', 'mcp'] },
+        }
+      }
+      return realLoad.call(this, request, parent, isMain)
+    }
+    try { return fn() } finally { Module._load = realLoad }
+  }
+
+  const TOOLS = 'student-backend/routes/ai/ai.tools/tools.js'
+  const { loadMutated } = require('#testjs/units/_mechanism.cjs')
+  // 变异版：闸门调用被抹掉（loadMutated 要求 transform 真改到源码，否则直接抛）
+  const blocked = withClosed(() => loadMutated(TOOLS, (s) => s.replace(
+    'const readErr = readableBlockedError(name, args);',
+    'const readErr = /*MUTATED*/ null;'
+  )))
+  // 变异后闸门被抹掉：派发会继续往下走。真调 runTool 看是否不再返回闸门错误。
+  const out = await blocked.runTool('delete_impact', { table: 'students' }, { slug: 'x' })
+  assert.ok(out && out.result, 'runTool 应返回结果')
+  assert.ok(!/设置中关闭/.test(String(out.result.error || '')),
+    '闸门被抹掉后仍返回「设置中关闭」→ 真回放没生效，变异反证是假绿')
+})

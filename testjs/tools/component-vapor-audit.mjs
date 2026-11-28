@@ -7,8 +7,11 @@
 // 用法：node component-vapor-audit.mjs
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const srcRoot = path.resolve('student-frontend/src')
+// 按脚本位置锚定仓库根：从任意 cwd 跑都读同一份源码（V10-T02a-01）。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const srcRoot = path.join(ROOT, 'student-frontend', 'src')
 
 function walk(dir) {
   const out = []
@@ -96,3 +99,13 @@ console.log('')
 const stat = { A: 0, B: 0, C: 0 }
 for (const r of rows) stat[r.level]++
 console.log(`统计：A=${stat.A} B=${stat.B} C=${stat.C} 合计=${rows.length}`)
+
+// V9-I-19 / V10 3-4：信息型扫描工具命中违规也要回传退出码，否则扫出问题仍 exit 0。
+// 存量 C 级 9 个（Vapor 迁移未完成，另行清理），这里只拦增量：新增 C 级即非零，
+// 清理到低于基线时同步下调 BASELINE_C（只降不升，跟 guards 台账同口径）。
+const BASELINE_C = 9
+if (stat.C > BASELINE_C) {
+  console.error(`\nC 级组件 ${stat.C} 个，超过基线 ${BASELINE_C}（新增 Vapor 阻塞项，须先迁移或下调基线）`)
+  process.exit(1)
+}
+console.log(`C 级基线 ${BASELINE_C}：当前 ${stat.C}，无新增阻塞项`)

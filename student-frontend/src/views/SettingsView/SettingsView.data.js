@@ -419,6 +419,14 @@ export function useSettingsData(ctx) {
     },
     closeModal() {
       ctx.modalType.value = ''
+      // 弹窗关掉后口令不能再留在内存里（V10-F07-01）：openModal 虽然会清，
+      // 但 close 到下次 open 之间这段时间里，devtools / 快照仍可能读到上一轮的明文口令。
+      ctx.usernamePassword.value = ''
+      ctx.oldPassword.value = ''
+      ctx.newPassword.value = ''
+      ctx.confirmPassword.value = ''
+      ctx.exportPassword.value = ''
+      ctx.exportDbPwd.value = ''
     },
     showAlert(msg) {
       ctx.dialog.value = { visible: true, message: msg, type: 'alert', showCancel: false }

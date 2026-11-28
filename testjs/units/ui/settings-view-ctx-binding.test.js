@@ -117,3 +117,12 @@ test('设置页不使用原生 <select>：下拉统一走 AppSelect', () => {
   const tpl = templateOf(viewSrc())
   assert.ok(!/<select\b/.test(tpl), '设置页模板里出现原生 <select>，改成 AppSelect')
 })
+
+test('V10-F07-01：closeModal 清全部口令 ref', () => {
+  const src = fs.readFileSync(path.join(VIEW_DIR, 'SettingsView.data.js'), 'utf8')
+  const close = src.slice(src.indexOf('closeModal()'), src.indexOf('closeModal()') + 700)
+  for (const ref of ['usernamePassword', 'oldPassword', 'newPassword', 'confirmPassword', 'exportPassword', 'exportDbPwd']) {
+    // @pin student-frontend/src/views/SettingsView/SettingsView.data.js#closeModal
+    assert.match(close, new RegExp(`ctx\\.${ref}\\.value = ''`), `closeModal 漏清 ${ref}`)
+  }
+})

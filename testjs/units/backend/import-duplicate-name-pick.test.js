@@ -91,3 +91,13 @@ test('前端：传了名册才检测同名，弹窗确认后才 emit', () => {
   assert.match(dlg, /row\.options\.find\(o => o\.value !== 'new'\)/, '默认选中第一个非新同学候选')
   assert.match(dlg, /:value="selections\[row\.key\]"/, '下拉要绑定选中值（点选才改得动）')
 })
+
+test('V9-F02-02：弹窗 watch 同时监听 rows（ImportExcel 多组同名逐组重置）', () => {
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '../../../student-frontend/src/components/dialogs/DuplicateNameDialog.vue'), 'utf8')
+  // @pin student-frontend/src/components/dialogs/DuplicateNameDialog.vue#selections
+  assert.match(src, /watch\(\[\(\) => props\.visible, \(\) => props\.rows\]/,
+    '只监听 visible 时，ImportExcel 全程 visible=true 切 rows 不会重置默认选择')
+  // @pin student-frontend/src/components/dialogs/DuplicateNameDialog.vue#selections
+  assert.match(src, /if \(!props\.visible\) return/)
+})

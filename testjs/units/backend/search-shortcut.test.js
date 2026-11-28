@@ -23,6 +23,11 @@ test('纯函数：Ctrl+K / Cmd+K 命中，大小写与非 k 键不命中', async
   assert.equal(isGlobalSearchShortcut(k({ ctrlKey: true, shiftKey: true })), false, '带 Shift 不命中')
   assert.equal(isGlobalSearchShortcut(k({ ctrlKey: true, altKey: true })), false, '带 Alt 不命中')
   assert.equal(isGlobalSearchShortcut(null), false, '空事件不炸')
+  // V9-F01-05：输入框 / 可编辑区里不抢快捷键
+  assert.equal(isGlobalSearchShortcut(k({ ctrlKey: true, target: { tagName: 'INPUT' } })), false, '输入框里不弹搜索')
+  assert.equal(isGlobalSearchShortcut(k({ ctrlKey: true, target: { tagName: 'TEXTAREA' } })), false)
+  assert.equal(isGlobalSearchShortcut(k({ ctrlKey: true, target: { isContentEditable: true, tagName: 'DIV' } })), false)
+  assert.equal(isGlobalSearchShortcut(k({ ctrlKey: true, target: { tagName: 'DIV' } })), true, '普通区域仍要响应')
 })
 
 test('App.vue 接线：登录页屏蔽、阻止默认行为、预取并打开搜索弹窗', () => {

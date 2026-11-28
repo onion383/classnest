@@ -47,8 +47,10 @@ const emit = defineEmits(['confirm', 'cancel'])
 // 每个同名行默认选第一个候选（用户看到的就是第一个），点选即改。
 // 整体替换 ref 对象（不是改属性）：vapor 下稳定触发 select 的 value 更新。
 const selections = ref({})
-watch(() => props.visible, (visible) => {
-  if (!visible) return
+// ImportExcel 复用同一个弹窗连处理多组同名：visible 全程 true，只换 rows，
+// 所以必须同时监听 rows，否则第二组还显示第一组的默认选择（V9-F02-02）。
+watch([() => props.visible, () => props.rows], () => {
+  if (!props.visible) return
   const next = {}
   for (const row of props.rows) {
     const first = row.options.find(o => o.value !== 'new')

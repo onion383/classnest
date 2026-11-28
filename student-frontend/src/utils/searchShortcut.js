@@ -14,5 +14,9 @@
 export function isGlobalSearchShortcut(e) {
   if (!e || e.shiftKey || e.altKey) return false
   if (!e.ctrlKey && !e.metaKey) return false
+  // 输入框/可编辑区里不抢快捷键（V9-F01-05）：用户可能在写备注/搜索词，
+  // 浏览器与 Electron 里 Ctrl+K 也常被输入框自己占用。
+  const t = e.target
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(String(t.tagName || '')))) return false
   return String(e.key || '').toLowerCase() === 'k'
 }

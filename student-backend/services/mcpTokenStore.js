@@ -128,7 +128,35 @@ function verify(token) {
   const hash = hashToken(token);
   const item = readAll().find((x) => x.hash === hash && !x.revoked_at);
   if (!item || expired(item)) return { ok: false };
+  // 登出后暂时失效：挂起不是撤销，重新登录会清 suspended_at 自动恢复。
+  // 外部客户端不需重新配置 token，但网页登出期间凭据确实不能用。
+  if (item.suspended_at) return { ok: false, suspended: true };
   return { ok: true, slug: item.slug, id: item.hash.slice(0, 12), label: item.label };
+}
+
+// 按账号挂起/恢复 MCP 令牌（V9-I-22）：core 索引里只加一个时间戳字段，
+// 不动班级库明文、不标 revoked —— 登出后「暂时失效」，登录即恢复。
+// core 索引不加密，超级隐私模式 lockDb 后仍可写，不依赖班级库钥匙。
+// 账号可持多个班级库，按 username 从 registry 查出全部 slug 一起处理。
+function setSuspendedByAccount(username, suspended) {
+  if (!username || typeof username !== 'string') return 0;
+  let slugs = [];
+  try {
+    slugs = (dbManager.registryFindAllByUsername(username) || [])
+      .map((r) => r && r.slug).filter((s) => typeof s === 'string' && s);
+  } catch (_) { return 0; }
+  if (!slugs.length) return 0;
+  const slugSet = new Set(slugs);
+  const list = readAll();
+  const at = suspended ? new Date().toISOString() : null;
+  let changed = 0;
+  for (const item of list) {
+    if (!slugSet.has(item.slug)) continue;
+    if (suspended && !item.suspended_at) { item.suspended_at = at; changed++; }
+    else if (!suspended && item.suspended_at) { delete item.suspended_at; changed++; }
+  }
+  if (changed) writeAll(list);
+  return changed;
 }
 
 function list() {
@@ -139,6 +167,7 @@ function list() {
     created_at: x.created_at,
     expires_at: x.expires_at || null,
     revoked: !!x.revoked_at,
+    suspended: !!x.suspended_at,
   }));
 }
 
@@ -198,4 +227,7 @@ function remove(id, slug) {
   return true;
 }
 
-module.exports = { create, verify, list, getPlain, revoke, revokeBySlug, remove, hashToken, FILE };
+module.exports = {
+  create, verify, list, getPlain, revoke, revokeBySlug, remove,
+  setSuspendedByAccount, hashToken, FILE,
+};

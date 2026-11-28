@@ -13,6 +13,7 @@ const { hash: bcryptHash, compare: bcryptCompare } = require('../services/bcrypt
 const { SECRET, auth, TOKEN_COOKIE_MAX_AGE, signMediaToken } = require('../middleware/auth');
 // 登录保持天数按账号配置：签发点一律现取，不再共享模块级常量
 const authPolicy = require('../services/authPolicy');
+const tokenStore = require('../services/mcpTokenStore');
 const secureChannel = require('../services/secureChannel');
 const sessions = require('../services/sessions');
 // 恢复词重置密码 = 凭证变更，必须走统一动作层吊销该账号全部会话
@@ -35,6 +36,9 @@ const loginThrottle = require('../services/loginThrottle');
 // 绑定后前端后续请求只需发送不含 token 的信道凭据，登录 token 不再随每次请求上线；
 // mediaToken 只用于 <img>/CSS 这类无法携带自定义头的静态资源，且不能调用业务 API。
 function issueSession(req, user, extra = {}) {
+  // 登录成功即恢复该账号被登出挂起的 MCP 凭据（V9-I-22）：四个登录出口都过这里，
+  // 不用在每个入口各写一遍。外部客户端无需重新配置 token。
+  try { tokenStore.setSuspendedByAccount(user.username, false); } catch (_) { /* best-effort: 挂起恢复失败不影响登录 */ }
   const sid = sessions.create(user.userId, user.dbSlug);
   const payload = { userId: user.userId, username: user.username, role: user.role, dbSlug: user.dbSlug, sid, ...extra };
   // 登录保持天数按账号名存（authPolicy 的键是 username，不是 dbSlug）。
@@ -88,6 +92,9 @@ router.get('/media-token', auth(), (req, res) => {
 // 否则关掉一个窗口会把同一账号的其它窗口一起踢下线（既有产品取舍）。
 router.post('/logout', auth(), (req, res) => {
   sessions.revoke(req.user && req.user.sid);
+  // MCP 凭据跟着账号一起「暂时失效」：不是永久撤销，下次登录由 issueSession 自动恢复。
+  // 超级隐私模式 lockDb 会让班级库钥匙失效，但挂起只写 core 索引，不依赖班级库。
+  try { tokenStore.setSuspendedByAccount(req.user && req.user.username, true); } catch (_) { /* best-effort: 不影响登出主流程 */ }
   // 解绑信道会话：换号登录后同一信道不会继续沿用上一个账号的 token
   const channelSid = req.sessionId;
   secureChannel.unbindAuth(channelSid);

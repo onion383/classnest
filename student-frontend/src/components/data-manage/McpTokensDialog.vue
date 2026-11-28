@@ -27,7 +27,7 @@
               <p class="text-sm text-text truncate">{{ t.label || '未命名令牌' }}
                 <span v-if="t.revoked" class="text-danger text-xs ml-1">（已失效）</span>
                 <!-- 有效期就放在原来「已失效」的位置：有到期日显示日期（过期标红），没有则长期有效 -->
-                <span v-else class="text-xs ml-1" :class="isExpired(t) ? 'text-danger' : 'text-text-muted'">（{{ expiryText(t) }}）</span>
+                <span v-else class="text-xs ml-1" :class="isExpired(t) ? 'text-danger' : 'text-text-muted'">（{{ expiryText(t) }}<template v-if="t.suspended"> · 已挂起</template>）</span>
               </p>
               <p class="text-xs text-text-muted font-mono truncate">{{ t.id }}</p>
             </div>
@@ -109,6 +109,7 @@ const tokenHelp = [
   '「复制配置」会生成一段 mcpServers 配置，里面的令牌就是这一行自己的；exe 与转发器路径由软件自动填好，直接粘到 Claude Desktop / Cursor 即可。',
   '安装版用自带运行时 ClassNest.exe（env 里带 ELECTRON_RUN_AS_NODE=1），源码调试时自动换成 node + 项目里的转发器，都不用手改。',
   '转发器只携带 URL 与令牌，接触不到数据库密钥。',
+  '退出登录后令牌暂时失效（显示「已挂起」），重新登录自动恢复，不用重新配置客户端。',
 ].join('\n')
 
 // 每次打开都重拉：令牌可能在另一个窗口或上一次会话里变过，别拿旧列表糊弄。

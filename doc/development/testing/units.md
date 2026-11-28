@@ -86,6 +86,7 @@ classnest/
         │   └── album-delete-compensation.test.js  # 删除照片双写失败补偿（2-5 / #13）
         ├── backend/
         │   ├── api-proxy.test.js  # B1 的 /api 同源代理（v6 · 2-15）：只代 /api 与 /api/*、目标 URL 保留 query、方法/请求体/响应流透传、Host/Content-Length 被清理、后端不可达回 503
+        │   ├── mcp-logout-suspend.test.js  # V9-I-22：登出后 MCP 令牌暂时失效（suspended_at），登录自动恢复 + 变异反证
         │   ├── backend-origin.test.js  # B1 地址口径（v6 · 2-15）：apiBaseUrl 永远相对、mediaBaseUrl 打包补后端、三处调用方共用；app:// 协议代理 /api，主窗口/引导/挂件不再换源
         │   ├── api-paths.test.js  # 认证端点路径单一来源：前端 apiPaths.js 的每个常量都在后端真实路由里存在（防止又…
         │   ├── backend-boundary.test.js  # 写入边界与实际结构脱节：①PATCH /cell 是唯一不经过 normalizeSeats…
